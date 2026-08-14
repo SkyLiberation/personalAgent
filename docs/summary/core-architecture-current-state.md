@@ -70,7 +70,7 @@ Pydantic、OpenAI-compatible transport、手写 loop 或 LangGraph 都可以替�
 
 | 目标约束 | 下一步 owner | 内部执行语义 | 为什么 |
 | --- | --- | --- | --- |
-| 多轮动态、无需独立后台生命周期 | 模型按 Goal 与 Observation 逐轮提出下一步 | Conversation Interaction loop | journal/context 支持多轮与恢复，但不需要独立持久化 Plan |
+| 多轮动态、无需独立后台生命周期 | 模型按目标与执行事实逐轮提出下一步；用户明示或存在协调收益时维护可验收工作项清单 | 当前对话循环 | 对话日志与上下文支持多轮和恢复；按需前台计划只服务当前对话，不承担后台调度 |
 | 拓扑和事务不变量固定 | Application / Domain | 具体 Use Case / 领域 Workflow | 模型不能重排确认、写入、Receipt 或补偿顺序 |
 | 路径动态且跨进程、用户轮次或审批边界 | 模型提出 Project 创建参数；Project 内 Planner 提出 Plan | Investigation Project | accepted Plan、ready set、journal 和 Completion obligation 都有生产消费者 |
 
@@ -100,7 +100,7 @@ Application Use Case，但多个协议入口不能制造第二事实 owner。
 | --- | --- | --- |
 | 框架不变量 | Proposal → Admission → Execution Fact → Verification → Completion | 稳定，改变需 ADR 与产品 E2E |
 | 普通用户入口 | Conversation goal entry | 稳定；内部执行语义不暴露为模式选择 |
-| 模型协议 | `AgentTurnDecision` object-root envelope | 当前 Provider 约束下的实现，可由同等 contract 替换 |
+| 模型协议 | `AgentTurnDecision` / `AgentTurnDecisionWithPlan` object-root lifecycle projection | 两者承载同一 Proposal union，仅调整无 Plan/已有 Plan 阶段的 schema 首选顺序；可由同等 contract 替换 |
 | Schema/transport | Pydantic + strict JSON Schema 或 JSON Object Adapter | deployment capability，集中在 Model Adapter |
 | 编排技术 | 显式 Python loop、领域状态机、worker queue | 可替换，但不能改变 canonical owner |
 | 外部能力 | Tool、MCP、A2A Adapter | 可扩展，必须先通过 visibility、Admission、Gateway 与 E2E |
@@ -189,8 +189,9 @@ WebAppContext / CLI / Feishu
 
 Investigation Project 使用 PostgreSQL append-only journal 和现有 worker queue；AgentGateway
 的生产 run store 为 PostgreSQL。Conversation 只在用户明确需要跨交互持续、进度查询、暂停或
-steering 时创建 Project，并且只持久化 `ProjectReference`，不拥有 Project definition、Plan、
-状态或 `WorkingPlanSnapshot`。
+steering 时创建 Project，并且只持久化 `ProjectReference`，不拥有 Project definition、accepted Plan、
+状态或 Completion。普通 Conversation 可以拥有独立的轻量 `ConversationWorkingPlan`；它只表示当前
+前台目标的可验收工作项，不是后台项目调查规划的副本，也不驱动队列、租约或可持久调度。
 
 `AgentRuntime` 是唯一集中装配点，但 Personal Knowledge、Research、Interaction、Tool audit 等事实仍由
 各自 Store/Service 拥有；Composition Root 不通过字段镜像成为第二事实源。
@@ -206,7 +207,9 @@ ConversationMessage[]
   -> materialize EffectiveCapabilities
   -> Model returns AgentTurnDecision
      -> FinalMessage
+        -> optional terminal WorkingPlan update
      -> ContinueTurnProposal
+        -> optional WorkingPlan proposal / wait_for_user
         -> actions[]
            -> ToolCallProposal | AgentDelegationProposal
   -> deterministic admission and budget checks
@@ -220,21 +223,124 @@ ConversationMessage[]
 
 - 模型负责开放语义：是否直接回答、是否需要计划、选择哪个语义能力、委托什么 bounded
   sub-goal、如何根据 Observation 修订下一步；
-- Runtime 负责 schema、重复 action、预算、并发安全、scope 和能力存在性等机械判断；
-- Admission 只能接受或返回 typed `DecisionFeedback`，不得补业务参数、改写 plan 或替换目标；
+- Runtime 负责 schema、重复 action、预算、scope 和能力存在性等机械判断；
+- Admission 只能接受或返回 typed `DecisionFeedback`，不得补业务参数、改写 working plan 或替换目标；
 - Tool/Agent 执行产生 execution fact；模型或领域 Verifier 判断语义结果；领域状态机判断完成。
 
-`AgentTurnDecision` 使用唯一 object-root envelope：
+模型输出使用同一 object-root 形状和同一 Proposal union；只按 Conversation Working Plan 生命周期选择 schema 投影：
 
 ```text
-AgentTurnDecision
+无 admitted Plan: AgentTurnDecision
+└─ decision: ContinueTurnProposal | FinalMessage
+
+已有 admitted Plan: AgentTurnDecisionWithPlan
 └─ decision: FinalMessage | ContinueTurnProposal
-   └─ actions: ToolCallProposal | AgentDelegationProposal []
+
+两者共享:
+├─ optional WorkingPlanProposal
+└─ actions: ToolCallProposal | AgentDelegationProposal []
 ```
 
-不存在 `.root` 兼容入口、`action/actions` 双轨、Plan step 直接执行或确定性业务 fallback。
+**两个 envelope 不是两个业务事实或决策 owner。** `kind`、Admission、journal 和 Completion Gate 完全共享；
+第二个 envelope 只调整已有计划生命周期中的 union 顺序，帮助结构化模型优先选择交付结果。`HARNESS-002` 的
+消融进一步证明，单改 union 顺序或接受相同 Proposal 为 no-op 都不能解决停滞；真正的问题是模型被要求先写一次
+计划完成状态、再写一次同义 FinalMessage，并被进度门禁阻止在同一步继续补充证据。
 
-### 3.2 预算、并发与恢复
+不存在 `.root` 兼容入口、`action/actions` 双轨、working-plan step 直接执行或确定性业务 fallback。
+
+### 3.2 按需前台工作清单
+
+**`ConversationWorkingPlan` 是当前对话拥有的可验收工作项清单，不是通用规划器、固定流程或后台项目规划。**
+每项可以描述分析、实现或用户可见交付，但必须同时写明预期结果和完成条件；“搜索资料”“调用工具”这类只有活动、
+没有产出的描述不合格。用户明确要求查看或调整时，模型必须先提出结构化计划并等待审阅；即使用户没有说出“计划”，
+模型也可在漏项、重复、跨预算、上下文、进程或用户轮次恢复，以及调整方向的收益显著时主动提出短期计划。default
+模式必须先展示计划并停下，不能夹带动作；只有调用方明确选择 auto 模式，计划才可与已授权动作同轮提交。模型不能根据
+用户文本猜测或自行切换 auto。普通多步请求仍走轻量循环，不能只因动作数量创建计划。
+
+- Interaction journal 是唯一 canonical 写入口，HTTP response 只投影同一对象；新 Web 进程可从 journal
+  恢复当前清单；
+- 模型只提出 `goal + steps`，看不到也不回传 `plan_id/revision`。Runtime 直接对照当前 canonical
+  清单检查 step ID 唯一和 completed step 不可删除或改写；
+- `revision` 仅由 Runtime 单调生成，用于 journal 恢复排序和响应展示，不是乐观并发令牌，也不声称提供
+  CAS。旧清单全部完成后，内容不同的新清单获得新的 `plan_id`；
+- Tool/Agent action 必须绑定当前 pending step，成功 Observation 仍只是 Execution Fact；模型可在继续工作时
+  修订状态，也可在最终答案的 `resolved_plan_step_ids` 中声明由本答案完成的 pending 结果。Runtime 只机械绑定
+  已成功 action ID，不根据 Tool success 自动判断语义完成；
+- `FinalMessage` 没有覆盖全部 pending step ID 时拒绝完成；它覆盖全部 pending 时，FinalMessage 是唯一语义
+  完成声明，不再要求模型先提交一次同义 plan-status-only 更新。若模型先
+  单独提交 all-completed plan，Runtime 进入只允许 `FinalMessage` 的受限 completion call；该调用不再暴露
+  Tool、Agent 或 Plan，不计入开放 Interaction turn，但仍计入 aggregate model usage 和 total-token cap；
+- working plan 不创建 Project、Repository、表、Planner Interface 或 durable dispatch，也不替代原有
+  Verification / Completion contract。
+
+跨用户轮次恢复时，Runtime 还会从同一 Interaction journal **确定性派生当前清单可继续消费的成功执行事实**：
+只选择同一 `conversation + principal + plan_id`、且绑定当前 step 的成功 `ActionObservation`，再交给已有的有界
+上下文物化；失败动作、DecisionFeedback、无计划 Observation 和其他权限范围的事实不会恢复。Journal 只筛选已经
+发生的事实，不决定下一步或语义完成。该实现没有新增 Plan/Todo、持久字段、表、Prompt 或配置。
+
+`HARNESS-003` 给出了这条消费链的同输入因果证据。无该消费点的 baseline 在首轮真实非零预算边界后，第二轮
+看不到已经提交的随机口令和本地副本，最终返回了三个错误口令；恢复该消费点后，第二轮只读取本地副本中尚未展开的
+内容，ALPHA、BETA、GAMMA 原始档案各执行一次，最终交付三个随机口令和用户 steering 后的新阈值。配对中还包含简单问答反事实，正式
+响应和 trace 均没有工作清单。checksum 封存与 identity 配对校验通过：
+
+- baseline：`data/e2e_traces/product_baselines/harness-003/baseline/20260814T091431.462087Z-3328-bd35a339`；
+- target：`data/e2e_traces/product_baselines/harness-003/target/20260814T091531.397728Z-17136-7b8c3257`。
+
+外部实现只用于约束机制边界：Gemini CLI commit `c0d192452b4e2df7efb6d62a60385f475bfd6779` 的
+[`plan-mode.md`](https://github.com/google-gemini/gemini-cli/blob/c0d192452b4e2df7efb6d62a60385f475bfd6779/docs/cli/plan-mode.md)
+和 [`tools.md`](https://github.com/google-gemini/gemini-cli/blob/c0d192452b4e2df7efb6d62a60385f475bfd6779/docs/reference/tools.md)
+区分执行前审阅与轻量 Todo；Hermes Agent commit `3c5fd918e3e2537cd74f4f88c990c5de5cbd9f63` 的
+[`todo_tool.py`](https://github.com/NousResearch/hermes-agent/blob/3c5fd918e3e2537cd74f4f88c990c5de5cbd9f63/tools/todo_tool.py)
+只在上下文压缩后重新注入 active items，避免完成项诱发重做；OpenAI 官方的
+[`Follow a goal`](https://learn.chatgpt.com/use-cases/follow-goals) 把持久目标限定为跨轮、具有可验证停止条件的工作。
+本工程采纳“按需、跨边界继续消费、结果验证”，不复制 Plan 文件、第二套 Todo、Task Tracker 或通用 Planner。
+
+默认审阅边界由两条正式入口证据共同约束。CONV-001 锁定用户明确要求计划时先返回 `plan_ready`，HARNESS-001
+使用没有“计划、步骤、确认、auto”等指令的自然研究请求，锁定两种合法结果：不创建正式计划并直接完成，或创建计划
+后在执行任何动作前停下。变更前同一 HARNESS-001 输入创建计划后先执行了 3 个网页动作；变更后返回完整答案且没有
+创建形式计划。baseline/target archive 分别为
+`data/e2e_traces/product_baselines/harness-001/baseline/20260813T155736.029773Z-2924-b3c89423` 和
+`data/e2e_traces/product_baselines/harness-001/target/20260813T162211.319231Z-25124-d865fd5b`，checksum 与配对校验均通过。
+
+CONV-002 已关闭 `HARNESS-002`。失败 baseline 证明旧协议会在 Observation 已齐后重复相同计划直到预算耗尽；
+落地时删除了模型可写的 revision/evidence 字段、`working_plan_progress_required` 和 FinalMessage 前的重复完成写入，
+保留一个 canonical Working Plan。最新正式 target 在进程重启后恢复 revision 1，以 3 个 ToolCall 取得 OpenAI、Gemini、
+Hermes 官方来源，在 4 个 continuation model-turn 内返回 answer；Runtime 生成 revision 3，三项来源步骤绑定各自
+action ID，最终交付步骤由 FinalMessage 明确完成。归档为
+`data/e2e_traces/product_baselines/conv-002/target/20260814T045035.499203Z-31672-582c9346`。
+这证明当前同一用例已交付，不代表任意模型调用都无方差；HARNESS-001 曾出现一次模型错误声称没有可用搜索能力，
+同输入复跑通过，尚不足以准入新的字符串门禁或 Prompt 规则。
+
+CONV-003 锁定计划项本身的质量。同一正式 Conversation HTTP 输入仍限制为一次模型决策和零次工具调用；
+变更前虽能创建计划，但各项只是“检索、比较、给建议”等活动，独立结构化语义评估将全部工作项判为不可验收。
+最小修复没有增加字段、表或第二套计划对象，只要求现有描述用用户语言写明“结果”和“完成条件”。目标路径中每项都
+说明要形成的资料提取或建议，以及何时可以接受为完成；执行成功仍只作为证据，不会由运行系统自动把工作项标成完成。
+用例为 `evals/product_baselines/test_conv_003_work_item_quality.py`；同输入失败基线与目标报告分别为
+`data/e2e_traces/conv-003-baseline.json` 和 `data/e2e_traces/conv-003-work-item-quality.json`。
+
+### 3.2.1 Interaction Prompt 的工程边界
+
+**Prompt materialization 已从 `ConversationService` 抽到纯函数模块 `interaction_prompt.py`；Service 只传入
+canonical projection、预算与当前 Working Plan，不再拥有 159 行 prompt literal。** 这是用户行为不变的内部
+重构：工程基线为 `service.py=3209` 行、内嵌 system prompt 159 行/10240 literal chars；重构后
+`service.py=3028` 行、prompt 模块 183 行。抽取前后代表性输入的 materialized prompt 均为 9940 chars 且
+byte-for-byte 相同；重构后的 targeted suite 为 65 passed，正式入口 CONV-001 为 1 passed（40.36s），
+CONV-002 为 1 passed（53.33s）。这些数字记录的是抽取阶段的行为保持基线；之后 CONV-003 依据失败的产品基线
+调整了计划项表述，因此不再声称当前提示词与抽取前逐字相同。该模块没有 Interface、Factory、Repository、状态或第二写入口。
+
+CONV-001 当前只能作为目标行为回归证据：旧测试把每次通过结果写回
+`data/e2e_traces/conv-001-baseline.json`，原失败 baseline 已被覆盖，不能继续声称存在可复核的 paired
+baseline。当前用例 `evals/product_baselines/test_conv_001_working_plan.py` 仍经过真实模型、PostgreSQL、
+Web 进程重启和运行时随机知识事实，并验证用户审阅、修订、恢复和最终结果；新执行写入
+`data/e2e_traces/product_baselines/conv-001/<baseline|target>/<run-id>/`，记录输入/初始事实/身份/入口/
+配置与 grader digest，并由 checksum 封印。只有在旧实现与目标实现使用相同 evidence seed 且机械配对
+校验通过后，才能重新建立“该产品变更有失败 baseline”的结论。机制参考为 A 级 OpenAI 官方文档（复核日期
+2026-08-13）：`https://developers.openai.com/api/docs/guides/function-calling` 的 five-step tool-calling
+conversation 与 strict schema，以及 `https://developers.openai.com/tracks/building-agents` 的 structured
+outputs / orchestration 边界。采纳 typed proposal、应用侧执行和 observation 回注；没有引入多 Agent、
+通用 Planner、Workflow、Aggregate、Repository 或新表。
+
+### 3.3 预算、并发与恢复
 
 `LoopBudgetPolicy` 限制 model turns、Tool calls、Agent calls、token 和并发数。预算耗尽返回
 明确 limitation/failure，不拼接替代业务答案。组建同一批 action 时按 proposal 顺序逐项预占剩余
@@ -244,11 +350,12 @@ Tool/Agent call slot；因此并发批次也不能基于同一个旧 usage 快�
 写状态、审批或结果依赖的动作保持串行，并把 Observation 返回下一模型轮。
 
 `InteractionTrace` 由 `ConversationService` 写入，直接保存 owner `AuthenticatedPrincipal`、输入消息、
-已提交 Observation/Feedback、usage、执行顺序、并发批次、逐轮上下文构成
-（`context_composition`）和最终消息。读取或用同一 `interaction_run_ref` 恢复前必须匹配已提交
+已提交 Observation/Feedback、usage、真实执行顺序、并发批次、逐轮上下文构成
+（`context_composition`）、当前 `ConversationWorkingPlan` 和最终消息。被 Admission 拒绝的 proposal
+只形成 typed Feedback，不进入 execution order。读取或用同一 `interaction_run_ref` 恢复前必须匹配已提交
 principal；不匹配时返回资源不存在，并以同一 run ref 记录 `conversation_run_scope_mismatch`。
 无法可信推导 owner 的旧 snapshot 被隔离，不能默认归给当前用户。恢复后模型直接读取 committed
-typed inputs；恢复不会重复已提交 action，也不要求生成没有生产调度消费者的中间 Plan。
+typed inputs；恢复不会重复已提交 action，也不把前台工作清单升级为生产调度源。
 
 `context_composition` 属于 Observability：记录发生在模型调用之后，不参与可见输入组装，不进入任何
 终止判据或预算判定，可由 committed inputs 确定性重算。语义见
@@ -364,10 +471,10 @@ GPT Researcher A2A profile 与主工程使用相同 tokeness Provider 配置。
 
 | 产品能力 | Application owner | Canonical fact / 唯一写入口 |
 | --- | --- | --- |
-| Conversation | `ConversationService` | `InteractionTrace` / Interaction journal |
+| Conversation | `ConversationService` | `InteractionTrace` / Interaction journal；按需 `ConversationWorkingPlan` 与 final message 共用此唯一写入口 |
 | Conversation governed save | `ConversationService` + `KnowledgeService` | journal 拥有 save Command/operation/Receipt；Personal Knowledge 固化方法仍是唯一知识写入口 |
 | Goal-entry knowledge delete | `ConversationService` 调用 `KnowledgeLifecycleService` | lifecycle service/store 拥有 delete Command/status/Receipt；Interaction 只存 command ref |
-| Goal-entry durable investigation | `ConversationService` 调用 `InvestigationProjectService` | Project aggregate/store 拥有 definition/Plan/state/Completion；Interaction 只存 ProjectReference |
+| Goal-entry durable investigation | `ConversationService` 调用 `InvestigationProjectService` | `InvestigationProject` aggregate 拥有 definition/accepted Plan/state/Completion，Service 是唯一 Application 写入口，store 持久化 definition/event；Interaction 只存 ProjectReference |
 | Artifact | `ArtifactService` | application-owned ArtifactRef 和 Artifact Store |
 | Capture | `CaptureService` + Personal Knowledge ingestion | 原始资源、Artifact、Evidence、Claim ingestion transaction |
 | Grounded answer | `ConversationService` + `KnowledgeService.select_evidence` | Conversation 拥有唯一 FinalMessage；Knowledge 拥有 Personal Evidence/Claim/conflict；回答不隐式写 Claim |
@@ -552,7 +659,7 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 - 模型拥有开放语义和下一步 Proposal，Runtime 不从字符串或相似度猜业务下一步；
 - Proposal 不是权限、执行事实或完成证明；
 - Admission 只接受/拒绝，不静默修复 Proposal；
-- 普通 Conversation 不创建强制 Plan；durable Plan 只属于显式 Investigation Project；
+- 普通 Conversation 不强制创建计划；用户明示是强触发条件，存在可证明协调收益时模型也可主动创建由当前对话拥有的可验收工作项清单；可持久恢复的调查规划只属于显式后台项目；
 - 普通只读 ToolCall 与 governed side effect 使用不同执行边界；
 - Tool 和 Agent 必须经过对应 Gateway，Adapter 不决定授权；
 - Agent Artifact、Tool Receipt、Semantic Verification 和 Domain Completion 互不冒充；
@@ -571,11 +678,12 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 | --- | --- |
 | Composition Root | `orchestration/runtime.py`、`orchestration/service.py` |
 | Conversation models / loop | `application/conversation/models.py`、`application/conversation/service.py` |
+| Conversation execution facts / working-plan admission / explicit knowledge save | `application/conversation/journal.py`、`application/conversation/working_plan.py`、`application/conversation/knowledge_save.py` |
 | Conversation Ports | `application/conversation/ports.py`、`capabilities/contracts/interaction.py` |
 | Web conversation entry | `adapters/web/routes/conversation.py` |
-| Personal Knowledge / grounded read | `application/knowledge/`、`application/conversation/` |
+| Personal Knowledge / grounded read | `application/knowledge/`；确定性文本与关系规则位于 `application/knowledge/text_rules.py` |
 | Knowledge delete/restore | `application/knowledge_lifecycle/`、`adapters/web/routes/notes.py` |
-| Research / Scheduled Intelligence | `application/research/`、`adapters/web/routes/research.py` |
+| Research / Scheduled Intelligence | `application/research/`；请求理解与查询规划位于 `application/research/planning.py`；Web 入口位于 `adapters/web/routes/research.py` |
 | Review / Knowledge Gap | `application/review/`、`application/insight/` |
 | Tool registry / execution | `governance/registry.py`、`governance/gateway.py` |
 | Agent lifecycle / A2A | `agents/gateway.py`、`agents/gpt_researcher_a2a.py` |
@@ -585,7 +693,52 @@ POST /api/conversation/runs/{run}/knowledge-save-decision
 | E2E catalog / gate | `evals/e2e_quality/evidence_catalog.py`、`evals/e2e_quality/release_gate.py` |
 | Architecture DAG gate | `scripts/check_layers.py`、`.github/workflows/architecture.yml` |
 
-## 13. 未闭合风险
+## 13. 巨大生产文件审计与职责收敛
+
+**结论：大文件是评审触发器，不是拆分目标。本轮只处理已测得职责混装的三个主文件；千行以上生产文件仍有 8 个，但其余文件没有足够证据支持机械拆分。**
+
+这是**纯内部重构**，用户行为保持不变。重构前，Conversation、Research 与 Knowledge 的主服务分别为
+3,028、2,589、1,981 行，并分别混入了可独立命名、可独立验证的职责。正式入口行为基线为：
+
+- `uv run pytest -q tests/test_conversation_interaction.py tests/test_research.py tests/test_research_digest_verification.py tests/test_knowledge_p0.py`：112 passed；
+- `uv run pytest -q tests/test_api.py`：29 passed。
+
+| 文件 | 已证明的职责混装 | 本轮处理 | 处理后行数 |
+| --- | --- | --- | ---: |
+| `application/conversation/service.py` | 主循环同时拥有 journal 实现、working-plan 机械准入与显式知识保存的确认事务 | 把执行事实存取、计划机械准入、知识保存 prepare/confirm/commit 分别交给命名 owner；保留原公共入口 | 2,450 |
+| `application/research/service.py` | 研究运行编排同时拥有请求理解、策略解析和查询规划 | 抽出无运行状态的 planning 规则，Research 主服务继续拥有研究生命周期 | 2,375 |
+| `application/knowledge/service.py` | 知识用例同时实现文本切分、规范化、实体与关系判定 | 抽出确定性文本/关系规则，Knowledge 主服务继续拥有写入和生命周期 | 1,736 |
+
+三个主文件共移出 **1,037 行**。新增模块不是新的架构层：没有新增 Interface、Factory、Registry、状态、表、写入口或兼容路径；生产主服务直接调用这些 owner，旧实现已删除。由于没有引入新的运行机制，本轮不以外部 Agent 框架作为需求或拓扑来源，继续复用本工程现有的 Application owner 与 Port 边界。
+
+其余千行文件的本轮判断如下：
+
+- `investigation_project/service.py` 仍围绕同一个 durable aggregate 的生命周期与恢复，不因 1,981 行直接拆分；
+- `investigation_project/model_ports.py`、`infra/structured_model.py` 位于模型边界，尚无已执行的变更耦合基线证明需要再分层；
+- `orchestration/runtime.py` 是 Composition Root，体积来自显式装配；只有装配职责发生混装或变更耦合可复现时才拆；
+- `kernel/evidence.py` 仍拥有同一 evidence contract，没有第二个事实 owner。
+
+重构后的同输入回归为 141 passed；`uv run ruff check .` 与 `uv run python scripts/check_layers.py` 均通过。当前最大剩余热点是 Conversation 的 `respond()`（748 行）和 `_admit()`（256 行）。它们不能只被搬进通用 Helper；后续只有在某个独立 Application Capability 的 owner 与失败工程基线成立时，才继续从主循环删除对应分支。
+
+## 14. 工作清单版本协议收缩
+
+**结论：模型只负责工作清单语义，服务端只负责计划身份、排序和恢复；当前实现不再让模型参与版本控制，也不声称具备并发 CAS。**
+
+这是**纯内部重构**，用户行为保持不变。工程基线显示，原 `WorkingPlanProposal.base_revision` 同时进入结构化输出 schema、Prompt 和 Admission；但 Journal 的“读取当前计划、接纳、写入”不是原子条件写，因此 `working_plan_revision_conflict` 只能拒绝顺序执行中的旧 Proposal，不能提供并发一致性。对应的正式入口行为基线仍使用 `POST /api/conversation/turn`，锁定计划展示、用户调整、Web 重启恢复和最终完成：
+
+- 重构前行为 archive：`data/e2e_traces/product_baselines/conv-001/target/20260814T030814.909041Z-2708-3c4881f7`；
+- 重构后行为 archive：`data/e2e_traces/product_baselines/conv-001/target/20260814T031938.266803Z-9344-31006f3d`。
+
+本轮删除模型 Proposal 的 `base_revision`、版本冲突反馈和相关 Prompt 协议；主决策调用与受限 completion call 都只向模型提供 `goal + steps`。Runtime 继续从当前 canonical plan 机械保护 completed step，并为已接纳快照生成内部 `revision`。该序号仍由 journal 恢复和 HTTP 展示消费，因此本轮不删除字段；若未来确有同会话并发写入，必须先取得正式入口失败 baseline，再在 canonical Repository 实现原子 `expected_revision`，不能把版本重新交给模型。
+
+复杂度变化为：模型字段 -1、Admission reason code -1、版本相关准入分支 -2；新增状态、表、Interface、Factory、Repository 和兼容路径均为 0。保留的内容比较由同一准入模块拥有，用于区分“已完成清单的重复提交”和“新目标的新清单”。验证结果：
+
+- `python -m pytest -q tests/test_conversation_interaction.py tests/test_api.py tests/test_e2e_evidence_catalog.py tests/test_e2e_trace_archive.py`：117 passed；
+- `ruff check .`：passed；
+- `python scripts/check_layers.py`：passed，14 packages、48 edges、0 cycle、0 forbidden edge；
+- `python -m pytest -q -s evals/product_baselines/test_conv_001_working_plan.py::test_conv_001_frontstage_working_plan_is_visible_and_revisable`：passed。
+
+## 15. 未闭合风险
 
 1. 旧 23/23 archive 不匹配新版自然 E2E；提交后必须在 clean revision 重跑当前完整矩阵，才能
    建立发布资格；

@@ -373,14 +373,10 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "evals/e2e_quality/trace_archive.py",
         "Archive writer whose output the release gate consumes.",
     ),
-    _full(
-        "evals/e2e_quality/investigation_harness.py",
-        "Shared durable-project harness used across investigation cases.",
-    ),
     _cases(
         "evals/e2e_quality/test_complex_loop_outcomes.py",
         "Assertions for the complex-loop journeys only.",
-        "L01", "L02", "L03", "L04", "L05", "L06",
+        "L01", "L02", "L03", "L04", "L05", "L06", "L07",
     ),
     _cases(
         "evals/e2e_quality/test_product_capability_outcomes.py",
@@ -393,10 +389,6 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "evals/e2e_quality/test_release_user_outcomes.py",
         "External capability-profile assertions and shared live fixtures.",
         "E16", "E17", "E18", "E19", "E21",
-    ),
-    _none(
-        "evals/e2e_quality/test_durable_investigation",
-        "Scripted/frozen-port durable diagnostics; not live release evidence.",
     ),
     _none("docs/", "Documentation carries no production behaviour."),
     _none("tests/", "Unit and contract tests do not change production behaviour."),

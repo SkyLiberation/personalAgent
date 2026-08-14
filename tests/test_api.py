@@ -258,7 +258,7 @@ class TestConversationEndpoint:
     ):
         def converse(
             *, conversation_id, messages, interaction_run_ref=None,
-            principal, source_platform,
+            principal, source_platform, interaction_mode,
         ):
             assert interaction_run_ref is None
             assert conversation_id == "conversation-1"
@@ -266,6 +266,7 @@ class TestConversationEndpoint:
             assert principal.user_id == "default"
             assert principal.tenant_id == "personal-agent"
             assert source_platform == "web"
+            assert interaction_mode == "default"
             return ConversationTurnView(
                 interaction_run_ref="irun-test",
                 conversation_id=conversation_id,

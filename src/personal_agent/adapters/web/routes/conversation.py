@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from personal_agent.application.conversation import (
     ConversationMessage,
     ConversationKnowledgeSaveOperation,
+    ConversationInteractionMode,
     ConversationOperationConflict,
     ConversationOperationNotFound,
     ConversationTurnView,
@@ -27,6 +28,13 @@ class ConversationTurnRequest(BaseModel):
         default=None, pattern=r"^irun_[A-Za-z0-9_-]+$"
     )
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
+    interaction_mode: ConversationInteractionMode = Field(
+        default="default",
+        description=(
+            "default requires review before a new formal plan can execute; "
+            "auto authorizes plan creation and execution in the same turn"
+        ),
+    )
 
 
 class ConversationKnowledgeSaveDecisionRequest(BaseModel):
@@ -67,6 +75,7 @@ def register_conversation_routes(
                 interaction_run_ref=body.interaction_run_ref,
                 principal=principal,
                 source_platform="web",
+                interaction_mode=body.interaction_mode,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

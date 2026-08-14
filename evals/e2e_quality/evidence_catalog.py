@@ -25,13 +25,32 @@ class FaultMechanism(str, Enum):
     PROCESS_TERMINATION = "process_termination"
 
 
-class EvidenceClaimKind(str, Enum):
-    ARCHITECTURE = "architecture"
-    PRODUCT_CAPABILITY = "product_capability"
+class EvidenceClass(str, Enum):
+    PRODUCT_E2E = "product_e2e"
+    APPLICATION_E2E = "application_e2e"
+    RUNTIME_CONFORMANCE = "runtime_conformance"
     CAPABILITY_PROFILE = "capability_profile"
-    COMPLEX_LOOP = "complex_loop"
-    DURABLE_INVESTIGATION = "durable_investigation"
     BOUNDARY_EVALUATION = "boundary_evaluation"
+
+
+class BaselineKind(str, Enum):
+    IMPLEMENTATION_FAILURE = "implementation_failure"
+    REGRESSION_CONTRACT = "regression_contract"
+
+
+@dataclass(frozen=True, slots=True)
+class UserOutcomeContract:
+    """Why one Product E2E may contribute to product completion claims."""
+
+    outcome_id: str
+    persona: str
+    source_ref: str
+    natural_goal: str
+    observable_result: str
+    counterfactuals: tuple[str, ...]
+    baseline_kind: BaselineKind
+    baseline_ref: str
+    assertion_owner: str
 
 
 class CapabilityProfile(str, Enum):
@@ -54,23 +73,22 @@ class EvidenceCase:
     test_name: str
     layers: frozenset[EvidenceLayer]
     entry_boundary: EntryBoundary
+    evidence_class: EvidenceClass
     fault_mechanism: FaultMechanism = FaultMechanism.NONE
     raw_user_input: bool = True
     real_model_required: bool = True
     real_postgres_required: bool = True
     test_doubles: frozenset[str] = frozenset()
     limitation: str = ""
-    claim_kind: EvidenceClaimKind = EvidenceClaimKind.ARCHITECTURE
+    user_outcome_contract: UserOutcomeContract | None = None
     capability_profile: CapabilityProfile = CapabilityProfile.BASELINE
+    covered_invariants: frozenset[str] = frozenset()
 
     @property
     def release_eligible(self) -> bool:
         return (
-            self.claim_kind
-            in {
-                EvidenceClaimKind.PRODUCT_CAPABILITY,
-                EvidenceClaimKind.COMPLEX_LOOP,
-            }
+            self.evidence_class is EvidenceClass.PRODUCT_E2E
+            and self.user_outcome_contract is not None
             and self.entry_boundary is EntryBoundary.HTTP_PROCESS
             and self.fault_mechanism is not FaultMechanism.IN_PROCESS_HOOK
             and self.raw_user_input
@@ -90,6 +108,10 @@ def _product(
     *layers: EvidenceLayer,
     capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
     fault_mechanism: FaultMechanism = FaultMechanism.NONE,
+    evidence_class: EvidenceClass = EvidenceClass.APPLICATION_E2E,
+    user_outcome_contract: UserOutcomeContract | None = None,
+    limitation: str = "",
+    covered_invariants: frozenset[str] = frozenset(),
 ) -> EvidenceCase:
     return EvidenceCase(
         evidence_id=f"{case_id}.product_http",
@@ -99,7 +121,10 @@ def _product(
         layers=frozenset(layers),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
         fault_mechanism=fault_mechanism,
-        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        evidence_class=evidence_class,
+        user_outcome_contract=user_outcome_contract,
+        limitation=limitation,
+        covered_invariants=covered_invariants,
         capability_profile=capability_profile,
     )
 
@@ -110,6 +135,9 @@ def _loop(
     *,
     fault_mechanism: FaultMechanism = FaultMechanism.NONE,
     capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
+    evidence_class: EvidenceClass = EvidenceClass.RUNTIME_CONFORMANCE,
+    user_outcome_contract: UserOutcomeContract | None = None,
+    covered_invariants: frozenset[str] = frozenset(),
 ) -> EvidenceCase:
     return EvidenceCase(
         evidence_id=f"{case_id}.complex_loop_http",
@@ -119,7 +147,9 @@ def _loop(
         layers=frozenset(EvidenceLayer),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
         fault_mechanism=fault_mechanism,
-        claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
+        evidence_class=evidence_class,
+        user_outcome_contract=user_outcome_contract,
+        covered_invariants=covered_invariants,
         capability_profile=capability_profile,
     )
 
@@ -128,6 +158,8 @@ def _profile(
     case_id: str,
     test_name: str,
     capability_profile: CapabilityProfile,
+    *,
+    covered_invariants: frozenset[str] = frozenset(),
 ) -> EvidenceCase:
     return EvidenceCase(
         evidence_id=f"{case_id}.capability_profile",
@@ -141,8 +173,9 @@ def _profile(
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
-        claim_kind=EvidenceClaimKind.CAPABILITY_PROFILE,
+        evidence_class=EvidenceClass.CAPABILITY_PROFILE,
         capability_profile=capability_profile,
+        covered_invariants=covered_invariants,
         limitation=(
             "Connector profile evidence; product release claims are owned by "
             "the product capability and complex-loop E2E suites."
@@ -161,7 +194,7 @@ def _investigation(
     return EvidenceCase(
         evidence_id=f"{case_id}.durable_investigation",
         case_id=case_id,
-        module=module,
+        module=f"../runtime_conformance/investigation_project/{module}",
         test_name=test_name,
         layers=frozenset(EvidenceLayer),
         entry_boundary=EntryBoundary.IN_PROCESS_SERVICE,
@@ -169,13 +202,35 @@ def _investigation(
         raw_user_input=False,
         real_model_required=False,
         test_doubles=frozenset({"scripted_model", "frozen_provider"}),
-        claim_kind=EvidenceClaimKind.DURABLE_INVESTIGATION,
+        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
         capability_profile=capability_profile,
         limitation=(
             "Diagnostic durable-project state-machine evidence. It uses the production "
             "application/domain/persistence path with scripted semantic decisions and "
             "frozen providers; it is not release evidence for live model/provider behavior."
         ),
+    )
+
+
+def _outcome(
+    outcome_id: str,
+    *,
+    natural_goal: str,
+    observable_result: str,
+    counterfactuals: tuple[str, ...],
+    baseline_ref: str,
+    baseline_kind: BaselineKind = BaselineKind.REGRESSION_CONTRACT,
+) -> UserOutcomeContract:
+    return UserOutcomeContract(
+        outcome_id=outcome_id,
+        persona="使用个人知识 Agent 的知识工作者",
+        source_ref="docs/evals/02-current-case-inventory.md",
+        natural_goal=natural_goal,
+        observable_result=observable_result,
+        counterfactuals=counterfactuals,
+        baseline_kind=baseline_kind,
+        baseline_ref=baseline_ref,
+        assertion_owner="the executable assertions in the catalogued pytest node",
     )
 
 
@@ -193,7 +248,15 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             EvidenceLayer.VERIFICATION_COMPLETION,
         }),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
-        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "grounded_answer.personal_only",
+            natural_goal="只根据我保存的资料回答并给出原文依据",
+            observable_result="回答引用当前用户的保存资料并正确呈现冲突",
+            counterfactuals=("不调用 Web", "不泄漏其他用户资料", "Ask 不写入知识"),
+            baseline_ref="behavior-baseline:ASK-001A",
+        ),
+        covered_invariants=frozenset({"ask.zero_write", "grounded_answer.personal"}),
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     EvidenceCase(
@@ -209,7 +272,15 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             EvidenceLayer.VERIFICATION_COMPLETION,
         }),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
-        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "grounded_answer.personal_and_web",
+            natural_goal="结合我的资料与官方 Web 证据回答",
+            observable_result="一个回答同时包含正确个人事实与可追溯官方证据",
+            counterfactuals=("不泄漏其他用户资料", "Ask 不写入知识"),
+            baseline_ref="behavior-baseline:ASK-001B",
+        ),
+        covered_invariants=frozenset({"ask.zero_write", "grounded_answer.web"}),
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     EvidenceCase(
@@ -224,7 +295,11 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             EvidenceLayer.JOURNAL_RECOVERY,
         }),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
-        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        limitation=(
+            "Regression evidence for controlling an already-created InvestigationProject; "
+            "it is not a complete product outcome or evidence of Project necessity."
+        ),
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     _product(
@@ -240,6 +315,10 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         EvidenceLayer.JOURNAL_RECOVERY,
         EvidenceLayer.VERIFICATION_COMPLETION,
         fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        covered_invariants=frozenset({
+            "knowledge_delete.confirmed",
+            "knowledge_delete.reject_and_multi_pending",
+        }),
     ),
     _product(
         "E05",
@@ -254,6 +333,10 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         "test_product_e08_ask_then_explicit_save",
         EvidenceLayer.AUTHORITY_GATEWAY,
         EvidenceLayer.VERIFICATION_COMPLETION,
+        covered_invariants=frozenset({
+            "ask.zero_write",
+            "knowledge_save.direct_solidify_contract",
+        }),
     ),
     _product(
         "E09",
@@ -269,6 +352,11 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         EvidenceLayer.JOURNAL_RECOVERY,
         EvidenceLayer.VERIFICATION_COMPLETION,
         fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        covered_invariants=frozenset({
+            "knowledge_delete.confirmed",
+            "knowledge_restore.replay",
+            "knowledge_correction.answer",
+        }),
     ),
     _product(
         "E11",
@@ -300,6 +388,19 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         EvidenceLayer.JOURNAL_RECOVERY,
         EvidenceLayer.VERIFICATION_COMPLETION,
         fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "knowledge_save.confirmed_exact_span",
+            natural_goal="在确认后保存我明确要求记住的内容",
+            observable_result="精确用户原文在确认后可恢复地保存",
+            counterfactuals=("确认前零写入", "控制语义不写入", "重放不重复写入"),
+            baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+            baseline_ref="B01/B02 -> E14 archived failure chain",
+        ),
+        covered_invariants=frozenset({
+            "knowledge_save.confirmed",
+            "knowledge_save.replay",
+        }),
     ),
     _product(
         "E22",
@@ -308,6 +409,16 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         EvidenceLayer.AUTHORITY_GATEWAY,
         EvidenceLayer.JOURNAL_RECOVERY,
         EvidenceLayer.VERIFICATION_COMPLETION,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "knowledge_delete.natural_confirmed",
+            natural_goal="用自然语言定位并删除我保存的一条知识",
+            observable_result="确认后目标知识被删除且重放返回同一结果",
+            counterfactuals=("确认前目标仍存在", "不泄漏其他用户知识", "不重复副作用"),
+            baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+            baseline_ref="archive:20260803T142932.564456Z-23720-19ba8517",
+        ),
+        covered_invariants=frozenset({"knowledge_delete.confirmed"}),
     ),
     _product(
         "E23",
@@ -317,6 +428,11 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         EvidenceLayer.AUTHORITY_GATEWAY,
         EvidenceLayer.JOURNAL_RECOVERY,
         capability_profile=CapabilityProfile.WEB_SEARCH,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        limitation=(
+            "Natural handoff regression only; no final report is asserted and the "
+            "InvestigationProject demand baseline is absent."
+        ),
     ),
     _product(
         "IP01",
@@ -327,25 +443,76 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         EvidenceLayer.VERIFICATION_COMPLETION,
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
-    _loop("L01", "test_l01_http_natural_recall_uses_observed_personal_knowledge"),
+    _loop(
+        "L01",
+        "test_l01_http_natural_recall_uses_observed_personal_knowledge",
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "personal_knowledge.natural_recall",
+            natural_goal="回忆我之前保存的一条个人知识",
+            observable_result="回答包含当前用户保存的精确随机事实",
+            counterfactuals=("不泄漏其他用户事实", "不在无证据时声称找到"),
+            baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+            baseline_ref="archive:20260803T142413.474927Z-4864-39fedcf5",
+        ),
+        covered_invariants=frozenset({"personal_knowledge.recall"}),
+    ),
     _loop(
         "L07",
         "test_l07_http_conversation_save_is_recalled_in_a_new_conversation",
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "personal_knowledge.save_then_cross_conversation_recall",
+            natural_goal="确认保存后在新会话回忆同一事实",
+            observable_result="新会话准确返回已确认保存的随机事实",
+            counterfactuals=("确认前不写入", "不返回其他用户事实"),
+            baseline_ref="behavior-baseline:L07",
+        ),
+        covered_invariants=frozenset({
+            "knowledge_save.confirmed",
+            "personal_knowledge.cross_conversation_recall",
+        }),
     ),
     _loop("L02", "test_l02_http_independent_reads_use_safe_concurrency"),
     _loop(
         "L03",
         "test_l03_http_process_restart_rebuilds_from_committed_facts",
         fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "conversation.recover_committed_read",
+            natural_goal="服务中断后仍完成同一知识查询",
+            observable_result="恢复后回答包含正确保存事实",
+            counterfactuals=("已提交读取不重复", "不泄漏其他用户事实"),
+            baseline_ref="behavior-baseline:L03",
+        ),
     ),
     _loop(
         "L04",
         "test_l04_http_manager_synthesizes_bounded_specialist_artifact",
         capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "deep_research.bounded_specialist_synthesis",
+            natural_goal="深入研究并综合四个安全边界及来源",
+            observable_result="最终答复覆盖要求的四个方面并提供来源依据",
+            counterfactuals=("不暴露内部 artifact 控制文本", "不只返回简短概述"),
+            baseline_ref="behavior-baseline:L04",
+        ),
+        covered_invariants=frozenset({"a2a.deep_research"}),
     ),
     _loop("L05", "test_l05_http_budget_exhaustion_fails_closed"),
     _loop(
-        "L06", "test_l06_http_user_requested_review_returns_receipt_bound_safe_revision"
+        "L06", "test_l06_http_user_requested_review_returns_receipt_bound_safe_revision",
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=_outcome(
+            "answer_review.safe_revision",
+            natural_goal="审查并修订一段缺少执行证据的答复",
+            observable_result="只返回不再虚假声称已写入的安全文本",
+            counterfactuals=("不发送未通过审查的草稿",),
+            baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+            baseline_ref="paired-eval:L06 5/9 -> 9/9",
+        ),
     ),
     EvidenceCase(
         evidence_id="CTX-001.baseline",
@@ -361,8 +528,8 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
         test_doubles=frozenset({"frozen_external_document_provider"}),
-        claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
         limitation=(
             "The real model and production HTTP/MCP/Gateway/Conversation path are used; "
             "only the external read-only documents are frozen for repeatable facts and size."
@@ -380,12 +547,12 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
         test_doubles=frozenset({"frozen_external_document_provider"}),
         limitation=(
             "The real model and production HTTP/MCP/Admission/Gateway path are used; "
             "only the untrusted external document is frozen and its provider records calls."
         ),
-        claim_kind=EvidenceClaimKind.BOUNDARY_EVALUATION,
     ),
     EvidenceCase(
         evidence_id="RUN-001.baseline",
@@ -400,12 +567,12 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
         test_doubles=frozenset({"frozen_external_record_provider"}),
         limitation=(
             "The real model and production HTTP/MCP/Conversation budget path are used; "
             "only the external records are frozen and their provider records calls."
         ),
-        claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
     ),
     EvidenceCase(
         evidence_id="DUR-001.baseline",
@@ -420,8 +587,8 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
         fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
     ),
     EvidenceCase(
         evidence_id="OBS-001.baseline",
@@ -435,8 +602,8 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
         fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        claim_kind=EvidenceClaimKind.BOUNDARY_EVALUATION,
         limitation=(
             "Operator diagnosis evidence for the same natural authorization failure; "
             "it does not itself claim improved answer quality."
@@ -451,6 +618,10 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         "E17",
         "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result",
         CapabilityProfile.GPT_RESEARCHER_A2A,
+        covered_invariants=frozenset({
+            "a2a.deep_research",
+            "a2a.provider_profile",
+        }),
     ),
     _profile(
         "E18",
@@ -479,8 +650,8 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             }
         ),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
         capability_profile=CapabilityProfile.WEB_SEARCH,
-        claim_kind=EvidenceClaimKind.BOUNDARY_EVALUATION,
         limitation=(
             "Paired product-boundary measurement; it compares ResearchRun, Conversation, "
             "and Investigation Project but does not itself produce a release claim."
@@ -571,52 +742,55 @@ def validate_catalog() -> None:
             "one E2E test node cannot own multiple evidence classifications"
         )
     expected = {
-        EvidenceClaimKind.PRODUCT_CAPABILITY: {
-            "E01",
-            "E04",
-            "E05",
-            "E08",
-            "E09",
-            "E10",
-            "E11",
-            "E12",
-            "E13",
+        EvidenceClass.PRODUCT_E2E: {
             "E14",
             "E22",
             "E23",
-            "IP01",
-            "DUR-001",
             "PLAN-001",
             "ASK-001A",
             "ASK-001B",
+            "L01",
+            "L03",
+            "L04",
+            "L06",
+            "L07",
         },
-        EvidenceClaimKind.COMPLEX_LOOP: {
-            *(f"L{index:02d}" for index in range(1, 8)),
+        EvidenceClass.APPLICATION_E2E: {
+            "E01", "E04", "E05", "E08", "E09", "E10", "E11", "E12",
+            "E13", "IP01",
+        },
+        EvidenceClass.RUNTIME_CONFORMANCE: {
+            "L02", "L05",
             "CTX-001",
             "RUN-001",
-        },
-        EvidenceClaimKind.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19", "E21"},
-        EvidenceClaimKind.DURABLE_INVESTIGATION: {
+            "GOV-001", "DUR-001", "OBS-001",
             *(f"LT{index:02d}" for index in range(1, 9)),
             "LT10",
             "LT11",
             "LT12",
             "LT13",
         },
-        EvidenceClaimKind.BOUNDARY_EVALUATION: {"E24", "GOV-001", "OBS-001"},
+        EvidenceClass.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19", "E21"},
+        EvidenceClass.BOUNDARY_EVALUATION: {"E24"},
     }
-    for kind, case_ids in expected.items():
-        actual = {case.case_id for case in EVIDENCE_CASES if case.claim_kind is kind}
+    for evidence_class, case_ids in expected.items():
+        actual = {
+            case.case_id
+            for case in EVIDENCE_CASES
+            if case.evidence_class is evidence_class
+        }
         if actual != case_ids:
             raise ValueError(
-                f"{kind.value} E2E catalog coverage mismatch: {sorted(actual ^ case_ids)}"
+                f"{evidence_class.value} catalog coverage mismatch: "
+                f"{sorted(actual ^ case_ids)}"
             )
-    if any(
-        case.claim_kind is EvidenceClaimKind.ARCHITECTURE for case in EVIDENCE_CASES
-    ):
-        raise ValueError(
-            "legacy architecture cases are not allowed in the release catalog"
-        )
+    outcome_ids = [
+        case.user_outcome_contract.outcome_id
+        for case in EVIDENCE_CASES
+        if case.user_outcome_contract is not None
+    ]
+    if len(outcome_ids) != len(set(outcome_ids)):
+        raise ValueError("one canonical product outcome cannot have multiple owners")
 
 
 validate_catalog()
@@ -624,12 +798,14 @@ validate_catalog()
 
 __all__ = [
     "CapabilityProfile",
+    "BaselineKind",
     "EVIDENCE_BY_NODE",
     "EVIDENCE_CASES",
     "EntryBoundary",
     "EvidenceCase",
-    "EvidenceClaimKind",
+    "EvidenceClass",
     "EvidenceLayer",
     "FaultMechanism",
+    "UserOutcomeContract",
     "validate_catalog",
 ]

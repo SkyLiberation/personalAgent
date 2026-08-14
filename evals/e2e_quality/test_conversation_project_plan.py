@@ -9,17 +9,18 @@ from uuid import uuid4
 
 import pytest
 
-from evals.e2e_quality.measurements import measurement_from_interaction_trace
 from evals.e2e_quality.test_product_capability_outcomes import (
     _record,
     live_investigation_worker as _live_investigation_worker_fixture,  # noqa: F401
-    live_web_search_process as _live_web_search_process_fixture,  # noqa: F401
 )
 from evals.e2e_quality.test_release_user_outcomes import _get_json, _post_json
 
 
 pytestmark = pytest.mark.integration
-pytest_plugins = ("evals.e2e_quality.test_release_user_outcomes",)
+pytest_plugins = (
+    "evals.e2e_quality.test_release_user_outcomes",
+    "evals.e2e_quality.test_product_capability_outcomes",
+)
 
 
 def test_plan_001_same_conversation_reads_steers_and_recovers_its_project(
@@ -143,5 +144,4 @@ def test_plan_001_same_conversation_reads_steers_and_recovers_its_project(
             "resumed_trace": resumed_trace,
         },
         profile="baseline+web_search",
-        measurement=measurement_from_interaction_trace(resumed_trace),
     )

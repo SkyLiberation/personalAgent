@@ -1,6 +1,6 @@
 # ADR 0002: Investigation Project Aggregate and Journal
 
-- Status: Accepted, release evidence pending
+- Status: Accepted implementation; product-demand qualification absent
 - Date: 2026-07-27
 - Removal review: 2027-07-27
 
@@ -8,8 +8,14 @@
 
 Conversation ReAct can recover committed interaction inputs, and existing durable workflows can recover
 fixed topologies. Neither owns dynamic SubGoal dependencies, requirement coverage, steering revisions or
-a deliverable contract across process and approval boundaries. LT09 freezes Conversation as the simplest
-baseline; LT12 separately compares a fixed durable workflow with observation-driven revision.
+a deliverable contract across process and approval boundaries.
+
+The adoption-time design said LT09 would freeze Conversation as the simplest product baseline and LT12
+would compare a fixed durable workflow with observation-driven revision. A later evidence audit found that
+LT09 returned a constructed `conversation_coverage` value without executing the Conversation production
+entry, while LT12 was mechanism evidence created with the design. They therefore do not qualify the
+product demand for InvestigationProject. This ADR records the ownership and recovery boundaries of the
+implemented public path; it must not be cited as proof that real users required the aggregate.
 
 ## Decision
 
@@ -40,20 +46,26 @@ ArtifactService on recovery, so final synthesis is not repeated.
 
 ## Net Complexity and Removed Path
 
-Added one aggregate, one journal/store and one worker handler. Removed the Conversation
-`WorkingPlanSnapshot` contract, recovery admission and trace projection. No converter, feature flag or
-second Project write path remains.
+Added one aggregate, one journal/store and one worker handler. The initial implementation removed the old
+Conversation `WorkingPlanSnapshot`; a later, independently admitted change added a Conversation-owned
+typed working plan without sharing Project facts or durable dispatch. No converter, feature flag or second
+Project write path remains.
 
 ## Verification
 
-Diagnostic LT01–LT13 exercise production domain/application/store/queue code with scripted external ports.
-Lifecycle integration additionally asserts user pause/resume, restart scanning and system-pause
-non-bypass, plus crash recovery from `cancelling` and `completing` without duplicate provider cancellation
-or final synthesis. Live model/provider release evidence remains mandatory.
+Current diagnostic coverage excludes the invalid LT09 comparison. The remaining runtime-conformance and
+lifecycle tests exercise production domain/application/store/queue code with scripted external ports and
+assert user pause/resume, restart scanning, system-pause non-bypass, and crash recovery from `cancelling`
+and `completing` without duplicate provider cancellation or final synthesis. These are regression and
+mechanism claims, not product-demand evidence. Live model/provider release evidence remains mandatory for
+the corresponding provider profile.
 
 ## Alternatives and Exit
 
-A longer Conversation loop was rejected because it has no durable deliverable owner. A generic DAG engine
-was rejected because it adds abstraction without a second business consumer. Remove the Project main path
-if LT09 does not prove recovery benefit or LT12 does not prove dynamic-plan benefit; migrate canonical
-facts first and retain the simpler baseline.
+A generic DAG engine remains rejected because it adds abstraction without a second business consumer.
+No additional Project lifecycle, approval, planning or persistence mechanism may be added until a
+traceable user/contract source and same-input failure baseline establish the missing result. The existing
+HTTP/Conversation path is already a public behavior with persisted canonical facts, so removing or
+collapsing it is also a product change: first identify real consumers and migration obligations, execute a
+behavior/migration baseline, and preserve canonical facts before deletion. Architecture references alone
+authorize neither expansion nor destructive removal.

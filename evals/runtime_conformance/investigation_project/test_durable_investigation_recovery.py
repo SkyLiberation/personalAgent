@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from evals.e2e_quality.investigation_harness import InvestigationScenarioHarness
+from evals.runtime_conformance.investigation_project.investigation_harness import (
+    InvestigationScenarioHarness,
+)
 
 
 pytestmark = [

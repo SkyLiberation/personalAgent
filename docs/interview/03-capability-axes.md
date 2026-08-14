@@ -1,175 +1,224 @@
-# Agent 能力设计：五个关键判断
+# 智能体运行外壳与关键能力
 
-> **能力设计不是十二项功能清单，而是五个可验证的边界：谁做语义决策、模型看见什么、动作如何治理、状态如何恢复、目标如何证明完成。** 每个机制只在本地可执行基线成立后引入。
+> **本篇集中介绍运行外壳拥有的五项关键能力：语义决策闭环、按需工作清单、有界模型上下文、受治理执行、恢复与完成。** 每项都按“解决什么错误、如何工作、能力收益、证据、边界”完整展开；知识生命周期和后台调查分别由[领域设计](04-knowledge-and-domain-workflows.md)主讲，本篇不复制第二套解释。
 
-## 1. 模型有语义提议权，没有事实所有权
+## 1. 运行外壳把模型建议变成可靠的用户结果
 
-```text
-Context + capability/tool projection
-  -> AgentTurnDecision
-       |-> FinalMessage / Clarification / Limitation
-       |-> ContinueTurn(ToolCallProposal / AgentDelegationProposal)
-  -> Admission / Policy
-  -> owner-based execution
-  -> bounded Observation
-  -> next turn or stop
-```
-
-**Agentic 的关键不是循环次数或是否先写 Plan，而是每轮只依据已提交输入，并让所有终止语义显式化。** 目标满足、需要用户输入、能力缺失、预算耗尽和执行失败不能都压成 `success=false`。
-
-| 判断 | owner | 机械边界 |
-| --- | --- | --- |
-| 用户想完成什么、下一步语义动作 | 模型或用户 | typed Proposal，不直接写事实 |
-| 当前身份能否看见/调用 | Policy / Application | scope、permission、exposure |
-| 参数是否符合 schema 和冻结约束 | Admission | 接受或返回 typed feedback，不补业务语义 |
-| 副作用是否发生 | 执行系统 | Event/Receipt/外部权威 |
-| 目标语义是否满足 | Verifier | 不能推翻执行事实 |
-| required result 是否齐全 | Completion Gate | 不把单个 Tool success 升级为完成 |
-
-Structured output 只让字段和分支可机械解析，不证明模型选对了目标或 Tool。Provider Adapter 可以转换 wire protocol，不能创造缺失语义、权限或业务 payload。
-
-## 2. Context 只注入当前允许且需要的信息
-
-**Context engineering 的顺序是 Visibility → Requirement Retrieval → Semantic Selection → Budget Materialization。** 权限必须在召回和 Prompt 之前生效；把越权内容取回后再要求模型忽略，已经越界。
-
-### 2.1 大 Observation 卸载与精确重读
+**运行外壳是包围模型的工作闭环，不是新的业务层。** 模型负责理解用户目标和提出下一步；运行外壳准备本轮可见信息、约束模型权力、执行获准动作、提交执行事实，并在发送答案前组织验证和完成判断。
 
 ```text
-large Tool result
-  -> resource owner 保存完整内容
-  -> journal 提交 bounded Observation + ResourceRef + omitted metadata
-  -> model decides whether/where to read
-  -> read_action_output(ref, offset/range)
-  -> bounded Observation
+用户目标
+  -> 组装当前身份允许且本轮需要的信息与能力
+  -> 模型提出回答、澄清、工作清单或动作
+  -> 确定性准入检查结构、权限、风险、预算和当前事实
+  -> 按事实归属执行获准动作
+  -> 提交有界执行事实并交回模型
+  -> 模型依据新事实继续、等待用户或准备结束
+  -> 语义验证与完成判断
+  -> 用户可见结果
 ```
 
-责任分开：模型判断证据是否充分和下一段读什么；Tool 校验 ref、scope、range 与单次上限；Runtime 限制总轮次和总预算。停止条件也不是只有 EOF：目标证据充分、资源耗尽、预算不足、能力失败或需要用户输入都能终止。
+这条闭环阻止五类错误：模型建议直接获得权限、外部数据升级为控制指令、恢复时重复已提交动作、工具成功冒充目标完成、预算耗尽被包装成正常答案。
 
-`CTX-001` 证明长 Conversation 在多个大结果和早期证据下仍保持有界 materialization，并能重读后回答；它不证明所有问题都能在固定页数内完成。完整机制见 [ADR 0013](../adr/0013-bounded-observation-and-offloaded-read.md)。
-
-### 2.2 Personal Knowledge 与 Project context
-
-- personal evidence 在 principal/scope 过滤后有界预取，作为 `personal_knowledge_context` Observation 进入同一 Conversation；
-- linked Project 每轮预取有界 plan/progress projection，Conversation 不复制 accepted Plan；
-- Artifact、Journal、Long-term Knowledge 和 Retrieval Index 保留目的不同，不合并成 God State。
-
-这两个预取机制都是只读 materialization，不是第二事实源，也不能自动触发知识写入或 Project 状态推进。
-
-## 3. Application Capability 与执行资源按 owner 分开
-
-**Application Capability 表达用户可理解、可验收的业务动作；Tool、MCP、Agent 是实现目标时可选的执行资源。** Workflow 是 Capability 内的固定事务编排，Project 是拥有动态长期事实的 Aggregate。
-
-| 模型可见动作 | 语义/事实 owner | 执行入口 |
+| 判断 | 责任主体 | 不能越过的边界 |
 | --- | --- | --- |
-| 低风险只读 Tool / MCP | Tool/Provider contract | ToolGateway |
-| 保存、删除、创建 Project 等 application action | 具体 Application / Aggregate | capability-specific Admission + Use Case |
-| bounded sub-goal | parent goal + child run contract | AgentGateway |
+| 用户想完成什么、下一步做什么 | 用户或模型 | 只能提出语义建议，不能直接写事实 |
+| 当前身份能否看见或调用 | 策略与具体业务 | 先检查权限范围，再暴露和执行 |
+| 参数和状态迁移是否合法 | 确定性准入 | 接受或拒绝，不能替模型补业务语义 |
+| 动作是否真实发生 | 执行系统或外部权威 | 形成执行事实，不宣布用户目标完成 |
+| 目标是否满足 | 语义验证 | 不能推翻已经发生的副作用 |
+| 用户要求是否全部交付 | 完成门禁 | 不能把单个成功动作升级为完成 |
 
-模型侧可以统一编码为 callable schema；执行侧不能因此把 Application action 降成普通 Tool。否则 ToolGateway 会被迫拥有知识生命周期、订阅迁移或 Project plan version 等业务事实。
+运行外壳不拥有个人知识、订阅、后台项目或业务完成标准。它统一的是“建议—准入—执行事实—再决策—验证—完成”的权力协议；长期事实继续由具体业务的唯一写入口负责。
 
-### 3.1 临时 projection 的价值与边界
+## 2. 按需工作清单提升复杂任务的跨轮完成能力
 
-模型只看到按 identity、scope、policy 和当前可用性生成的 action/schema projection。它有两个作用：控制不可见资源不进入 Context，统一模型调用协议。它**不拥有 capability definition、availability 或 revision 事实**；没有生产消费者的 revision/digest/cache 直接删除。
+### 2.1 它解决的不是“没有步骤”，而是跨边界后失去任务连续性
 
-Tool 多也不自动需要两阶段 discovery。只有全量 schema 已由相同自然输入证明造成选择、token 或延迟失败，才准入候选发现和按需加载；否则 registry 搜索是提前设计。
+**工作清单解决的是复杂目标跨越预算、上下文、进程或用户调整边界后，Agent 容易忘记未交付结果、看不到已取得事实、重复执行或过早结束的问题。** 一次模型调用能够完成的请求不需要它；单纯多调用几个工具也不是准入理由。
 
-### 3.2 Tool 可见、获准和健康是三个事实
+当前对话只保存一份可验收工作项清单。每项描述：
 
-MCP discovery 只说明远端声明 schema；本地 exposure mapping 决定模型是否看见，Policy/Admission 决定本次是否获准，Gateway 调用结果说明 Provider 是否可用。外部网页、文件和 Tool 输出都是不可信数据，不能借 Observation 获得新工具或覆盖系统控制。`GOV-001` 专门诊断这条“数据不能升级为控制权”的边界。
+- 要向用户形成什么结果；
+- 什么条件下可以接受为完成；
+- 当前是待完成还是已完成。
 
-### 3.3 外部实现如何参考
+“提取三份档案中的准确口令”是结果；“搜索资料”“调用工具”只是活动，不是合格工作项。清单不预先写死工具、顺序或模型的思考过程，下一步仍由新执行事实决定。
 
-**主流框架共享的是边界机制，不共享 `ApplicationCapability` 这个领域类名。**
+### 2.2 真正产生能力收益的是三者共同工作
 
-| A 级坐标 | 可复核机制 | 本项目采用 / 不采用 |
+**单独保存一个 Plan 对象不会提升能力；工作清单、已绑定执行事实和完成门禁共同形成协调能力。**
+
+| 组成 | 回答的问题 | 对 Agent 的实际影响 |
 | --- | --- | --- |
-| OpenAI Agents SDK `running_agents`、`sessions` | 轻量 agent loop、tools、sessions、tracing、HITL | 采用 loop/tool/session 边界；不因此强制通用 Plan |
-| LangGraph `checkpoint-postgres` | thread-scoped checkpoint 与 writes | 参考恢复隔离；领域事实继续由 Application/Aggregate 拥有 |
-| Hermes `agent-loop.md`、`context-compressor.py` | session persistence、bounded tool loop、context 压缩与重读保护 | 采用真源保留和有界读取；不复制其全部 session/compression 拓扑 |
-
-本地 baseline 回答“要不要做”，外部源码只帮助回答“最小机制怎么做”。
-
-## 4. 治理只放在真实风险边界上
-
-**Command、Grant 和 budget reservation 只服务确认、父子隔离或资源竞争等已证明边界，不作为所有 action 的通用包装。**
-
-### 4.1 Command 与 digest
-
-**只读、低风险、可安全重试的 ToolCall 直接执行；需要确认、跨请求恢复或不可安全重试的副作用才形成 immutable Command。**
+| 可验收工作清单 | 还欠用户哪些结果 | 约束下一动作必须服务未完成结果 |
+| 与工作项绑定的成功执行事实 | 已经取得了什么 | 跨轮复用结果或本地副本，不从聊天文本猜测 |
+| 完成门禁 | 现在是否可以结束 | 仍有未完成结果时拒绝最终回答 |
 
 ```text
-Proposal -> immutable Command -> Confirmation -> execute once -> Receipt
-                         \-> CommandDigest binds frozen payload
+模型提出工作清单
+  -> 准入检查工作项可验收、已完成项不可被篡改
+  -> 对话日志提交当前清单
+  -> 动作绑定某个待完成工作项
+  -> 执行系统提交成功或失败事实
+  -> 下一轮恢复当前清单及其绑定的成功事实
+  -> 模型继续处理未完成结果，或根据用户调整修订清单
+  -> 所有当前有效结果满足后，才允许最终回答
 ```
 
-一个 `CommandDigest` 的价值是让确认、journal 和执行机械引用同一冻结 payload；它不是身份、授权或成功证明。授权内容与最终执行相同时不拆双 digest。Command、Event、Receipt 也不机械成套创建，各自必须有审批、审计、恢复、重放或外部关联消费者。
+日志只筛选同一对话、同一身份范围、同一清单且绑定当前工作项的成功事实；失败动作、未绑定事实和其他用户范围的内容不会恢复。日志不决定下一步，也不把工具成功自动解释成工作项完成。
 
-### 4.2 Specialist 与父目标
+### 2.3 什么时候创建，什么时候直接执行
 
-子 Agent 接受 bounded sub-goal，返回 `AgentArtifact`；父 Runtime 仍整合、验证并完成父目标。Grant 限制 scope 和数据外发，stable submission key 防止重启重复提交，late artifact 在 cancel 后隔离。`L04` 证明远端 completed 不会自动完成父请求。
-
-### 4.3 预算与并发
-
-**预算是一份 interaction policy，而不是每层各自维护数字。** 模型轮次、Tool 调用和 Context/token 限制只有在约束不同成本或失败语义时才独立存在；没有独立消费者的参数合并或删除。
-
-并发 batch 必须在执行前根据最新 usage 原子预留，不能让多个 action 都读取旧余额后各自通过。`RUN-001` 证明 cap 为 2 时三个同轮 proposal 最多执行两个，其余得到 typed budget outcome。预算耗尽返回 limitation/暂停/用户输入，不用确定性代码拼“差不多答案”。
-
-## 5. Durable state 恢复已提交事实，不重算语义
-
-| 生命周期 owner | 必须恢复 | 不允许重算 |
+| 场景 | 当前行为 | 原因 |
 | --- | --- | --- |
-| Conversation | committed inputs、Observation refs、usage、ProjectReference | 已提交 Tool/Agent action |
-| Governed side effect | immutable Command、decision、Receipt | 已确认 payload、已发生副作用 |
-| ResearchRun | run state、Digest、Delivery fact | 已发送 Delivery |
-| InvestigationProject | definition、accepted Plan、journal、evidence、submission key | 冻结 SubGoal、已提交 child run |
+| 用户明确要求先看方案或调整工作项 | 创建清单并停在审阅边界 | 用户控制本身就是产品契约 |
+| 任务会跨真实预算、上下文、进程或用户轮次，且存在明显漏项、重复或调整风险 | Agent 可以主动创建 | 清单会在边界后继续约束决策和完成 |
+| 简单问答、一次调用可完成的请求 | 直接回答 | 保存清单没有协调收益 |
+| 只是工具多、步骤多或流程固定 | 继续普通执行循环或进入具体业务流程 | 数量不等于动态协调需求 |
+| 需要离开当前请求后持续运行、查询、暂停或调整 | 创建后台调查项目，而不是扩大前台清单 | 这是独立长期生命周期 |
 
-**Checkpoint 不是 exactly-once 魔法。** 相同 digest 的技术重试可以复用；外部结果不确定时 reconcile；replay 不能再次让模型生成 Command。`DUR-001` 证明 Conversation Web 重启后 owner 能恢复读取且另一 principal 被拒绝；它不能外推所有 Provider crash window 已闭合。
+默认交互中新清单必须先展示，不能一边要求用户审阅一边执行；只有调用方明确选择自动执行模式，清单才可以与已授权动作同轮提交。模型不能根据用户措辞自行切换交互模式。
 
-`PLAN-001` 进一步证明 Conversation journal 只恢复 scoped ProjectReference，Project journal 继续拥有 plan/progress；两者不双写同一业务事实。
+### 2.4 用户调整与版本的责任边界
 
-## 6. Knowledge、Verification 与 Completion 各自守边界
+**用户调整改变当前有效目标，版本号只帮助运行系统恢复排序。** 模型提出目标、工作项和语义完成状态；确定性代码保护已经完成的工作项，并在接受更新后生成单调恢复序号。模型看不到也不回传版本号，它不是授权凭证、完成证据或并发控制令牌。
 
-**知识写入、语义判断和完成证据属于三个 owner；把它们压成一个 `success` 会同时制造污染和错误完成。**
+用户改变尚未完成的要求时，后续动作只服务新要求；已经发生的执行事实不会被改写。若旧清单全部完成后出现新的用户目标，系统创建新的清单身份，而不是把两个目标混成同一次修订。
 
-### 6.1 Grounded answer 不等于 memory write
+### 2.5 当前证据证明了什么
+
+| 用例 | 直接证明 | 不能外推 |
+| --- | --- | --- |
+| `HARNESS-001` | 默认交互中新清单必须先展示；自动执行由调用方明确选择 | 所有复杂请求都应创建清单 |
+| `CONV-001` | 用户可以审阅、调整并最终完成同一清单 | 清单本身必然提升所有任务结果 |
+| `CONV-003` | 工作项必须表达结果和完成条件，不能只列活动 | 任意模型都能稳定分解高质量工作项 |
+| `CONV-002` | 预算边界和网页服务重启后可以恢复同一清单并继续交付 | 只恢复 Plan 对象就足够 |
+| `HARNESS-003` | 同输入消融中，恢复清单绑定的成功事实使错误口令变成准确结果；简单问答仍不建清单 | 所有跨轮任务都有相同收益 |
+
+`HARNESS-003` 是当前最直接的能力证据：首轮在非零预算下取得三个随机事实；移除“成功执行事实消费点”后，第二轮看不到这些事实并给出错误口令；恢复消费点后，Agent 只读取已保存的本地副本，三个原始档案各访问一次，最终交付准确口令和用户调整后的新阈值。这证明收益来自生产消费链，而不是 Plan 字段存在或状态变化。
+
+### 2.6 为什么不与后台调查规划合并
+
+**前台工作清单和后台调查规划碰巧都含“目标、工作项、版本”，但它们不是同一业务事实。**
+
+| 对比 | 前台工作清单 | 后台调查规划 |
+| --- | --- | --- |
+| 事实归属 | 当前对话 | 后台调查项目 |
+| 内容 | 短期可验收结果 | 子目标、依赖和要求覆盖关系 |
+| 消费者 | 用户审阅、动作绑定、跨轮恢复、完成判断 | 工作进程、可执行集合、调整、覆盖检查、项目完成 |
+| 生命周期 | 当前对话协调 | 跨请求、跨进程长期运行 |
+| 不拥有 | 队列、租约和后台项目状态 | 对话审阅状态和前台最终消息 |
+
+两者没有同步、转换或双写；对话只保存后台项目引用。完整的后台调查能力见[领域设计 §8](04-knowledge-and-domain-workflows.md#8-动态后台调查由新证据决定后续路径)。外部实现只用于校准边界：A 级 Gemini CLI commit `c0d192452b4e2df7efb6d62a60385f475bfd6779` 的 [`plan-mode.md`](https://github.com/google-gemini/gemini-cli/blob/c0d192452b4e2df7efb6d62a60385f475bfd6779/docs/cli/plan-mode.md) 与 [`tools.md`](https://github.com/google-gemini/gemini-cli/blob/c0d192452b4e2df7efb6d62a60385f475bfd6779/docs/reference/tools.md) 区分执行前方案审阅与轻量待办；A 级 Hermes Agent commit `3c5fd918e3e2537cd74f4f88c990c5de5cbd9f63` 的 [`todo_tool.py`](https://github.com/NousResearch/hermes-agent/blob/3c5fd918e3e2537cd74f4f88c990c5de5cbd9f63/tools/todo_tool.py) 在上下文压缩后重新注入活跃待办；OpenAI 官方文档（访问日期 2026-08-14）[`Follow a goal`](https://learn.chatgpt.com/use-cases/follow-goals)把持久目标用于跨轮且有可验证停止条件的工作。本工程没有复制第二套 Todo、通用 Planner 或 Task Tracker。
+
+## 3. 有界模型上下文保留真源，只注入当前需要的信息
+
+### 3.1 权限先于召回，需求先于压缩
+
+**模型上下文的顺序是：先过滤可见性，再按当前需求召回，随后选择语义相关内容，最后按预算压缩。** 把越权内容取回后再要求模型忽略，本身已经越界。
+
+同时进入模型的信息仍有不同责任主体：
+
+| 注入内容 | 权威来源 | 模型看见什么 | 如何修改 |
+| --- | --- | --- | --- |
+| 当前工作清单及绑定事实 | 对话日志 | 有界只读视图 | 模型提出更新，准入后写回日志 |
+| 与问题相关的个人证据 | 个人知识 | 当前用户可见的有界证据 | 进入知识专属写入口 |
+| 后台项目进度 | 后台项目日志 | 按项目引用生成的只读投影 | 进入项目调整用例 |
+| 外部大结果 | 资源存储与执行日志 | 摘要、资源引用和按需窗口 | 重新读取，不复制第二份真源 |
+
+上下文组装不拥有这些事实，也不能因为看见某项内容就自动保存知识、推进项目或宣布完成。
+
+### 3.2 大型结果通过引用精确重读
+
+**大结果保留完整真源，只把本轮必要片段交给模型。**
 
 ```text
-Ask  -> scoped evidence -> answer + citations -> no Claim write
-Save -> explicit intent -> exact source/span -> confirmation when required -> Claim write
+大型工具结果
+  -> 资源存储保存完整内容
+  -> 执行日志提交有界片段、资源引用和省略信息
+  -> 模型判断是否需要继续读取以及读取位置
+  -> 返回新的有界片段
 ```
 
-回答含有模型组织和推断，不能自动成为长期事实。纠错创建新 Claim 并用 supersede/conflict 关系连接旧 Claim，不覆盖 provenance。`ASK-001A`、`ASK-001B` 证明 personal-only 和 personal + official web 两条 Conversation 结果；`E08/E14` 证明 Ask 零写入与显式保存边界。
+模型判断证据是否充分以及下一段读什么；工具校验引用、权限范围和单次读取上限；运行系统限制总轮次和总预算。`CTX-001` 证明多个大型结果并存时上下文仍然有界，并可通过重读完成指定回答；它不证明所有问题都能在固定页数内完成。
 
-### 6.2 Execution、Verification、Completion 三分
+## 4. 业务能力与执行资源分开，执行只在获准后发生
 
-| 阶段 | 回答的问题 | 事实例子 |
+**业务能力表达用户可验收的动作和结果责任；工具、MCP 接口和子智能体只是执行资源。** 模型可以用统一结构提出调用，执行侧仍要按事实归属分流。
+
+| 模型提出的动作 | 事实归属 | 正式执行入口 |
 | --- | --- | --- |
-| Execution | 动作是否真实执行 | ToolResult、Event、Receipt、Artifact |
-| Semantic Verification | 结果是否满足 Goal | verdict、verified artifact ref |
-| Completion | required result 是否齐全 | terminal outcome、CompletionReport |
+| 低风险只读调用 | 工具或服务提供方契约 | 受治理工具执行 |
+| 保存、删除、创建后台项目 | 具体业务 | 能力专属准入与唯一业务写入口 |
+| 有界子目标 | 父目标与子任务结果契约 | 受治理的子智能体委托 |
 
-Verifier 可以拒绝“已满足”的声明，不能推翻已发生删除或外部发送。Completion Gate 检查证据齐全，不重做开放语义判断。`L06` 覆盖 Runtime-owned verified draft；`IP01` 覆盖 Project 缺 coverage/evidence 时不得完成。
+工具可见、当前获准和服务健康是三个不同事实。远端发现接口只说明其声明了结构；本地投影决定模型是否看见，策略和准入决定本次是否允许，真实调用结果才说明服务是否可用。网页、文件和工具输出都是数据，不能借内容获得新的控制权。
 
-## 7. 可观测性解释失败，不制造事实
+### 4.1 治理成本只放在真实风险边界
 
-**Trace 应能区分未选择、准入拒绝、执行失败、验证失败和完成证据缺失。**
+**普通只读调用在准入后直接执行；需要确认、跨请求恢复或不可安全重试的副作用才冻结为不可变动作。** 一致性指纹只绑定用户确认、日志和执行过程引用的同一份冻结内容，不是身份、授权或成功证明。冻结动作、事件和回执也不机械成套创建，各自必须有审批、审计、恢复或外部关联的真实消费者。
 
-| 阶段 | 记录 | 不记录成什么 |
+### 4.2 子智能体只完成有界子目标
+
+**子智能体返回产物，不接管父目标的整合、验证和完成责任。** 授权范围限制数据外发，稳定提交键避免恢复时重复提交，取消后的迟到结果必须隔离。远端显示完成，只能证明子任务结束，不能直接完成父请求。
+
+### 4.3 预算是一份统一交互策略
+
+**模型轮次、工具调用和上下文令牌只有约束不同成本或失败语义时才分别存在。** 同批动作在执行前按最新用量预留预算，不能各自读取旧余额后同时超限。预算耗尽时返回能力限制、暂停或请求用户输入，不用确定性代码拼出替代答案。`RUN-001` 证明同轮三个提议在工具上限为 2 时最多执行两个。
+
+## 5. 恢复复用已提交事实，只继续未完成语义
+
+**恢复不是根据原始提示重新思考整件事，而是还原已提交事实、对账结果不明的外部动作，并继续处理未完成结果。**
+
+| 恢复前事实 | 恢复动作 |
+| --- | --- |
+| 执行事实、工作清单或回执已经提交 | 直接复用，不重新生成对应动作 |
+| 外部请求已发出但本地结果不明 | 用稳定提交键查询并对账 |
+| 动作已冻结但尚未执行 | 对同一指纹做幂等执行 |
+| 后续路径尚未冻结且新事实改变依赖 | 可以继续调用模型决策 |
+| 进度、覆盖率和上下文视图 | 从权威事实重新派生 |
+
+检查点不是“恰好执行一次”的魔法；业务副作用仍需要幂等键、查询或补偿。只有承诺跨请求、跨进程或不可重复副作用的路径才承担完整恢复协议，普通单次交互不机械升级为长期项目。
+
+## 6. 动作执行、语义验证和完成判断必须分开
+
+**动作发生、目标满足和结果齐全是三个不同问题。**
+
+| 阶段 | 回答的问题 | 依据 |
 | --- | --- | --- |
-| Proposal | action kind、proposal/model ref | 已执行 Event |
-| Admission/Policy | effect、rule、scope、typed reason | 模糊 `failed` |
-| Execution | attempt、outcome、artifact/receipt ref | 业务状态写入口 |
-| Verification | criterion、verdict、verified ref | Receipt 的替代品 |
-| Completion | required item、evidence/missing reason | Tool success 的别名 |
+| 动作执行 | 动作是否真实发生 | 工具结果、事件、回执或产物 |
+| 语义验证 | 结果是否满足目标 | 验证结论和已验证引用 |
+| 完成判断 | 用户要求是否全部交付 | 终态结果、完成报告或缺失项 |
 
-`OBS-001` 验证跨 principal 拒绝既不泄漏内容，又能通过同 run 的 typed policy/trace 定位为 scope 拒绝，而不是误诊为 Provider 空结果。Observability 是只读投影，不需要通用 observability domain。
+语义验证可以拒绝“已经满足”的声明，不能推翻已经发生的删除或发送；完成门禁检查结果是否齐全，不重新执行开放语义判断。有工作清单时，清单没有未完成项是完成条件之一，但工具成功仍不会自动把工作项变成完成。Plan 如何参与完成判断已在[§2](#2-按需工作清单提升复杂任务的跨轮完成能力)完整说明。
 
-## 8. 面试时只展开三步
+## 7. 可观测性解释失败，不制造业务事实
 
-**每个设计选择只回答三件事：**
+**追踪记录要区分未选择、准入拒绝、执行失败、验证失败和完成证据缺失。** 提议不能记录成已执行事件，策略拒绝不能伪装成服务返回空结果，追踪投影也不能成为第二个业务写入口。`OBS-001` 证明跨用户访问既不泄漏内容，又能通过同一运行引用定位为权限范围拒绝。
 
-1. 用户原来会遇到什么错误；
-2. 哪个 owner 用什么不变量阻止它；
-3. 哪条证据证明到哪里、不能外推什么。
+## 8. 面试时按“错误—机制—证据—边界”介绍能力
 
-避免“优秀 Agent 都这么做”“有 checkpoint 就 exactly-once”“Tool success 就完成”“用例通过就可发布”。准确证据与发布结论见[证据与发布](05-evidence-and-release.md)。
+每项关键能力只讲四步：
+
+1. 没有它时用户会遇到什么错误；
+2. 哪个责任主体用什么机制阻止错误；
+3. 哪条正式证据证明用户结果发生变化；
+4. 结论不能外推到什么范围。
+
+不要从类名、字段或流程图开始，也不要用“优秀 Agent 都这么做”“有检查点就能恰好执行一次”“工具成功就等于完成”替代证据。
+
+## 9. 当前实现坐标
+
+**以下名称只帮助进入代码，不承担前文的设计论证。**
+
+| 设计概念 | 当前代码坐标 |
+| --- | --- |
+| 对话交互主循环 | `application/conversation/service.py` |
+| 模型上下文与指令组装 | `application/conversation/interaction_prompt.py` |
+| 已提交事实与工作清单恢复 | `application/conversation/journal.py` |
+| 工作清单确定性准入 | `application/conversation/working_plan.py` |
+| 一次模型语义建议 | `AgentTurnDecision`（历史代码名，不代表完整应用级交互） |
+| 模型提出的工作清单 | `WorkingPlanProposal` |
+| 当前对话已接受的清单 | `ConversationWorkingPlan` |
+| 后台项目拥有的调查规划 | `InvestigationPlanVersion` |

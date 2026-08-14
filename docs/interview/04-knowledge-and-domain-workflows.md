@@ -1,65 +1,76 @@
 # 领域设计：知识、研究与动态调查
 
-> **领域边界按“谁拥有长期事实和生命周期”划分，而不是按存储技术、Tool 名或任务时长划分。** Knowledge、ResearchRun 和 InvestigationProject 不能被一个通用 Task 抹平，向量库、MCP 和 Agent 也不能成为业务事实源。
+> **领域边界按“谁拥有长期事实和生命周期”划分，而不是按存储技术、工具名或任务时长划分。** 长期知识、周期研究和动态调查具有不同的写入口、状态迁移和完成契约，不能被一个通用任务对象抹平；向量库、外部工具和子智能体也不能成为业务事实源。
 
-## 1. 知识事实链不是 Document + Embedding
+## 1. 知识必须保留“内容从哪里来、支撑了什么”
+
+**只保存文档和向量无法回答：某条陈述来自哪里、现在是否有效、与旧说法是否冲突。** 因此知识链把原始内容、证据位置、可维护陈述和检索投影分开：
 
 ```text
-Source -> Artifact -> EvidenceBlock / EvidenceSpan -> Claim -> Relation / KnowledgeItem
-                                                        |
-                                                        -> Retrieval / Graph projection
+来源
+  -> 可复查的原始或规范化内容
+  -> 精确证据位置
+  -> 可维护陈述及其有效状态
+  -> 支持 / 冲突 / 取代关系
+  -> 可重建的向量或图检索投影
 ```
 
-| 对象 | 权威事实 | 不拥有 |
+| 事实层 | 负责回答 | 明确不负责 |
 | --- | --- | --- |
-| Artifact | 原始/规范化资源及引用 | 内容一定为真 |
-| EvidenceBlock/Span | 支撑位置与 provenance | Claim 生命周期 |
-| Claim | 可维护陈述与 active/superseded/deleted 状态 | 检索排名 |
-| Relation/KnowledgeItem | 支持、冲突、取代和产品读取结构 | 原始资源正文 |
-| Retrieval/Graph projection | 可重建召回视图 | 业务事实和写入口 |
+| 原始内容 | 当时实际保存了什么，可以从哪里复查 | 内容一定为真 |
+| 证据位置 | 哪一段内容支撑后续陈述 | 陈述当前是否有效 |
+| 可维护陈述 | 用户当前认可什么，是否已被取代或删除 | 检索排名 |
+| 关系与产品读取结构 | 新旧陈述如何支持、冲突或取代 | 原始正文存储 |
+| 检索投影 | 如何高效找到候选 | 业务状态与写入口 |
 
-一次索引失败只能影响召回，不能覆盖 Claim。引用必须回到实际 Evidence，而不是只返回相似 chunk id。
+一次索引失败只能影响召回，不能覆盖权威陈述。引用必须回到实际证据位置，而不是只返回相似文本块编号。
 
-## 2. 一个事实一个 owner
+## 2. 一个事实只有一个权威来源
 
-| 事实 | owner / 唯一写入口 |
+**每项长期事实只能有一个权威来源和一个合法写入口，读取便利不能成为复制事实的理由。**
+
+| 事实 | 责任主体和唯一写入口 |
 | --- | --- |
-| Artifact | ArtifactService + Artifact Store |
-| Evidence / Claim | KnowledgeService ingestion transaction |
-| Conversation committed inputs / ProjectReference | ConversationService + Interaction journal |
-| Delete/Restore Command、Event、Receipt | KnowledgeLifecycleService |
-| Subscription、ResearchRun、Digest、Delivery | ResearchService |
-| Project definition、Plan、SubGoal、Completion | InvestigationProject aggregate + service |
-| Tool policy、idempotency、audit | ToolGateway governance store |
-| Child run 与 AgentArtifact | AgentGateway |
+| 原始内容及引用 | 产物存储写入口 |
+| 证据位置与可维护陈述 | 知识摄取事务 |
+| 对话已提交输入、前台可验收工作项、后台项目引用 | 对话日志 |
+| 知识删除/恢复请求、已发生事实和执行回执 | 知识生命周期写入口 |
+| 订阅、单次研究运行、摘要、投递事实 | 周期研究写入口 |
+| 后台项目定义、当前调查规划、子目标、证据和完成 | 后台调查项目自身；项目业务入口是唯一追加事实入口 |
+| 工具权限、幂等和审计 | 工具治理存储 |
+| 子任务运行与返回产物 | 子智能体执行网关 |
 
-UI View、Trace、Capability projection、向量索引和 Graph 都是读取投影，不得成为第二写入口。
+界面视图、诊断追踪、能力投影、向量索引和图索引都只是读取投影，不得成为第二写入口。
 
-## 3. Context、Journal、Artifact 和 Memory 不能合并
+## 3. 模型上下文、运行日志、大内容存储和长期知识不能合并
+
+**这些存储解决的是可见性、恢复、大内容保存和跨会话事实四个不同问题，合并后会互相污染生命周期。**
 
 | 存储 | 目的 | 失效/恢复边界 |
 | --- | --- | --- |
-| LLM Context | 当前模型调用可见输入 | 可裁剪、压缩和重建 |
-| Interaction Journal | 恢复 Conversation committed facts | 不重复已提交 action |
-| Artifact Store | 保存大内容与中间产物 | 通过 scoped ResourceRef 读取 |
-| Long-term Knowledge | 跨会话可维护事实 | 只能走 Knowledge 写入口 |
-| Retrieval Index | 高效生成候选 | 可从权威事实重建 |
+| 模型上下文 | 当前模型调用可见输入 | 可裁剪、压缩和重建 |
+| 对话日志 | 恢复对话中已经提交的事实 | 不重复已提交动作 |
+| 大内容存储 | 保存大内容与中间产物 | 通过受作用域约束的资源引用读取 |
+| 长期知识 | 跨会话可维护事实 | 只能走知识写入口 |
+| 检索索引 | 高效生成候选 | 可从权威事实重建 |
 
-结构相似不代表生命周期相同。把它们合成 God State 会让 Context 摘要、运行恢复和长期事实互相污染。
+结构相似不代表生命周期相同。把它们合成一个无所不包的大状态，会让上下文摘要、运行恢复和长期事实互相污染。
 
-## 4. Grounded answer 是只读证据链
+## 4. 有证据的回答默认只读
+
+**回答可以消费个人与外部证据，但不能因为生成了一段可信文本就自动产生长期知识。**
 
 ```text
-authenticated principal + question
-  -> visible knowledge
-  -> bounded personal evidence Observation
-  -> optional Tool/MCP observations
-  -> answer generation
-  -> grounding/conflict verification
-  -> one Conversation FinalMessage
+已认证用户 + 问题
+  -> 先过滤其可见知识
+  -> 注入有界个人证据
+  -> 按需取得外部证据
+  -> 生成一个统一答案
+  -> 检查引用与冲突
+  -> 返回最终结果，不自动写知识
 ```
 
-**最终回答由 Conversation 拥有，Knowledge 拥有 evidence/claim 语义。** `ASK-001A` 覆盖 personal-only 冲突证据，`ASK-001B` 覆盖 personal + official web；两者都断言不写 Claim、不跨 principal。当前只证明 principal ownership，不外推 workspace/membership/role Aggregate。
+**最终回答由当前交互负责，知识业务继续拥有证据与长期陈述。** `ASK-001A` 覆盖仅使用个人冲突证据，`ASK-001B` 覆盖个人证据结合官方网页；两者都断言不写入长期陈述、不跨用户。当前只证明用户级事实隔离，不外推工作区、成员或角色能力。
 
 ## 5. 写入首要目标是防污染
 
@@ -67,57 +78,82 @@ authenticated principal + question
 
 ### 显式保存
 
-Ask 默认零写入。Save 需要明确意图、user-authored exact span、来源索引和必要确认；assistant candidate 包含推断与生成措辞，当前不是已准入长期知识来源。
+**保存必须绑定用户明确意图和精确原文，不能把助手生成内容当成已授权事实。** 问答默认零写入；保存需要来源索引和必要确认。
 
 ### 纠错
 
+**纠错通过新增当前陈述并保留旧陈述完成，不能覆盖历史来源。**
+
 ```text
-old Claim(active) -> old Claim(superseded)
-new Claim(active) -> Relation(supersedes/conflicts) -> old Claim
+旧陈述：有效 -> 已被取代
+新陈述：有效 -> 通过“取代/冲突”关系连接旧陈述
 ```
 
-不覆盖旧 Claim，才能保留“原来是什么、谁在何时更正、为什么新旧冲突”的 provenance，同时让默认检索只选择 active facts。
+不覆盖旧陈述，才能保留“原来是什么、谁在何时更正、为什么新旧冲突”的来源链，同时让默认检索只选择当前有效事实。
 
 ### 删除与恢复
 
-DeleteCommand 和 RestoreCommand 是两个 immutable 动作；prepare 零副作用，Confirmation 绑定服务端冻结 payload，相同 digest replay 返回已有 Receipt。只有确认、幂等和跨请求恢复消费者存在，才值得创建 Command/Receipt。
+**删除和恢复是两个独立的不可变动作，恢复不能抹掉删除曾经发生。** 准备阶段零副作用，确认绑定服务端已经冻结的内容，相同指纹的重放返回已有结果。只有确认、幂等和跨请求恢复确有消费者时，才值得保存冻结请求和执行回执。
 
-## 6. Review 与 Maintenance 只消费知识事实
+## 6. 复习与维护只能消费知识事实
 
-- Review 生成 ReviewCard、记录用户反馈并更新 schedule projection；
-- Maintenance 产生 conflict/orphan/backlink 候选并引用 source Claim；
-- 二者都不能绕过 KnowledgeService 直接改写 Claim。
+- 复习生成展示卡片、记录用户反馈并更新复习日程投影；
+- 维护产生冲突、孤立项和反向链接候选，并引用来源陈述；
+- 二者都不能绕过知识写入口直接改写长期陈述。
 
-它们共享 Knowledge 读取模型，不拥有第二套知识权威事实。
+它们共享知识读取模型，不拥有第二套知识权威事实。
 
-## 7. ResearchRun 适合固定结果契约
+### 6.1 当前知识能力证据与边界
+
+| 用例 | 直接证明 | 不能外推 |
+| --- | --- | --- |
+| `ASK-001A/B` | 个人证据和外部证据可以进入同一回答，且不跨用户、不自动写知识 | 已实现完整工作区和角色权限体系 |
+| `E14/L07` | 用户明确保存的原文可以在确认、重启后跨会话召回 | 助手生成内容可以安全自动保存 |
+| `E22` | 自然语言定位知识后，确认前零副作用，确认后删除 | 所有批量知识治理场景 |
+| `E10` | 纠错、删除、恢复和重放遵守已有生命周期 | 自然入口已经覆盖所有维护动作 |
+
+这些证据共同说明来源、显式写入和生命周期边界已经进入生产路径；准确用例分类仍以[证据与发布](05-evidence-and-release.md)为准。
+
+## 7. 固定周期研究由稳定结果契约驱动
+
+**后续步骤在执行前已经由产品契约确定时，应使用固定流程，不让模型重新规划事务顺序。**
 
 ```text
-Subscription -> Scheduler -> ResearchRun -> Digest -> Delivery -> Feedback
+用户订阅 -> 定时触发 -> 单次研究运行 -> 摘要 -> 幂等投递 -> 用户反馈
 ```
 
-Subscription 定义计划，ResearchRun 保存单次执行状态，Delivery 保存幂等投递事实。模型和 Web Provider 可以参与检索总结，但领域状态迁移、来源要求、partial/limitation 和 exactly-once delivery 由 Research Application 决定。修改订阅不能篡改历史 Run，Feedback 必须关联同一 Subscription/Run。
+订阅定义未来研究契约，单次运行保存本次执行状态，投递记录不可重复发送事实。模型和网页服务提供方可以参与检索总结，但状态迁移、来源要求、部分完成、能力限制和投递幂等由研究业务决定。修改订阅不能篡改历史运行，反馈必须关联产生该结果的订阅和运行。
 
-## 8. InvestigationProject 适合动态 durable facts
+当前 `E05/E13` 证明研究运行、摘要记录、幂等投递和反馈关联可以贯穿正式业务入口；现有断言对摘要正确性和用户实际收到的内容仍偏弱，因此只能介绍生命周期能力，不能声称研究质量已经充分验证。
 
-| 维度 | ResearchRun | InvestigationProject |
+## 8. 动态后台调查由新证据决定后续路径
+
+**只有新证据会改变后续依赖，并且目标需要独立长期生命周期时，动态后台项目才比固定流程更合适。**
+
+| 维度 | 固定周期研究 | 动态后台调查 |
 | --- | --- | --- |
-| 目标 | 稳定研究/摘要契约 | 显式 required result 的开放调查 |
-| 编排 | 固定 pipeline/state machine | Observation 驱动 accepted Plan/ready set |
-| 用户控制 | Run/Subscription 操作 | steering、pause/cancel、progress |
-| 恢复 | run state、Digest、Delivery | Plan、journal、submission key、evidence |
-| 完成 | Digest/Delivery 领域终态 | Verification + CompletionReport |
+| 目标 | 稳定研究与摘要契约 | 带明确验收要求的开放调查 |
+| 编排 | 固定流程和状态机 | 新证据驱动规划修订与可执行集合 |
+| 用户控制 | 修改订阅、查看单次运行 | 调整方向、暂停、取消、查看进度 |
+| 恢复 | 运行状态、摘要与投递事实 | 当前规划、事实日志、稳定提交键和证据 |
+| 完成 | 研究结果与投递达到领域终态 | 逐项语义验证并生成完成报告 |
 
-Project 的区分标准不是“运行很久”，而是动态依赖和独立长期业务事实。Conversation 只保存 ProjectReference；读取 projection 不推进状态，steering 走 Project 唯一写入口。普通请求已有路径能满足时，不能因为框架支持 durable graph 就迁入 Project。
+是否建立后台项目，不取决于“运行很久”，而取决于是否存在动态依赖和独立长期业务事实。当前对话只保存项目引用；读取投影不推进状态，调整必须进入项目唯一写入口。普通请求已有路径能满足时，不能因为框架支持持久图就迁入后台项目。
 
-## 9. MCP 与 A2A 只拥有执行事实
+当前证据分三段：`E23` 证明自然语言入口可以创建并返回项目引用；`PLAN-001` 证明同一对话查询、调整和网页服务重启后仍访问同一项目；`IP01` 从项目接口证明要求覆盖、证据和最终报告。三条用例不能拼成“自然语言创建后由真实工作进程持续完成并返回报告”的单一产品证据，后台项目的产品必要性也仍缺少实现前的同输入失败基线。
 
-- MCP discovery/schema 不定义 Claim、Subscription 或 Project 状态；
-- A2A completed 只表示 child run 终止，不表示父 Goal 完成；
-- Adapter 只转换协议，不补业务 payload、不绕过 Policy、不把远端状态写成领域终态。
+## 9. 外部协议只拥有执行事实
+
+- 外部工具发现和接口结构不定义长期知识、订阅或后台项目状态；
+- 远端子智能体显示“已完成”，只表示子任务终止，不表示父目标完成；
+- 协议适配只转换格式，不补业务内容、不绕过权限、不把远端状态直接写成领域终态。
 
 ## 10. 只持久化不能安全重建的事实
 
-**持久化的判据是存在恢复、审计或幂等消费者，而不是对象看起来重要。** immutable Command、Receipt、accepted Plan、Delivery fact 和 Claim 需要保存；Context projection、ready set、检索排名和模型可见 capability projection 能从权威事实重建，不应成为第二事实源。
+**持久化的判据是存在恢复、审计或幂等消费者，而不是某个对象看起来重要。** 已确认的冻结动作、执行回执、后台调查规划、投递事实和长期陈述需要保存；上下文投影、当前可执行集合、检索排名和模型可见能力投影都能从权威事实重建，不应成为第二事实源。
 
-通用 Context、HITL、预算和恢复机制见[能力设计](03-capability-axes.md)，证据边界见[证据与发布](05-evidence-and-release.md)。
+## 11. 当前实现坐标
+
+**以下名称只用于进入代码，不是划分领域边界的理由。** 正文中的“原始内容—证据位置—可维护陈述”主要映射为 `Artifact`、`EvidenceBlock/EvidenceSpan`、`Claim`；固定周期研究映射为 `Subscription/ResearchRun/Delivery`，动态后台调查映射为 `InvestigationProject`。
+
+通用模型上下文、人工介入、预算和恢复机制见[能力设计](03-capability-axes.md)，证据边界见[证据与发布](05-evidence-and-release.md)。

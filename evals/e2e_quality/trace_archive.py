@@ -12,7 +12,13 @@ import subprocess
 from typing import Any
 from uuid import uuid4
 
-from evals.e2e_quality.measurements import CaseMeasurement, MeasurementProfile
+from pydantic import BaseModel
+
+from evals.e2e_quality.measurements import (
+    CaseMeasurement,
+    MeasurementProfile,
+    measurement_from_trace_payload,
+)
 
 
 TRACE_SCHEMA_VERSION = 3
@@ -44,6 +50,36 @@ def _git_value(*args: str) -> str | None:
         return None
 
 
+def _git_dirty_digest() -> str | None:
+    status = _git_value("status", "--porcelain=v1")
+    if not status:
+        return None
+    try:
+        diff = subprocess.check_output(
+            ("git", "diff", "--binary", "HEAD", "--"),
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        diff = b""
+    digest = sha256(status.encode("utf-8") + b"\0" + diff)
+    try:
+        root = Path(_git_value("rev-parse", "--show-toplevel") or ".")
+        untracked = subprocess.check_output(
+            ("git", "ls-files", "--others", "--exclude-standard", "-z"),
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        ).split(b"\0")
+        for relative_bytes in sorted(item for item in untracked if item):
+            digest.update(b"\0untracked\0" + relative_bytes + b"\0")
+            path = root / relative_bytes.decode("utf-8")
+            if path.is_file():
+                digest.update(path.read_bytes())
+    except (OSError, UnicodeDecodeError, subprocess.SubprocessError):
+        pass
+    return digest.hexdigest()
+
+
 class TraceArchive:
     """Write immutable-shaped E2E evidence without coupling production code."""
 
@@ -72,6 +108,7 @@ class TraceArchive:
                 "commit": _git_value("rev-parse", "HEAD"),
                 "branch": _git_value("branch", "--show-current"),
                 "dirty": bool(_git_value("status", "--porcelain")),
+                "dirty_digest": _git_dirty_digest(),
             },
             "runtime": {
                 "python": platform.python_version(),
@@ -100,7 +137,10 @@ class TraceArchive:
         case_id: str,
         trace: dict[str, Any],
         measurement: CaseMeasurement | None = None,
+        product_evidence: BaseModel | None = None,
     ) -> Path:
+        if measurement is None:
+            measurement = measurement_from_trace_payload(trace)
         paths = self._trace_files_by_nodeid.setdefault(nodeid, [])
         sequence = len(paths) + 1
         path = self.run_dir / f"{_safe_name(case_id)}.{sequence}.trace.json"
@@ -114,6 +154,11 @@ class TraceArchive:
             "measurement": (
                 measurement.model_dump(mode="json")
                 if measurement is not None
+                else None
+            ),
+            "product_evidence": (
+                product_evidence.model_dump(mode="json")
+                if product_evidence is not None
                 else None
             ),
             "trace": trace,

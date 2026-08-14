@@ -2,8 +2,12 @@ from personal_agent.application.conversation.models import (
     ActionObservation,
     AgentDelegationProposal,
     AgentTurnDecision,
+    AgentTurnDecisionWithPlan,
     ContinueTurnProposal,
+    ConversationInteractionMode,
     ConversationMessage,
+    ConversationWorkingPlan,
+    ConversationWorkingPlanStep,
     ConversationKnowledgeSaveCommand,
     ConversationKnowledgeSaveOperation,
     ConversationKnowledgeSaveReceipt,
@@ -16,29 +20,37 @@ from personal_agent.application.conversation.models import (
     LoopBudgetPolicy,
     ReviewCriteria,
     ToolCallProposal,
+    WorkingPlanProposal,
+    WorkingPlanStepProposal,
 )
 from personal_agent.application.conversation.review_admission import (
     ReviewIntent,
     ReviewRequirement,
 )
-from personal_agent.application.conversation.service import (
-    ConversationOperationConflict,
-    ConversationOperationNotFound,
-    ConversationService,
-    ConversationUnavailable,
+from personal_agent.application.conversation.journal import (
     FileInteractionJournal,
     InMemoryInteractionJournal,
 )
+from personal_agent.application.conversation.errors import (
+    ConversationOperationConflict,
+    ConversationOperationNotFound,
+    ConversationUnavailable,
+)
+from personal_agent.application.conversation.service import ConversationService
 
 __all__ = [
     "ActionObservation",
     "AgentDelegationProposal",
     "AgentTurnDecision",
+    "AgentTurnDecisionWithPlan",
     "ContinueTurnProposal",
+    "ConversationInteractionMode",
     "ConversationKnowledgeSaveCommand",
     "ConversationKnowledgeSaveOperation",
     "ConversationKnowledgeSaveReceipt",
     "ConversationMessage",
+    "ConversationWorkingPlan",
+    "ConversationWorkingPlanStep",
     "ConversationOperationConflict",
     "ConversationOperationNotFound",
     "ConversationService",
@@ -56,4 +68,6 @@ __all__ = [
     "ReviewIntent",
     "ReviewRequirement",
     "ToolCallProposal",
+    "WorkingPlanProposal",
+    "WorkingPlanStepProposal",
 ]

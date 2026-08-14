@@ -3,7 +3,7 @@
 > 状态：本文后半仍混合迁移前 `AgentGraphState`、旧 AgentEvent 和 LangGraph 总图描述，不是
 > 当前架构的 canonical owner。当前事实与证据边界见
 > [核心架构当前状态](../summary/core-architecture-current-state.md) 和
-> [E2E 质量用例](../evals/e2e-quality-cases.md)。在完成逐项代码取证前，本文仅作历史设计参考。
+> [当前评测体系](../evals/README.md)。在完成逐项代码取证前，本文仅作历史设计参考。
 
 观测与治理层负责回答三个问题：
 

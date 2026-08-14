@@ -11,16 +11,22 @@ from personal_agent.agents import AgentGateway, InMemoryAgentRunStore
 from personal_agent.application.conversation import (
     AgentDelegationProposal,
     AgentTurnDecision,
+    AgentTurnDecisionWithPlan,
     ContinueTurnProposal,
     ConversationMessage,
+    ConversationWorkingPlan,
+    ConversationWorkingPlanStep,
     ConversationOperationNotFound,
     ConversationService,
     FileInteractionJournal,
     FinalMessage,
+    InMemoryInteractionJournal,
     LoopBudgetPolicy,
     ReviewIntent,
     ReviewRequirement,
     ToolCallProposal,
+    WorkingPlanProposal,
+    WorkingPlanStepProposal,
 )
 from personal_agent.application.conversation.models import (
     ActionObservation,
@@ -34,6 +40,15 @@ from personal_agent.application.conversation.models import (
     PersonalKnowledgeEvidenceSnapshot,
     InvestigationRequirementProgress,
     InvestigationSubgoalProgress,
+    InteractionTrace,
+)
+from personal_agent.application.conversation.working_plan import (
+    admit_action_plan_bindings,
+    admit_final_plan_resolution,
+    admit_working_plan,
+)
+from personal_agent.application.conversation.interaction_prompt import (
+    build_interaction_system_prompt,
 )
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
@@ -112,6 +127,8 @@ class _Decisions:
         item = self.items.pop(0)
         if isinstance(item, BaseException):
             raise item
+        if request.operation == "interaction_completion_answer":
+            return self._response(item)
         return self._response(AgentTurnDecision(decision=item))
 
     @staticmethod
@@ -132,6 +149,14 @@ def test_agent_turn_decision_uses_supported_object_root_schema():
     assert schema["type"] == "object"
     assert schema["required"] == ["decision"]
     assert "anyOf" in schema["properties"]["decision"]
+    assert schema["properties"]["decision"]["anyOf"][0]["$ref"].endswith(
+        "/ContinueTurnProposal"
+    )
+
+    plan_schema = strictify_schema(AgentTurnDecisionWithPlan.model_json_schema())
+    assert plan_schema["properties"]["decision"]["anyOf"][0]["$ref"].endswith(
+        "/FinalMessage"
+    )
 
     def contains_one_of(node) -> bool:
         if isinstance(node, dict):
@@ -145,8 +170,45 @@ def test_agent_turn_decision_uses_supported_object_root_schema():
     assert contains_one_of(schema) is False
 
 
+def test_working_plan_proposal_excludes_runtime_identity_and_revision():
+    assert set(WorkingPlanProposal.model_fields) == {"goal", "steps"}
+    assert set(WorkingPlanStepProposal.model_fields) == {
+        "step_id",
+        "description",
+        "status",
+    }
+    assert set(FinalMessage.model_fields) == {
+        "kind",
+        "disposition",
+        "message",
+        "resolved_plan_step_ids",
+    }
+
+
+def test_continue_turn_can_handoff_an_all_completed_plan_to_completion_phase():
+    completed = WorkingPlanProposal(
+        goal="Finish the current goal",
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect the evidence",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="answer",
+                description="Answer the user",
+                status="completed",
+            ),
+        ),
+    )
+
+    proposal = ContinueTurnProposal(working_plan=completed)
+
+    assert all(step.status == "completed" for step in proposal.working_plan.steps)
+
+
 def test_interaction_prompt_matches_the_object_root_wire_contract():
-    prompt = ConversationService(None)._system_prompt(
+    prompt = build_interaction_system_prompt(
         EffectiveCapabilities(),
         CommittedUsage(),
     )
@@ -161,6 +223,69 @@ def test_interaction_prompt_matches_the_object_root_wire_contract():
     assert '"kind": "continue_turn"' in prompt
 
 
+def test_interaction_prompt_hides_runtime_plan_identity_and_revision():
+    working_plan = ConversationWorkingPlan(
+        plan_id="wplan-internal",
+        revision=7,
+        goal="Organize knowledge",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent knowledge",
+                status="completed",
+                completion_action_ids=("read-1",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="answer",
+                description="Answer from the evidence",
+                status="pending",
+            ),
+        ),
+    )
+
+    prompt = build_interaction_system_prompt(
+        EffectiveCapabilities(),
+        CommittedUsage(),
+        working_plan=working_plan,
+    )
+
+    assert "wplan-internal" not in prompt
+    assert '"revision"' not in prompt
+    assert "completion_action_ids" not in prompt
+    assert "read-1" not in prompt
+    assert '"goal":"Organize knowledge"' in prompt
+
+
+def test_interaction_prompt_separates_default_review_from_explicit_auto_execution():
+    prompt = build_interaction_system_prompt(
+        EffectiveCapabilities(),
+        CommittedUsage(),
+    )
+
+    assert "proactively propose working_plan" in prompt.lower()
+    assert "verifiable work result" in prompt
+    assert "A bare activity such as searching" in prompt
+    assert "Result: ...; Complete when: ..." in prompt
+    assert "结果：……；完成条件：……" in prompt
+    assert "Keep the initial plan short-horizon" in prompt
+    assert "several actions or Tool calls" in prompt
+    assert "proactively create a formal plan" in prompt
+    assert "wait_for_user true and no actions" in prompt
+    assert "caller-selected auto interaction mode" in prompt
+    assert "An agent-initiated plan does not require approval" not in prompt
+    assert "must use wait_for_user true and contain no actions" in prompt
+
+    auto_prompt = build_interaction_system_prompt(
+        EffectiveCapabilities(),
+        CommittedUsage(),
+        interaction_mode="auto",
+    )
+    assert "caller selected auto interaction mode" in auto_prompt
+    assert "must use wait_for_user true and contain no actions" not in auto_prompt
+    assert "A bare request to continue refers to the current" in prompt
+    assert "Without a current plan or another committed continuation contract" in prompt
+
+
 def test_prompt_never_asks_the_model_to_run_or_reference_verification():
     """The invariant is the runtime's, so the prompt must not delegate it.
 
@@ -168,7 +293,7 @@ def test_prompt_never_asks_the_model_to_run_or_reference_verification():
     relied on, and is exactly the probabilistic enforcement this change removes.
     Its absence is asserted so it cannot drift back in as a "helpful" hint.
     """
-    prompt = ConversationService(None)._system_prompt(
+    prompt = build_interaction_system_prompt(
         EffectiveCapabilities(),
         CommittedUsage(),
         ReviewCriteria(criteria=("no unverifiable occurrence claims",)),
@@ -178,6 +303,16 @@ def test_prompt_never_asks_the_model_to_run_or_reference_verification():
     assert "verify_interaction_draft" not in prompt
     assert "verified_final_message" not in prompt
     assert "receipt" not in prompt.lower()
+
+
+def test_prompt_requires_exact_preservation_of_cited_opaque_values():
+    prompt = build_interaction_system_prompt(
+        EffectiveCapabilities(),
+        CommittedUsage(),
+    )
+
+    assert "Preserve opaque identifiers, dates, quantities, version strings" in prompt
+    assert "must not erase them" in prompt
 
 
 def _tool(name, function, *, side_effects=("none",), emits_verified_artifact=False):
@@ -204,6 +339,16 @@ def _executor(*tools):
 
 def _continue(*actions):
     return ContinueTurnProposal(actions=actions)
+
+
+def _plan(*steps, goal="Organize the saved knowledge"):
+    return WorkingPlanProposal(
+        goal=goal,
+        steps=tuple(
+            WorkingPlanStepProposal(step_id=step_id, description=description)
+            for step_id, description in steps
+        ),
+    )
 
 
 def _conversation_scope():
@@ -260,8 +405,1277 @@ def test_l01_observation_drives_next_react_decision_and_user_result():
         message["content"] for message in model.decision_requests[1].messages
     )
     assert "Typed execution inputs" in next_turn_context
-    assert "working plan" not in next_turn_context.lower()
+    assert "Current Conversation working plan:" not in next_turn_context
     assert trace.final_message is not None
+
+
+def test_user_requested_working_plan_is_committed_and_visible_without_project():
+    model = _Decisions(
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("inspect", "Inspect recent saved knowledge"),
+                ("summarize", "Summarize the main themes"),
+            ),
+            wait_for_user=True,
+            message="Review these remaining steps before I continue.",
+        )
+    )
+    service = ConversationService(model)
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-working-plan",
+        interaction_run_ref="irun_working_plan",
+        messages=[
+            ConversationMessage(
+                role="user",
+                content="Show me the remaining steps and wait for my revision.",
+            )
+        ],
+    )
+    trace = _trace(service, "irun_working_plan")
+
+    assert result.disposition == "plan_ready"
+    assert result.working_plan is not None
+    assert result.working_plan.revision == 1
+    assert result.project_reference is None
+    assert trace is not None
+    assert trace.working_plan == result.working_plan
+
+
+def test_default_mode_rejects_a_new_plan_that_skips_user_review():
+    plan = _plan(
+        ("inspect", "Inspect recent saved knowledge"),
+        ("summarize", "Summarize the main themes"),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan, wait_for_user=False),
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+    )
+    service = ConversationService(model)
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-default-plan-review",
+        interaction_run_ref="irun_default_plan_review",
+        messages=[ConversationMessage(role="user", content="Analyze my saved knowledge.")],
+    )
+    trace = _trace(service, "irun_default_plan_review")
+
+    assert result.disposition == "plan_ready"
+    assert trace is not None
+    assert any(
+        item.reason_code == "working_plan_review_required"
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+    )
+    assert len(model.decision_requests) == 2
+
+
+def test_default_mode_rejects_a_formal_plan_added_after_execution_started():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    model = _Decisions(
+        ContinueTurnProposal(actions=(
+            ToolCallProposal(
+                action_id="read-before-plan",
+                tool_name="read_fact",
+                arguments={"query": "Orion"},
+            ),
+        )),
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("inspect", "Inspect the Orion fact"),
+                ("answer", "Answer from the observed fact"),
+            ),
+            wait_for_user=True,
+        ),
+        FinalMessage(disposition="answer", message="Orion was observed."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-late-plan-review",
+        interaction_run_ref="irun_late_plan_review",
+        messages=[ConversationMessage(role="user", content="Read and explain Orion.")],
+    )
+    trace = _trace(service, "irun_late_plan_review")
+
+    assert result.disposition == "answer"
+    assert result.working_plan is None
+    assert trace is not None
+    assert trace.execution_order == ("read-before-plan",)
+    assert any(
+        item.reason_code == "working_plan_review_too_late"
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+    )
+
+
+def test_waiting_plan_with_actions_is_repaired_before_any_action_executes():
+    plan = _plan(
+        ("inspect", "Inspect recent saved knowledge"),
+        ("summarize", "Summarize the main themes"),
+    )
+    action = ToolCallProposal(
+        action_id="read-during-review",
+        tool_name="read_fact",
+        arguments={"query": "Orion"},
+        plan_step_id="inspect",
+    )
+    model = _Decisions(
+        ContinueTurnProposal(
+            working_plan=plan,
+            actions=(action,),
+            wait_for_user=True,
+        ),
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool(
+            "read_fact",
+            lambda query: tool_response(tool_success({"fact": query})),
+        )),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-wait-actions-repair",
+        interaction_run_ref="irun_wait_actions_repair",
+        messages=[ConversationMessage(role="user", content="Analyze my knowledge.")],
+    )
+    trace = _trace(service, "irun_wait_actions_repair")
+
+    assert result.disposition == "plan_ready"
+    assert trace is not None
+    assert trace.execution_order == ()
+    assert any(
+        item.reason_code == "waiting_plan_has_actions"
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+    )
+
+
+def test_working_plan_update_preserves_completed_steps_from_current_plan():
+    current = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=2,
+        goal="Organize knowledge",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="completed",
+                completion_action_ids=("read-1",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="summarize",
+                description="Summarize the main themes",
+                status="pending",
+            ),
+        ),
+    )
+    inputs = (
+        ActionObservation(
+            kind="tool_result",
+            action_id="read-1",
+            capability_id="read_recent",
+            status="succeeded",
+            payload={},
+            plan_step_id="inspect",
+        ),
+    )
+    rewritten = WorkingPlanProposal(
+        goal=current.goal,
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect everything again",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="summarize",
+                description="Summarize the main themes",
+            ),
+        ),
+    )
+    feedback, admitted = admit_working_plan(
+        rewritten,
+        current=current,
+        inputs=inputs,
+    )
+    assert admitted is None
+    assert feedback.reason_code == "completed_plan_step_immutable"
+
+
+def test_plan_update_preserves_prior_completed_evidence_without_replaying_observation():
+    current = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=2,
+        goal="Organize knowledge and identify gaps",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="completed",
+                completion_action_ids=("context-personal-knowledge",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="analyze",
+                description="Identify knowledge gaps",
+                status="pending",
+            ),
+        ),
+    )
+    update = WorkingPlanProposal(
+        goal="Organize knowledge and identify conflicts",
+        steps=(
+            WorkingPlanStepProposal(
+                step_id=current.steps[0].step_id,
+                description=current.steps[0].description,
+                status=current.steps[0].status,
+            ),
+            WorkingPlanStepProposal(
+                step_id="analyze",
+                description="Identify conflicting records",
+            ),
+        ),
+    )
+
+    feedback, admitted = admit_working_plan(
+        update,
+        current=current,
+        inputs=(),
+    )
+
+    assert feedback is None
+    assert admitted.steps[0] == current.steps[0]
+    assert admitted.revision == 3
+
+
+def test_plan_update_rejects_goal_text_from_a_replaced_pending_obligation():
+    current = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=1,
+        goal="Inspect recent knowledge, identify gaps, and recommend next steps",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent knowledge",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="analyze",
+                description="identify gaps",
+                status="pending",
+            ),
+        ),
+    )
+    stale = WorkingPlanProposal(
+        goal=current.goal,
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect recent knowledge",
+            ),
+            WorkingPlanStepProposal(
+                step_id="analyze",
+                description="identify conflicting records",
+            ),
+        ),
+    )
+
+    feedback, admitted = admit_working_plan(
+        stale,
+        current=current,
+        inputs=(),
+    )
+
+    assert admitted is None
+    assert feedback.reason_code == "working_plan_goal_stale"
+
+
+def test_identical_working_plan_is_rejected_as_no_op():
+    current = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=3,
+        goal="Organize knowledge",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="completed",
+                completion_action_ids=("context-personal-knowledge",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="summarize",
+                description="Summarize the main themes",
+                status="completed",
+            ),
+        ),
+    )
+    proposal = WorkingPlanProposal(
+        goal=current.goal,
+        steps=tuple(
+            WorkingPlanStepProposal(
+                step_id=step.step_id,
+                description=step.description,
+                status=step.status,
+            )
+            for step in current.steps
+        ),
+    )
+
+    feedback, admitted = admit_working_plan(
+        proposal,
+        current=current,
+        inputs=(
+            ActionObservation(
+                kind="context_evidence",
+                action_id="context-personal-knowledge",
+                capability_id="personal_knowledge_context",
+                status="succeeded",
+                payload={},
+            ),
+        ),
+    )
+
+    assert admitted is None
+    assert feedback.reason_code == "working_plan_no_change"
+
+
+def test_runtime_derives_completion_evidence_from_bound_observation():
+    proposal = WorkingPlanProposal(
+        goal="Organize knowledge",
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="summarize",
+                description="Summarize the main themes",
+            ),
+        ),
+    )
+
+    observation = ActionObservation(
+        kind="tool_result",
+        action_id="read-1",
+        capability_id="read_recent",
+        status="succeeded",
+        payload={},
+        plan_step_id="inspect",
+    )
+
+    feedback, admitted = admit_working_plan(
+        proposal,
+        current=None,
+        inputs=(observation,),
+    )
+
+    assert feedback is None
+    assert admitted.steps[0].completion_action_ids == ("read-1",)
+
+
+def test_successful_context_evidence_can_support_semantic_plan_completion():
+    proposal = WorkingPlanProposal(
+        goal="Organize knowledge",
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="summarize",
+                description="Summarize the main themes",
+            ),
+        ),
+    )
+    context = ActionObservation(
+        kind="context_evidence",
+        action_id="context-personal-knowledge",
+        capability_id="personal_knowledge_context",
+        status="succeeded",
+        payload={"citations": []},
+    )
+
+    feedback, admitted = admit_working_plan(
+        proposal,
+        current=None,
+        inputs=(context,),
+    )
+
+    assert feedback is None
+    assert admitted.steps[0].status == "completed"
+    assert admitted.steps[0].completion_action_ids == ()
+
+
+def test_actions_bind_to_pending_working_plan_steps():
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=1,
+        goal="Organize knowledge",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="summarize",
+                description="Summarize the main themes",
+                status="pending",
+            ),
+        ),
+    )
+    unbound = ToolCallProposal(
+        action_id="read-1",
+        tool_name="read_recent",
+        arguments={},
+    )
+    feedback = admit_action_plan_bindings(
+        (unbound,),
+        working_plan=plan,
+    )
+    assert feedback.reason_code == "plan_step_binding_required"
+
+    bound = unbound.model_copy(update={"plan_step_id": "inspect"})
+    assert (
+        admit_action_plan_bindings(
+            (bound,),
+            working_plan=plan,
+        )
+        is None
+    )
+
+
+def test_bound_observation_does_not_block_a_follow_up_action_for_the_same_pending_result():
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=1,
+        goal="Organize knowledge",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect recent saved knowledge",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="summarize",
+                description="Summarize the main themes",
+                status="pending",
+            ),
+        ),
+    )
+    feedback = admit_action_plan_bindings(
+        (
+            ToolCallProposal(
+                action_id="read-2",
+                tool_name="read_recent",
+                arguments={},
+                plan_step_id="inspect",
+            ),
+        ),
+        working_plan=plan,
+    )
+
+    assert feedback is None
+
+
+def test_final_answer_resolves_only_the_remaining_delivery_step():
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=2,
+        goal="Compare the observed sources",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="sources",
+                description="Establish the official sources",
+                status="completed",
+                completion_action_ids=("search-1",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="answer",
+                description="Deliver the comparison and recommendation",
+                status="pending",
+            ),
+        ),
+    )
+
+    feedback, resolved = admit_final_plan_resolution(
+        ("answer",),
+        working_plan=plan,
+        inputs=(
+            ActionObservation(
+                kind="tool_result",
+                action_id="search-1",
+                capability_id="web_search",
+                status="succeeded",
+                payload={},
+                plan_step_id="sources",
+            ),
+        ),
+    )
+
+    assert feedback is None
+    assert resolved.revision == 3
+    assert all(step.status == "completed" for step in resolved.steps)
+    assert resolved.steps[0].completion_action_ids == ("search-1",)
+
+
+def test_final_answer_resolves_execution_steps_and_runtime_binds_their_evidence():
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=1,
+        goal="Inspect and answer",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Establish the observed fact",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="answer",
+                description="Deliver the answer",
+                status="pending",
+            ),
+        ),
+    )
+
+    feedback, resolved = admit_final_plan_resolution(
+        ("inspect", "answer"),
+        working_plan=plan,
+        inputs=(
+            ActionObservation(
+                kind="tool_result",
+                action_id="read-1",
+                capability_id="read_recent",
+                status="succeeded",
+                payload={},
+                plan_step_id="inspect",
+            ),
+        ),
+    )
+
+    assert feedback is None
+    assert resolved.revision == 2
+    assert all(step.status == "completed" for step in resolved.steps)
+    assert resolved.steps[0].completion_action_ids == ("read-1",)
+    assert resolved.steps[1].completion_action_ids == ()
+
+
+def test_executed_action_observation_keeps_its_working_plan_step_binding():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    model = _Decisions(
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("inspect", "Inspect the Orion fact"),
+                ("answer", "Answer from the observed fact"),
+            ),
+            actions=(
+                ToolCallProposal(
+                    action_id="read-1",
+                    tool_name="read_fact",
+                    arguments={"query": "Orion"},
+                    plan_step_id="inspect",
+                ),
+            ),
+        ),
+        ContinueTurnProposal(
+            working_plan=WorkingPlanProposal(
+                goal="Organize the saved knowledge",
+                steps=(
+                    WorkingPlanStepProposal(
+                        step_id="inspect",
+                        description="Inspect the Orion fact",
+                        status="completed",
+                    ),
+                    WorkingPlanStepProposal(
+                        step_id="answer",
+                        description="Answer from the observed fact",
+                    ),
+                ),
+            ),
+            wait_for_user=True,
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-plan-binding",
+        interaction_run_ref="irun_plan_binding",
+        messages=[ConversationMessage(role="user", content="Show and execute the plan.")],
+        interaction_mode="auto",
+    )
+    trace = _trace(service, "irun_plan_binding")
+
+    assert result.disposition == "plan_ready"
+    assert trace.inputs[0].plan_step_id == "inspect"
+    assert result.working_plan.steps[0].status == "completed"
+
+
+def test_unchanged_plan_does_not_block_actions_bound_to_the_current_plan():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    plan = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+        ContinueTurnProposal(
+            working_plan=plan,
+            actions=(
+                ToolCallProposal(
+                    action_id="read-1",
+                    tool_name="read_fact",
+                    arguments={"query": "Orion"},
+                    plan_step_id="inspect",
+                ),
+            ),
+        ),
+        ContinueTurnProposal(
+            working_plan=WorkingPlanProposal(
+                goal=plan.goal,
+                steps=tuple(
+                    step.model_copy(update={"status": "completed"})
+                    for step in plan.steps
+                ),
+            ),
+        ),
+        FinalMessage(
+            disposition="answer",
+            message="Observed Orion.",
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+    first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
+    first = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-no-op-plan-action",
+        interaction_run_ref="irun_no_op_plan_first",
+        messages=first_messages,
+    )
+    messages = [
+        *first_messages,
+        first.message,
+        ConversationMessage(role="user", content="Continue."),
+    ]
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-no-op-plan-action",
+        interaction_run_ref="irun_no_op_plan_second",
+        messages=messages,
+    )
+    trace = _trace(service, "irun_no_op_plan_second")
+
+    assert result.disposition == "answer"
+    assert trace.execution_order == ("read-1",)
+    assert trace.working_plan.revision == 2
+
+
+def test_unchanged_pending_plan_does_not_bypass_completion():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    plan = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+    )
+    progressed = WorkingPlanProposal(
+        goal=plan.goal,
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect the Orion fact",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="answer",
+                description="Answer from the observed fact",
+            ),
+        ),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+        ContinueTurnProposal(
+            working_plan=plan,
+            actions=(
+                ToolCallProposal(
+                    action_id="read-1",
+                    tool_name="read_fact",
+                    arguments={"query": "Orion"},
+                    plan_step_id="inspect",
+                ),
+            ),
+        ),
+        ContinueTurnProposal(working_plan=progressed),
+        ContinueTurnProposal(working_plan=progressed),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+        budget_policy=LoopBudgetPolicy(max_model_turns=3),
+    )
+    first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
+    first = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-stalled-plan",
+        interaction_run_ref="irun_stalled_plan_first",
+        messages=first_messages,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-stalled-plan",
+        interaction_run_ref="irun_stalled_plan_second",
+        messages=[
+            *first_messages,
+            first.message,
+            ConversationMessage(role="user", content="Continue."),
+        ],
+    )
+    trace = _trace(service, "irun_stalled_plan_second")
+
+    assert result.disposition == "limitation"
+    assert trace.execution_order == ("read-1",)
+    assert any(step.status == "pending" for step in result.working_plan.steps)
+    assert sum(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "working_plan_no_change"
+        for item in trace.inputs
+    ) == 1
+    assert not any(
+        request.operation == "interaction_completion_answer"
+        for request in model.requests
+    )
+
+
+def test_plan_proposed_after_execution_switches_to_answer_only_recovery():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    model = _Decisions(
+        ContinueTurnProposal(actions=(
+            ToolCallProposal(
+                action_id="read-1",
+                tool_name="read_fact",
+                arguments={"query": "Orion"},
+            ),
+        )),
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("inspect", "Inspect the Orion fact"),
+                ("answer", "Answer from the observed fact"),
+            ),
+            wait_for_user=True,
+        ),
+        FinalMessage(disposition="answer", message="Observed Orion."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-late-plan",
+        interaction_run_ref="irun_late_plan",
+        messages=[ConversationMessage(role="user", content="Inspect and answer.")],
+    )
+    trace = _trace(service, "irun_late_plan")
+
+    assert result.disposition == "answer"
+    assert result.working_plan is None
+    assert trace.execution_order == ("read-1",)
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "working_plan_review_too_late"
+        for item in trace.inputs
+    )
+    assert any(
+        request.operation == "interaction_completion_answer"
+        for request in model.requests
+    )
+
+
+def test_completed_plan_update_enters_runtime_owned_completion_call():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    plan = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+    )
+    completed = WorkingPlanProposal(
+        goal=plan.goal,
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect the Orion fact",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="answer",
+                description="Answer from the observed fact",
+                status="completed",
+            ),
+        ),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+        ContinueTurnProposal(
+            actions=(
+                ToolCallProposal(
+                    action_id="read-1",
+                    tool_name="read_fact",
+                    arguments={"query": "Orion"},
+                    plan_step_id="inspect",
+                ),
+            ),
+        ),
+        ContinueTurnProposal(working_plan=completed),
+        FinalMessage(disposition="answer", message="Observed Orion."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+        budget_policy=LoopBudgetPolicy(max_model_turns=2),
+    )
+    first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
+    first = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-terminal-plan",
+        interaction_run_ref="irun-terminal-plan-first",
+        messages=first_messages,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-terminal-plan",
+        interaction_run_ref="irun-terminal-plan-second",
+        messages=[
+            *first_messages,
+            first.message,
+            ConversationMessage(role="user", content="Continue and finish."),
+        ],
+    )
+    trace = _trace(service, "irun-terminal-plan-second")
+
+    assert result.disposition == "answer"
+    assert result.working_plan.revision == 2
+    assert all(step.status == "completed" for step in result.working_plan.steps)
+    assert trace.execution_order == ("read-1",)
+    completion_request = next(
+        request
+        for request in model.requests
+        if request.operation == "interaction_completion_answer"
+    )
+    completion_prompt = "\n".join(
+        message["content"] for message in completion_request.messages
+    )
+    assert '"revision"' not in completion_prompt
+    assert '"plan_id"' not in completion_prompt
+    assert "completion_action_ids" not in completion_prompt
+
+
+def test_answer_cannot_silently_complete_a_pending_working_plan():
+    plan = _plan(
+        ("inspect", "Inspect recent knowledge"),
+        ("answer", "Answer from the evidence"),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+        FinalMessage(disposition="answer", message="Completed answer."),
+    )
+    service = ConversationService(
+        model,
+        budget_policy=LoopBudgetPolicy(max_model_turns=1),
+    )
+    first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
+    first = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-pending-final",
+        interaction_run_ref="irun-pending-final-first",
+        messages=first_messages,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-pending-final",
+        interaction_run_ref="irun-pending-final-second",
+        messages=[
+            *first_messages,
+            first.message,
+            ConversationMessage(role="user", content="Finish it."),
+        ],
+    )
+    trace = _trace(service, "irun-pending-final-second")
+
+    assert result.disposition == "limitation"
+    assert result.working_plan.revision == 1
+    assert any(step.status == "pending" for step in result.working_plan.steps)
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "working_plan_incomplete"
+        for item in trace.inputs
+    )
+
+
+def test_denied_duplicate_action_is_not_recorded_as_execution_fact():
+    calls = 0
+
+    def read_fact(query: str):
+        nonlocal calls
+        calls += 1
+        return tool_response(tool_success({"fact": query}))
+
+    action = ToolCallProposal(
+        action_id="read-1",
+        tool_name="read_fact",
+        arguments={"query": "Orion"},
+    )
+    model = _Decisions(
+        ContinueTurnProposal(actions=(action,)),
+        ContinueTurnProposal(actions=(action,)),
+        FinalMessage(disposition="answer", message="Observed Orion."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-duplicate-action",
+        interaction_run_ref="irun-duplicate-action",
+        messages=[ConversationMessage(role="user", content="Read Orion, then answer.")],
+    )
+    trace = _trace(service, "irun-duplicate-action")
+
+    assert calls == 1
+    assert trace.execution_order == ("read-1",)
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "duplicate_action_id"
+        for item in trace.inputs
+    )
+
+
+def test_file_journal_restores_working_plan_for_a_new_service(temp_dir):
+    journal_root = temp_dir / "working-plan-journal"
+    plan = _plan(
+        ("summarize", "Summarize the visible evidence"),
+        ("recommend", "Recommend the next action"),
+    )
+    first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
+    first_service = ConversationService(
+        _Decisions(ContinueTurnProposal(working_plan=plan, wait_for_user=True)),
+        journal=FileInteractionJournal(journal_root),
+    )
+    first = first_service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-file-plan",
+        interaction_run_ref="irun-file-plan-first",
+        messages=first_messages,
+    )
+
+    second_service = ConversationService(
+        _Decisions(
+            ContinueTurnProposal(
+                working_plan=WorkingPlanProposal(
+                    goal=plan.goal,
+                    steps=tuple(
+                        step.model_copy(update={"status": "completed"})
+                        for step in plan.steps
+                    ),
+                ),
+            ),
+            FinalMessage(
+                disposition="answer",
+                message="Recovered and completed.",
+            )
+        ),
+        journal=FileInteractionJournal(journal_root),
+    )
+    result = second_service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-file-plan",
+        interaction_run_ref="irun-file-plan-second",
+        messages=[
+            *first_messages,
+            first.message,
+            ConversationMessage(role="user", content="Continue after restart."),
+        ],
+    )
+
+    assert result.disposition == "answer"
+    assert result.working_plan.plan_id == first.working_plan.plan_id
+    assert result.working_plan.revision == 2
+
+
+def test_new_user_turn_reuses_successful_observations_bound_to_current_plan():
+    principal = AuthenticatedPrincipal(
+        tenant_id="tenant-plan-context",
+        user_id="user-plan-context",
+    )
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-context",
+        revision=1,
+        goal="Deliver both exact results",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="alpha",
+                description="Deliver the exact ALPHA result",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="beta",
+                description="Deliver the exact BETA result",
+                status="pending",
+            ),
+        ),
+    )
+    journal = InMemoryInteractionJournal()
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-plan-context-first",
+        conversation_id="conversation-plan-context",
+        principal=principal,
+        messages=(ConversationMessage(role="user", content="Read both results."),),
+        inputs=(
+            ActionObservation(
+                kind="tool_result",
+                action_id="read-alpha",
+                capability_id="archive.read",
+                status="succeeded",
+                payload={"value": "alpha-exact-value"},
+                plan_step_id="alpha",
+            ),
+            ActionObservation(
+                kind="tool_result",
+                action_id="read-beta",
+                capability_id="archive.read",
+                status="succeeded",
+                payload={"value": "beta-exact-value"},
+                plan_step_id="beta",
+            ),
+        ),
+        final_message=FinalMessage(
+            disposition="limitation",
+            message="Continue from committed results.",
+        ),
+        working_plan=plan,
+    ))
+    model = _Decisions(FinalMessage(
+        disposition="answer",
+        message="alpha-exact-value; beta-exact-value",
+        resolved_plan_step_ids=("alpha", "beta"),
+    ))
+    service = ConversationService(model, journal=journal)
+
+    result = service.respond(
+        conversation_id="conversation-plan-context",
+        interaction_run_ref="irun-plan-context-second",
+        messages=[ConversationMessage(role="user", content="Continue.")],
+        principal=principal,
+    )
+
+    visible_request = json.dumps(
+        model.decision_requests[0].messages,
+        ensure_ascii=False,
+    )
+    assert "alpha-exact-value" in visible_request
+    assert "beta-exact-value" in visible_request
+    assert result.disposition == "answer"
+    assert all(step.status == "completed" for step in result.working_plan.steps)
+
+
+def test_working_plan_observation_projection_excludes_other_scope_and_failures():
+    principal = AuthenticatedPrincipal(
+        tenant_id="tenant-plan-projection",
+        user_id="user-plan-projection",
+    )
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-projection",
+        revision=1,
+        goal="Deliver two results",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="first",
+                description="First result",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="second",
+                description="Second result",
+                status="pending",
+            ),
+        ),
+    )
+    journal = InMemoryInteractionJournal()
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-plan-projection",
+        conversation_id="conversation-plan-projection",
+        principal=principal,
+        messages=(ConversationMessage(role="user", content="Read results."),),
+        inputs=(
+            ActionObservation(
+                kind="tool_result",
+                action_id="accepted",
+                capability_id="archive.read",
+                status="succeeded",
+                payload={"value": "accepted"},
+                plan_step_id="first",
+            ),
+            ActionObservation(
+                kind="tool_result",
+                action_id="failed",
+                capability_id="archive.read",
+                status="failed",
+                payload={"error": "failed"},
+                plan_step_id="second",
+            ),
+            ActionObservation(
+                kind="tool_result",
+                action_id="unbound",
+                capability_id="archive.read",
+                status="succeeded",
+                payload={"value": "unbound"},
+            ),
+        ),
+        working_plan=plan,
+    ))
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-plan-projection-other-scope",
+        conversation_id="conversation-plan-projection",
+        principal=AuthenticatedPrincipal(
+            tenant_id="tenant-plan-projection",
+            user_id="other-user",
+        ),
+        messages=(ConversationMessage(role="user", content="Read results."),),
+        inputs=(ActionObservation(
+            kind="tool_result",
+            action_id="other-scope",
+            capability_id="archive.read",
+            status="succeeded",
+            payload={"value": "other-scope"},
+            plan_step_id="second",
+        ),),
+        working_plan=plan,
+    ))
+
+    projected = journal.working_plan_observations(
+        "conversation-plan-projection",
+        principal,
+        plan,
+    )
+
+    assert tuple(item.action_id for item in projected) == ("accepted",)
+
+
+def test_completed_working_plan_can_be_superseded_by_a_new_frontstage_goal():
+    current = ConversationWorkingPlan(
+        plan_id="wplan-completed",
+        revision=3,
+        goal="Finish the prior goal",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect prior evidence",
+                status="completed",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="answer",
+                description="Answer the prior goal",
+                status="completed",
+            ),
+        ),
+    )
+    proposal = _plan(
+        ("compare", "Compare the new alternatives"),
+        ("recommend", "Recommend one alternative"),
+        goal="Choose a new alternative",
+    )
+
+    feedback, admitted = admit_working_plan(
+        proposal,
+        current=current,
+        inputs=(),
+    )
+
+    assert feedback is None
+    assert admitted.plan_id != current.plan_id
+    assert admitted.revision == 4
+    assert admitted.goal == "Choose a new alternative"
+
+
+def test_successful_tool_observation_does_not_auto_complete_a_plan_step():
+    def read_fact(query: str):
+        return tool_response(tool_success({"fact": query}))
+
+    plan = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+        ContinueTurnProposal(
+            actions=(
+                ToolCallProposal(
+                    action_id="read-1",
+                    tool_name="read_fact",
+                    arguments={"query": "Orion"},
+                    plan_step_id="inspect",
+                ),
+            ),
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+        budget_policy=LoopBudgetPolicy(max_model_turns=1),
+    )
+    first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
+    first = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-no-auto-complete",
+        interaction_run_ref="irun-no-auto-complete-first",
+        messages=first_messages,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-no-auto-complete",
+        interaction_run_ref="irun-no-auto-complete-second",
+        messages=[
+            *first_messages,
+            first.message,
+            ConversationMessage(role="user", content="Continue."),
+        ],
+    )
+
+    assert result.disposition == "limitation"
+    assert result.working_plan.steps[0].status == "pending"
 
 
 def test_interaction_trace_read_and_resume_require_the_committed_principal(caplog):
@@ -1251,7 +2665,7 @@ def test_a_single_batch_cannot_spend_more_tool_calls_than_remain():
     assert len(calls) == 2
     assert set(calls) == {"A", "B"}
     assert trace.usage.tool_calls == 2
-    assert trace.execution_order == ("inspect-A", "inspect-B", "inspect-C")
+    assert trace.execution_order == ("inspect-A", "inspect-B")
     assert any(
         item.kind == "decision_feedback"
         and item.action_id == "inspect-C"

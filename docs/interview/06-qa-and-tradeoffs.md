@@ -1,151 +1,147 @@
-# 高频追问：一句结论，一个边界
+# 高频追问：一句结论，一个跳转坐标
 
-> **先回答判断，再按追问跳转到唯一机制文档。** 本篇不复制第二套架构说明，也不为真实缺口增加防御性话术。
+> **本篇只提供面试短答，不复制第二套能力说明。** 回答先给判断，再指向唯一主讲章节；面试官继续追问时，沿链接展开问题、机制、证据和边界。
 
 ## 1. 定位与总体架构
 
-### 这是 RAG 还是 Agent？
+### 这是检索增强生成，还是智能体？
 
-**产品边界是 Agent，RAG 只是证据子系统。** 模型还会决定下一步 action、Tool/MCP 或 Agent delegation；Runtime 治理权限、执行、恢复和完成。见[项目故事](01-project-story.md)。
+**产品边界是智能体，检索增强生成只是证据子系统。** 模型还会决定下一步动作和子目标；运行外壳治理权限、执行、恢复和完成。见[项目故事](01-project-story.md)。
 
-### Conversation、Workflow、Project 是三种产品模式吗？
+### 什么是智能体运行外壳，为什么单独介绍？
 
-**不是同一维度。** Conversation 是交互 owner，Workflow 是 Capability 内固定编排，Project 是动态长任务 Aggregate；Conversation 可以调用或创建后两者。见[请求路径](02-request-walkthroughs.md)。
+**它是包围模型的工作闭环，不是新的业务层。** 它把上下文、模型建议、确定性准入、动作执行、事实回注、验证和完成连起来，使“模型生成了内容”变成“系统受治理地交付用户结果”。见[运行外壳 §1](03-capability-axes.md#1-运行外壳把模型建议变成可靠的用户结果)。
 
-### 为什么不用通用 DurableTask？
+### 运行外壳会不会变成通用任务框架？
 
-**交互、删除、投递和调查没有共同的业务事实、状态机和完成契约。** 共享 journal/queue/gateway 等 runtime mechanism，领域状态仍归各自 owner。
+**不会。** 它统一跨业务的权力协议，不拥有知识、订阅、后台项目或业务完成标准，也不要求每个请求创建计划、冻结动作或回执。
 
-### 当前工程有没有 Plan？
+### 对话、固定流程和后台项目是什么关系？
 
-**有，但不强制每个 Conversation 产生持久化 Plan。** Conversation 逐轮基于 Observation 决策；InvestigationProject 的 ready set、steering、恢复和 Completion 真正消费 accepted Plan，因此才持久化。`PLAN-001` 证明同 Conversation 可恢复并调整同一 Project。
+**它们不是互斥产品模式。** 对话拥有当前交互，固定流程拥有稳定事务顺序，后台项目拥有动态长期事实；对话可以调用或创建后两者。见[请求路径](02-request-walkthroughs.md)。
 
-### LangGraph 是领域核心吗？
+### 为什么不用通用持久任务？
 
-**不是。** 它可承载编排/checkpoint，Claim、Command、Plan 和 Completion 的语义仍由 Domain/Application contract 拥有。
+**删除、投递、当前交互和动态调查没有共同的业务状态机与完成契约。** 它们可以共享日志、队列和执行网关，业务事实仍归各自责任主体。
 
-## 2. Capability、Tool 与决策
+### 当前工程有没有计划？
 
-### Application Capability 为什么不是 Workflow 别名？
+**有两种不同生命周期的规划事实，但没有通用计划层。** 当前对话按需保存可验收工作项；后台调查项目保存动态子目标与依赖。前者完整见[工作清单能力](03-capability-axes.md#2-按需工作清单提升复杂任务的跨轮完成能力)，后者见[领域设计 §8](04-knowledge-and-domain-workflows.md#8-动态后台调查由新证据决定后续路径)。
 
-**Capability 是用户可验收动作和业务 owner；Workflow 是该动作内部的固定步骤。** “删除知识”是 Capability，prepare/confirm/execute/receipt 是 Workflow。见[能力设计 §3](03-capability-axes.md#3-application-capability-与执行资源按-owner-分开)。
+### 两种计划不是冗余吗？
 
-### Application action 为什么不全做成普通 Tool？
+**不是同一事实的两份副本，因此不构成冗余。** 前台清单服务用户审阅、动作绑定、跨轮恢复和当前回答；后台规划服务调度、依赖、覆盖检查和项目完成。两者没有同步或双写，对话只保存项目引用。见[工作清单能力 §2.6](03-capability-axes.md#26-为什么不与后台调查规划合并)。
 
-**模型侧可以共享 callable schema，执行侧不能丢掉领域 owner。** ToolGateway 不拥有 Claim 生命周期、订阅迁移或 Project plan version。
+### Plan 如何提升 Agent 能力？
 
-### Effective projection 有什么价值？
+**不是靠“先列步骤”，而是靠“未完成结果 + 已绑定执行事实 + 完成门禁”共同保持跨轮任务连续性。** `HARNESS-003` 的同输入消融证明，没有事实消费点时第二轮交付错误口令；恢复消费点后准确完成，简单问答仍不建清单。见[工作清单能力 §2.2—§2.5](03-capability-axes.md#22-真正产生能力收益的是三者共同工作)。
 
-**它只把当前 identity/scope/policy 下可见的 action schema 临时交给模型。** 它不是 capability definition 或 availability 的第二事实源；零消费者 revision/digest 应删除。
+### 为什么清单有版本，模型需要理解吗？
 
-### Tool 很多时一定做两阶段 discovery 吗？
+**模型不理解也不回传版本。** 运行系统生成单调恢复序号，用于日志排序和响应展示；它不是授权、完成证据或并发控制令牌。见[工作清单能力 §2.4](03-capability-axes.md#24-用户调整与版本的责任边界)。
 
-**不一定。** 只有全量 schema 已由真实 baseline 证明损害选择质量、token 或延迟，才准入候选发现与按需加载。
+## 2. 业务能力、执行资源与决策
 
-### Tool schema 为什么不是授权？
+### 业务能力为什么不是固定流程的别名？
 
-**可见、获准、健康是三个事实。** MCP discovery 声明 schema，Policy 决定调用许可，Gateway 才产生 Provider 执行事实。
+**业务能力表达用户可验收动作和结果责任，固定流程只是它内部不可重排的事务步骤。** “删除知识”是业务能力，准备、确认、执行和回执是内部流程。见[请求路径 §3](02-request-walkthroughs.md#3-受治理事务保存删除与恢复)。
 
-### 为什么不用关键词 Router？
+### 业务动作为什么不全做成普通工具？
 
-**词面不能证明开放语义。** “不要保存”“如何删除”“删除它”共享关键词但目标不同；模型提出 typed Proposal，确定性代码只做可证明的准入。
+**统一调用结构不等于统一事实归属。** 保存、删除和创建后台项目必须进入具体业务写入口；普通工具执行不能拥有知识或项目生命周期。见[运行外壳 §4](03-capability-axes.md#4-业务能力与执行资源分开执行只在获准后发生)。
 
-### Admission 能补 `note_id` 或换 Tool 吗？
+### 工具出现在模型上下文中为什么还不能直接调用？
 
-**不能。** 这会把语义选择藏进 Validator；Admission 只能接受或返回 typed repair feedback。
+**可见、获准和健康是三个事实。** 能力投影决定模型看见什么，策略与准入决定本次是否允许，真实调用结果才说明服务是否可用。
 
-## 3. Command、协作与恢复
+### 为什么不用关键词路由？
 
-### Proposal、Command、Event、Receipt 有什么区别？
+**关键词不能可靠区分“不要保存”“解释删除”和“删除它”。** 开放语义由模型判断；确定性代码只检查结构、权限和合法迁移，不能替模型猜目标。
 
-**Proposal 是建议，Command 是冻结待执行动作，Event 是已发生事实，Receipt 是执行关联/幂等依据。** 按真实消费者选用，不机械成套创建。
+### 准入可以帮模型补参数或换工具吗？
 
-### 为什么读取不建 Command，删除要建？
+**不可以。** 准入只能接受或返回结构化拒绝原因；补目标、改参数或静默换能力会把确定性边界变成隐藏的语义决策者。
 
-**安全可重试读取直接执行；删除跨确认、恢复和不可重复副作用边界。** 给读取套 Command/Receipt 只会增加状态。
+## 3. 冻结动作、子智能体与恢复
 
-### CommandDigest 是否过度设计？
+### 建议、冻结动作、执行事实和回执有什么区别？
 
-**当确认必须绑定同一冻结 payload 时，一个 digest 有价值；没有该边界就不创建。** 它不替代身份、授权或 Receipt，也不在授权/执行相同时拆双 digest。
+**建议是模型想做什么；冻结动作是经准入后不可再扩权的待执行内容；执行事实说明已经发生什么；回执用于幂等、外部关联或恢复证明。** 四者按真实边界使用，不机械成套创建。
 
-### 子 Agent completed 为什么不等于完成？
+### 为什么读取不冻结，删除却需要？
 
-**它只产生 child execution fact/Artifact。** 父 Runtime 仍要综合、验证并完成父 Goal。
+**低风险且可安全重试的读取可以直接执行；需要确认、不可安全重试或跨请求恢复的副作用才冻结。** 见[运行外壳 §4.1](03-capability-axes.md#41-治理成本只放在真实风险边界)。
+
+### 一致性指纹是否过度设计？
+
+**一个指纹只在需要机械证明“确认、日志和执行引用同一冻结内容”时存在。** 它不是身份、授权或成功证明；授权内容与执行内容相同时不拆成两个指纹。
+
+### 子智能体完成为什么不等于父目标完成？
+
+**子智能体只交付有界产物，父智能体继续承担整合、验证和最终完成。** 远端状态为完成只能证明子任务结束。见[运行外壳 §4.2](03-capability-axes.md#42-子智能体只完成有界子目标)。
 
 ### 崩溃后怎样避免重复执行？
 
-**恢复 committed inputs、immutable Command、Receipt 和 stable submission key，不重新让模型生成动作。** 外部结果不确定时 reconcile；checkpoint 本身不保证 exactly-once。
+**先恢复已提交事实，再查询对账结果不明的外部请求，只继续未完成语义。** 检查点不能替代幂等键、外部查询或补偿。见[运行外壳 §5](03-capability-axes.md#5-恢复复用已提交事实只继续未完成语义)。
 
-## 4. Context、Knowledge 与 Memory
+## 4. 模型上下文与长期知识
 
-### Context 很大怎么办？
+### 模型上下文很大怎么办？
 
-**先过滤 visibility，再召回选择；大结果保存真源并提交 ResourceRef，模型按需有界重读。** `CTX-001` 证明对应 workload 的增长受控。见[能力设计 §2](03-capability-axes.md#2-context-只注入当前允许且需要的信息)。
+**保留完整真源，只注入有界片段和安全引用，让模型按需精确重读。** 权限过滤必须发生在召回之前。见[运行外壳 §3](03-capability-axes.md#3-有界模型上下文保留真源只注入当前需要的信息)。
 
 ### 模型何时停止重读？
 
-**按目标证据充分性与终止事实停止，不只看 EOF。** 证据齐全、资源耗尽、预算不足、能力失败或需要用户输入都可结束。
+**证据充分、资源读完、预算耗尽、能力失败或需要用户输入都可以停止。** 停止条件不是固定读到文件末尾。
 
-### Grounded Ask 和通用多源 RAG 为什么不再分两条答案链？
+### 个人证据和网页证据为什么不分两条答案链？
 
-**最终答案只有 Conversation 一个 owner。** Personal Knowledge 和 Web/MCP 是同一 answer contract 的不同 evidence/Observation 来源；`ASK-001A`、`ASK-001B` 分别验证 personal-only 与 personal + official web。
+**最终回答只有一个结果契约。** 个人知识和网页读取分别提供受权限约束的证据，当前交互统一组织答案；来源不同不应产生两个回答责任主体。
 
-### 为什么向量库和 Graph 不是事实源？
+### 为什么向量库和知识图不是事实源？
 
-**它们是可重建检索投影。** Artifact、Evidence、Claim 才拥有 provenance、状态和纠错语义。见[领域设计](04-knowledge-and-domain-workflows.md)。
+**它们是可从原始内容、证据位置和长期陈述重建的检索投影。** 把投影当事实源会使纠错、删除和来源追踪出现多套写入口。见[领域设计](04-knowledge-and-domain-workflows.md)。
 
 ### 如何防止记忆污染？
 
-**Ask 默认只读，Save 要明确意图和 exact source；纠错新增 Claim 并 supersede 旧 Claim。** 当前不自动保存 assistant candidate。
-
-### 当前有 Workspace/RBAC Aggregate 吗？
-
-**没有已证明的该产品能力。** 当前证据只支持 principal ownership，不把跨 principal 隔离外推成 membership/role。
+**问答默认只读；保存必须来自用户明确意图和精确原文，纠错创建新陈述并保留关系，删除与恢复形成独立事实。** 见[领域设计 §4—§5](04-knowledge-and-domain-workflows.md#4-有证据的回答默认只读)。
 
 ## 5. 完成、预算与诊断
 
-### Tool success 为什么不等于完成？
+### 工具成功为什么不等于完成？
 
-**Tool success 只证明动作执行。** Verifier 判断 Goal 语义，Completion Gate 检查 required evidence；Project created、Delivery sent 和 child completed 同理。
+**工具成功只回答动作是否发生，不能证明目标满足或结果齐全。** 执行、语义验证和完成判断三分，见[运行外壳 §6](03-capability-axes.md#6-动作执行语义验证和完成判断必须分开)。
 
-### Verifier 能推翻真实副作用吗？
+### 语义验证能推翻真实副作用吗？
 
-**不能。** 它可拒绝“目标已满足”，不能声称已经发生的删除或发送没有发生。
+**不能。** 它可以拒绝“目标已满足”的声明，但删除、发送等已发生事实只能通过对应业务的补偿或新状态迁移处理。
 
 ### 预算参数会不会过多？
 
-**只保留约束不同资源和失败语义的参数，并集中成 interaction policy。** batch 前原子预留；无独立消费者的旋钮合并或删除。
+**只有约束不同成本或失败语义时才分别保留模型轮次、工具调用和上下文令牌。** 预算耗尽必须明确返回能力限制，不能生成未经证据支持的替代答案。
 
 ### 可观测性记录什么？
 
-**记录 Proposal、Admission、Execution、Verification、Completion 的 typed stage fact 和关联引用。** Trace 用于定位，不是授权或业务状态写入口。
-
-### 一个失败如何定位？
-
-**找最后一个已提交权威事实，再检查下一阶段缺失或拒绝原因。** 例如删除依次检查 Proposal、Command、Confirmation、Event、Receipt 和 replay。
+**记录建议、准入、执行、验证和完成各阶段事实及关联引用。** 它用于区分未选择、权限拒绝、服务失败和结果缺失，不写业务状态。见[运行外壳 §7](03-capability-axes.md#7-可观测性解释失败不制造业务事实)。
 
 ## 6. 证据与外部框架
 
 ### 怎样证明设计有效？
 
-**产品变更用同入口同输入的失败 baseline 与 target E2E；纯重构用失败工程约束基线和行为保持 E2E。** 对象存在、Unit 或竞品实现不能替代。见[证据与发布](05-evidence-and-release.md)。
-
-### 当前有哪些框架级指标？
-
-**EVAL-001 已能从同 profile checksum archive 统计完成率、token、调用、延迟和恢复，但没有第二个可比 runtime。** 因此能测当前基线，不能宣称相对外部框架更优。
+**产品变更必须用同一正式入口和自然用户输入先得到失败基线，再证明最小改动改变用户结果。** 单元测试、对象存在、追踪命中或外部框架采用同类机制都不能替代。见[证据与发布](05-evidence-and-release.md)。
 
 ### 为什么不能说当前可发布？
 
-**当前工作树没有 clean matching revision 的完整 eligible matrix。** 定向 E2E 只证明自己的 archive，release gate 还检查 catalog、checksum、commit 和 clean tree。
+**定向用例通过只证明对应行为。** 发布还要求目标代码版本、完整矩阵、真实环境证据和工作树状态一致，由机器发布门禁统一派生。
 
-### 与优秀 Agent 框架的关系是什么？
+### 与优秀智能体框架是什么关系？
 
-**本地 baseline 决定要不要做，A 级源码/规范帮助选择怎么做。** 参考 OpenAI Agents SDK 的 loop/session/tool、LangGraph checkpoint 和 Hermes context 机制，但不复制对象数量或强制 Planner。
+**外部实现帮助选择机制，不替本工程创造需求。** 当前借鉴轻量会话待办、有界上下文、检查点和持久任务的边界，但是否采用仍由本地失败基线决定；不会为了拓扑相似复制通用 Planner、Todo、Task 或 Project。
 
 ### 当前最大缺口是什么？
 
-**证据层缺口是建立目标 revision 的完整 clean release matrix；产品层没有预设“下一个最大功能”。** 新能力必须由真实用户扩展或失败 baseline 准入。
+**长期后台调查已经有完整运行结构，但其产品必要性仍缺少实现前、同输入的真实需求基线。** 因此可以准确介绍当前能力和回归证据，不能声称其复杂度已经由用户需求充分证明。
 
 ## 7. 收尾口径
 
-> 这个项目的核心不是抽象多，而是每个判断和事实有明确 owner：模型负责开放语义提议，确定性系统负责治理，Application/Domain 负责业务事实，Verifier 与 Completion Gate 负责完成证据。成立到什么范围由正式入口 E2E 和反事实决定；证据不足就明确说不足。
+**先讲用户错误，再讲责任边界和最小机制，最后给证据与不能外推的范围。** 如果一个回答需要连续列出大量类名、字段或历史过程，说明还没有讲清能力本身，应回到对应主讲章节重组。

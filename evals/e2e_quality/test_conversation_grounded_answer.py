@@ -8,17 +8,18 @@ from uuid import uuid4
 
 import pytest
 
-from evals.e2e_quality.measurements import measurement_from_interaction_trace
 from evals.e2e_quality.test_product_capability_outcomes import (
     _knowledge_ingest,
     _record,
-    live_web_search_process as _live_web_search_process_fixture,  # noqa: F401
 )
 from evals.e2e_quality.test_release_user_outcomes import _get_json, _post_json
 
 
 pytestmark = pytest.mark.integration
-pytest_plugins = ("evals.e2e_quality.test_release_user_outcomes",)
+pytest_plugins = (
+    "evals.e2e_quality.test_release_user_outcomes",
+    "evals.e2e_quality.test_product_capability_outcomes",
+)
 
 
 def _conversation(server, *, conversation_id: str, user_id: str, text: str):
@@ -94,7 +95,6 @@ def test_ask_001a_personal_only_answer_observes_quotes_and_conflict_without_web(
         "ASK-001A.product_http",
         {"user_text": user_text, "result": result, "trace": trace},
         profile="baseline+web_search",
-        measurement=measurement_from_interaction_trace(trace),
     )
 
     assert result["disposition"] == "answer"
@@ -164,7 +164,6 @@ def test_ask_001b_one_conversation_combines_personal_and_official_web_evidence(
         "ASK-001B.product_http",
         {"user_text": user_text, "result": result, "trace": trace},
         profile="baseline+web_search",
-        measurement=measurement_from_interaction_trace(trace),
     )
 
     assert result["disposition"] == "answer"

@@ -1,12 +1,14 @@
-# 能力 E2E 与发布证据
+# E2E 执行与机器证据目录
 
-本目录包含两种证据，唯一分类 owner 是
-[`evidence_catalog.py`](evidence_catalog.py)：
+本目录当前由 [`evidence_catalog.py`](evidence_catalog.py) 分成两种**执行 selection**：
 
-- `release`：从独立 Web 进程的正式 HTTP/Application 入口进入，使用真实模型、真实
-  PostgreSQL 和场景所需的真实 Provider，断言一个用户目标及关键反事实；
-- `diagnostic`：验证外部 Capability Profile 或 durable runtime 协议，只用于定位，不能单独
-  产生产品发布声明。
+- `release`：9 条同时具有 typed 用户结果契约与真实 HTTP/模型/PostgreSQL profile 的 Product E2E；
+- `diagnostic`：25 条 Application、Runtime、Boundary 或 Capability Profile supporting evidence。
+
+12 条 scripted Investigation 用例位于 `evals/runtime_conformance/investigation_project`，不再由本目录的产品矩阵收集。
+
+当前逐项证据分类、baseline 合法性和指标覆盖见
+[`docs/evals/README.md`](../../docs/evals/README.md)。
 
 用户输入不得点名内部 Tool、Agent、Artifact、Model、执行顺序或结束判断。精确 capability、
 并发、receipt、provider binding 只能在执行后通过 trace/contract 断言。
@@ -25,12 +27,7 @@ layer 是断言焦点，不是独立产品链路，也不能替代完整用户�
 
 ## 矩阵与发布门禁
 
-精确用例、数量、test double 和 `release_eligible` 只由 `evidence_catalog.py` 枚举，本 README 不维护
-第二份清单。分类包括 `product_capability`、`complex_loop`、
-`capability_profile/boundary_evaluation` 和 `durable_investigation`。DUR-001 从正式 HTTP 入口验证
-重启后的运行记录 scope 隔离，属于 release-eligible product capability；OBS-001 对同一次失败验证
-operator diagnosis，属于 boundary evaluation。CTX-001、RUN-001、GOV-001 因使用冻结外部 Provider
-属于 diagnostic。
+精确用例、证据类别、test double、覆盖不变量和机器 `release_eligible` 只由 `evidence_catalog.py` 枚举。Product E2E 必须绑定 persona、source、自然目标、可观察结果、反事实、baseline 与 assertion owner；`IP01/DUR-001/L02/E12` 等 supporting evidence 不进入产品完成率。
 
 发布能力由 `release_gate.py` 对机器声明、catalog eligibility、clean 同 revision trace、test
 outcome 和 checksum 求交集。终态由测试中的可执行断言拥有，不再维护一个 gate 不读取的
@@ -61,8 +58,10 @@ uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s
 
 ```powershell
 uv run python -m evals.e2e_quality.metrics_report `
-  --trace-root data/e2e_traces --profile current-runtime `
-  --require-complete-profile --output data/e2e_metrics/current-runtime.json
+  --trace-root data/e2e_traces --list-cohorts
+uv run python -m evals.e2e_quality.metrics_report `
+  --trace-root data/e2e_traces --profile <cohort-specific-profile> `
+  --require-complete-profile --output data/e2e_metrics/report.json
 ```
 
 reporter 只读取 checksum 完整、profile 兼容的 archive，并把缺失 usage 标为 unavailable；它不能改变 release gate 的发布判断。

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from personal_agent.application.conversation.models import InteractionTrace
@@ -34,7 +36,6 @@ class MeasurementProfile(_MeasurementModel):
 
     def cohort_key(self) -> tuple[object, ...]:
         return (
-            self.profile_id,
             self.runtime_implementation,
             self.structured_provider,
             self.structured_model,
@@ -43,6 +44,15 @@ class MeasurementProfile(_MeasurementModel):
             self.budget,
             self.fixture_revision,
         )
+
+    def cohort_digest(self) -> str:
+        """Stable identity of comparable facts; labels and repetitions are excluded."""
+
+        canonical = self.model_dump_json(
+            exclude={"profile_id", "repetition"},
+            exclude_none=False,
+        )
+        return sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 class CaseMeasurement(_MeasurementModel):
@@ -61,6 +71,7 @@ class CaseMeasurement(_MeasurementModel):
     agent_calls: int | None = Field(default=None, ge=0)
     recovery_duration_seconds: float | None = Field(default=None, ge=0)
     replay_new_side_effects: int | None = Field(default=None, ge=0)
+    limited: bool | None = None
 
     @model_validator(mode="after")
     def validate_token_total(self) -> "CaseMeasurement":
@@ -86,14 +97,92 @@ def measurement_from_interaction_trace(
     )
     usage = interaction.usage
     return CaseMeasurement(
+        input_tokens=usage.input_tokens if usage.provider_usage_complete else None,
+        output_tokens=usage.output_tokens if usage.provider_usage_complete else None,
         total_tokens=(
             usage.total_tokens
             if usage.total_tokens > 0 or usage.model_turns == 0
             else None
         ),
+        model_calls=usage.model_calls if usage.provider_usage_complete else None,
         model_turns=usage.model_turns,
         tool_calls=usage.tool_calls,
         agent_calls=usage.agent_calls,
+        limited=(
+            interaction.final_message.disposition == "limitation"
+            if interaction.final_message is not None
+            else None
+        ),
+    )
+
+
+def measurement_from_trace_payload(
+    payload: dict[str, object],
+) -> CaseMeasurement | None:
+    """Extract committed Conversation usage through typed boundary validation.
+
+    A journey may archive setup/result/path evidence around the production trace.
+    The extractor does not infer keys from a case id: it recursively finds only
+    objects that validate as ``InteractionTrace``, keeps the latest revision of
+    each run, and aggregates distinct interaction runs in the journey.
+    """
+
+    candidates: list[InteractionTrace] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            if {
+                "interaction_run_ref",
+                "conversation_id",
+                "principal",
+                "messages",
+                "usage",
+            } <= value.keys():
+                try:
+                    candidates.append(InteractionTrace.model_validate(value))
+                    return
+                except ValueError:
+                    pass
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    if not candidates:
+        return None
+    latest: dict[str, InteractionTrace] = {}
+    for trace in candidates:
+        current = latest.get(trace.interaction_run_ref)
+        if current is None or trace.revision > current.revision:
+            latest[trace.interaction_run_ref] = trace
+    measurements = [measurement_from_interaction_trace(trace) for trace in latest.values()]
+    return CaseMeasurement(
+        input_tokens=(
+            sum(item.input_tokens or 0 for item in measurements)
+            if all(item.input_tokens is not None for item in measurements)
+            else None
+        ),
+        output_tokens=(
+            sum(item.output_tokens or 0 for item in measurements)
+            if all(item.output_tokens is not None for item in measurements)
+            else None
+        ),
+        total_tokens=sum(item.total_tokens or 0 for item in measurements),
+        model_calls=(
+            sum(item.model_calls or 0 for item in measurements)
+            if all(item.model_calls is not None for item in measurements)
+            else None
+        ),
+        model_turns=sum(item.model_turns or 0 for item in measurements),
+        tool_calls=sum(item.tool_calls or 0 for item in measurements),
+        agent_calls=sum(item.agent_calls or 0 for item in measurements),
+        limited=(
+            any(item.limited is True for item in measurements)
+            if any(item.limited is not None for item in measurements)
+            else None
+        ),
     )
 
 
@@ -102,4 +191,5 @@ __all__ = [
     "CaseMeasurement",
     "MeasurementProfile",
     "measurement_from_interaction_trace",
+    "measurement_from_trace_payload",
 ]

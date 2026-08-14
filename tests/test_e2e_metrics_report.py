@@ -5,9 +5,11 @@ import json
 import pytest
 
 from evals.e2e_quality.evidence_catalog import (
+    BaselineKind,
     EntryBoundary,
     EvidenceCase,
-    EvidenceClaimKind,
+    EvidenceClass,
+    UserOutcomeContract,
 )
 from evals.e2e_quality.measurements import (
     BudgetProfile,
@@ -54,10 +56,25 @@ def _case(test_name: str, *, release_eligible: bool = True) -> EvidenceCase:
             if release_eligible
             else EntryBoundary.IN_PROCESS_SERVICE
         ),
+        evidence_class=EvidenceClass.PRODUCT_E2E,
         raw_user_input=release_eligible,
         real_model_required=release_eligible,
         real_postgres_required=release_eligible,
-        claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+        user_outcome_contract=(
+            UserOutcomeContract(
+                outcome_id=test_name,
+                persona="tester",
+                source_ref="test-contract",
+                natural_goal="exercise the measured product outcome",
+                observable_result="the user-visible result is asserted",
+                counterfactuals=("no hidden side effect",),
+                baseline_kind=BaselineKind.REGRESSION_CONTRACT,
+                baseline_ref="test-baseline",
+                assertion_owner="this test",
+            )
+            if release_eligible
+            else None
+        ),
     )
 
 
@@ -191,3 +208,12 @@ def test_report_is_byte_stable_and_rejects_tampered_measurement(temp_dir) -> Non
 def test_case_measurement_rejects_inconsistent_provider_token_facts() -> None:
     with pytest.raises(ValueError, match=r"input_tokens \+ output_tokens"):
         CaseMeasurement(input_tokens=3, output_tokens=4, total_tokens=8)
+
+
+def test_measurement_cohort_digest_ignores_label_and_repetition_only() -> None:
+    first = _profile()
+    second = first.model_copy(update={"profile_id": "renamed", "repetition": 9})
+    changed_model = first.model_copy(update={"structured_model": "other-model"})
+
+    assert first.cohort_digest() == second.cohort_digest()
+    assert first.cohort_digest() != changed_model.cohort_digest()

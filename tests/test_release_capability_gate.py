@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 
 from evals.e2e_quality.evidence_catalog import (
+    BaselineKind,
     EntryBoundary,
     EvidenceCase,
-    EvidenceClaimKind,
+    EvidenceClass,
+    UserOutcomeContract,
 )
 from evals.e2e_quality.release_gate import (
+    LOOP_CAPABILITIES,
     NATIVE_CAPABILITIES,
     REQUIRED_NATIVE_EVIDENCE_IDS,
     REQUIRED_LOOP_EVIDENCE_IDS,
@@ -21,7 +24,6 @@ REVISION = "a" * 40
 
 def _case(
     evidence_id: str,
-    claim_kind: EvidenceClaimKind,
     *,
     test_doubles: frozenset[str] = frozenset(),
 ) -> EvidenceCase:
@@ -32,18 +34,29 @@ def _case(
         test_name=f"test_{evidence_id.lower()}",
         layers=frozenset(),
         entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
         test_doubles=test_doubles,
-        claim_kind=claim_kind,
+        user_outcome_contract=UserOutcomeContract(
+            outcome_id=f"outcome-{evidence_id}",
+            persona="tester",
+            source_ref="test-contract",
+            natural_goal="exercise the release outcome",
+            observable_result="the asserted user-visible result is returned",
+            counterfactuals=("no hidden side effect",),
+            baseline_kind=BaselineKind.REGRESSION_CONTRACT,
+            baseline_ref="test-baseline",
+            assertion_owner="this test",
+        ),
     )
 
 
 def _catalog() -> tuple[EvidenceCase, ...]:
     native = tuple(
-        _case(evidence_id, EvidenceClaimKind.PRODUCT_CAPABILITY)
+        _case(evidence_id)
         for evidence_id in REQUIRED_NATIVE_EVIDENCE_IDS
     )
     loops = tuple(
-        _case(evidence_id, EvidenceClaimKind.COMPLEX_LOOP)
+        _case(evidence_id)
         for evidence_id in REQUIRED_LOOP_EVIDENCE_IDS
     )
     return native + loops
@@ -90,7 +103,7 @@ def test_gate_trusts_only_same_revision_catalog_and_trace_intersection(temp_dir)
     )
 
     assert len(report.trusted_native_capability_ids) == len(NATIVE_CAPABILITIES)
-    assert len(report.trusted_loop_capability_ids) == 6
+    assert len(report.trusted_loop_capability_ids) == len(LOOP_CAPABILITIES)
 
 
 def test_catalog_or_implementation_presence_without_trace_is_unverified(temp_dir) -> None:
@@ -128,9 +141,9 @@ def test_dirty_target_revision_fails_closed_even_with_passing_archive(temp_dir) 
 
 def test_test_double_cannot_become_release_evidence(temp_dir) -> None:
     cases = list(_catalog())
+    target_id = REQUIRED_NATIVE_EVIDENCE_IDS[0]
     cases[0] = _case(
-        "E01",
-        EvidenceClaimKind.PRODUCT_CAPABILITY,
+        target_id,
         test_doubles=frozenset({"FakeProvider"}),
     )
     frozen_cases = tuple(cases)
@@ -143,6 +156,8 @@ def test_test_double_cannot_become_release_evidence(temp_dir) -> None:
         evidence_cases=frozen_cases,
     )
 
-    e01 = next(item for item in report.native_evidence if item.evidence_id == "E01")
-    assert e01.status == "unverified"
-    assert "release_catalog_entry_ineligible" in e01.reasons
+    target = next(
+        item for item in report.native_evidence if item.evidence_id == target_id
+    )
+    assert target.status == "unverified"
+    assert "release_catalog_entry_ineligible" in target.reasons

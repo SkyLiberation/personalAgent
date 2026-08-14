@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from personal_agent.capabilities.contracts.model import (
     StructuredModelClient,
     StructuredModelRequest,
+    StructuredModelResponse,
     sealed_context_projection_ref,
 )
 
@@ -109,8 +110,8 @@ def derive_review_criteria(
     model_client: StructuredModelClient,
     *,
     messages: Sequence[ConversationMessage],
-) -> tuple[ReviewCriteria, int]:
-    """Derive this turn's frozen criteria, with the tokens the derivation cost.
+) -> tuple[ReviewCriteria, StructuredModelResponse[ReviewIntent]]:
+    """Derive frozen criteria and return the authoritative provider response.
 
     The token count is returned so the derivation is charged to the same
     interaction budget as every other model call; a runtime-owned step is not a
@@ -132,10 +133,7 @@ def derive_review_criteria(
         max_tokens=800,
         metadata={"component": "conversation_review_admission"},
     ))
-    token_count = response.total_tokens or (
-        (response.input_tokens or 0) + (response.output_tokens or 0)
-    )
-    return admit_review_intent(response.value, messages=messages), token_count
+    return admit_review_intent(response.value, messages=messages), response
 
 
 def ungrounded_criteria_feedback(criteria: ReviewCriteria) -> DecisionFeedback:

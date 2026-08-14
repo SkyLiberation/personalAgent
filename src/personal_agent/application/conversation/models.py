@@ -13,6 +13,9 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
+ConversationInteractionMode = Literal["default", "auto"]
+
+
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -24,6 +27,57 @@ class ConversationMessage(_StrictModel):
     content: str = Field(min_length=1, max_length=20_000)
 
 
+class WorkingPlanStepProposal(_StrictModel):
+    step_id: str = Field(min_length=1, max_length=100)
+    description: str = Field(
+        min_length=1,
+        max_length=1_000,
+        description=(
+            "In the user's language, state the verifiable work result and its acceptance "
+            "condition using the equivalent of 'Result: ...; Complete when: ...'; do not "
+            "state only a search, read, tool call, or other activity."
+        ),
+    )
+    status: Literal["pending", "completed"] = "pending"
+
+
+class WorkingPlanProposal(_StrictModel):
+    """A short-horizon user-visible contract for unresolved result obligations.
+
+    Propose this without waiting for the user to name planning when it materially
+    prevents omission, repeated work, or loss across a budget, context, process,
+    or user-turn boundary. It is not required merely because several actions are
+    possible.
+    """
+
+    goal: str = Field(min_length=1, max_length=4_000)
+    steps: tuple[WorkingPlanStepProposal, ...] = Field(min_length=2, max_length=12)
+
+
+class ConversationWorkingPlanStep(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_id: str = Field(min_length=1, max_length=100)
+    description: str = Field(
+        min_length=1,
+        max_length=1_000,
+        description=(
+            "The admitted verifiable work result and its explicit completion condition."
+        ),
+    )
+    status: Literal["pending", "completed"]
+    completion_action_ids: tuple[str, ...] = ()
+
+
+class ConversationWorkingPlan(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    plan_id: str = Field(min_length=1)
+    revision: int = Field(ge=1)
+    goal: str = Field(min_length=1, max_length=4_000)
+    steps: tuple[ConversationWorkingPlanStep, ...] = Field(min_length=2, max_length=12)
+
+
 class ToolCallProposal(_StrictModel):
     kind: Literal["tool_call"] = "tool_call"
     action_id: str = Field(
@@ -31,6 +85,7 @@ class ToolCallProposal(_StrictModel):
     )
     tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class AgentDelegationProposal(_StrictModel):
@@ -45,6 +100,7 @@ class AgentDelegationProposal(_StrictModel):
     token_budget: int = Field(default=4_000, ge=1)
     cost_budget: float = Field(default=1.0, ge=0)
     time_budget_seconds: int = Field(default=180, ge=1, le=180)
+    plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class KnowledgeSaveSelection(_StrictModel):
@@ -161,14 +217,37 @@ ActionProposal = ToolCallProposal | AgentDelegationProposal
 
 
 class FinalMessage(_StrictModel):
+    """Close the interaction only after required user-visible results are resolved.
+
+    If available capabilities can continue an unresolved obligation now or in a
+    later interaction, use ContinueTurnProposal with a working plan instead.
+    """
+
     kind: Literal["final_message"] = "final_message"
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
     message: str = Field(min_length=1)
+    resolved_plan_step_ids: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Pending plan steps whose user-visible result is delivered directly by "
+            "this answer. The runtime binds successful execution observations as "
+            "evidence; this field makes the semantic completion claim."
+        ),
+    )
 
 
 class ContinueTurnProposal(_StrictModel):
+    """Continue required work through actions, a coordination boundary, or both.
+
+    A new formal working plan waits for user review in default interaction mode.
+    It may use ``wait_for_user=false`` only in caller-selected auto mode.
+    """
+
     kind: Literal["continue_turn"] = "continue_turn"
     actions: tuple[ActionProposal, ...] = ()
+    working_plan: WorkingPlanProposal | None = None
+    wait_for_user: bool = False
+    message: str = Field(default="", max_length=4_000)
 
     @model_validator(mode="after")
     def _action_ids_are_unique(self) -> "ContinueTurnProposal":
@@ -179,7 +258,18 @@ class ContinueTurnProposal(_StrictModel):
 
 
 class AgentTurnDecision(_StrictModel):
-    """Object-root model-output envelope accepted by the interaction loop."""
+    """Object-root output for a turn that has no admitted working plan yet."""
+
+    decision: ContinueTurnProposal | FinalMessage
+
+
+class AgentTurnDecisionWithPlan(_StrictModel):
+    """Object-root output while an admitted plan can now be closed or continued.
+
+    ``FinalMessage`` comes first only in this lifecycle projection so structured
+    output does not keep selecting an unchanged continuation after evidence is
+    sufficient. Admission and the completion gate still reject premature closure.
+    """
 
     decision: FinalMessage | ContinueTurnProposal
 
@@ -249,6 +339,7 @@ class ActionObservation(_StrictModel):
     capability_id: str
     status: Literal["succeeded", "failed", "running", "cancelled"]
     payload: dict[str, Any] = Field(default_factory=dict)
+    plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 InteractionInput = DecisionFeedback | ActionObservation
@@ -264,9 +355,13 @@ class LoopBudgetPolicy(_StrictModel):
 
 
 class CommittedUsage(_StrictModel):
+    provider_usage_complete: bool = False
+    model_calls: int | None = None
     model_turns: int = 0
     tool_calls: int = 0
     agent_calls: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     total_tokens: int = 0
 
 
@@ -401,6 +496,7 @@ class InteractionTrace(_StrictModel):
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
     knowledge_delete_command_ref: str | None = None
     project_reference: ProjectReference | None = None
+    working_plan: ConversationWorkingPlan | None = None
 
 
 class ConversationTurnView(_StrictModel):
@@ -411,6 +507,7 @@ class ConversationTurnView(_StrictModel):
         "clarification_required",
         "confirmation_required",
         "background_started",
+        "plan_ready",
         "limitation",
         "failed",
     ]
@@ -419,6 +516,7 @@ class ConversationTurnView(_StrictModel):
         ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | None
     ) = None
     project_reference: ProjectReference | None = None
+    working_plan: ConversationWorkingPlan | None = None
 
 
 __all__ = [
@@ -428,7 +526,10 @@ __all__ = [
     "AgentTurnDecision",
     "CommittedUsage",
     "ContinueTurnProposal",
+    "ConversationInteractionMode",
     "ConversationMessage",
+    "ConversationWorkingPlan",
+    "ConversationWorkingPlanStep",
     "ConversationTurnView",
     "ConversationKnowledgeSaveCommand",
     "ConversationKnowledgeSaveOperation",
@@ -457,5 +558,7 @@ __all__ = [
     "StartDurableInvestigationArguments",
     "ToolCallProposal",
     "TurnContextComposition",
+    "WorkingPlanProposal",
+    "WorkingPlanStepProposal",
     "PersonalKnowledgeCandidate",
 ]

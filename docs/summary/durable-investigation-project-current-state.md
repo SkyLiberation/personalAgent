@@ -7,6 +7,11 @@ Investigation Project 已成为独立的 durable 产品入口，而不是 Conver
 journal 重建 Project，并按 accepted Plan 计算 ready set、dispatch、join、coverage 与
 Completion。
 
+**该纵切的生产可达性和回归覆盖不等于产品必要性已经准入。** 后续审计确认：实现前没有来自
+真实用户、工单、公开契约或同输入正式入口失败的证据；原 LT09 没有运行 Conversation 对照，
+`E23` 只证明已有 Project 的 Conversation handoff 缺口。因此当前禁止据此扩张 Project 机制，
+也不能在没有消费者、迁移和行为 baseline 的情况下删除已公开入口或持久化事实。
+
 当前 LT01–LT08、LT10–LT13 使用生产 Domain、Application、PostgreSQL store、worker queue 和 Artifact owner，
 但 semantic model 与外部 Provider 是 scripted/frozen Port。B03 已补正式 HTTP/worker、真实模型
 和 Web Search baseline，并证明 verification repair 的生产死锁；相关 runtime 缺口已修复。
@@ -21,7 +26,7 @@ SerpAPI、URL reader、Verifier、Synthesis 和 Completion Gate 交付最终报�
 
 | 事实 | 唯一 owner/写入口 |
 | --- | --- |
-| Project definition、Plan、SubGoal、waiting、budget、verification、completion | `InvestigationProject` aggregate + `InvestigationProjectService` |
+| Project definition、accepted Plan、SubGoal、waiting、budget、verification、completion | 事实 owner 是 `InvestigationProject` aggregate；唯一 Application 写入口是 `InvestigationProjectService`，通过 typed event 追加 |
 | Project persistence | `PostgresInvestigationProjectStore` definition + append-only events |
 | child Agent definition、submission binding、projection | `AgentGateway` + `PostgresAgentRunStore` |
 | Artifact 正文与私有路径 | `ArtifactService` |
@@ -108,11 +113,11 @@ capability 变化继续使用 `max_plan_revisions`，两类预算不相互吞噬
 
 ## 6. Conversation boundary
 
-普通 Conversation 保持 request-local ReAct，只持久化 messages、Observation/Feedback、usage、
-execution order、并发批次、final message 和跨领域资源引用。旧 `WorkingPlanSnapshot` 输出、恢复
-admission 和 trace 字段已删除。用户明确要求跨交互持续和后续控制时，Conversation 可以调用
-`InvestigationProjectService.create`，但只保存 `ProjectReference`；Project definition、Plan、状态和
-Completion 仍由 Project aggregate 唯一拥有。
+普通 Conversation 保持前台 Interaction loop，并可在用户明确要求，或模型判断存在漏项、重复、恢复或
+steering 收益时持久化独立的 `ConversationWorkingPlan`，用于展示和修订当前目标的可验收工作项。它不包含 Project definition、ready set、
+queue/lease、审批、budget 或 Completion obligation，也不驱动 durable dispatch。用户明确要求跨交互持续
+和后续控制时，Conversation 才调用 `InvestigationProjectService.create`，并只保存
+`ProjectReference`；Project definition、accepted Plan、状态和 Completion 仍由 Project aggregate 唯一拥有。
 
 ## 7. 已执行验证
 

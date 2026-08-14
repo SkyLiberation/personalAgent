@@ -1,7 +1,7 @@
 from evals.e2e_quality.evidence_catalog import (
     CapabilityProfile,
     EVIDENCE_CASES,
-    EvidenceClaimKind,
+    EvidenceClass,
     EntryBoundary,
     FaultMechanism,
 )
@@ -9,6 +9,7 @@ from evals.e2e_quality.release_gate import (
     NATIVE_CAPABILITIES,
     REQUIRED_NATIVE_EVIDENCE_IDS,
 )
+from evals.e2e_quality.evidence_audit import build_overlap_graph
 from evals.e2e_quality.test_release_user_outcomes import (
     _child_environment,
     _release_profile_settings,
@@ -16,29 +17,32 @@ from evals.e2e_quality.test_release_user_outcomes import (
 from personal_agent.kernel.config import OpenAIConfig, Settings, StructuredConfig
 
 
-def test_catalog_contains_only_product_loop_and_external_profile_evidence() -> None:
-    legacy_architecture_ids = {
+def test_catalog_declares_one_explicit_evidence_responsibility_per_case() -> None:
+    application_ids = {
         case.case_id
         for case in EVIDENCE_CASES
-        if case.claim_kind is EvidenceClaimKind.ARCHITECTURE
+        if case.evidence_class is EvidenceClass.APPLICATION_E2E
     }
     profile_ids = {
         case.case_id
         for case in EVIDENCE_CASES
-        if case.claim_kind is EvidenceClaimKind.CAPABILITY_PROFILE
+        if case.evidence_class is EvidenceClass.CAPABILITY_PROFILE
     }
-    assert legacy_architecture_ids == set()
+    assert {"IP01", "E08", "E12"} <= application_ids
     assert profile_ids == {"E16", "E17", "E18", "E19", "E21"}
 
 
-def test_product_release_matrix_is_complete() -> None:
+def test_product_release_matrix_contains_only_qualified_user_outcomes() -> None:
     product_ids = {
         case.case_id
         for case in EVIDENCE_CASES
-        if case.claim_kind is EvidenceClaimKind.PRODUCT_CAPABILITY
+        if case.release_eligible
     }
 
-    assert product_ids == set(REQUIRED_NATIVE_EVIDENCE_IDS)
+    assert product_ids == set(REQUIRED_NATIVE_EVIDENCE_IDS) | {
+        "L01", "L03", "L04", "L06", "L07"
+    }
+    assert {"IP01", "DUR-001", "L02", "E12"}.isdisjoint(product_ids)
 
 
 def test_current_catalog_has_no_historical_failure_or_synthetic_comparison() -> None:
@@ -55,6 +59,26 @@ def test_every_required_product_evidence_is_consumed_by_an_application_capabilit
             owners[evidence_id].append(capability.capability_id)
 
     assert all(capability_ids for capability_ids in owners.values()), owners
+
+
+def test_every_product_release_claim_has_typed_user_outcome_metadata() -> None:
+    assert all(
+        case.user_outcome_contract is not None
+        for case in EVIDENCE_CASES
+        if case.release_eligible
+    )
+
+
+def test_overlap_graph_exposes_shared_invariants_without_erasing_unique_ones() -> None:
+    edges = build_overlap_graph(EVIDENCE_CASES)
+    shared_pairs = {
+        frozenset((edge.left_evidence_id, edge.right_evidence_id))
+        for edge in edges
+    }
+    assert frozenset(("E14.product_http", "L07.complex_loop_http")) in shared_pairs
+    assert frozenset(("L04.complex_loop_http", "E17.capability_profile")) in shared_pairs
+    e08 = next(case for case in EVIDENCE_CASES if case.case_id == "E08")
+    assert "knowledge_save.direct_solidify_contract" in e08.covered_invariants
 
 
 def test_executable_assertions_and_profiles_own_outcomes_without_dead_metadata() -> None:

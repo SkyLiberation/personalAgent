@@ -22,7 +22,6 @@ from uuid import uuid4
 import pytest
 
 from evals.e2e_quality.trace_archive import TraceArchive
-from evals.e2e_quality.measurements import CaseMeasurement
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
     _get_json,
@@ -188,14 +187,12 @@ def _record(
     trace: dict[str, object],
     *,
     profile: str,
-    measurement: CaseMeasurement | None = None,
 ) -> None:
     archive.update_environment({"product_release_matrix": True})
     archive.write_trace(
         nodeid=request.node.nodeid,
         case_id=case_id,
         trace={"capability_profile": profile, **trace},
-        measurement=measurement,
     )
 
 

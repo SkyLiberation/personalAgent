@@ -50,6 +50,7 @@ class MetricsReport(_ReportModel):
     repetitions: tuple[int, ...]
     case_ids: tuple[str, ...]
     goal_completion_rate: RateMetric
+    limitation_rate: RateMetric
     input_tokens: IntegerMetric
     output_tokens: IntegerMetric
     total_tokens: IntegerMetric
@@ -78,6 +79,27 @@ def _read_object(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise MeasurementArchiveError(f"archive JSON is not an object: {path}")
     return value
+
+
+def available_cohorts(trace_root: Path) -> dict[str, tuple[str, ...]]:
+    """Return profile labels and the distinct typed cohort digests they contain."""
+
+    if not trace_root.exists():
+        return {}
+    cohorts: dict[str, set[str]] = {}
+    for run_dir in sorted(path for path in trace_root.iterdir() if path.is_dir()):
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        raw_profile = _read_object(manifest_path).get("measurement_profile")
+        if not isinstance(raw_profile, dict):
+            continue
+        profile = MeasurementProfile.model_validate(raw_profile)
+        cohorts.setdefault(profile.profile_id, set()).add(profile.cohort_digest())
+    return {
+        profile_id: tuple(sorted(digests))
+        for profile_id, digests in sorted(cohorts.items())
+    }
 
 
 def _measurement_for_result(
@@ -175,8 +197,10 @@ def _load_cohort(
         )
     cohort_key = selected_profiles[0].cohort_key()
     if any(profile.cohort_key() != cohort_key for profile in selected_profiles[1:]):
+        digests = sorted({profile.cohort_digest() for profile in selected_profiles})
         raise MeasurementArchiveError(
-            "profile id maps to incompatible model, prompt, budget, fixture, or runtime facts"
+            "profile id maps to incompatible model, prompt, budget, fixture, or runtime "
+            f"facts; select a cohort-specific profile ({', '.join(digests)})"
         )
     return (
         selected_profiles[0],
@@ -254,6 +278,16 @@ def build_metrics_report(
         repetitions=repetitions,
         case_ids=tuple(sorted({case.case_id for case in cases})),
         goal_completion_rate=_rate(passed, len(cases)),
+        limitation_rate=_rate(
+            sum(
+                case.measurement is not None and case.measurement.limited is True
+                for case in cases
+            ),
+            sum(
+                case.measurement is not None and case.measurement.limited is not None
+                for case in cases
+            ),
+        ),
         input_tokens=_integer_metric(cases, "input_tokens"),
         output_tokens=_integer_metric(cases, "output_tokens"),
         total_tokens=_integer_metric(cases, "total_tokens"),
@@ -298,10 +332,16 @@ def main() -> int:
         description="derive deterministic measurements from sealed E2E archives"
     )
     parser.add_argument("--trace-root", type=Path, default=Path("data/e2e_traces"))
-    parser.add_argument("--profile", required=True)
+    parser.add_argument("--profile")
+    parser.add_argument("--list-cohorts", action="store_true")
     parser.add_argument("--require-complete-profile", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.list_cohorts:
+        print(json.dumps(available_cohorts(args.trace_root), indent=2, sort_keys=True))
+        return 0
+    if not args.profile:
+        parser.error("--profile is required unless --list-cohorts is used")
     try:
         report = build_metrics_report(
             trace_root=args.trace_root,
@@ -310,6 +350,20 @@ def main() -> int:
     except MeasurementArchiveError as exc:
         parser.error(str(exc))
     rendered = report.model_dump_json(indent=2) + "\n"
+    if args.require_complete_profile:
+        required = (
+            report.total_tokens,
+            report.model_calls,
+            report.model_turns,
+            report.tool_calls,
+            report.agent_calls,
+            report.case_latency_seconds,
+        )
+        if any(item.available_cases != item.expected_cases for item in required):
+            parser.error(
+                "required Product E2E measurement fields are incomplete; unavailable "
+                "facts are never coerced to zero"
+            )
     if args.output is None:
         print(rendered, end="")
     else:
@@ -322,6 +376,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "available_cohorts",
     "MeasurementArchiveError",
     "MetricsReport",
     "build_metrics_report",

@@ -1,101 +1,114 @@
 # 从四类用户请求理解生产路径
 
-> **请求按“谁拥有结果和生命周期”分组，不按 Tool 名或代码包分组。** Conversation 是统一自然语言入口，但可以调用其他 Application 或创建 Aggregate；这四类路径不是互斥产品模式。
+> **请求按“谁拥有结果和生命周期”分组，不按工具名或代码包分组。** 对话是统一的自然语言入口，但可以调用其他业务能力或创建长期业务对象；这四类路径不是互斥的产品模式。
 
 ## 1. 统一路由原则
 
+**所有自然请求共享“模型提出语义、确定性边界治理、真正的责任主体提交事实”这条主链，但不会因此共享同一个业务状态机。**
+
 ```text
 用户自然表达
-  -> FinalMessage / Clarification / Limitation
-  -> ContinueTurn(actions)
-       -> Admission
-       -> Application-owned action -> 唯一 Use Case / Aggregate
-       -> Tool / MCP action         -> ToolGateway
-       -> Agent delegation          -> AgentGateway
-  -> committed Observation
-  -> 下一模型回合或结束
+  -> 模型判断：直接回答 / 需要澄清 / 能力不足 / 继续执行
+  -> 继续执行时，可按需保存可验收工作项清单
+  -> 确定性边界检查身份、权限、参数、预算和结果绑定
+  -> 按事实归属分流
+       -> 业务动作进入唯一业务写入口
+       -> 外部读取进入受治理工具执行
+       -> 子目标进入受治理的子智能体委托
+  -> 提交有界执行事实
+  -> 模型依据新事实继续，或进入验证与完成判断
 ```
 
-**模型选择“要做什么”，确定性代码只检查是否允许以及如何提交事实。** 关键词无法区分“不要保存”“解释删除”和“删除它”，因此不能成为开放语义 Router；Admission 也不能补 `note_id`、替换 Goal 或静默换 Tool。
+**模型选择“要做什么”，确定性代码只检查是否允许以及如何提交事实。** 关键词无法区分“不要保存”“解释删除”和“删除它”，因此不能承担开放语义路由；准入代码也不能替模型补目标、猜对象或静默改用另一种能力。
 
-## 2. Conversation：直接回答与 grounded answer
+## 2. 直接回答与有证据的回答
 
-**没有执行需要时直接回答；需要个人或外部证据时，先取得真实 Observation 再生成最终答案。**
+**没有执行需要时直接回答；需要个人或外部证据时，先取得真实执行事实，再生成最终答案。**
 
 | 用户表达 | 当前路径 | 关键反事实 |
 | --- | --- | --- |
-| “SLO 错误预算是什么？” | 模型直接 FinalMessage | 不伪造 Task、Command、Receipt |
-| “根据我的记录，项目是哪天上线的？” | scope-filtered personal evidence 预取 → 回答 | 不读取其他 principal；不把回答写成 Claim |
-| “结合我的项目记录和 OpenAI 官方资料回答” | personal evidence → 模型按需 web Tool → 综合回答 | 外部内容不获得控制权；只返回一个最终答案 |
-| “读取这个大文件中的地址和行号” | Tool Observation → ResourceRef → 有界重读 | 不把全文永久复制进每轮 Context |
+| “SLO 错误预算是什么？” | 模型直接回答 | 不为形式统一创建任务、冻结动作或执行回执 |
+| “根据我的记录，项目是哪天上线的？” | 先按用户范围取得个人证据，再回答 | 不读取他人内容；不把回答自动写成长期知识 |
+| “结合我的项目记录和 OpenAI 官方资料回答” | 个人证据与按需网页读取汇入同一个答案 | 外部内容不获得控制权；不产生第二条答案链 |
+| “读取这个大文件中的地址和行号” | 保存完整结果，只把有界片段和安全引用交给模型按需重读 | 不把全文永久复制进每轮上下文 |
 
-`ASK-001A`、`ASK-001B` 的关键设计是**最终回答只有 Conversation 一个 owner**。Personal Knowledge 负责可见证据和 Claim 生命周期，Web Tool 负责外部执行事实；所有来源汇入同一 answer contract。
+`ASK-001A`、`ASK-001B` 的关键设计是**最终回答只由当前交互负责**。个人知识负责可见证据和长期事实的生命周期，网页能力只产生外部执行事实；所有来源汇入同一个回答契约。
+
+任务需要跨真实边界协调时，对话路径可以保存短期工作清单；简单问答和普通多动作请求仍直接走执行循环。这里仅说明请求会进入这条支路，创建条件、跨轮事实复用、用户调整和完成门禁统一见[工作清单能力](03-capability-axes.md#2-按需工作清单提升复杂任务的跨轮完成能力)。
 
 ## 3. 受治理事务：保存、删除与恢复
 
-**需要确认、幂等或跨请求恢复的副作用才形成 immutable Command；普通读取不承担这套成本。**
+**只有需要确认、幂等或跨请求恢复的副作用，才冻结成不可变待执行动作；普通读取不承担这套成本。**
 
 ### 显式保存
 
+**保存只接受用户明确授权的原文事实，不能把控制指令或模型生成内容混入长期知识。**
+
 ```text
 自然语言保存请求
-  -> 模型选择 exact user-authored span
-  -> Application admission 校验 message/source index
-  -> immutable SaveCommand + CommandDigest
-  -> confirmation 绑定 principal、scope、command
-  -> KnowledgeService 唯一写入口
-  -> Receipt 引用实际 Claim
+  -> 模型只选择用户原文中的精确片段
+  -> 准入检查片段确实来自对应用户消息
+  -> 冻结待保存内容并生成一致性指纹
+  -> 用户确认绑定身份、范围和同一冻结内容
+  -> 进入知识唯一写入口
+  -> 回执引用实际写入的长期事实
 ```
 
-Admission 只验证模型选择的 span 确实来自对应 user message，不把整条控制指令、assistant candidate 或模型总结写入长期知识。
+准入只验证模型选择的片段确实来自对应用户消息，不把整条控制指令、助手候选回答或模型总结写入长期知识。
 
 ### 删除与恢复
 
-```text
-DeleteCommand --confirm--> delete event + Receipt
-              --reject--> terminal rejection, no side effect
-
-RestoreCommand --confirm--> restore event + Receipt
-```
-
-Restore 是新动作，不覆盖旧删除事实。相同 digest replay 返回已有结果；跨 principal/scope、错误 command ref 或参数重绑定均 fail closed。领域迁移归 KnowledgeLifecycleService，通用确认入口不能直接改写知识状态。
-
-## 4. 固定长期流程：ResearchRun
-
-**依赖固定、结果契约稳定的长期工作由领域 Workflow/状态机拥有，不需要模型动态重排每个 Activity。**
+**删除和恢复是两次独立、可审计的状态迁移；恢复不能覆盖删除历史。**
 
 ```text
-Subscription -> Scheduler -> ResearchRun -> Digest -> Delivery -> Feedback
+冻结的删除请求 --确认--> 删除事实 + 执行回执
+               --拒绝--> 终止且零副作用
+
+冻结的恢复请求 --确认--> 恢复事实 + 执行回执
 ```
 
-模型可以完成检索与总结，但 `running/completed/partial/limitation/failure`、来源要求和 Delivery exactly-once 由 Research Application 控制。Provider `ok`、Run `running` 或发送成功都不能单独代表研究目标完成。
+恢复是新动作，不覆盖旧删除事实。相同指纹的重放返回已有结果；身份或范围不符、引用错误、参数被替换时全部拒绝。知识生命周期迁移归知识业务写入口，通用确认入口不能直接改写知识状态。
 
-## 5. 动态长任务：InvestigationProject
+## 4. 固定周期研究：流程由结果契约决定
 
-**只有下一步依赖新 Observation，并且任务需要跨进程或用户轮次持续推进时，才使用 Project。**
+**依赖固定、结果契约稳定的长期工作由领域固定流程或状态机负责，不需要模型动态重排每个步骤。**
 
 ```text
-Conversation / Project API
-  -> immutable Project definition
-  -> PlanProposal -> PlanAdmission -> AcceptedPlanVersion
-  -> deterministic ready set
-  -> governed Tool / Agent execution
-  -> evidence admission
-  -> semantic verification
-  -> CompletionReport + ArtifactRef
+用户订阅 -> 定时触发 -> 单次研究运行 -> 摘要 -> 幂等投递 -> 用户反馈
 ```
 
-Conversation 创建后只保存 scoped `ProjectReference`。后续 turn 从 Project owner 预取有界的 plan/progress projection；模型可以直接回答进度，也可以提议 `steer_investigation_project`，Application 再绑定真实 project identity 与当前 plan version。读取 projection 不推进状态，steering 不修改冻结 SubGoal，恢复不重复已提交 child action。
+模型可以完成检索与总结，但运行状态、来源要求、部分完成、能力限制和投递幂等由研究业务负责。服务提供方返回成功、任务仍在运行或消息已发送，都不能单独代表研究目标完成。
 
-`PLAN-001` 从正式 Conversation 验证了同项目读取、调整和 Web 重启恢复，同时断言没有创建第二个 Project 或 Plan 副本。它证明这条纵向切片，不代表所有长请求都需要 Project。
+## 5. 动态后台调查：新事实决定后续路径
 
-## 6. Owner 总表
+**只有下一步依赖新的执行事实，并且任务需要跨进程或跨用户轮次持续推进时，才使用后台项目。**
 
-| 用户目标 | 长期事实 owner | 正式入口 | Conversation 的角色 |
+```text
+自然语言入口 / 项目接口
+  -> 提交不可变目标、要求和预算
+  -> 模型提出调查子目标与依赖
+  -> 准入后成为项目拥有的当前规划版本
+  -> 确定性计算当前可执行子目标
+  -> 受治理地调用工具或子智能体
+  -> 接纳证据并逐项验证
+  -> 所有要求满足后生成最终报告与产物引用
+```
+
+对话创建后台调查后，只保存一个受身份范围约束的引用。后续轮次从后台项目读取有界的规划和进度投影；模型可以回答进度，也可以提议调整尚未冻结的要求。读取投影不会推进状态，调整不能修改已冻结子目标，恢复不能重复已经提交的子任务。
+
+`PLAN-001` 从正式对话入口验证了同一后台项目的读取、调整和网页服务重启恢复，同时断言没有创建第二个项目或规划副本。它只证明这条纵向路径，不代表所有长请求都需要后台项目。
+
+## 6. 事实归属总表
+
+**同一个自然语言入口可以调用多个业务，但每种长期事实仍只有一个责任主体和一个写入口。**
+
+| 用户目标 | 长期事实归属 | 正式入口 | 自然语言对话的角色 |
 | --- | --- | --- | --- |
-| 直接回答、证据问答、MCP、Agent 委托 | Conversation Interaction | Conversation API | 拥有交互与最终消息 |
-| 保存、删除、恢复知识 | Knowledge Application | Conversation + Knowledge/lifecycle API | 选择能力并进入同一写入口 |
-| 订阅、周期研究、投递 | Research Application | Research API + Scheduler/Worker | 不逐轮接管状态 |
-| 动态跨进程调查 | InvestigationProject | Conversation / Project API + Worker | 创建并持有 scoped reference |
+| 直接回答、证据问答、外部读取、子智能体委托 | 当前交互 | 对话接口 | 负责交互、短期可验收工作项与最终消息 |
+| 保存、删除、恢复知识 | 知识业务 | 对话入口与知识接口 | 选择能力并进入同一写入口 |
+| 订阅、周期研究、投递 | 研究业务 | 研究接口、定时器与工作进程 | 不逐轮接管状态 |
+| 动态跨进程调查 | 后台调查项目 | 对话入口、项目接口与工作进程 | 创建并持有受权限范围约束的引用 |
 
-代码入口见 [Conversation routes](../../src/personal_agent/adapters/web/routes/conversation.py)、[Knowledge routes](../../src/personal_agent/adapters/web/routes/knowledge.py)、[Notes routes](../../src/personal_agent/adapters/web/routes/notes.py) 和 [Investigation routes](../../src/personal_agent/adapters/web/routes/investigation_projects.py)。证据强度以[证据与发布](05-evidence-and-release.md)为准。
+## 7. 当前实现坐标
+
+**设计成立的原因是上述生命周期和反事实，而不是路由或类名。** 进入代码时再使用以下入口：[对话路由](../../src/personal_agent/adapters/web/routes/conversation.py)、[知识路由](../../src/personal_agent/adapters/web/routes/knowledge.py)、[笔记路由](../../src/personal_agent/adapters/web/routes/notes.py)和[调查项目路由](../../src/personal_agent/adapters/web/routes/investigation_projects.py)。证据强度以[证据与发布](05-evidence-and-release.md)为准。

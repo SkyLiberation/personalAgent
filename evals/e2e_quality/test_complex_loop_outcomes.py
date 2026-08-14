@@ -389,11 +389,12 @@ def test_l03_http_process_restart_rebuilds_from_committed_facts(
     assert other_code not in json.dumps(recovered, ensure_ascii=False)
     assert tuple(recovered["execution_order"][: len(before_order)]) == before_order
     assert len(recovered["execution_order"]) == len(set(recovered["execution_order"]))
-    assert "working_plans" not in recovered
+    assert recovered["working_plan"] is None
     assert any(
         expected_code in json.dumps(item["payload"], ensure_ascii=False)
         for item in recovered["inputs"]
-        if item["kind"] == "tool_result" and item["status"] == "succeeded"
+        if item["kind"] in {"context_evidence", "tool_result"}
+        and item["status"] == "succeeded"
     )
 
 

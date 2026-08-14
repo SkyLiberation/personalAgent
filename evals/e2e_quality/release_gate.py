@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from evals.e2e_quality.evidence_catalog import (
     EVIDENCE_CASES,
     EvidenceCase,
-    EvidenceClaimKind,
+    EvidenceClass,
 )
 from evals.e2e_quality.trace_archive import archive_checksums_valid
 
@@ -38,7 +38,7 @@ class LoopCapabilityDefinition(_GateModel):
 
 class EvidenceGateResult(_GateModel):
     evidence_id: str
-    claim_kind: EvidenceClaimKind
+    evidence_class: EvidenceClass
     status: Literal["trusted", "unverified"]
     reasons: tuple[str, ...] = ()
     archive_run_ids: tuple[str, ...] = ()
@@ -80,56 +80,16 @@ class ReleaseCapabilityReport(_GateModel):
 # deliberately absent: it is a separate, interaction-scoped projection.
 NATIVE_CAPABILITIES: tuple[NativeCapabilityDefinition, ...] = (
     NativeCapabilityDefinition(
-        capability_id="conversation",
-        required_evidence_ids=("E01", "DUR-001"),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="capture",
-        required_evidence_ids=("E08", "E09"),
-    ),
-    NativeCapabilityDefinition(
         capability_id="grounded_ask",
-        required_evidence_ids=("ASK-001A", "ASK-001B", "E08"),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="knowledge_lifecycle",
-        required_evidence_ids=("E04", "E10"),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="review",
-        required_evidence_ids=("E11",),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="knowledge_maintenance",
-        required_evidence_ids=("E12",),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="research",
-        required_evidence_ids=("E05",),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="scheduled_intelligence",
-        required_evidence_ids=("E13",),
+        required_evidence_ids=("ASK-001A", "ASK-001B"),
     ),
     NativeCapabilityDefinition(
         capability_id="governed_conversation_save",
         required_evidence_ids=("E14",),
     ),
     NativeCapabilityDefinition(
-        capability_id="durable_investigation_report",
-        required_evidence_ids=("IP01",),
-    ),
-    NativeCapabilityDefinition(
         capability_id="governed_knowledge_delete_from_goal",
         required_evidence_ids=("E22",),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="durable_investigation_handoff",
-        required_evidence_ids=("E23",),
-    ),
-    NativeCapabilityDefinition(
-        capability_id="conversation_investigation_continuation",
-        required_evidence_ids=("PLAN-001",),
     ),
 )
 
@@ -139,42 +99,26 @@ LOOP_CAPABILITIES: tuple[LoopCapabilityDefinition, ...] = (
         required_evidence_id="L01",
     ),
     LoopCapabilityDefinition(
-        capability_id="safe_action_concurrency", required_evidence_id="L02"
-    ),
-    LoopCapabilityDefinition(
         capability_id="canonical_fact_recovery", required_evidence_id="L03"
     ),
     LoopCapabilityDefinition(
         capability_id="manager_specialists", required_evidence_id="L04"
     ),
     LoopCapabilityDefinition(
-        capability_id="budget_fail_closed", required_evidence_id="L05"
+        capability_id="receipt_bound_semantic_revision", required_evidence_id="L06"
     ),
     LoopCapabilityDefinition(
-        capability_id="receipt_bound_semantic_revision", required_evidence_id="L06"
+        capability_id="cross_conversation_recall", required_evidence_id="L07"
     ),
 )
 
 REQUIRED_NATIVE_EVIDENCE_IDS = (
-    "E01",
-    "E04",
-    "E05",
-    "E08",
-    "E09",
-    "E10",
-    "E11",
-    "E12",
-    "E13",
     "E14",
     "E22",
-    "E23",
-    "IP01",
-    "DUR-001",
-    "PLAN-001",
     "ASK-001A",
     "ASK-001B",
 )
-REQUIRED_LOOP_EVIDENCE_IDS = tuple(f"L{index:02d}" for index in range(1, 7))
+REQUIRED_LOOP_EVIDENCE_IDS = ("L01", "L03", "L04", "L06", "L07")
 
 
 def evaluate_release_capabilities(
@@ -202,7 +146,7 @@ def evaluate_release_capabilities(
     native_evidence = tuple(
         _evaluate_evidence(
             evidence_id=evidence_id,
-            claim_kind=EvidenceClaimKind.PRODUCT_CAPABILITY,
+            evidence_class=EvidenceClass.PRODUCT_E2E,
             catalog=catalog,
             passing=passing,
             target_dirty=target_dirty,
@@ -212,7 +156,7 @@ def evaluate_release_capabilities(
     loop_evidence = tuple(
         _evaluate_evidence(
             evidence_id=evidence_id,
-            claim_kind=EvidenceClaimKind.COMPLEX_LOOP,
+            evidence_class=EvidenceClass.PRODUCT_E2E,
             catalog=catalog,
             passing=passing,
             target_dirty=target_dirty,
@@ -242,15 +186,15 @@ def evaluate_release_capabilities(
 def _evaluate_evidence(
     *,
     evidence_id: str,
-    claim_kind: EvidenceClaimKind,
+    evidence_class: EvidenceClass,
     catalog: tuple[EvidenceCase, ...],
-    passing: dict[tuple[EvidenceClaimKind, str], set[str]],
+    passing: dict[tuple[EvidenceClass, str], set[str]],
     target_dirty: bool,
 ) -> EvidenceGateResult:
     candidates = tuple(
         case
         for case in catalog
-        if case.case_id == evidence_id and case.claim_kind is claim_kind
+        if case.case_id == evidence_id and case.evidence_class is evidence_class
     )
     reasons: list[str] = []
     if target_dirty:
@@ -259,12 +203,12 @@ def _evaluate_evidence(
         reasons.append("missing_release_catalog_entry")
     elif not any(case.release_eligible for case in candidates):
         reasons.append("release_catalog_entry_ineligible")
-    archive_run_ids = tuple(sorted(passing.get((claim_kind, evidence_id), set())))
+    archive_run_ids = tuple(sorted(passing.get((evidence_class, evidence_id), set())))
     if not archive_run_ids:
         reasons.append("missing_same_revision_passing_trace")
     return EvidenceGateResult(
         evidence_id=evidence_id,
-        claim_kind=claim_kind,
+        evidence_class=evidence_class,
         status="trusted" if not reasons else "unverified",
         reasons=tuple(dict.fromkeys(reasons)),
         archive_run_ids=archive_run_ids,
@@ -309,7 +253,7 @@ def _passing_evidence_by_id(
     target_dirty: bool,
     trace_root: Path,
     evidence_cases: tuple[EvidenceCase, ...],
-) -> dict[tuple[EvidenceClaimKind, str], set[str]]:
+) -> dict[tuple[EvidenceClass, str], set[str]]:
     if target_dirty or not trace_root.exists():
         return {}
     by_nodeid = {
@@ -317,7 +261,7 @@ def _passing_evidence_by_id(
         for case in evidence_cases
         if case.release_eligible
     }
-    passing: dict[tuple[EvidenceClaimKind, str], set[str]] = {}
+    passing: dict[tuple[EvidenceClass, str], set[str]] = {}
     for run_dir in sorted(path for path in trace_root.iterdir() if path.is_dir()):
         archive = _load_valid_archive(run_dir, revision=revision)
         if archive is None:
@@ -334,7 +278,7 @@ def _passing_evidence_by_id(
                 continue
             if not _trace_files_passed(run_dir, run_id, trace_files):
                 continue
-            passing.setdefault((case.claim_kind, case.case_id), set()).add(run_id)
+            passing.setdefault((case.evidence_class, case.case_id), set()).add(run_id)
     return passing
 
 
