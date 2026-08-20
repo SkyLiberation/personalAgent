@@ -96,7 +96,7 @@ class FirecrawlConfig(_StrictBase):
 
 
 class WebSearchConfig(_StrictBase):
-    provider: str = "serpapi"
+    provider: str = "tavily"
     api_key: str | None = None
     base_url: str | None = None
     timeout_ms: int = 60000

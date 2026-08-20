@@ -1,4 +1,4 @@
-"""CONV-001 target/regression E2E for a revisable foreground working plan."""
+"""CONV-001 product E2E for user-visible foreground-plan steering."""
 
 from __future__ import annotations
 
@@ -124,6 +124,16 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
         f"{live_web_process.base_url}/api/conversation/runs/"
         f"{third['interaction_run_ref']}"
     )
+    final_answer = str(third["message"]["content"])
+    result_metrics = {
+        "revised_requirement_present": "冲突" in final_answer,
+        "superseded_requirement_absent": "缺口" not in final_answer,
+        "seeded_result_present": random_fact in final_answer,
+        "duplicate_execution_count": (
+            len(third_trace["execution_order"])
+            - len(set(third_trace["execution_order"]))
+        ),
+    }
     report = {
         "case_id": "CONV-001",
         "conversation_id": conversation_id,
@@ -138,6 +148,7 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
         "second_trace": second_trace,
         "third": third,
         "third_trace": third_trace,
+        "result_metrics": result_metrics,
     }
     settings = live_web_process.settings
     product_evidence_recorder.capture(
@@ -169,7 +180,7 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
                 "max_tool_calls": settings.interaction_loop.max_tool_calls,
                 "max_total_tokens": settings.interaction_loop.max_total_tokens,
             }),
-            grader_version="conv-001-assertions-v1",
+            grader_version="conv-001-user-steering-v2",
         ),
         report=report,
     )
@@ -195,7 +206,6 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
         if step["status"] != "completed"
     )
     final_plan = third.get("working_plan")
-    final_answer = str(third["message"]["content"])
     successful_execution_actions = [
         item
         for item in third_trace["inputs"]
@@ -208,13 +218,17 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
         if item["kind"] == "context_evidence" and item["status"] == "succeeded"
     ]
     assert third["disposition"] == "answer"
-    assert random_fact in final_answer
+    assert result_metrics["seeded_result_present"]
+    assert result_metrics["revised_requirement_present"], (
+        "最终结果没有落实用户修订后的冲突检查"
+    )
+    assert result_metrics["superseded_requirement_absent"], (
+        "最终结果仍包含用户已替换的缺口分析"
+    )
     assert final_plan is not None
     assert all(step["status"] == "completed" for step in final_plan["steps"])
     assert third.get("project_reference") is None
-    assert len(third_trace["execution_order"]) == len(
-        set(third_trace["execution_order"])
-    )
+    assert result_metrics["duplicate_execution_count"] == 0
     assert any(
         item["action_id"] == "context-personal-knowledge"
         for item in successful_context

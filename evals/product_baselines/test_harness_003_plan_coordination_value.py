@@ -1,4 +1,4 @@
-"""HARNESS-003 baseline: a working plan must preserve usable committed work."""
+"""HARNESS-003 conformance for cross-turn consumption of plan-bound facts."""
 
 from __future__ import annotations
 
@@ -240,6 +240,34 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
     second_reads = _source_reads(second_trace)
     all_reads = first_reads + second_reads
     answer = str(second["message"]["content"])
+    first_plan = first.get("working_plan")
+    second_plan = second.get("working_plan")
+    result_metrics = {
+        "partial_boundary_established": (
+            first["disposition"] == "limitation" and bool(first_reads)
+        ),
+        "same_plan_recovered": (
+            isinstance(first_plan, dict)
+            and isinstance(second_plan, dict)
+            and second_plan.get("plan_id") == first_plan.get("plan_id")
+        ),
+        "recovered_result_count": sum(
+            harness_003_values[name] in answer
+            for name in ("ALPHA", "BETA", "GAMMA")
+        ),
+        "revised_requirement_present": f"当前阈值：{new_threshold}" in answer,
+        "superseded_requirement_absent": (
+            f"当前阈值：{old_threshold}" not in answer
+        ),
+        "duplicate_source_read_count": sum(
+            max(0, all_reads.count(name) - 1)
+            for name in ("ALPHA", "BETA", "GAMMA")
+        ),
+        "simple_plan_absent": (
+            simple.get("working_plan") is None
+            and simple_trace.get("working_plan") is None
+        ),
+    }
     report = {
         "case_id": "HARNESS-003",
         "conversation_id": conversation_id,
@@ -260,6 +288,7 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
             "second": second_reads,
             "combined": all_reads,
         },
+        "result_metrics": result_metrics,
     }
     settings = server.settings
     product_evidence_recorder.capture(
@@ -271,7 +300,7 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
         identity=ProductEvidenceIdentity(
             case_id="HARNESS-003",
             role=product_evidence_role("HARNESS-003"),
-            evidence_class="product_e2e",
+            evidence_class="runtime_conformance",
             formal_entrypoint="POST /api/conversation/turn",
             interaction_mode="auto",
             principal=AuthenticatedPrincipal(
@@ -301,27 +330,25 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
                     "max_total_tokens": 128000,
                 },
             }),
-            grader_version="harness-003-result-contract-v2",
+            grader_version="harness-003-plan-fact-consumption-v3",
         ),
         report=report,
     )
 
-    assert first["disposition"] == "limitation", (
+    assert result_metrics["partial_boundary_established"], (
         "首轮没有在真实非零调用预算边界停下，场景未形成部分完成反事实"
     )
-    assert first_reads, "首轮没有产生任何可复用的正式执行结果"
+    assert result_metrics["same_plan_recovered"], "跨进程继续后没有恢复同一工作清单"
     assert second["disposition"] == "answer"
-    assert all(
-        harness_003_values[name] in answer
-        for name in ("ALPHA", "BETA", "GAMMA")
-    ), "跨轮继续后遗漏了已经取得或仍需取得的用户结果"
-    assert f"当前阈值：{new_threshold}" in answer
-    assert f"当前阈值：{old_threshold}" not in answer, (
+    assert result_metrics["recovered_result_count"] == 3, (
+        "跨轮继续后遗漏了已经取得或仍需取得的用户结果"
+    )
+    assert result_metrics["revised_requirement_present"]
+    assert result_metrics["superseded_requirement_absent"], (
         "最终结果仍把用户已经撤回的旧阈值作为当前值"
     )
-    assert all(all_reads.count(name) == 1 for name in ("ALPHA", "BETA", "GAMMA")), (
+    assert result_metrics["duplicate_source_read_count"] == 0, (
         "跨轮继续重复访问了按次计费的原始档案"
     )
     assert simple["disposition"] == "answer"
-    assert simple.get("working_plan") is None
-    assert simple_trace.get("working_plan") is None
+    assert result_metrics["simple_plan_absent"]

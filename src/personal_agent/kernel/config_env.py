@@ -197,7 +197,7 @@ def settings_from_env(settings_cls: type):
             ),
         ),
         web_search=WebSearchConfig(
-            provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "serpapi"),
+            provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "tavily"),
             api_key=os.getenv("PERSONAL_AGENT_WEB_SEARCH_API_KEY"),
             base_url=os.getenv("PERSONAL_AGENT_WEB_SEARCH_BASE_URL"),
             timeout_ms=int(

@@ -25,8 +25,9 @@ from dataclasses import replace
 from time import perf_counter, sleep
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator, Protocol
+from urllib.parse import urlparse
 
-from openai import OpenAI
+from openai import APIError, APIStatusError, OpenAI
 from pydantic import BaseModel
 from personal_agent.capabilities.contracts.model import (
     StreamChunk,
@@ -34,6 +35,8 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelClient,
     StructuredModelRequest,
     StructuredModelResponse,
+    ModelInvocationUnavailable,
+    StructuredOutputFailure,
     StructuredOutputT,
 )
 
@@ -50,8 +53,17 @@ class _EmptyNestedCompletionError(RuntimeError):
     """A provider accepted the request but returned no nested completion."""
 
 
-class ModelCallDeadlineExceeded(TimeoutError):
+class ModelCallDeadlineExceeded(ModelInvocationUnavailable, TimeoutError):
     """A provider call exceeded its configured wall-clock deadline."""
+
+    def __init__(self, message: str, *, operation: str | None = None) -> None:
+        self.message = message
+        super().__init__(
+            operation or "model_call",
+            "provider_timeout",
+            retryable=True,
+        )
+        self.args = (message,)
 
 
 def _close_provider_client(client: OpenAI) -> None:
@@ -103,7 +115,8 @@ def _run_with_deadline(
             daemon=True,
         ).start()
         raise ModelCallDeadlineExceeded(
-            f"{operation} provider call exceeded {timeout_seconds:g}s wall-clock deadline"
+            f"{operation} provider call exceeded {timeout_seconds:g}s wall-clock deadline",
+            operation=operation,
         ) from exc
     if succeeded:
         return value
@@ -112,7 +125,12 @@ def _run_with_deadline(
 
 def _is_reasoning_model(model: str) -> bool:
     name = model.lower()
-    return name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3")
+    return (
+        name.startswith("gpt-5")
+        or name.startswith("o1")
+        or name.startswith("o3")
+        or name.startswith("mimo")
+    )
 
 
 def _usage(response: Any) -> dict[str, int]:
@@ -434,13 +452,37 @@ class OpenAIModelClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        return _run_with_deadline(
-            lambda: _collect_streamed_chat_response(
-                client.chat.completions.create(**streaming_kwargs)
-            ),
-            client=client,
-            operation=request.operation,
-            timeout_seconds=self._config.timeout_seconds,
+        try:
+            return _run_with_deadline(
+                lambda: _collect_streamed_chat_response(
+                    client.chat.completions.create(**streaming_kwargs)
+                ),
+                client=client,
+                operation=request.operation,
+                timeout_seconds=self._config.timeout_seconds,
+            )
+        except (APIStatusError, APIError) as exc:
+            raise self._provider_unavailable(request.operation, exc) from exc
+
+    def _provider_unavailable(
+        self,
+        operation: str,
+        exc: Exception,
+    ) -> ModelInvocationUnavailable:
+        status_code = getattr(exc, "status_code", None)
+        retryable = status_code in {408, 409, 429} or status_code is None or status_code >= 500
+        category = (
+            "provider_rejected"
+            if status_code is not None and status_code < 500
+            else "provider_transport"
+        )
+        return ModelInvocationUnavailable(
+            operation,
+            category,
+            model=self._resolved_model,
+            provider_host=urlparse(self._config.base_url).hostname,
+            status_code=status_code,
+            retryable=retryable,
         )
 
     def _create_chat_completion(
@@ -449,12 +491,15 @@ class OpenAIModelClient:
         operation: str,
         kwargs: dict[str, Any],
     ) -> Any:
-        return _run_with_deadline(
-            lambda: client.chat.completions.create(**kwargs),
-            client=client,
-            operation=operation,
-            timeout_seconds=self._config.timeout_seconds,
-        )
+        try:
+            return _run_with_deadline(
+                lambda: client.chat.completions.create(**kwargs),
+                client=client,
+                operation=operation,
+                timeout_seconds=self._config.timeout_seconds,
+            )
+        except (APIStatusError, APIError) as exc:
+            raise self._provider_unavailable(operation, exc) from exc
 
     # -- unified non-streaming entrypoint -------------------------------
 
@@ -518,9 +563,7 @@ class OpenAIModelClient:
                 latency_ms=latency_ms,
             )
             if parse_error is not None:
-                raise ValueError(
-                    f"{request.operation} structured parse failed: {parse_error}"
-                )
+                raise StructuredOutputFailure(request.operation, parse_error)
         usage = _aggregate_usage(responses)
         return StructuredModelResponse(
             value=parsed,
@@ -785,6 +828,8 @@ class RetryingStructuredModelClient:
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:
+    if isinstance(exc, ModelInvocationUnavailable):
+        return exc.retryable
     name = exc.__class__.__name__.lower()
     message = str(exc).lower()
     retryable_names = (

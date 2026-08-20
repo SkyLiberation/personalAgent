@@ -31,9 +31,11 @@ from .models import ConversationMessage, DecisionFeedback, ReviewCriteria
 _FEEDBACK_ACTION_ID = "interaction_turn"
 
 _DERIVATION_INSTRUCTION = (
-    "Decide whether the latest user message asks for a draft, message, or text to be "
-    "reviewed, validated, or revised against requirements the user states. "
-    "Set requires_review true only for that case; a request to answer, explain, look "
+    "Decide whether the latest user message asks for a draft, message, plan, or text to be "
+    "created or revised and then reviewed or validated against requirements the user states. "
+    "A request to create a plan and wait for review is such a case when the user states "
+    "acceptance conditions for that plan. Set requires_review true only for these cases; "
+    "a request to answer, explain, look "
     "something up, summarize, or save is not a review request. "
     "When it is a review request, return one requirement per acceptance condition the "
     "user states. For each requirement, criterion is a single testable condition phrased "
@@ -41,7 +43,10 @@ _DERIVATION_INSTRUCTION = (
     "user message that states it. Copy source_span character for character from that "
     "message: do not translate, paraphrase, trim inner words, or merge two sentences. "
     "Return no requirement for a condition the user did not state; never invent one. "
-    "When it is not a review request, return requires_review false with no requirements."
+    "When it is not a review request, return requires_review false with no requirements. "
+    "Separately, set plan_review_source_span to the exact user substring only when the "
+    "latest message explicitly asks the Agent to present a plan and wait for review or "
+    "confirmation before executing work. Otherwise return an empty string."
 )
 
 
@@ -71,6 +76,7 @@ class ReviewIntent(_StrictModel):
 
     requires_review: bool
     requirements: tuple[ReviewRequirement, ...] = ()
+    plan_review_source_span: str = Field(default="", max_length=2_000)
 
 
 def admit_review_intent(
@@ -85,13 +91,19 @@ def admit_review_intent(
     inventing a criterion here would recreate, on the runtime side, exactly the
     self-authored standard this module removes from the model.
     """
-    if not intent.requires_review:
+    if not intent.requires_review and not intent.plan_review_source_span:
         return ReviewCriteria()
     user_text = tuple(
         message.content for message in messages if message.role == "user"
     )
     criteria: list[str] = []
     ungrounded: list[str] = []
+    plan_review_span = intent.plan_review_source_span.strip()
+    plan_review_required = bool(
+        plan_review_span and _appears_in(plan_review_span, user_text)
+    )
+    if plan_review_span and not plan_review_required:
+        ungrounded.append(plan_review_span)
     for requirement in intent.requirements:
         span = requirement.source_span.strip()
         criterion = requirement.criterion.strip()
@@ -103,6 +115,7 @@ def admit_review_intent(
     return ReviewCriteria(
         criteria=tuple(criteria),
         ungrounded_spans=tuple(ungrounded),
+        plan_review_required=plan_review_required,
     )
 
 

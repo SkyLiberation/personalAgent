@@ -21,6 +21,13 @@ from personal_agent.kernel.contracts.scope import ExecutionScope
 
 logger = logging.getLogger(__name__)
 
+_PLANNING_EXPLORATION_EFFECTS = frozenset({
+    "none",
+    "read_local",
+    "read_longterm",
+    "external_network",
+})
+
 class ToolExecutor:
     """Registered LangChain tools and non-graph administrative invocation.
 
@@ -71,6 +78,11 @@ class ToolExecutor:
                 description=tool.description or tool.name,
                 input_schema=tool_schema(tool),
                 read_only=not side_effects,
+                planning_safe=(
+                    governance.risk_level == "low"
+                    and not governance.requires_confirmation
+                    and set(governance.side_effects) <= _PLANNING_EXPLORATION_EFFECTS
+                ),
                 safely_retryable=not side_effects,
                 emits_verified_artifact=governance.emits_verified_artifact,
             ))

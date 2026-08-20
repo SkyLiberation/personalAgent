@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-本文记录截至 2026-08-10 已落地的生产架构事实。尚未落地的设计只进入
+本文记录截至 2026-08-20 已落地的生产架构事实。尚未落地的设计只进入
 [future 索引](../future/README.md)，不能反向定义当前架构；产品能力、E2E 和发布可信度的当前事实由
 [`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md) 拥有。
 [`core-architecture-e2e-audit.md`](core-architecture-e2e-audit.md) 是 paired baseline 的历史证据 owner，
@@ -250,17 +250,24 @@ ConversationMessage[]
 
 ### 3.2 按需前台工作清单
 
-**`ConversationWorkingPlan` 是当前对话拥有的可验收工作项清单，不是通用规划器、固定流程或后台项目规划。**
+**`ConversationWorkingPlan` 是当前对话拥有的、有依据的可验收工作项清单，不是通用规划器、固定流程或后台项目规划。**
 每项可以描述分析、实现或用户可见交付，但必须同时写明预期结果和完成条件；“搜索资料”“调用工具”这类只有活动、
 没有产出的描述不合格。用户明确要求查看或调整时，模型必须先提出结构化计划并等待审阅；即使用户没有说出“计划”，
 模型也可在漏项、重复、跨预算、上下文、进程或用户轮次恢复，以及调整方向的收益显著时主动提出短期计划。default
-模式必须先展示计划并停下，不能夹带动作；只有调用方明确选择 auto 模式，计划才可与已授权动作同轮提交。模型不能根据
-用户文本猜测或自行切换 auto。普通多步请求仍走轻量循环，不能只因动作数量创建计划。
+模式必须在非规划安全执行前展示计划并停下；若计划需要文件、网页、记录等证据，模型可先调用投影为
+`planning_safe=true` 的低风险读取能力，再把已观察事实、约束、取舍和来源放入 `grounding`。写入、准备副作用、创建后台
+项目、Agent 委托和其他非规划安全动作不能夹带。只有调用方明确选择 auto 模式，计划才可与已授权执行动作同轮提交。
+模型不能根据用户文本猜测或自行切换 auto。普通多步请求仍走轻量循环，不能只因动作数量创建计划。
 
 - Interaction journal 是唯一 canonical 写入口，HTTP response 只投影同一对象；新 Web 进程可从 journal
   恢复当前清单；
-- 模型只提出 `goal + steps`，看不到也不回传 `plan_id/revision`。Runtime 直接对照当前 canonical
+- 模型只提出 `goal + grounding + steps`，看不到也不回传 `plan_id/revision`。`grounding` 只承载已经观察到的依据，
+  不拥有来源事实，也不能把尚未执行的读取写成既成事实。Runtime 直接对照当前 canonical
   清单检查 step ID 唯一和 completed step 不可删除或改写；
+- `planning_safe` 与严格 `read_only` 分离：低风险、无需确认且副作用集合仅含 none、本地/长期读取或外部网络读取的 Tool
+  可用于规划探索；外部网络读取仍不是严格无副作用。执行记录必须能证明所有 Plan 前动作都属于该投影，否则新 Plan 被拒绝；
+- 用户明确要求“计划经审阅/确认后再执行”时，FinalMessage 中的散文列表不能替代 canonical Plan。验收条件从用户原文冻结，
+  即将展示的同一份 Plan 先复用现有 Verifier；未通过只返回 typed revision feedback，失败草案不写入 journal；
 - `revision` 仅由 Runtime 单调生成，用于 journal 恢复排序和响应展示，不是乐观并发令牌，也不声称提供
   CAS。旧清单全部完成后，内容不同的新清单获得新的 `plan_id`；
 - Tool/Agent action 必须绑定当前 pending step，成功 Observation 仍只是 Execution Fact；模型可在继续工作时
@@ -273,18 +280,30 @@ ConversationMessage[]
 - working plan 不创建 Project、Repository、表、Planner Interface 或 durable dispatch，也不替代原有
   Verification / Completion contract。
 
+`PLAN-FDBK-001` 暴露并修复了一个局部反馈契约矛盾：旧的 `working_plan_no_change` 同时把 `steps` 放入
+`immutable_fields`，又在 `required_repair` 中要求模型修订剩余义务，导致确定性 repair path 为空且自相矛盾。
+修复只调整 `repairable_fields` / `immutable_fields`，不新增 Plan 状态、字段、写入口、fallback 或自动完成逻辑。
+事故分析正式入口的 target 与独立 target-minus-mechanism ablation 各执行五次，均为 `5/5 delivered`、pending `0`、
+Tool failure `0`，因此这是行为保持的内部 Framework Protocol 重构；它不证明 Plan 完成率、成本或延迟改善。
+对应工程 baseline、target 和 ablation 归档由[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)拥有。
+
 跨用户轮次恢复时，Runtime 还会从同一 Interaction journal **确定性派生当前清单可继续消费的成功执行事实**：
 只选择同一 `conversation + principal + plan_id`、且绑定当前 step 的成功 `ActionObservation`，再交给已有的有界
 上下文物化；失败动作、DecisionFeedback、无计划 Observation 和其他权限范围的事实不会恢复。Journal 只筛选已经
 发生的事实，不决定下一步或语义完成。该实现没有新增 Plan/Todo、持久字段、表、Prompt 或配置。
 
-`HARNESS-003` 给出了这条消费链的同输入因果证据。无该消费点的 baseline 在首轮真实非零预算边界后，第二轮
-看不到已经提交的随机口令和本地副本，最终返回了三个错误口令；恢复该消费点后，第二轮只读取本地副本中尚未展开的
-内容，ALPHA、BETA、GAMMA 原始档案各执行一次，最终交付三个随机口令和用户 steering 后的新阈值。配对中还包含简单问答反事实，正式
-响应和 trace 均没有工作清单。checksum 封存与 identity 配对校验通过：
+`HARNESS-003` v3 用干净单变量消融验证这条消费链。ablation commit `9fe874d` 只把
+`ConversationService` 恢复 Plan 绑定成功事实的输入替换为空列表；target commit `b93c765` 保留生产消费点。
+两边使用同一自然输入、seed `recovery-v3-20260818`、身份、初始事实、模型配置、Postgres、正式 HTTP 入口和 grader。
+baseline 与 target 都恢复同一 Plan、交付三个随机口令、应用 steering 后的新阈值，且简单问答不创建工作清单；预定义
+指标上的差异是 baseline 第二轮重复访问 BETA、GAMMA，重复原始读取为 `2`，target 为 `0`。归档为：
 
-- baseline：`data/e2e_traces/product_baselines/harness-003/baseline/20260814T091431.462087Z-3328-bd35a339`；
-- target：`data/e2e_traces/product_baselines/harness-003/target/20260814T091531.397728Z-17136-7b8c3257`。
+- baseline：`data/e2e_traces/product_baselines/harness-003/baseline/20260818T142059.741275Z-36660-7e4d41f7`；
+- target：`data/e2e_traces/product_baselines/harness-003/target/20260818T141508.281495Z-17744-bb191346`。
+
+归档 checksum 和 comparison identity 配对通过。因此“消费成功事实能消除该冻结档案场景的重复原始读取”已有干净
+**Runtime Conformance 单变量因果**。外部档案仍来自冻结 MCP Provider，不能等价为真实 Provider 产品交付。正式生产代码
+只保留 target 消费链；baseline 仅位于独立可还原 commit/worktree，没有 feature flag、fallback 或双轨 Composition Root。
 
 外部实现只用于约束机制边界：Gemini CLI commit `c0d192452b4e2df7efb6d62a60385f475bfd6779` 的
 [`plan-mode.md`](https://github.com/google-gemini/gemini-cli/blob/c0d192452b4e2df7efb6d62a60385f475bfd6779/docs/cli/plan-mode.md)
@@ -293,7 +312,11 @@ ConversationMessage[]
 [`todo_tool.py`](https://github.com/NousResearch/hermes-agent/blob/3c5fd918e3e2537cd74f4f88c990c5de5cbd9f63/tools/todo_tool.py)
 只在上下文压缩后重新注入 active items，避免完成项诱发重做；OpenAI 官方的
 [`Follow a goal`](https://learn.chatgpt.com/use-cases/follow-goals) 把持久目标限定为跨轮、具有可验证停止条件的工作。
-本工程采纳“按需、跨边界继续消费、结果验证”，不复制 Plan 文件、第二套 Todo、Task Tracker 或通用 Planner。
+Claude Code 官方 [`permission-modes`](https://code.claude.com/docs/en/permission-modes)（访问日期 2026-08-17）和 Gemini 的 Plan Mode 都把修改前研究、
+计划审阅与执行切换分开；Gemini 另有阶段模型路由和 Plan artifact。OpenAI 官方
+[`Follow a goal`](https://learn.chatgpt.com/use-cases/follow-goals)（访问日期 2026-08-17）强调持久目标、进度记录和可验证停止条件。本工程采纳
+“规划安全探索、按需审阅、跨边界继续消费、结果验证”，不复制 Plan 文件、第二套 Todo、Task Tracker、Conversation
+依赖 DAG、专用规划模型路由或通用 Planner；这些未被当前失败 baseline 准入。
 
 默认审阅边界由两条正式入口证据共同约束。CONV-001 锁定用户明确要求计划时先返回 `plan_ready`，HARNESS-001
 使用没有“计划、步骤、确认、auto”等指令的自然研究请求，锁定两种合法结果：不创建正式计划并直接完成，或创建计划
@@ -302,21 +325,64 @@ ConversationMessage[]
 `data/e2e_traces/product_baselines/harness-001/baseline/20260813T155736.029773Z-2924-b3c89423` 和
 `data/e2e_traces/product_baselines/harness-001/target/20260813T162211.319231Z-25124-d865fd5b`，checksum 与配对校验均通过。
 
-CONV-002 已关闭 `HARNESS-002`。失败 baseline 证明旧协议会在 Observation 已齐后重复相同计划直到预算耗尽；
-落地时删除了模型可写的 revision/evidence 字段、`working_plan_progress_required` 和 FinalMessage 前的重复完成写入，
-保留一个 canonical Working Plan。最新正式 target 在进程重启后恢复 revision 1，以 3 个 ToolCall 取得 OpenAI、Gemini、
-Hermes 官方来源，在 4 个 continuation model-turn 内返回 answer；Runtime 生成 revision 3，三项来源步骤绑定各自
-action ID，最终交付步骤由 FinalMessage 明确完成。归档为
-`data/e2e_traces/product_baselines/conv-002/target/20260814T045035.499203Z-31672-582c9346`。
-这证明当前同一用例已交付，不代表任意模型调用都无方差；HARNESS-001 曾出现一次模型错误声称没有可用搜索能力，
-同输入复跑通过，尚不足以准入新的字符串门禁或 Prompt 规则。
+CONV-002 的历史失败 baseline 显示旧协议会在 Observation 已齐后重复相同计划直到预算耗尽；后续历史 dirty target
+曾交付，但不能代表稳定性。2026-08-18 在干净生产 commit `b93c765` 的 SerpAPI cohort 执行三次相同
+真实模型、Postgres、Web Search 和 Web 进程重启路径：
 
-CONV-003 锁定计划项本身的质量。同一正式 Conversation HTTP 输入仍限制为一次模型决策和零次工具调用；
-变更前虽能创建计划，但各项只是“检索、比较、给建议”等活动，独立结构化语义评估将全部工作项判为不可验收。
-最小修复没有增加字段、表或第二套计划对象，只要求现有描述用用户语言写明“结果”和“完成条件”。目标路径中每项都
-说明要形成的资料提取或建议，以及何时可以接受为完成；执行成功仍只作为证据，不会由运行系统自动把工作项标成完成。
-用例为 `evals/product_baselines/test_conv_003_work_item_quality.py`；同输入失败基线与目标报告分别为
-`data/e2e_traces/conv-003-baseline.json` 和 `data/e2e_traces/conv-003-work-item-quality.json`。
+- delivered：6 次搜索、5 个 model turn、71,488 token；
+- semantic completion failure：9 次搜索全部成功，3 次相同 Plan 更新被 `working_plan_no_change` 拒绝后仍未转向
+  FinalMessage，7 个 model turn、123,754 token；
+- provider failure：OpenAI、Gemini 来源已取得，但 Hermes 的 8 次调用均收到 SerpAPI
+  `429 account has run out of searches`。
+
+归档分别为 `data/e2e_traces/product_baselines/conv-002/target/20260818T145947.002369Z-34208-5abc4434`、
+`data/e2e_traces/product_baselines/conv-002/target/20260818T150220.790806Z-30932-db0b8ad0` 和
+`data/e2e_traces/product_baselines/conv-002/target/20260818T150411.102632Z-26492-f8341c5c`。只有 `1/3` 满足“官方来源
+均已取得但未交付”，低于预声明 `2/3` 门槛，旧 cohort 因而未准入生产改动。
+
+2026-08-19 切换 Tavily 后，在 clean eval commit `1bf6660` 上以同一输入、身份、结构化模型与预算重新执行三次；三份均为
+`delivered`，并从 trace 确认 Web Search Observation 的 `source=tavily`。归档为
+`data/e2e_traces/product_baselines/conv-002/target/20260819T024939.694454Z-36804-4dfbf7f7`、
+`data/e2e_traces/product_baselines/conv-002/target/20260819T025122.943068Z-20084-e056299d` 和
+`data/e2e_traces/product_baselines/conv-002/target/20260819T025311.679044Z-7264-4814c592`。这不证明切换 Provider 是
+Plan 机制修复，只说明语义失败未在新 Provider cohort 复现；因此没有生产 Plan 优化准入。`CONV-002` v2 机械记录
+`delivered / semantic_completion_failure / provider_failure / insufficient_official_evidence`、来源覆盖、失败调用、工作项
+状态和 usage；本次更新再把 Provider/base URL 加入未来 cohort digest，避免不同 Provider 的样本混算。Plan 当前结论是：
+**target 生产链唯一；三项已证收益保持成立；跨模型和更大重复样本仍是证据缺口。** 不能以字符串门禁、提高预算或新增 Planner 直接掩盖。
+
+CONV-004 锁定“先查官方约束、再展示可审阅计划”的缺口。旧边界把任何 Tool 执行都视为计划审阅过晚；干净 ablation
+commit `1a03bcd` 只禁止规划安全 Observation 打开 Plan 状态迁移，真实 Web Search 执行一次后仍在 7 个模型轮次内无法
+提交计划并以预算 `limitation` 结束。target commit `4c45fd` 在相同正式入口、输入、身份、配置 cohort 和 grader 下，
+以 3 个模型轮次执行一次 Web Search 和一次既有 Verifier，返回带 Gemini CLI 官方 URL 与只读约束的 `plan_ready`，且没有
+创建后台项目。baseline/target 归档为
+`data/e2e_traces/product_baselines/conv-004/baseline/20260817T125508.522289Z-13716-84644d23` 与
+`data/e2e_traces/product_baselines/conv-004/target/20260817T125248.223759Z-2688-be9e3dc7`，机械配对通过。该单样本证明
+规划安全状态迁移在这一用户目标中的因果价值；`104,225` 对 `30,710` token 只作为失败路径诊断，不外推效率分布。
+
+CONV-003 锁定计划项本身的质量。正式 Conversation HTTP 输入仍限制为一次模型决策和零次工具调用；最小生产修复没有
+增加字段、表或第二套计划对象，只要求现有描述用用户语言写明“结果”和“完成条件”。v2 在干净 eval commit `de0e786`
+预先固定三类自然请求：来源比较、产品变更和事故分析。独立结构化语义评估对三类均判定没有裸活动工作项，通过率为
+`3/3`。归档为 `data/e2e_traces/product_baselines/conv-003/target/20260818T143109.910996Z-27324-008ad8bf`。
+执行成功仍只作为证据，不会由运行系统自动把工作项标成完成；该样本也不证明不同模型或同一模型重复运行的稳定性。
+第二模型 `mimo-v2.5` 已通过 `https://api.xiaomimimo.com/v1` 的最小 Chat Completions、`ReviewIntent`
+和完整 `AgentTurnDecision` schema smoke；运行时已按推理模型发送 `max_completion_tokens`。旧协议 CONV-002 三次
+checksum 有效 archive 均失败：两次明确为空 `web_search.arguments`，一次缺 Plan step 绑定，均为零 Tool 执行。
+根因是开放 `arguments` 经 strict schema 归一化后成为只允许 `{}` 的 object，而不是 Provider HTTP 或 Plan 状态失败。
+
+最小 JSON 字符串参数候选随后以同一 Mimo、Tavily、正式入口和预算执行三次，结果为 `0/3 delivered`。候选已允许
+3 至 12 次参数化 Tool 执行，但用户结果分别因 Plan 修订/完成冲突、官方来源缺失与重复 action、Tavily SSL failure
+及 offloaded ArtifactRef 不存在而失败；三次最终均有 pending step。由于低于预声明 `2/3 delivered`，候选及相关
+Prompt/解析协议已撤回，当前生产仍保持唯一旧协议。该实验把问题从“动作参数不可表达”推进到多个独立失败边界，不能据此
+声称 Plan 提升已交付，也不能新增 fallback、预算或生产阶段模型路由。
+
+此前 `json_schema` 和 JSON 字符串候选不能用于原 Provider 的 Plan 对照，因为 transport 或 Proposal 表示发生了变化。
+修正后的公平 cohort 在保持原配置 `json_object`、同一 Prompt/Plan/Tool schema、Tavily、预算和 grader 的情况下，
+只替换 Provider/model，三次结果为 `0/3 delivered`：两次首轮没有正式 Working Plan，一次续轮收到 HTTP 503。
+该结论只属于 CONV-002 输入，不能外推普遍模型能力。随后 `PLAN-STAB-001` 在同一
+`mimo-v2.5 + json_object`、Tavily 和 Postgres cohort 下对来源比较、产品变更、事故分析各运行五次，结果为
+`13/15 delivered`、`1/15 insufficient_official_evidence`、`1/15 semantic_transition_failure`；唯一语义失败只覆盖
+事故分析，未达到预声明的 `>=3/15` 且覆盖两类场景门槛。因此当前既不把 Provider 503 归因于 Plan，也不准入新的
+Prompt、schema、Admission、预算或模型路由。跨模型评测继续通过隔离 E2E profile 注入。
 
 ### 3.2.1 Interaction Prompt 的工程边界
 
@@ -328,13 +394,25 @@ byte-for-byte 相同；重构后的 targeted suite 为 65 passed，正式入口 
 CONV-002 为 1 passed（53.33s）。这些数字记录的是抽取阶段的行为保持基线；之后 CONV-003 依据失败的产品基线
 调整了计划项表述，因此不再声称当前提示词与抽取前逐字相同。该模块没有 Interface、Factory、Repository、状态或第二写入口。
 
-CONV-001 当前只能作为目标行为回归证据：旧测试把每次通过结果写回
-`data/e2e_traces/conv-001-baseline.json`，原失败 baseline 已被覆盖，不能继续声称存在可复核的 paired
-baseline。当前用例 `evals/product_baselines/test_conv_001_working_plan.py` 仍经过真实模型、PostgreSQL、
-Web 进程重启和运行时随机知识事实，并验证用户审阅、修订、恢复和最终结果；新执行写入
-`data/e2e_traces/product_baselines/conv-001/<baseline|target>/<run-id>/`，记录输入/初始事实/身份/入口/
-配置与 grader digest，并由 checksum 封印。只有在旧实现与目标实现使用相同 evidence seed 且机械配对
-校验通过后，才能重新建立“该产品变更有失败 baseline”的结论。机制参考为 A 级 OpenAI 官方文档（复核日期
+CONV-001 的旧失败 baseline 曾被固定文件覆盖，仍不能用于证明最初产品变更。当前 v2 用例经过真实模型、PostgreSQL、
+Web 进程重启和运行时随机知识事实，直接断言用户审阅和修订后，最终答案包含新的冲突检查、不包含已撤回的缺口分析、
+保留随机验收标记且没有重复执行。2026-08-17 的干净配对用于一次纯重构：baseline commit `4a8ab3b` 保留
+`working_plan_goal_stale` 字符串门禁，target commit `af398d1` 删除该 27 行门禁并把目标语义归还模型；相同 seed
+`steering-v2-refactor` 下两边用户结果均通过，配对校验通过。归档为：
+
+- baseline：`data/e2e_traces/product_baselines/conv-001/baseline/20260817T115602.508210Z-24656-5a6c418d`；
+- target：`data/e2e_traces/product_baselines/conv-001/target/20260817T115841.990333Z-13988-4e418406`。
+
+这只证明删除错误决策 owner 后该场景行为保持，不证明 Plan 相对无 Plan 的净收益；最初能力仍没有可复核的失败 baseline。
+随后从 target `af398d1` 创建单行 Plan 物化消融 `99116cf`，只把 admitted Plan 丢弃。同一 v2 输入、seed、模型和配置下，
+消融首轮仍返回 `plan_ready`，但正式响应没有可查看清单，第二轮没有可修订 revision，产品契约失败；target 返回可见清单、
+接受“缺口”到“冲突检查”的修订并完成。消融与 target 的最终答案都正确交付随机标记和修订后结果，因此该配对证明的是
+**显式审阅/纠偏状态的因果价值**，不是答案正确率提升。消融归档为
+`data/e2e_traces/product_baselines/conv-001/baseline/20260817T120259.823550Z-31308-0ebef3c3`；它与 target 归档的
+checksum、输入身份和代码状态配对校验通过。target 的模型轮次/token 为 `4/29,104`，消融为 `5/35,219`；只有一个样本，
+不据此声称效率提升。
+
+机制参考为 A 级 OpenAI 官方文档（复核日期
 2026-08-13）：`https://developers.openai.com/api/docs/guides/function-calling` 的 five-step tool-calling
 conversation 与 strict schema，以及 `https://developers.openai.com/tracks/building-agents` 的 structured
 outputs / orchestration 边界。采纳 typed proposal、应用侧执行和 observation 回注；没有引入多 Agent、

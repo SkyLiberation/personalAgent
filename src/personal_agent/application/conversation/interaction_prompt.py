@@ -21,6 +21,7 @@ def model_visible_working_plan_json(
     return json.dumps(
         {
             "goal": working_plan.goal,
+            "grounding": working_plan.grounding,
             "steps": [
                 {
                     "step_id": step.step_id,
@@ -81,9 +82,21 @@ def build_interaction_system_prompt(
         '"actions": [<typed action>, ...], "working_plan": <optional proposal>, '
         '"wait_for_user": false, "message": ""}}. '
         "Use working_plan as an optional, user-visible coordination contract, not as a mandatory "
-        "prelude to action. When the user explicitly asks to see or revise remaining obligations, "
-        "propose working_plan with wait_for_user true and no actions. When you proactively create "
+        "prelude to action. When the user explicitly asks for a plan to review before work, you "
+        "MUST eventually return ContinueTurnProposal with working_plan, wait_for_user true, and "
+        "no actions; a prose plan inside FinalMessage violates the requested review boundary. "
+        "The same contract applies when the user asks to see or revise remaining obligations. "
+        "If that requested plan must "
+        "first be grounded in files, URLs, records, or other evidence not already present in the "
+        "typed inputs, call only capabilities projected with planning_safe=true, wait for their "
+        "Observations, and only then propose the evidence-grounded working_plan. Never claim that "
+        "a source was inspected merely because its URL or name appears in a user message. A new "
+        "plan may follow planning-safe exploration in default mode; it may not follow any other "
+        "execution. When you proactively create "
         "a formal plan, follow the caller-selected interaction mode stated below. "
+        "Put already-observed facts, constraints, trade-offs, and source references in "
+        "working_plan.grounding. Do not disguise evidence already learned as a future step "
+        "that merely says it will be extracted or reviewed. "
         "Proactively propose working_plan only when explicitly "
         "preserving a short horizon of user-result obligations materially reduces the risk of "
         "omitting an independently required result, repeating committed work, losing remaining "

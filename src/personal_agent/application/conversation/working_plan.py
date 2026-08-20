@@ -21,6 +21,7 @@ def _same_plan_content(
 ) -> bool:
     return (
         proposal.goal == current.goal
+        and proposal.grounding == current.grounding
         and tuple(
             (step.step_id, step.description, step.status)
             for step in proposal.steps
@@ -72,12 +73,30 @@ def admit_plan_wait_boundary(
     return None
 
 
+def required_plan_review_feedback() -> DecisionFeedback:
+    return DecisionFeedback(
+        action_id="working_plan",
+        reason_code="plan_review_boundary_required",
+        message=(
+            "The user explicitly requested a reviewable plan before execution, but "
+            "the proposed final message has no admitted working plan."
+        ),
+        repairable_fields=("working_plan", "wait_for_user"),
+        immutable_fields=("messages", "interaction_mode", "inputs"),
+        required_repair=(
+            "If required evidence is not yet present, use only planning_safe actions. "
+            "Then return ContinueTurnProposal with the grounded working_plan, "
+            "wait_for_user true, and no actions; do not place a prose plan in FinalMessage."
+        ),
+    )
+
+
 def admit_new_plan_interaction_mode(
     decision: ContinueTurnProposal,
     *,
     current: ConversationWorkingPlan | None,
     interaction_mode: ConversationInteractionMode,
-    execution_started: bool = False,
+    unsafe_execution_started: bool = False,
 ) -> DecisionFeedback | None:
     proposal = decision.working_plan
     if proposal is None or interaction_mode == "auto":
@@ -85,20 +104,21 @@ def admit_new_plan_interaction_mode(
     starts_new_plan = _starts_new_plan(proposal, current)
     if not starts_new_plan:
         return None
-    if execution_started:
+    if unsafe_execution_started:
         return DecisionFeedback(
             action_id="working_plan",
             reason_code="working_plan_review_too_late",
             message=(
                 "Default interaction mode cannot introduce a formal working plan "
-                "after unplanned execution has started."
+                "after execution outside the planning-safe exploration boundary "
+                "has started."
             ),
             repairable_fields=("working_plan",),
             immutable_fields=("interaction_mode", "inputs"),
             required_repair=(
                 "Continue the already-started work without introducing a formal plan, "
                 "or return a truthful final limitation. On a new turn, create the plan "
-                "before executing any action."
+                "before executing any non-planning-safe action."
             ),
         )
     if decision.wait_for_user:
@@ -143,7 +163,12 @@ def admit_working_plan(
             action_id="working_plan",
             reason_code="working_plan_no_change",
             message="The proposed working plan is identical to the current plan.",
-            immutable_fields=("steps",),
+            repairable_fields=(
+                "working_plan",
+                "actions",
+                "resolved_plan_step_ids",
+            ),
+            immutable_fields=("messages", "inputs"),
             required_repair=(
                 "Do not resubmit the plan. If the user-visible answer delivers every "
                 "pending obligation, return FinalMessage with exactly those IDs in "
@@ -167,33 +192,6 @@ def admit_working_plan(
         else {}
     )
     proposed_by_id = {step.step_id: step for step in proposal.steps}
-    superseded_goal_text = tuple(
-        existing.description
-        for step_id, existing in current_by_id.items()
-        if existing.status == "pending"
-        and existing.description in current.goal
-        and (
-            step_id not in proposed_by_id
-            or proposed_by_id[step_id].description != existing.description
-        )
-        and existing.description in proposal.goal
-    )
-    if superseded_goal_text:
-        return DecisionFeedback(
-            action_id="working_plan",
-            reason_code="working_plan_goal_stale",
-            message=(
-                "The revised plan goal still contains text from a replaced pending "
-                "obligation."
-            ),
-            repairable_fields=("goal",),
-            immutable_fields=("steps",),
-            required_repair=(
-                "Update the goal so it describes the revised pending obligations and "
-                "removes superseded text: "
-                + "; ".join(superseded_goal_text)
-            ),
-        ), None
     for step_id, existing in current_by_id.items():
         if existing.status != "completed":
             continue
@@ -229,6 +227,7 @@ def admit_working_plan(
         ),
         revision=(current.revision + 1 if current is not None else 1),
         goal=proposal.goal,
+        grounding=proposal.grounding,
         steps=tuple(materialize_step(step) for step in proposal.steps),
     )
     return None, plan
@@ -354,4 +353,5 @@ __all__ = [
     "admit_plan_wait_boundary",
     "admit_working_plan",
     "incomplete_working_plan_feedback",
+    "required_plan_review_feedback",
 ]

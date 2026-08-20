@@ -51,6 +51,15 @@ class WorkingPlanProposal(_StrictModel):
     """
 
     goal: str = Field(min_length=1, max_length=4_000)
+    grounding: str = Field(
+        default="",
+        max_length=4_000,
+        description=(
+            "Observed facts, constraints, trade-offs, and source references that "
+            "justify this plan. State evidence already learned here; do not turn it "
+            "into a future activity step. Leave empty when no grounding was needed."
+        ),
+    )
     steps: tuple[WorkingPlanStepProposal, ...] = Field(min_length=2, max_length=12)
 
 
@@ -75,6 +84,7 @@ class ConversationWorkingPlan(_StrictModel):
     plan_id: str = Field(min_length=1)
     revision: int = Field(ge=1)
     goal: str = Field(min_length=1, max_length=4_000)
+    grounding: str = Field(default="", max_length=4_000)
     steps: tuple[ConversationWorkingPlanStep, ...] = Field(min_length=2, max_length=12)
 
 
@@ -279,6 +289,7 @@ class EffectiveToolCapability(_StrictModel):
     description: str
     input_schema: dict[str, Any]
     read_only: bool
+    planning_safe: bool
     safely_retryable: bool
     emits_verified_artifact: bool = False
 
@@ -311,6 +322,7 @@ class ReviewCriteria(_StrictModel):
 
     criteria: tuple[str, ...] = ()
     ungrounded_spans: tuple[str, ...] = ()
+    plan_review_required: bool = False
 
     @property
     def requires_review(self) -> bool:
@@ -326,6 +338,17 @@ class DecisionFeedback(_StrictModel):
     immutable_fields: tuple[str, ...] = ()
     required_repair: str = ""
     disposition: Literal["revise", "clarify", "fail_closed"] = "revise"
+
+    @model_validator(mode="after")
+    def validate_repair_paths(self) -> "DecisionFeedback":
+        overlap = set(self.repairable_fields).intersection(self.immutable_fields)
+        if overlap:
+            fields = ", ".join(sorted(overlap))
+            raise ValueError(
+                "repairable_fields and immutable_fields must be disjoint; "
+                f"overlap: {fields}"
+            )
+        return self
 
 
 class ActionObservation(_StrictModel):

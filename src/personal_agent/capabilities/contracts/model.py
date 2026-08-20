@@ -15,6 +15,43 @@ ModelRequestKind = Literal["structured", "tool_calling", "text"]
 ModelReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
 
+class ModelInvocationUnavailable(RuntimeError):
+    """A model call could not produce a usable provider response.
+
+    This is a framework-boundary error: infra adapters may attach diagnostic
+    facts, while application code should expose only a stable user-facing
+    failure. ``provider_host`` is intentionally host-only so credentials and
+    raw provider payloads cannot cross the boundary.
+    """
+
+    def __init__(
+        self,
+        operation: str,
+        category: str,
+        *,
+        model: str | None = None,
+        provider_host: str | None = None,
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        self.operation = operation
+        self.category = category
+        self.model = model
+        self.provider_host = provider_host
+        self.status_code = status_code
+        self.retryable = retryable
+        super().__init__(f"{operation} model provider unavailable ({category})")
+
+
+class StructuredOutputFailure(ValueError):
+    """The provider returned content that failed the typed output contract."""
+
+    def __init__(self, operation: str, reason: str) -> None:
+        self.operation = operation
+        self.reason = reason
+        super().__init__(f"{operation} structured parse failed: {reason}")
+
+
 @dataclass(frozen=True, slots=True)
 class StructuredModelRequest(Generic[StructuredOutputT]):
     operation: str
@@ -143,6 +180,7 @@ class ModelInvocationDenial(BaseModel):
 
 __all__ = [
     "ModelCallIntent", "ModelInvocationDenial", "ModelInvocationGrant", "ModelReasoningEffort",
+    "ModelInvocationUnavailable", "StructuredOutputFailure",
     "ModelRequestKind",
     "SkillActivationDecision", "SkillContextGrant", "StreamChunk", "StreamingModelClient",
     "StructuredModelClient", "StructuredModelRequest", "StructuredModelResponse", "StructuredOutputT",

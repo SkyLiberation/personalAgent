@@ -10,7 +10,11 @@ from unittest.mock import MagicMock
 from personal_agent.application.review.delivery import DeliveryRouter
 from personal_agent.kernel.contracts.research import ResearchRunDefinition, ResearchRunRecord
 from personal_agent.kernel.contracts.review import DeliveryResult
-from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
+from personal_agent.application.conversation import (
+    ConversationMessage,
+    ConversationTurnView,
+    ConversationUnavailable,
+)
 from personal_agent.application.conversation.models import ProjectReference
 from personal_agent.application.knowledge import Artifact
 from tests.conftest import POSTGRES_URL
@@ -253,6 +257,26 @@ class TestEntryStreamEndpoint:
 
 
 class TestConversationEndpoint:
+    def test_direct_turn_maps_model_unavailability_to_503(
+        self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        def fail_conversation(**_kwargs):
+            raise ConversationUnavailable("conversation model is temporarily unavailable")
+
+        monkeypatch.setattr(api_client.app.state.service, "converse", fail_conversation)
+        response = api_client.post(
+            "/api/conversation/turn",
+            json={
+                "conversation_id": "conversation-provider-failure",
+                "messages": [{"role": "user", "content": "执行请求"}],
+            },
+        )
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": "conversation model is temporarily unavailable"
+        }
+
     def test_direct_turn_returns_typed_message_without_durable_run(
         self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ):

@@ -16,6 +16,7 @@
 | 历史 GitHub/Notion MCP wrapper | `passed_historical_only` | 旧 E06 曾复跑 E16/E18/E19；因重复记功已退出当前 catalog，archive `20260725T064548.518818Z-19688-d08d031f` |
 | 历史 tokeness GPT Researcher A2A | `passed`（旧模型定向） | E17 223.32 秒、L04 228.40 秒，分别为 archive `20260725T084944.789762Z-42408-b3b97220`、`20260725T085407.393906Z-28364-8e0c1122` |
 | 历史 `gpt-5.6-luna` 尝试 | `configured_not_executable` | 最小 Provider 请求返回 404，E01/E17 正式 HTTP 均 fail closed |
+| 当前 `mimo-v2.5` 第二 Provider 尝试 | `fair_json_object_target_failed` | 先前 `json_schema` cohort 与原 Provider 不可比，旧协议为 `3/3 action-contract failure`；JSON 字符串候选为 `0/3 delivered`。修正后固定原配置 `json_object`，同一 CONV-002 cohort 为 `0/3 delivered`：两次首轮缺正式 Working Plan，一次续轮 HTTP 503。可作为同 transport 对照失败证据，但不计入发布成功 |
 | `gpt-5.6-terra` 尝试 | `rejected_by_runtime_contract` | E01 通过；E17 因顶层 union schema/retry 超时，修正 schema 后复杂请求仍超过 120 秒 |
 | 当前 `deepseek-v4-flash` 配置 | `target_completed_release_not_established` | 显式 `json_object` Adapter + 关闭 thinking 后，IP01 最终 archive 已交付报告；完整 clean-revision 矩阵仍未建立 |
 | 当前 catalog/gate 门禁 | `passed_current_engineering_evidence` | 2026-08-11：46 个 E2E 可收集，其中 release 24、diagnostic 22；DUR-001/OBS-001 定向通过，但完整 clean-revision 矩阵未执行 |

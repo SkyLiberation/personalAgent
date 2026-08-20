@@ -16,6 +16,8 @@ from personal_agent.capabilities.contracts.grants import (
     GrantDependencySet,
 )
 from personal_agent.capabilities.contracts.model import (
+    ModelInvocationUnavailable,
+    StructuredOutputFailure,
     StructuredModelClient,
     StructuredModelRequest,
     sealed_context_projection_ref,
@@ -97,6 +99,7 @@ from .working_plan import (
     admit_new_plan_interaction_mode,
     admit_plan_wait_boundary,
     admit_working_plan,
+    required_plan_review_feedback,
 )
 
 
@@ -411,6 +414,24 @@ class ConversationService:
                     model_turn=True,
                 )
             if isinstance(decision, FinalMessage):
+                if (
+                    review_criteria.plan_review_required
+                    and working_plan is None
+                ):
+                    inputs.append(required_plan_review_feedback())
+                    self._commit(
+                        run_ref,
+                        principal,
+                        messages,
+                        inputs,
+                        usage,
+                        execution_order,
+                        concurrent_batches,
+                        context_composition,
+                        review_criteria=review_criteria,
+                        working_plan=working_plan,
+                    )
+                    continue
                 if decision.disposition == "answer" and working_plan is not None:
                     incomplete_feedback, resolved_plan = admit_final_plan_resolution(
                         decision.resolved_plan_step_ids,
@@ -517,6 +538,51 @@ class ConversationService:
                     working_plan=working_plan,
                 )
 
+            if (
+                decision.wait_for_user
+                and decision.working_plan is not None
+                and decision.actions
+                and self._actions_are_planning_safe(
+                    decision.actions,
+                    capabilities,
+                )
+            ):
+                results, usage, concurrent = self._execute_actions(
+                    decision,
+                    conversation_id=conversation_id,
+                    run_ref=run_ref,
+                    principal=principal,
+                    owner=owner,
+                    source_platform=source_platform,
+                    usage=usage,
+                    committed_action_ids=frozenset(execution_order),
+                    committed_inputs=tuple(inputs),
+                )
+                inputs.extend(item.interaction_input for item in results)
+                executed_results = [
+                    item
+                    for item in results
+                    if isinstance(item.interaction_input, ActionObservation)
+                ]
+                execution_order.extend(item.action_id for item in executed_results)
+                if concurrent:
+                    concurrent_batches.append(
+                        tuple(item.action_id for item in executed_results)
+                    )
+                self._commit(
+                    run_ref,
+                    principal,
+                    messages,
+                    inputs,
+                    usage,
+                    execution_order,
+                    concurrent_batches,
+                    context_composition,
+                    review_criteria=review_criteria,
+                    working_plan=working_plan,
+                )
+                continue
+
             wait_feedback = admit_plan_wait_boundary(decision)
             if wait_feedback is not None:
                 inputs.append(wait_feedback)
@@ -539,7 +605,13 @@ class ConversationService:
                     decision,
                     current=working_plan,
                     interaction_mode=interaction_mode,
-                    execution_started=bool(execution_order),
+                    unsafe_execution_started=(
+                        self._unsafe_execution_started_before_plan(
+                            execution_order,
+                            inputs,
+                            capabilities,
+                        )
+                    ),
                 )
                 if mode_feedback is not None:
                     inputs.append(mode_feedback)
@@ -560,6 +632,36 @@ class ConversationService:
                         working_plan=working_plan,
                     )
                     continue
+                if decision.wait_for_user and review_criteria.requires_review:
+                    verified, result, usage = self._verify_plan_before_review(
+                        decision,
+                        working_plan=decision.working_plan,
+                        review_criteria=review_criteria,
+                        conversation_id=conversation_id,
+                        run_ref=run_ref,
+                        principal=principal,
+                        owner=owner,
+                        source_platform=source_platform,
+                        usage=usage,
+                        attempt=len(execution_order),
+                    )
+                    inputs.append(result.interaction_input)
+                    execution_order.append(result.action_id)
+                    if not verified:
+                        inputs.append(self._plan_verification_feedback(result))
+                        self._commit(
+                            run_ref,
+                            principal,
+                            messages,
+                            inputs,
+                            usage,
+                            execution_order,
+                            concurrent_batches,
+                            context_composition,
+                            review_criteria=review_criteria,
+                            working_plan=working_plan,
+                        )
+                        continue
                 feedback, admitted_plan = admit_working_plan(
                     decision.working_plan,
                     current=working_plan,
@@ -1320,6 +1422,75 @@ class ConversationService:
             usage,
         )
 
+    def _verify_plan_before_review(
+        self,
+        decision,
+        *,
+        working_plan,
+        review_criteria,
+        conversation_id,
+        run_ref,
+        principal,
+        owner,
+        source_platform,
+        usage,
+        attempt,
+    ):
+        """Verify the exact user-visible plan projection before exposing it."""
+        action_id = f"runtime-verify-plan-{attempt}"
+        draft = json.dumps(
+            {
+                "message": decision.message.strip(),
+                "working_plan": working_plan.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        result = self._execute_one(
+            ToolCallProposal(
+                action_id=action_id,
+                tool_name=_VERIFICATION_CAPABILITY,
+                arguments={
+                    "draft": draft,
+                    "success_criteria": list(review_criteria.criteria),
+                },
+            ),
+            (conversation_id, run_ref, principal, owner, source_platform),
+        )
+        usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
+        receipts = observed_receipts(
+            (result.interaction_input,),
+            capability_names=frozenset({_VERIFICATION_CAPABILITY}),
+        )
+        return (
+            any(receipt.verdict == "passed" for receipt in receipts),
+            result,
+            usage,
+        )
+
+    @staticmethod
+    def _plan_verification_feedback(result):
+        receipts = observed_receipts(
+            (result.interaction_input,),
+            capability_names=frozenset({_VERIFICATION_CAPABILITY}),
+        )
+        repair = next(
+            (
+                receipt.revision_feedback
+                for receipt in receipts
+                if receipt.revision_feedback
+            ),
+            "Revise the visible plan so it satisfies every frozen user criterion.",
+        )
+        return DecisionFeedback(
+            action_id="working_plan",
+            reason_code="plan_verification_failed",
+            message="The proposed user-visible plan did not satisfy its review criteria.",
+            repairable_fields=("working_plan", "message"),
+            immutable_fields=("messages", "inputs"),
+            required_repair=repair,
+        )
+
     def _decide(
         self,
         *,
@@ -1366,7 +1537,7 @@ class ConversationService:
                 default=str,
             )
             visible_messages.append({"role": "system", "content": typed_inputs_content})
-        response = self._model_client.generate(
+        response = self._generate_model(
             StructuredModelRequest(
                 operation="agent_interaction_turn",
                 version="v1",
@@ -1426,7 +1597,7 @@ class ConversationService:
                     default=str,
                 ),
             })
-        response = self._model_client.generate(
+        response = self._generate_model(
             StructuredModelRequest(
                 operation="interaction_completion_answer",
                 version="v1",
@@ -1442,6 +1613,14 @@ class ConversationService:
             )
         )
         return response.value, response
+
+    def _generate_model(self, request):
+        try:
+            return self._model_client.generate(request)
+        except (ModelInvocationUnavailable, StructuredOutputFailure) as exc:
+            raise ConversationUnavailable(
+                "conversation model is temporarily unavailable"
+            ) from exc
 
     def _effective_capabilities(
         self,
@@ -1459,6 +1638,7 @@ class ConversationService:
                     ),
                     input_schema=KnowledgeSaveArguments.model_json_schema(),
                     read_only=False,
+                    planning_safe=False,
                     safely_retryable=False,
                 )
             )
@@ -1477,6 +1657,7 @@ class ConversationService:
                     ),
                     input_schema=ReadActionOutputArguments.model_json_schema(),
                     read_only=True,
+                    planning_safe=True,
                     safely_retryable=True,
                 )
             )
@@ -1491,6 +1672,7 @@ class ConversationService:
                     ),
                     input_schema=ListPersonalKnowledgeArguments.model_json_schema(),
                     read_only=True,
+                    planning_safe=True,
                     safely_retryable=True,
                 )
             )
@@ -1504,6 +1686,7 @@ class ConversationService:
                     ),
                     input_schema=PrepareKnowledgeDeleteArguments.model_json_schema(),
                     read_only=False,
+                    planning_safe=False,
                     safely_retryable=False,
                 )
             )
@@ -1518,6 +1701,7 @@ class ConversationService:
                     ),
                     input_schema=StartDurableInvestigationArguments.model_json_schema(),
                     read_only=False,
+                    planning_safe=False,
                     safely_retryable=False,
                 )
             )
@@ -1532,6 +1716,7 @@ class ConversationService:
                     ),
                     input_schema=SteerInvestigationProjectArguments.model_json_schema(),
                     read_only=False,
+                    planning_safe=False,
                     safely_retryable=False,
                 ),
             )
@@ -1548,6 +1733,7 @@ class ConversationService:
                         description=candidate.description,
                         input_schema=candidate.input_schema,
                         read_only=candidate.read_only,
+                        planning_safe=candidate.planning_safe,
                         safely_retryable=candidate.safely_retryable,
                         emits_verified_artifact=candidate.emits_verified_artifact,
                     )
@@ -1564,6 +1750,41 @@ class ConversationService:
         return EffectiveCapabilities(
             tools=tuple(tools),
             agents=agents,
+        )
+
+    @staticmethod
+    def _unsafe_execution_started_before_plan(
+        execution_order,
+        inputs,
+        capabilities: EffectiveCapabilities,
+    ) -> bool:
+        """Fail closed unless every executed action was planning-safe exploration."""
+        if not execution_order:
+            return False
+        planning_safe_capabilities = {
+            tool.name for tool in capabilities.tools if tool.planning_safe
+        }
+        planning_safe_capabilities.add(_VERIFICATION_CAPABILITY)
+        observed_capability_by_action = {
+            item.action_id: item.capability_id
+            for item in inputs
+            if isinstance(item, ActionObservation)
+        }
+        return any(
+            observed_capability_by_action.get(action_id)
+            not in planning_safe_capabilities
+            for action_id in execution_order
+        )
+
+    @staticmethod
+    def _actions_are_planning_safe(actions, capabilities) -> bool:
+        planning_safe = {
+            tool.name for tool in capabilities.tools if tool.planning_safe
+        }
+        return bool(actions) and all(
+            isinstance(action, ToolCallProposal)
+            and action.tool_name in planning_safe
+            for action in actions
         )
 
     def _execute_actions(

@@ -18,13 +18,12 @@ POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_tes
 ADMIN_POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
 
 
-# LLM-provider env vars that, if populated from a developer's .env, cause tests
-# to make live network calls (with multi-second timeouts + retries). The planner
-# endpoint is the worst offender: a single ask/solidify-routed test pays a ~15s
-# live SSL round-trip. Cleared session-wide so the suite is hermetic and fast —
-# components fall back to offline defaults (planner → default plan, rerank →
-# heuristic, etc.). Individual tests still inject stubs/mocks as needed.
-_LLM_PROVIDER_ENV_VARS = (
+# External-provider env vars that, if populated from a developer's .env, cause
+# ordinary tests to make live network calls (with multi-second timeouts,
+# retries, provider processes, or trace uploads). Cleared before every test so
+# the suite is hermetic and fast. Individual provider tests still inject the
+# exact configuration they own after this fixture has run.
+_LIVE_PROVIDER_ENV_VARS = (
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "STRUCTURED_API_KEY",
@@ -40,12 +39,22 @@ _LLM_PROVIDER_ENV_VARS = (
     "PERSONAL_AGENT_WEB_SEARCH_BASE_URL",
     "PERSONAL_AGENT_EMBEDDING_API_KEY",
     "PERSONAL_AGENT_EMBEDDING_BASE_URL",
+    "PERSONAL_AGENT_MCP_SERVERS",
+    "PERSONAL_AGENT_GITHUB_MCP_ENABLED",
+    "PERSONAL_AGENT_NOTION_MCP_ENABLED",
+    "PERSONAL_AGENT_LANGSMITH_ENABLED",
+    "LANGSMITH_TRACING",
+    "LANGSMITH_TRACING_V2",
+    "LANGSMITH_API_KEY",
+    "LANGSMITH_PROJECT",
+    "LANGSMITH_ENDPOINT",
+    "LANGSMITH_WORKSPACE_ID",
 )
 
 
 @pytest.fixture(autouse=True)
 def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep the suite hermetic: no test should hit a real LLM/embedding endpoint.
+    """Keep ordinary tests from reaching real external providers.
 
     ``.env`` is loaded into ``os.environ`` by ``Settings.from_env`` through
     ``core.config_env``; once a real key lands in the process
@@ -53,7 +62,7 @@ def _neutralize_live_llm_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     before every test and neutralizes ``load_dotenv`` so ``from_env`` cannot
     re-import them. Tests that need a configured provider set it explicitly.
     """
-    for name in _LLM_PROVIDER_ENV_VARS:
+    for name in _LIVE_PROVIDER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     from personal_agent.kernel import config_env as _config_env_module
 

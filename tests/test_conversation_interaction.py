@@ -18,6 +18,7 @@ from personal_agent.application.conversation import (
     ConversationWorkingPlanStep,
     ConversationOperationNotFound,
     ConversationService,
+    ConversationUnavailable,
     FileInteractionJournal,
     FinalMessage,
     InMemoryInteractionJournal,
@@ -62,6 +63,7 @@ from personal_agent.application.conversation.verification_admission import (
     observed_receipts,
 )
 from personal_agent.capabilities.contracts.model import (
+    ModelInvocationUnavailable,
     StructuredModelResponse,
     sealed_context_projection_ref,
 )
@@ -170,8 +172,29 @@ def test_agent_turn_decision_uses_supported_object_root_schema():
     assert contains_one_of(schema) is False
 
 
+def test_main_conversation_decision_maps_provider_failure_to_unavailable():
+    model = _Decisions(
+        ModelInvocationUnavailable(
+            "agent_interaction_turn",
+            "provider_rejected",
+            model="gpt-5.4-mini",
+            provider_host="uuapi.net",
+            status_code=400,
+        )
+    )
+    service = ConversationService(model)
+
+    with pytest.raises(ConversationUnavailable, match="temporarily unavailable"):
+        service.respond(
+            **_conversation_scope(),
+            conversation_id="conversation-provider-failure",
+            interaction_run_ref="irun-provider-failure",
+            messages=[ConversationMessage(role="user", content="执行请求")],
+        )
+
+
 def test_working_plan_proposal_excludes_runtime_identity_and_revision():
-    assert set(WorkingPlanProposal.model_fields) == {"goal", "steps"}
+    assert set(WorkingPlanProposal.model_fields) == {"goal", "grounding", "steps"}
     assert set(WorkingPlanStepProposal.model_fields) == {
         "step_id",
         "description",
@@ -228,6 +251,7 @@ def test_interaction_prompt_hides_runtime_plan_identity_and_revision():
         plan_id="wplan-internal",
         revision=7,
         goal="Organize knowledge",
+        grounding="Observed source: docs/plan.md",
         steps=(
             ConversationWorkingPlanStep(
                 step_id="inspect",
@@ -254,6 +278,7 @@ def test_interaction_prompt_hides_runtime_plan_identity_and_revision():
     assert "completion_action_ids" not in prompt
     assert "read-1" not in prompt
     assert '"goal":"Organize knowledge"' in prompt
+    assert '"grounding":"Observed source: docs/plan.md"' in prompt
 
 
 def test_interaction_prompt_separates_default_review_from_explicit_auto_execution():
@@ -270,7 +295,11 @@ def test_interaction_prompt_separates_default_review_from_explicit_auto_executio
     assert "Keep the initial plan short-horizon" in prompt
     assert "several actions or Tool calls" in prompt
     assert "proactively create a formal plan" in prompt
-    assert "wait_for_user true and no actions" in prompt
+    assert "working_plan, wait_for_user true, and no actions" in prompt
+    assert "planning_safe=true" in prompt
+    assert "Never claim that a source was inspected" in prompt
+    assert "a prose plan inside FinalMessage violates" in prompt
+    assert "working_plan.grounding" in prompt
     assert "caller-selected auto interaction mode" in prompt
     assert "An agent-initiated plan does not require approval" not in prompt
     assert "must use wait_for_user true and contain no actions" in prompt
@@ -358,6 +387,29 @@ def _conversation_scope():
             user_id="default",
         ),
     }
+
+
+def test_tool_projection_distinguishes_planning_safety_from_strict_read_only():
+    def query_source(query: str):
+        return tool_response(tool_success({"query": query}))
+
+    executor = _executor(
+        _tool(
+            "query_source",
+            query_source,
+            side_effects=("external_network",),
+        ),
+        _tool(
+            "write_source",
+            query_source,
+            side_effects=("write_longterm",),
+        ),
+    )
+    by_name = {item.name: item for item in executor.list_interaction_tools()}
+
+    assert by_name["query_source"].read_only is False
+    assert by_name["query_source"].planning_safe is True
+    assert by_name["write_source"].planning_safe is False
 
 
 def _trace(service: ConversationService, interaction_run_ref: str):
@@ -472,7 +524,7 @@ def test_default_mode_rejects_a_new_plan_that_skips_user_review():
     assert len(model.decision_requests) == 2
 
 
-def test_default_mode_rejects_a_formal_plan_added_after_execution_started():
+def test_default_mode_allows_a_grounded_plan_after_planning_safe_exploration():
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
@@ -491,7 +543,6 @@ def test_default_mode_rejects_a_formal_plan_added_after_execution_started():
             ),
             wait_for_user=True,
         ),
-        FinalMessage(disposition="answer", message="Orion was observed."),
     )
     service = ConversationService(
         model,
@@ -506,10 +557,59 @@ def test_default_mode_rejects_a_formal_plan_added_after_execution_started():
     )
     trace = _trace(service, "irun_late_plan_review")
 
+    assert result.disposition == "plan_ready"
+    assert result.working_plan is not None
+    assert trace is not None
+    assert trace.execution_order == ("read-before-plan",)
+    assert not any(
+        item.reason_code == "working_plan_review_too_late"
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+    )
+
+
+def test_default_mode_rejects_a_formal_plan_after_non_planning_safe_execution():
+    def write_fact(query: str):
+        return tool_response(tool_success({"fact": f"written:{query}"}))
+
+    model = _Decisions(
+        ContinueTurnProposal(actions=(
+            ToolCallProposal(
+                action_id="write-before-plan",
+                tool_name="write_fact",
+                arguments={"query": "Orion"},
+            ),
+        )),
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("inspect", "Inspect the Orion fact"),
+                ("answer", "Answer from the observed fact"),
+            ),
+            wait_for_user=True,
+        ),
+        FinalMessage(disposition="answer", message="Orion was written."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool(
+            "write_fact",
+            write_fact,
+            side_effects=("write_longterm",),
+        )),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-unsafe-late-plan-review",
+        interaction_run_ref="irun_unsafe_late_plan_review",
+        messages=[ConversationMessage(role="user", content="Record and explain Orion.")],
+    )
+    trace = _trace(service, "irun_unsafe_late_plan_review")
+
     assert result.disposition == "answer"
     assert result.working_plan is None
     assert trace is not None
-    assert trace.execution_order == ("read-before-plan",)
+    assert trace.execution_order == ("write-before-plan",)
     assert any(
         item.reason_code == "working_plan_review_too_late"
         for item in trace.inputs
@@ -517,7 +617,7 @@ def test_default_mode_rejects_a_formal_plan_added_after_execution_started():
     )
 
 
-def test_waiting_plan_with_actions_is_repaired_before_any_action_executes():
+def test_planning_safe_draft_actions_execute_before_plan_admission():
     plan = _plan(
         ("inspect", "Inspect recent saved knowledge"),
         ("summarize", "Summarize the main themes"),
@@ -551,6 +651,52 @@ def test_waiting_plan_with_actions_is_repaired_before_any_action_executes():
         messages=[ConversationMessage(role="user", content="Analyze my knowledge.")],
     )
     trace = _trace(service, "irun_wait_actions_repair")
+
+    assert result.disposition == "plan_ready"
+    assert trace is not None
+    assert trace.execution_order == ("read-during-review",)
+    assert not any(
+        item.reason_code == "waiting_plan_has_actions"
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+    )
+
+
+def test_waiting_plan_rejects_non_planning_safe_actions_before_execution():
+    plan = _plan(
+        ("inspect", "Inspect recent saved knowledge"),
+        ("summarize", "Summarize the main themes"),
+    )
+    action = ToolCallProposal(
+        action_id="write-during-review",
+        tool_name="write_fact",
+        arguments={"query": "Orion"},
+        plan_step_id="inspect",
+    )
+    model = _Decisions(
+        ContinueTurnProposal(
+            working_plan=plan,
+            actions=(action,),
+            wait_for_user=True,
+        ),
+        ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool(
+            "write_fact",
+            lambda query: tool_response(tool_success({"fact": query})),
+            side_effects=("write_longterm",),
+        )),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-wait-unsafe-actions",
+        interaction_run_ref="irun_wait_unsafe_actions",
+        messages=[ConversationMessage(role="user", content="Analyze my knowledge.")],
+    )
+    trace = _trace(service, "irun_wait_unsafe_actions")
 
     assert result.disposition == "plan_ready"
     assert trace is not None
@@ -659,7 +805,7 @@ def test_plan_update_preserves_prior_completed_evidence_without_replaying_observ
     assert admitted.revision == 3
 
 
-def test_plan_update_rejects_goal_text_from_a_replaced_pending_obligation():
+def test_plan_update_leaves_goal_semantics_to_the_model():
     current = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=1,
@@ -677,7 +823,7 @@ def test_plan_update_rejects_goal_text_from_a_replaced_pending_obligation():
             ),
         ),
     )
-    stale = WorkingPlanProposal(
+    revised = WorkingPlanProposal(
         goal=current.goal,
         steps=(
             WorkingPlanStepProposal(
@@ -692,13 +838,15 @@ def test_plan_update_rejects_goal_text_from_a_replaced_pending_obligation():
     )
 
     feedback, admitted = admit_working_plan(
-        stale,
+        revised,
         current=current,
         inputs=(),
     )
 
-    assert admitted is None
-    assert feedback.reason_code == "working_plan_goal_stale"
+    assert feedback is None
+    assert admitted is not None
+    assert admitted.goal == current.goal
+    assert admitted.steps[1].description == "identify conflicting records"
 
 
 def test_identical_working_plan_is_rejected_as_no_op():
@@ -748,6 +896,67 @@ def test_identical_working_plan_is_rejected_as_no_op():
 
     assert admitted is None
     assert feedback.reason_code == "working_plan_no_change"
+
+
+def test_unchanged_plan_feedback_exposes_only_valid_repair_paths():
+    current = ConversationWorkingPlan(
+        plan_id="wplan-1",
+        revision=1,
+        goal="Resolve the incident",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="diagnose",
+                description="Result: root cause; Complete when: evidence supports it",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="report",
+                description="Result: report; Complete when: all findings are covered",
+                status="pending",
+            ),
+        ),
+    )
+    proposal = WorkingPlanProposal(
+        goal=current.goal,
+        steps=tuple(
+            WorkingPlanStepProposal(
+                step_id=step.step_id,
+                description=step.description,
+                status=step.status,
+            )
+            for step in current.steps
+        ),
+    )
+
+    feedback, admitted = admit_working_plan(
+        proposal,
+        current=current,
+        inputs=(),
+    )
+
+    assert admitted is None
+    assert feedback is not None
+    assert feedback.reason_code == "working_plan_no_change"
+    assert feedback.repairable_fields == (
+        "working_plan",
+        "actions",
+        "resolved_plan_step_ids",
+    )
+    assert feedback.immutable_fields == ("messages", "inputs")
+    assert not set(feedback.repairable_fields).intersection(
+        feedback.immutable_fields
+    )
+
+
+def test_decision_feedback_rejects_conflicting_repair_paths():
+    with pytest.raises(ValueError, match="must be disjoint"):
+        DecisionFeedback(
+            action_id="working_plan",
+            reason_code="invalid_feedback",
+            message="invalid",
+            repairable_fields=("steps",),
+            immutable_fields=("steps",),
+        )
 
 
 def test_runtime_derives_completion_evidence_from_bound_observation():
@@ -1166,54 +1375,6 @@ def test_unchanged_pending_plan_does_not_bypass_completion():
         for item in trace.inputs
     ) == 1
     assert not any(
-        request.operation == "interaction_completion_answer"
-        for request in model.requests
-    )
-
-
-def test_plan_proposed_after_execution_switches_to_answer_only_recovery():
-    def read_fact(query: str):
-        return tool_response(tool_success({"fact": f"observed:{query}"}))
-
-    model = _Decisions(
-        ContinueTurnProposal(actions=(
-            ToolCallProposal(
-                action_id="read-1",
-                tool_name="read_fact",
-                arguments={"query": "Orion"},
-            ),
-        )),
-        ContinueTurnProposal(
-            working_plan=_plan(
-                ("inspect", "Inspect the Orion fact"),
-                ("answer", "Answer from the observed fact"),
-            ),
-            wait_for_user=True,
-        ),
-        FinalMessage(disposition="answer", message="Observed Orion."),
-    )
-    service = ConversationService(
-        model,
-        tool_port=_executor(_tool("read_fact", read_fact)),
-    )
-
-    result = service.respond(
-        **_conversation_scope(),
-        conversation_id="conversation-late-plan",
-        interaction_run_ref="irun_late_plan",
-        messages=[ConversationMessage(role="user", content="Inspect and answer.")],
-    )
-    trace = _trace(service, "irun_late_plan")
-
-    assert result.disposition == "answer"
-    assert result.working_plan is None
-    assert trace.execution_order == ("read-1",)
-    assert any(
-        isinstance(item, DecisionFeedback)
-        and item.reason_code == "working_plan_review_too_late"
-        for item in trace.inputs
-    )
-    assert any(
         request.operation == "interaction_completion_answer"
         for request in model.requests
     )
@@ -2826,6 +2987,64 @@ def test_review_criteria_must_be_traceable_to_the_user_verbatim():
     assert admitted.requires_review is True
 
 
+def test_plan_review_boundary_must_be_traceable_to_user_text():
+    request = "先给我一份计划，等我确认后再执行。"
+
+    admitted = admit_review_intent(
+        ReviewIntent(
+            requires_review=False,
+            plan_review_source_span="等我确认后再执行",
+        ),
+        messages=[ConversationMessage(role="user", content=request)],
+    )
+    rejected = admit_review_intent(
+        ReviewIntent(
+            requires_review=False,
+            plan_review_source_span="wait for approval",
+        ),
+        messages=[ConversationMessage(role="user", content=request)],
+    )
+
+    assert admitted.plan_review_required is True
+    assert rejected.plan_review_required is False
+    assert rejected.ungrounded_spans == ("wait for approval",)
+
+
+def test_explicit_plan_review_request_cannot_end_as_a_prose_final_plan():
+    request = "先给我一份计划，等我确认后再执行。"
+    model = _Decisions(
+        FinalMessage(disposition="answer", message="Plan: inspect, then change."),
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("inspect", "Inspect the current behavior"),
+                ("change", "Implement the approved change"),
+            ),
+            wait_for_user=True,
+        ),
+        review_intent=ReviewIntent(
+            requires_review=False,
+            plan_review_source_span="等我确认后再执行",
+        ),
+    )
+    service = ConversationService(model)
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-required-plan-review",
+        interaction_run_ref="irun-required-plan-review",
+        messages=[ConversationMessage(role="user", content=request)],
+    )
+    trace = _trace(service, "irun-required-plan-review")
+
+    assert result.disposition == "plan_ready"
+    assert result.working_plan is not None
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "plan_review_boundary_required"
+        for item in trace.inputs
+    )
+
+
 def test_a_review_request_with_no_grounded_criterion_is_not_silently_downgraded():
     messages = [ConversationMessage(role="user", content=_REVIEW_REQUEST)]
 
@@ -2950,6 +3169,71 @@ def test_a_review_answer_is_verified_before_it_can_be_sent():
         "verify_interaction_draft",
         "verify_interaction_draft",
     ]
+
+
+def test_reviewable_plan_is_verified_against_frozen_user_criteria():
+    request = "先给我计划，计划必须包含来源链接，等我确认后再执行。"
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    first = _plan(
+        ("inspect", "Inspect the source"),
+        ("change", "Propose the change"),
+    )
+    revised = WorkingPlanProposal(
+        goal=first.goal,
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect https://example.test/source",
+            ),
+            WorkingPlanStepProposal(
+                step_id="change",
+                description="Propose the change",
+            ),
+        ),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=first, wait_for_user=True),
+        ContinueTurnProposal(working_plan=revised, wait_for_user=True),
+        review_intent=ReviewIntent(
+            requires_review=True,
+            requirements=(ReviewRequirement(
+                criterion="the plan must include a source link",
+                source_span="计划必须包含来源链接",
+            ),),
+            plan_review_source_span="等我确认后再执行",
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_verifier_tool(
+            recorder,
+            verdicts=("needs_revision", "passed"),
+        )),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-verified-plan",
+        interaction_run_ref="irun-verified-plan",
+        messages=[ConversationMessage(role="user", content=request)],
+    )
+    trace = _trace(service, "irun-verified-plan")
+
+    assert result.disposition == "plan_ready"
+    assert "https://example.test/source" in str(result.working_plan)
+    assert [criteria for _, criteria in recorder] == [
+        ("the plan must include a source link",),
+        ("the plan must include a source link",),
+    ]
+    assert trace.execution_order == (
+        "runtime-verify-plan-0",
+        "runtime-verify-plan-1",
+    )
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "plan_verification_failed"
+        for item in trace.inputs
+    )
 
 
 def test_a_review_request_cannot_be_ended_without_a_verified_answer():

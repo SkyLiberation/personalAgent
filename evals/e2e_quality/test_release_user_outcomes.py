@@ -445,7 +445,12 @@ def _get_json(url: str) -> object:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
+def _post_json(
+    url: str,
+    payload: dict[str, object],
+    *,
+    timeout: float | None = None,
+) -> dict[str, object]:
     request = Request(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -453,7 +458,12 @@ def _post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=300) as response:
+        request_timeout = timeout
+        if request_timeout is None:
+            request_timeout = float(
+                os.getenv("PERSONAL_AGENT_E2E_REQUEST_TIMEOUT_SECONDS", "300")
+            )
+        with urlopen(request, timeout=request_timeout) as response:
             assert response.status == 200
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:

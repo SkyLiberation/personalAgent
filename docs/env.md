@@ -235,19 +235,19 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=${STRUCTURED_MODEL}
 
 ## Web 搜索配置
 
-`web_search` 工具的生产默认 Provider 是 `serpapi`，使用通用且唯一的
+`web_search` 工具的生产默认 Provider 是 `tavily`，使用通用且唯一的
 `PERSONAL_AGENT_WEB_SEARCH_*` 凭据：
 
 ```env
-PERSONAL_AGENT_WEB_SEARCH_PROVIDER=serpapi
-PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_serpapi_api_key
-PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://serpapi.com
+PERSONAL_AGENT_WEB_SEARCH_PROVIDER=tavily
+PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_tavily_api_key
+PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://api.tavily.com
 PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS=60000
 PERSONAL_AGENT_URL_CAPTURE_PROVIDER=builtin
 ```
 
-可选的 `tavily` Adapter 使用同一组通用配置。Provider 由 Composition Root 静态绑定，
-不做运行时 fallback；已移除 Firecrawl Web Search Adapter。
+Provider 由 Composition Root 静态绑定，不做运行时 fallback；SerpAPI Adapter 仅保留为显式
+历史/对照配置，已移除 Firecrawl Web Search Adapter。
 `PERSONAL_AGENT_URL_CAPTURE_PROVIDER` 独立决定 URL 正文读取使用 `firecrawl` 还是 `builtin`；
 它是一个单值绑定，不会在执行失败后自动切换 Provider。未显式设置时，有 Firecrawl key 的
 环境解析为 `firecrawl`，否则解析为 `builtin`。
@@ -430,7 +430,7 @@ PERSONAL_AGENT_URL_CAPTURE_PROVIDER=firecrawl
 ```
 
 生产配置使用 `PERSONAL_AGENT_URL_CAPTURE_PROVIDER=builtin`；若显式选择 Firecrawl，
-它只改变 URL 正文读取，不改变 SerpAPI Web Search，也不是运行时 fallback。
+它只改变 URL 正文读取，不改变 Tavily Web Search，也不是运行时 fallback。
 
 ## 图谱同步调参
 

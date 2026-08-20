@@ -93,46 +93,81 @@ def test_conv_003_work_items_state_verifiable_results(
     live_web_process: LiveWebProcess,
     product_evidence_recorder: ProductEvidenceRecorder,
 ) -> None:
-    user_request = (
-        "请只基于 OpenAI 官方开发者文档、Google Gemini CLI 官方 GitHub 仓库和 "
-        "NousResearch Hermes Agent 官方 GitHub 仓库，比较它们在复杂任务中如何保持"
-        "未完成工作、更新进度和恢复上下文，并给出本工程应采用与不采用的建议。"
-        "请先列出一份我能查看的工作清单并直接开始，不要启动后台任务，也无需等我确认。"
+    scenarios = (
+        (
+            "source-comparison",
+            "请只基于 OpenAI 官方开发者文档、Google Gemini CLI 官方 GitHub 仓库和 "
+            "NousResearch Hermes Agent 官方 GitHub 仓库，比较它们在复杂任务中如何保持"
+            "未完成工作、更新进度和恢复上下文，并给出本工程应采用与不采用的建议。"
+            "请先列出一份我能查看的工作清单并直接开始，不要启动后台任务，也无需等我确认。",
+        ),
+        (
+            "product-change",
+            "我们准备为知识问答增加用户可下载的引用报告。请先列出一份我能查看的工作清单，"
+            "最终需要得到用户结果定义、现有约束核对、最小实现边界和可验收的发布检查，"
+            "然后直接开始分析；不要修改代码，不要启动后台任务，也无需等我确认。",
+        ),
+        (
+            "incident-analysis",
+            "线上长对话在服务重启后偶尔会重复发送通知。请先列出一份我能查看的工作清单，"
+            "最终需要得到可复现条件、可能原因的证据排序、止损方案和验证恢复正确性的标准，"
+            "然后直接开始分析；不要执行外部写入，不要启动后台任务，也无需等我确认。",
+        ),
     )
     live_web_process.child_env["PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS"] = "1"
     live_web_process.child_env["PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS"] = "0"
     live_web_process.restart()
 
-    result = _post_json(
-        f"{live_web_process.base_url}/api/conversation/turn",
-        {
-            "conversation_id": "conv-003-work-item-quality",
-            "messages": [{"role": "user", "content": user_request}],
-            "interaction_mode": "auto",
-        },
-    )
-    working_plan = result.get("working_plan")
-    assert isinstance(working_plan, dict), (
-        "资源边界到达时没有保留可供后续继续的工作清单"
-    )
-    descriptions = [
-        str(step["description"])
-        for step in working_plan["steps"]
-    ]
-    assert all(
-        "Result:" not in description and "Complete when:" not in description
-        for description in descriptions
-    ), "中文请求的用户可见工作项不应混用英文结构标签"
-    verdict = _grade_work_items(
-        live_web_process,
-        user_request=user_request,
-        working_plan=working_plan,
+    scenario_reports: list[dict[str, object]] = []
+    scenario_verdicts: list[tuple[str, _WorkItemQualityVerdict]] = []
+    for scenario_id, user_request in scenarios:
+        result = _post_json(
+            f"{live_web_process.base_url}/api/conversation/turn",
+            {
+                "conversation_id": f"conv-003-work-item-quality-{scenario_id}",
+                "messages": [{"role": "user", "content": user_request}],
+                "interaction_mode": "auto",
+            },
+        )
+        working_plan = result.get("working_plan")
+        assert isinstance(working_plan, dict), (
+            f"{scenario_id}: 资源边界到达时没有保留可供后续继续的工作清单"
+        )
+        descriptions = [
+            str(step["description"])
+            for step in working_plan["steps"]
+        ]
+        assert all(
+            "Result:" not in description and "Complete when:" not in description
+            for description in descriptions
+        ), f"{scenario_id}: 中文请求的用户可见工作项不应混用英文结构标签"
+        verdict = _grade_work_items(
+            live_web_process,
+            user_request=user_request,
+            working_plan=working_plan,
+        )
+        scenario_verdicts.append((scenario_id, verdict))
+        scenario_reports.append({
+            "scenario_id": scenario_id,
+            "user_request": user_request,
+            "result": result,
+            "verdict": verdict.model_dump(mode="json"),
+        })
+
+    passing_scenarios = sum(
+        verdict.all_items_state_verifiable_results
+        and not verdict.bare_activity_step_ids
+        for _, verdict in scenario_verdicts
     )
     report = {
         "case_id": "CONV-003",
-        "user_request": user_request,
-        "result": result,
-        "verdict": verdict.model_dump(mode="json"),
+        "sample_contract": {
+            "scenario_count": len(scenarios),
+            "required_pass_count": len(scenarios),
+            "scenario_ids": [item[0] for item in scenarios],
+        },
+        "passing_scenarios": passing_scenarios,
+        "scenarios": scenario_reports,
     }
     settings = live_web_process.settings
     product_evidence_recorder.capture(
@@ -150,7 +185,7 @@ def test_conv_003_work_items_state_verifiable_results(
                 tenant_id="personal-agent",
                 user_id="default",
             ),
-            user_input_digest=canonical_evidence_digest(user_request),
+            user_input_digest=canonical_evidence_digest(scenarios),
             initial_state_digest=canonical_evidence_digest({
                 "seeded_facts": (),
             }),
@@ -162,10 +197,21 @@ def test_conv_003_work_items_state_verifiable_results(
                 "max_model_turns": 1,
                 "max_tool_calls": 0,
             }),
-            grader_version="conv-003-model-grader-v1",
+            grader_version="conv-003-model-grader-v2-three-scenarios",
         ),
         report=report,
     )
 
-    assert verdict.all_items_state_verifiable_results, verdict.rationale
-    assert not verdict.bare_activity_step_ids, verdict.rationale
+    failures = [
+        (
+            scenario_id,
+            verdict.rationale,
+            verdict.bare_activity_step_ids,
+        )
+        for scenario_id, verdict in scenario_verdicts
+        if (
+            not verdict.all_items_state_verifiable_results
+            or verdict.bare_activity_step_ids
+        )
+    ]
+    assert passing_scenarios == len(scenarios), failures

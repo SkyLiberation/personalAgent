@@ -15,9 +15,10 @@ Completion。
 当前 LT01–LT08、LT10–LT13 使用生产 Domain、Application、PostgreSQL store、worker queue 和 Artifact owner，
 但 semantic model 与外部 Provider 是 scripted/frozen Port。B03 已补正式 HTTP/worker、真实模型
 和 Web Search baseline，并证明 verification repair 的生产死锁；相关 runtime 缺口已修复。
-Firecrawl Web Search Adapter 已删除，生产搜索迁移为 SerpAPI；URL 正文读取仍显式绑定
-builtin，不存在运行时 Provider fallback。IP01 已从正式 HTTP/worker 入口经过真实模型、
-SerpAPI、URL reader、Verifier、Synthesis 和 Completion Gate 交付最终报告：archive
+Firecrawl Web Search Adapter 已删除，当前生产搜索绑定为 Tavily；URL 正文读取仍显式绑定
+builtin，不存在运行时 Provider fallback。SerpAPI 仅作为显式历史/对照 Adapter 保留。IP01
+历史归档曾从正式 HTTP/worker 入口经过真实模型、SerpAPI、URL reader、Verifier、Synthesis
+和 Completion Gate 交付最终报告：archive
 `20260729T101501.732689Z-53628-6c5f02f2`，`1 passed in 86.42s`，3/3 outcome satisfied，
 5 条 admitted evidence，`environment_failed=false`。这证明 IP01 repair 缺口已闭合，但不替代
 尚未执行的完整 live GitHub/Notion/Web/A2A 发布矩阵和重复运行方差。
@@ -31,7 +32,7 @@ SerpAPI、URL reader、Verifier、Synthesis 和 Completion Gate 交付最终报�
 | child Agent definition、submission binding、projection | `AgentGateway` + `PostgresAgentRunStore` |
 | Artifact 正文与私有路径 | `ArtifactService` |
 | Tool 执行事实、policy、idempotency、audit | `ToolGateway` |
-| Web Search Provider 与凭据 | `Settings.web_search` + `PERSONAL_AGENT_WEB_SEARCH_*`；生产绑定 SerpAPI |
+| Web Search Provider 与凭据 | `Settings.web_search` + `PERSONAL_AGENT_WEB_SEARCH_*`；当前生产绑定 Tavily，SerpAPI 仅显式对照 |
 | URL 正文 Provider 绑定 | `Settings.url_capture_provider` + Composition Root；单值绑定，无 runtime fallback |
 | repair-to-frozen-gap lineage | accepted `SubGoalDefinitionVersion.repairs_frozen_subgoals`；仅随 Plan 接受写入 |
 | Execution Proposal 拒绝事实 | Project journal `ExecutionProposalRejectedData`；仅由 `InvestigationProjectService` append |

@@ -493,6 +493,22 @@ class TestToolExecutor:
 
         assert isinstance(build_web_search_provider(settings), SerpApiWebSearchProvider)
 
+    def test_web_search_provider_defaults_to_tavily(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers.web_search import (
+            TavilyWebSearchProvider,
+            build_web_search_provider,
+        )
+        from personal_agent.kernel.config import Settings
+
+        monkeypatch.delenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", raising=False)
+        settings = Settings.from_env()
+
+        assert settings.web_search.provider == "tavily"
+        assert isinstance(build_web_search_provider(settings), TavilyWebSearchProvider)
+
     def test_serpapi_provider_uses_google_organic_results_contract(
         self,
         monkeypatch: pytest.MonkeyPatch,

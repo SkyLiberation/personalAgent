@@ -22,8 +22,10 @@ from personal_agent.infra.structured_model import (
     build_structured_model_client,
 )
 from personal_agent.capabilities.contracts.model import (
+    ModelInvocationUnavailable,
     StructuredModelRequest,
     StructuredModelResponse,
+    StructuredOutputFailure,
     sealed_context_projection_ref,
 )
 from personal_agent.capabilities.model_resolution import GovernedModelClient
@@ -152,6 +154,35 @@ def test_openai_adapter_sends_typed_effort_only_to_reasoning_models(monkeypatch)
     assert calls[0]["max_completion_tokens"] == 6000
     assert calls[0]["reasoning_effort"] == "low"
     assert "reasoning_effort" not in calls[1]
+
+
+def test_openai_adapter_uses_completion_budget_for_mimo_reasoning_models(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
+                model=kwargs["model"],
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="mimo-v2.5",
+    )).generate(_request())
+
+    assert calls[0]["max_completion_tokens"] == 500
+    assert "max_tokens" not in calls[0]
+    assert "temperature" not in calls[0]
 
 
 def test_openai_adapter_accepts_direct_structured_content_transport(monkeypatch):
@@ -290,12 +321,49 @@ def test_strict_adapter_fails_closed_after_one_invalid_repair(monkeypatch):
         model="structured-model",
     ))
 
-    with pytest.raises(ValueError, match="structured parse failed"):
+    with pytest.raises(StructuredOutputFailure, match="structured parse failed") as exc_info:
         client.generate(_request())
 
+    assert exc_info.value.operation == "router"
+    assert "nested chat completion choices are missing" in exc_info.value.reason
     assert calls[0]["response_format"]["type"] == "json_schema"
     assert calls[1]["response_format"]["type"] == "json_schema"
     assert len(calls) == 2
+
+
+def test_openai_adapter_classifies_provider_http_failure_without_raw_details(monkeypatch):
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **_kwargs):
+            from openai import BadRequestError
+            import httpx
+
+            request = httpx.Request("POST", "https://llm.invalid/v1/chat/completions")
+            response = httpx.Response(400, request=request)
+            raise BadRequestError(
+                "upstream secret detail", response=response, body={"error": "bad"}
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="secret-key",
+        base_url="https://llm.invalid/v1",
+        model="structured-model",
+    ))
+
+    with pytest.raises(ModelInvocationUnavailable) as exc_info:
+        client.generate(_request())
+
+    error = exc_info.value
+    assert error.operation == "router"
+    assert error.category == "provider_rejected"
+    assert error.status_code == 400
+    assert error.provider_host == "llm.invalid"
+    assert "secret" not in str(error)
 
 
 def test_openai_adapter_switches_to_streaming_after_provider_returns_sse(monkeypatch):
@@ -842,3 +910,35 @@ def test_retrying_client_does_not_retry_non_transient_failures():
         raise AssertionError("expected ValueError")
 
     assert calls == 1
+
+
+def test_retrying_client_uses_typed_provider_retryability():
+    calls = 0
+
+    class Delegate:
+        def generate(self, request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ModelInvocationUnavailable(
+                    request.operation,
+                    "provider_transport",
+                    status_code=503,
+                    retryable=True,
+                )
+            return StructuredModelResponse(
+                value=ExampleOutput(ok=True),
+                model="model",
+                latency_ms=1.0,
+            )
+
+    client = RetryingStructuredModelClient(
+        Delegate(),
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    result = client.generate(_request())
+
+    assert calls == 2
+    assert result.retry_attempts == 1
