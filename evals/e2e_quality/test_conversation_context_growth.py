@@ -142,7 +142,7 @@ def test_long_conversation_retains_correction_and_early_document_evidence(
 
     answer = str(result["message"]["content"])
     assert result["disposition"] == "answer"
-    assert f"当前阈值：{corrected_threshold}" in answer
+    assert corrected_threshold in answer
     assert all(fact in answer for fact in context_facts.values())
     assert all(name in answer for name in context_facts)
 

@@ -111,4 +111,4 @@
 
 ## 7. 当前实现坐标
 
-**设计成立的原因是上述生命周期和反事实，而不是路由或类名。** 进入代码时再使用以下入口：[对话路由](../../src/personal_agent/adapters/web/routes/conversation.py)、[知识路由](../../src/personal_agent/adapters/web/routes/knowledge.py)、[笔记路由](../../src/personal_agent/adapters/web/routes/notes.py)和[调查项目路由](../../src/personal_agent/adapters/web/routes/investigation_projects.py)。证据强度以[证据与发布](05-evidence-and-release.md)为准。
+**设计成立的原因是上述生命周期和反事实，而不是路由或类名。** 进入代码时再使用以下入口：[对话路由](../../src/personal_agent/adapters/web/routes/conversation.py)、[知识路由](../../src/personal_agent/adapters/web/routes/knowledge.py)、[笔记路由](../../src/personal_agent/adapters/web/routes/notes.py)和[调查项目路由](../../src/personal_agent/adapters/web/routes/investigation_projects.py)。证据强度以[证据与发布](06-evidence-and-release.md)为准。

@@ -36,12 +36,12 @@ messages + authenticated principal
 每次模型调用按以下顺序构造输入：
 
 1. visibility/scope 过滤；
-2. 当前问题所需的 personal evidence 与 linked Project projection；
+2. 已关联 Project projection，以及模型已经选择的 personal evidence；
 3. capability/tool schema 投影；
 4. committed Observation/Feedback；
 5. budget materialization。
 
-Personal Knowledge 通过 `personal_knowledge_context` 只读 Observation 进入；linked durable investigation 通过 `investigation_project_context` 进入。两者都不复制 canonical facts，也不成为写入口。
+Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才通过有界 `tool_result` 进入；已关联调查项目通过 `investigation_project_context` 进入。两者都不复制 canonical facts，也不成为写入口。
 
 ## Durable execution
 
@@ -56,7 +56,7 @@ Personal Knowledge 通过 `personal_knowledge_context` 只读 Observation 进入
 
 ## Grounded answer
 
-产品没有平行 Ask runtime。Conversation 是唯一 FinalMessage owner：个人证据由 `KnowledgeService.select_evidence()` 预取，外部事实由受治理只读 Tool 返回，模型在同一 loop 内综合。回答本身不写长期知识；显式保存必须另走确认写路径。
+产品没有平行 Ask runtime。Conversation 是唯一 FinalMessage owner：模型按当前目标选择 `search_personal_knowledge`，外部事实由受治理只读工具返回，模型在同一循环内综合。回答本身不写长期知识；显式保存必须另走确认写路径。
 
 ## 可观测与评测
 

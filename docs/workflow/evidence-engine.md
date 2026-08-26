@@ -45,7 +45,7 @@ SourceDocument / EvidenceItem
 - Investigation/Conversation review verifier：对冻结的候选文本和 admitted evidence 做 claim-level grounding；
 - 其他明确 Application：只有在 baseline 证明需要同一证据机械语义时才通过 Port 复用。
 
-Personal Knowledge 的 Claim/Evidence/conflict/scope 仍由 `KnowledgeService` 拥有。Conversation 将其选择结果物化为 `personal_knowledge_context`，而不是先运行一个子 RAG answer service。
+Personal Knowledge 的 Claim、Evidence、conflict 和 scope 仍由 `KnowledgeService` 拥有。模型选择只读 `search_personal_knowledge` 后，Conversation 才把选择结果物化为有界 `tool_result`，而不是先运行一个子 RAG answer service。
 
 ## Non-goals
 

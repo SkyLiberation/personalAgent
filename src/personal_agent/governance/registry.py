@@ -66,6 +66,13 @@ class ToolExecutor:
     def get(self, name: str) -> BaseTool | None:
         return self._gateway.get(name)
 
+    def _interaction_tool(self, name: str) -> BaseTool | None:
+        """Resolve only tools authorized for ordinary model-driven interaction."""
+        tool = self.get(name)
+        if tool is None or tool_governance(tool).exposure != "public_agent":
+            return None
+        return tool
+
     def list_interaction_tools(self) -> tuple[InteractionToolDefinition, ...]:
         definitions: list[InteractionToolDefinition] = []
         for tool in self.list_tools(exposures={"public_agent"}):
@@ -93,7 +100,7 @@ class ToolExecutor:
         name: str,
         arguments: dict[str, object],
     ) -> InteractionToolCallValidation:
-        tool = self.get(name)
+        tool = self._interaction_tool(name)
         if tool is None:
             return InteractionToolCallValidation(
                 status="capability_missing",
@@ -110,7 +117,7 @@ class ToolExecutor:
         return InteractionToolCallValidation(status="accepted")
 
     def interaction_call_is_safe_for_concurrency(self, name: str) -> bool:
-        tool = self.get(name)
+        tool = self._interaction_tool(name)
         if tool is None:
             return False
         governance = tool_governance(tool)

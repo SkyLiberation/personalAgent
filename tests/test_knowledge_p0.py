@@ -128,6 +128,36 @@ def test_select_evidence_returns_resolvable_citations_without_writing_claims():
     assert selection.selected_claims
 
 
+def test_select_evidence_searches_relevant_claims_beyond_recent_window():
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(store)
+    target = "蓝鲸档案 R1000 的当前校验码是 SCALE-TARGET-1000-7Q9X。"
+    fillers = [
+        f"填充档案 F{index:04d} 的归档序号是 SCALE-FILLER-{index:04d}。"
+        for index in range(1, 1_000)
+    ]
+    service.ingest_text(
+        "\n".join([target, *fillers]),
+        owner_id="scale-owner",
+        user_id="scale-user",
+        extract_claim_limit=1_020,
+    )
+
+    selection = service.select_evidence(
+        "蓝鲸档案 R1000 的当前校验码是什么？",
+        owner_id="scale-owner",
+    )
+
+    assert any(
+        "SCALE-TARGET-1000-7Q9X" in claim.statement
+        for claim in selection.selected_claims
+    )
+    assert any(
+        "SCALE-TARGET-1000-7Q9X" in citation.quote
+        for citation in selection.citations
+    )
+
+
 def test_no_evidence_question_returns_empty_selection_with_reason():
     service = KnowledgeService(InMemoryKnowledgeStore())
 

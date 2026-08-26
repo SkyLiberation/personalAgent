@@ -24,6 +24,10 @@ from evals.product_baselines.evidence import (
     product_evidence_role,
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.application.conversation.interaction_intent import (
+    _DERIVATION_INSTRUCTION,
+)
+from personal_agent.tools.interaction_verifier import _VERIFICATION_INSTRUCTION
 
 
 _CASE_ID = "PLAN-REPLAN-001"
@@ -42,7 +46,10 @@ class _Scenario:
     continue_request: str
     required_answer_terms: tuple[str, ...]
     forbidden_answer_patterns: tuple[str, ...]
+    required_plan_terms: tuple[str, ...]
+    withdrawn_plan_terms: tuple[str, ...]
     official_source_groups: tuple[tuple[str, ...], ...]
+    required_criteria_scope_terms: tuple[str, ...] = ()
 
 
 _SCENARIOS = (
@@ -61,6 +68,8 @@ _SCENARIOS = (
         ),
         required_answer_terms=("业务幂等", "恢复后对账", "验收条件"),
         forbidden_answer_patterns=(r"(?m)^#{1,6}\s*有序投递方案\s*$",),
+        required_plan_terms=("业务幂等", "恢复后对账", "验收条件"),
+        withdrawn_plan_terms=("依赖有序投递",),
         official_source_groups=(
             ("docs.temporal.io", "temporal.io"),
             ("docs.restate.dev", "restate.dev"),
@@ -81,6 +90,8 @@ _SCENARIOS = (
         ),
         required_answer_terms=("结构化边界", "来源追溯", "发布失败条件"),
         forbidden_answer_patterns=(r"(?m)^#{1,6}\s*下载性能基准\s*$",),
+        required_plan_terms=("结构化", "来源追溯", "发布失败"),
+        withdrawn_plan_terms=("下载性能基准",),
         official_source_groups=(
             ("developers.openai.com", "platform.openai.com", "openai.com"),
             ("modelcontextprotocol.io", "github.com/modelcontextprotocol"),
@@ -100,14 +111,22 @@ _SCENARIOS = (
         ),
         required_answer_terms=("采用建议", "不采用边界", "验证条件"),
         forbidden_answer_patterns=(),
+        required_plan_terms=("采用建议", "不采用", "验证条件"),
+        withdrawn_plan_terms=(),
         official_source_groups=(
-            ("developers.openai.com", "platform.openai.com", "openai.github.io"),
+            (
+                "developers.openai.com",
+                "platform.openai.com",
+                "openai.github.io",
+                "openai.com",
+            ),
             ("geminicli.com", "github.com/google-gemini/gemini-cli"),
             (
                 "github.com/nousresearch/hermes-agent",
                 "hermes-agent.nousresearch.com",
             ),
         ),
+        required_criteria_scope_terms=("openai", "gemini cli", "hermes"),
     ),
 )
 
@@ -181,12 +200,89 @@ def _answer_source_coverage(
     )
 
 
-def _plan_counts(plan: object) -> tuple[int, int]:
+def _criteria_scope_coverage(
+    trace: dict[str, Any],
+    scenario: _Scenario,
+) -> tuple[bool, ...]:
+    criteria = json.dumps(
+        trace.get("review_criteria", {}).get("criteria", []),
+        ensure_ascii=False,
+    ).lower()
+    return tuple(
+        term in criteria for term in scenario.required_criteria_scope_terms
+    )
+
+
+def _plan_contract(
+    plan: dict[str, Any] | None,
+    scenario: _Scenario,
+) -> tuple[tuple[bool, ...], tuple[bool, ...], tuple[bool, ...]]:
+    if not isinstance(plan, dict):
+        return (
+            tuple(False for _ in scenario.required_plan_terms),
+            tuple(False for _ in scenario.withdrawn_plan_terms),
+            tuple(False for _ in scenario.withdrawn_plan_terms),
+        )
+    active_plan_text = json.dumps(
+        {
+            "goal": plan.get("goal", ""),
+            "steps": [
+                {
+                    "description": step.get("description", ""),
+                    "status": step.get("status", ""),
+                }
+                for step in plan.get("steps", [])
+                if isinstance(step, dict) and step.get("status") != "superseded"
+            ],
+        },
+        ensure_ascii=False,
+    ).lower()
+    active_step_descriptions = [
+        str(step.get("description", "")).lower()
+        for step in plan.get("steps", [])
+        if isinstance(step, dict) and step.get("status") != "superseded"
+    ]
+    superseded_step_count = sum(
+        isinstance(step, dict) and step.get("status") == "superseded"
+        for step in plan.get("steps", [])
+    )
+    return (
+        tuple(
+            term.lower() in active_plan_text
+            for term in scenario.required_plan_terms
+        ),
+        tuple(
+            any(
+                term.lower() in description
+                and not any(
+                    marker in description
+                    for marker in (
+                        "撤回",
+                        "取消",
+                        "不再成立",
+                        "已无效",
+                        "排除",
+                        "不包含",
+                    )
+                )
+                for description in active_step_descriptions
+            )
+            for term in scenario.withdrawn_plan_terms
+        ),
+        tuple(
+            superseded_step_count > 0
+            for term in scenario.withdrawn_plan_terms
+        ),
+    )
+
+
+def _plan_counts(plan: object) -> tuple[int, int, int]:
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
-        return 0, 0
+        return 0, 0, 0
     completed = sum(step.get("status") == "completed" for step in plan["steps"])
     pending = sum(step.get("status") == "pending" for step in plan["steps"])
-    return completed, pending
+    superseded = sum(step.get("status") == "superseded" for step in plan["steps"])
+    return completed, pending, superseded
 
 
 def _feedback_reason_codes(trace: dict[str, Any]) -> tuple[str, ...]:
@@ -218,7 +314,18 @@ def _config_cohort(server: LiveWebProcess) -> str:
         "structured_extra_body_digest": canonical_evidence_digest(
             settings.structured.extra_body
         ),
-        "structured_contract_revision": "AgentTurnDecision:v1",
+        "structured_timeout_seconds": settings.structured.timeout_seconds,
+        "structured_max_retries": settings.structured.max_retries,
+        "structured_contract_revision": (
+            "AgentTurnDecision:v1+InteractionIntentProposal:lifecycle-v2+"
+            "ConversationWorkingPlan:superseded"
+        ),
+        "review_instruction_digest": canonical_evidence_digest(
+            _DERIVATION_INSTRUCTION
+        ),
+        "verifier_instruction_digest": canonical_evidence_digest(
+            _VERIFICATION_INSTRUCTION
+        ),
         "web_search_provider": settings.web_search.provider,
         "web_search_base_url": settings.web_search.base_url,
         "interaction_policy_revision": settings.interaction_loop.policy_revision,
@@ -256,7 +363,7 @@ def _capture(
             )),
             initial_state_digest=canonical_evidence_digest({"seeded_facts": ()}),
             config_cohort=_config_cohort(server),
-            grader_version="plan-replan-001-deterministic-v3",
+            grader_version="plan-replan-001-deterministic-v10",
         ),
         report={
             "case_id": _CASE_ID,
@@ -311,7 +418,7 @@ def test_plan_replan_001_obligation_revision(
 
     first_trace = _trace(live_web_process, first)
     first_plan = first.get("working_plan")
-    _, first_pending = _plan_counts(first_plan)
+    _, first_pending, _ = _plan_counts(first_plan)
     if (
         not isinstance(first_plan, dict)
         or first.get("disposition") != "plan_ready"
@@ -369,8 +476,21 @@ def test_plan_replan_001_obligation_revision(
 
     second_trace = _trace(live_web_process, second)
     final_plan = second.get("working_plan")
-    completed, pending = _plan_counts(final_plan)
-    failed_tools = _failed_tool_results(second_trace)
+    completed, pending, superseded = _plan_counts(final_plan)
+    failed_tools = [
+        *_failed_tool_results(first_trace),
+        *_failed_tool_results(second_trace),
+    ]
+    failed_provider_tools = [
+        item
+        for item in failed_tools
+        if item.get("capability_id") != "verify_interaction_draft"
+    ]
+    failed_verifications = [
+        item
+        for item in failed_tools
+        if item.get("capability_id") == "verify_interaction_draft"
+    ]
     source_coverage = _official_source_coverage(
         (first_trace, second_trace),
         scenario,
@@ -380,9 +500,18 @@ def test_plan_replan_001_obligation_revision(
         term.lower() in answer.lower() for term in scenario.required_answer_terms
     )
     answer_source_coverage = _answer_source_coverage(answer, scenario)
+    criteria_scope_coverage = _criteria_scope_coverage(second_trace, scenario)
     stale_patterns_present = tuple(
         bool(re.search(pattern, answer))
         for pattern in scenario.forbidden_answer_patterns
+    )
+    (
+        plan_terms_present,
+        withdrawn_active_plan_terms_present,
+        withdrawn_superseded_plan_terms_present,
+    ) = _plan_contract(
+        final_plan,
+        scenario,
     )
     same_plan_revised = (
         isinstance(final_plan, dict)
@@ -390,24 +519,26 @@ def test_plan_replan_001_obligation_revision(
         and isinstance(final_plan.get("revision"), int)
         and final_plan["revision"] > first_plan.get("revision", -1)
     )
-    all_steps_completed = (
-        isinstance(final_plan, dict)
-        and completed > 0
+    final_steps = final_plan.get("steps", []) if isinstance(final_plan, dict) else []
+    all_steps_terminal = (
+        bool(final_steps)
         and pending == 0
-        and completed == len(final_plan.get("steps", []))
+        and completed + superseded == len(final_steps)
     )
     feedback_codes = _feedback_reason_codes(second_trace)
     repeated_plan_feedback_count = feedback_codes.count("working_plan_no_change")
     delivered = (
         second.get("disposition") == "answer"
         and same_plan_revised
-        and all_steps_completed
+        and all_steps_terminal
         and all(source_coverage)
         and all(answer_source_coverage)
         and all(answer_terms_present)
         and not any(stale_patterns_present)
+        and not any(withdrawn_active_plan_terms_present)
+        and all(withdrawn_superseded_plan_terms_present)
     )
-    if failed_tools:
+    if failed_provider_tools:
         failure_class = "provider_failure"
     elif not all(source_coverage):
         failure_class = "insufficient_official_evidence"
@@ -424,11 +555,20 @@ def test_plan_replan_001_obligation_revision(
         "same_plan_revised": same_plan_revised,
         "official_source_coverage": source_coverage,
         "answer_source_coverage": answer_source_coverage,
+        "criteria_scope_coverage": criteria_scope_coverage,
         "answer_terms_present": answer_terms_present,
         "stale_patterns_present": stale_patterns_present,
+        "plan_terms_present": plan_terms_present,
+        "withdrawn_active_plan_terms_present": withdrawn_active_plan_terms_present,
+        "withdrawn_superseded_plan_terms_present": (
+            withdrawn_superseded_plan_terms_present
+        ),
         "completed_step_count": completed,
         "pending_step_count": pending,
+        "superseded_step_count": superseded,
         "failed_tool_result_count": len(failed_tools),
+        "failed_provider_tool_result_count": len(failed_provider_tools),
+        "failed_verification_count": len(failed_verifications),
         "feedback_reason_codes": feedback_codes,
         "repeated_plan_feedback_count": repeated_plan_feedback_count,
         "initial_usage": first_trace.get("usage"),

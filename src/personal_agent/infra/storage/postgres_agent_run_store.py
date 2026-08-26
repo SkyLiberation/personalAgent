@@ -12,6 +12,7 @@ from personal_agent.kernel.contracts.agent import (
     AgentArtifact,
     AgentGatewayContext,
     AgentTask,
+    CAPACITY_OCCUPYING_AGENT_RUN_STATUSES,
     ChildAgentArtifactIndex,
     ChildAgentRunDefinition,
     ChildAgentRunEvent,
@@ -64,12 +65,52 @@ class PostgresAgentRunStore(PostgresStoreBase):
         submission_key: str,
         definition_digest: str,
         definition: ChildAgentRunDefinition,
-    ) -> ReservedAgentSubmission:
+        max_active_runs: int | None = None,
+    ) -> ReservedAgentSubmission | None:
         self.ensure_schema()
         run = _reserved_record(definition)
         payload = _record_payload(run)
         with self._connect(row_factory=dict_row) as conn:
             with conn.cursor() as cur:
+                if max_active_runs is not None:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                        (f"agent-run-capacity:{definition.agent_id}",),
+                    )
+                cur.execute(
+                    """
+                    SELECT definition_digest, payload
+                    FROM agent_runs
+                    WHERE submission_key = %s
+                    """,
+                    (submission_key,),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    if existing["definition_digest"] != definition_digest:
+                        raise AgentSubmissionConflict(
+                            "submission_key is bound to a different child definition"
+                        )
+                    return ReservedAgentSubmission(
+                        _record_from_payload(existing["payload"]),
+                        created=False,
+                    )
+                if max_active_runs is not None:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS active_count
+                        FROM agent_runs
+                        WHERE agent_id = %s
+                          AND payload->'projection'->>'status' = ANY(%s)
+                        """,
+                        (
+                            definition.agent_id,
+                            list(CAPACITY_OCCUPYING_AGENT_RUN_STATUSES),
+                        ),
+                    )
+                    active_count = int(cur.fetchone()["active_count"])
+                    if active_count >= max_active_runs:
+                        return None
                 cur.execute(
                     """
                     INSERT INTO agent_runs (

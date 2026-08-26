@@ -196,7 +196,7 @@ class AgentExecutionOperation(DomainModel):
     bounded_sub_goal: str = Field(min_length=1)
     context_artifact_refs: tuple[ResourceRef, ...] = ()
     expected_artifact_types: tuple[str, ...] = Field(min_length=1)
-    token_budget: int = Field(ge=0)
+    token_budget: int = Field(ge=1)
     cost_budget: float = Field(ge=0)
     time_budget_seconds: int = Field(ge=1)
 
@@ -363,9 +363,9 @@ class ExternalDelegationCommand(DomainModel):
     bounded_sub_goal: str
     context_artifact_refs: tuple[ResourceRef, ...]
     disclosure_manifest: DisclosureManifest
-    token_budget: int
-    cost_budget: float
-    time_budget_seconds: int
+    token_budget: int = Field(ge=1)
+    cost_budget: float = Field(ge=0)
+    time_budget_seconds: int = Field(ge=1)
     authorization_digest: str
     execution_command_digest: str
     approved: bool = False
@@ -604,6 +604,7 @@ __all__ = [
     "ProjectView",
     "ReplanRequest",
     "ReplanRequestedData",
+    "RequirementRelevance",
     "RequirementMapping",
     "StateChangedData",
     "SteeringCommand",

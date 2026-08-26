@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from hashlib import sha256
 import json
+from threading import RLock
 from typing import Protocol
 
 from personal_agent.governance.policy import PolicyEngine, PolicyInput
@@ -11,6 +12,7 @@ from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.kernel.contracts.agent import (
     AgentAdapter,
     AgentArtifact,
+    CAPACITY_OCCUPYING_AGENT_RUN_STATUSES,
     ChildAgentArtifactIndex,
     ChildAgentRunRecord,
     ChildAgentRunDefinition,
@@ -30,6 +32,10 @@ class AgentSubmissionOutcomeUnknown(RuntimeError):
     """A reserved provider submission cannot be safely retried or reconciled."""
 
 
+class AgentCapacityUnavailable(RuntimeError):
+    """The provider's durable in-flight run limit is currently exhausted."""
+
+
 class AgentRunStorePort(Protocol):
     def reserve_submission(
         self,
@@ -37,7 +43,8 @@ class AgentRunStorePort(Protocol):
         submission_key: str,
         definition_digest: str,
         definition: ChildAgentRunDefinition,
-    ) -> ReservedAgentSubmission: ...
+        max_active_runs: int | None = None,
+    ) -> ReservedAgentSubmission | None: ...
 
     def commit_submission(
         self,
@@ -65,6 +72,7 @@ class InMemoryAgentRunStore:
     def __init__(self) -> None:
         self._runs: dict[str, ChildAgentRunRecord] = {}
         self._submission_keys: dict[str, tuple[str, str]] = {}
+        self._lock = RLock()
 
     def reserve_submission(
         self,
@@ -72,27 +80,45 @@ class InMemoryAgentRunStore:
         submission_key: str,
         definition_digest: str,
         definition: ChildAgentRunDefinition,
-    ) -> ReservedAgentSubmission:
-        existing = self._submission_keys.get(submission_key)
-        if existing is not None:
-            agent_run_id, existing_digest = existing
-            if existing_digest != definition_digest:
-                raise RuntimeError("submission_key is bound to a different definition")
-            return ReservedAgentSubmission(self._runs[agent_run_id], created=False)
-        run = ChildAgentRunRecord(
-            definition=definition,
-            projection=ChildAgentRunProjection(
-                agent_run_id=definition.agent_run_id,
-                status="created",
-            ),
-            artifact_index=ChildAgentArtifactIndex(agent_run_id=definition.agent_run_id),
-        )
-        self._runs[definition.agent_run_id] = run
-        self._submission_keys[submission_key] = (
-            definition.agent_run_id,
-            definition_digest,
-        )
-        return ReservedAgentSubmission(run, created=True)
+        max_active_runs: int | None = None,
+    ) -> ReservedAgentSubmission | None:
+        with self._lock:
+            existing = self._submission_keys.get(submission_key)
+            if existing is not None:
+                agent_run_id, existing_digest = existing
+                if existing_digest != definition_digest:
+                    raise RuntimeError(
+                        "submission_key is bound to a different definition"
+                    )
+                return ReservedAgentSubmission(
+                    self._runs[agent_run_id],
+                    created=False,
+                )
+            if max_active_runs is not None:
+                active_count = sum(
+                    run.definition.agent_id == definition.agent_id
+                    and run.projection.status
+                    in CAPACITY_OCCUPYING_AGENT_RUN_STATUSES
+                    for run in self._runs.values()
+                )
+                if active_count >= max_active_runs:
+                    return None
+            run = ChildAgentRunRecord(
+                definition=definition,
+                projection=ChildAgentRunProjection(
+                    agent_run_id=definition.agent_run_id,
+                    status="created",
+                ),
+                artifact_index=ChildAgentArtifactIndex(
+                    agent_run_id=definition.agent_run_id
+                ),
+            )
+            self._runs[definition.agent_run_id] = run
+            self._submission_keys[submission_key] = (
+                definition.agent_run_id,
+                definition_digest,
+            )
+            return ReservedAgentSubmission(run, created=True)
 
     def commit_submission(
         self,
@@ -101,36 +127,43 @@ class InMemoryAgentRunStore:
         definition_digest: str,
         run: ChildAgentRunRecord,
     ) -> ChildAgentRunRecord:
-        reserved = self.reserve_submission(
-            submission_key=submission_key,
-            definition_digest=definition_digest,
-            definition=run.definition,
-        ).run
-        canonical = replace(run, definition=reserved.definition)
-        return self.put(canonical)
+        with self._lock:
+            reservation = self.reserve_submission(
+                submission_key=submission_key,
+                definition_digest=definition_digest,
+                definition=run.definition,
+            )
+            if reservation is None:
+                raise RuntimeError("unbounded submission reservation was rejected")
+            canonical = replace(run, definition=reservation.run.definition)
+            return self.put(canonical)
 
     def put(self, run: ChildAgentRunRecord) -> ChildAgentRunRecord:
-        self._runs[run.definition.agent_run_id] = run
-        return run
+        with self._lock:
+            self._runs[run.definition.agent_run_id] = run
+            return run
 
     def get(self, agent_run_id: str) -> ChildAgentRunRecord | None:
-        return self._runs.get(agent_run_id)
+        with self._lock:
+            return self._runs.get(agent_run_id)
 
     def get_by_submission_key(self, submission_key: str) -> ChildAgentRunRecord | None:
-        binding = self._submission_keys.get(submission_key)
-        return self._runs.get(binding[0]) if binding is not None else None
+        with self._lock:
+            binding = self._submission_keys.get(submission_key)
+            return self._runs.get(binding[0]) if binding is not None else None
 
     def list(self, *, run_id: str | None = None, agent_id: str | None = None) -> tuple[ChildAgentRunRecord, ...]:
-        runs = list(self._runs.values())
-        if run_id is not None:
-            runs = [
-                run
-                for run in runs
-                if run.definition.context.execution_scope.execution_id == run_id
-            ]
-        if agent_id is not None:
-            runs = [run for run in runs if run.definition.agent_id == agent_id]
-        return tuple(runs)
+        with self._lock:
+            runs = list(self._runs.values())
+            if run_id is not None:
+                runs = [
+                    run
+                    for run in runs
+                    if run.definition.context.execution_scope.execution_id == run_id
+                ]
+            if agent_id is not None:
+                runs = [run for run in runs if run.definition.agent_id == agent_id]
+            return tuple(runs)
 
 
 class AgentGateway:
@@ -163,8 +196,8 @@ class AgentGateway:
         *,
         submission_key: str,
     ) -> ChildAgentRunOutcome:
-        self._authorize_grant(agent_id, context, grant)
         adapter = self._adapter(agent_id)
+        self._authorize_grant(adapter.profile, context, grant)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
         definition = self._new_definition(
             agent_id=agent_id,
@@ -179,6 +212,8 @@ class AgentGateway:
             definition_digest=definition_digest,
             definition=definition,
         )
+        if reservation is None:
+            raise RuntimeError("unbounded synchronous reservation was rejected")
         if not reservation.created:
             stored = reservation.run
             if stored.projection.status == "completed":
@@ -244,8 +279,8 @@ class AgentGateway:
         *,
         submission_key: str,
     ) -> ChildAgentRunRecord:
-        self._authorize_grant(agent_id, context, grant)
         adapter = self._adapter(agent_id)
+        self._authorize_grant(adapter.profile, context, grant)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
         definition = self._new_definition(
             agent_id=agent_id,
@@ -259,7 +294,12 @@ class AgentGateway:
             submission_key=submission_key,
             definition_digest=definition_digest,
             definition=definition,
+            max_active_runs=adapter.profile.governance.max_concurrent_runs,
         )
+        if reservation is None:
+            raise AgentCapacityUnavailable(
+                f"agent {agent_id!r} has no available provider execution slot"
+            )
         if not reservation.created:
             if reservation.run.projection.external_task_id:
                 return reservation.run
@@ -351,7 +391,13 @@ class AgentGateway:
     def cancel(self, agent_run_id: str, context: AgentGatewayContext) -> ChildAgentRunRecord:
         stored = self._require_run(agent_run_id)
         self._authorize_context(stored, context)
-        if stored.projection.status in {"cancelled", "completed", "completed_degraded"}:
+        if stored.projection.status in {
+            "cancelled",
+            "completed",
+            "completed_degraded",
+            "failed",
+            "timed_out",
+        }:
             return stored
         adapter = self._adapter(stored.definition.agent_id)
         self._authorize(adapter.profile, context, execution_mode="deterministic")
@@ -360,6 +406,47 @@ class AgentGateway:
             _merge_events(stored, run), "cancelled", {"status": run.projection.status},
         )
         return self._store.put(run)
+
+    def timeout(
+        self,
+        agent_run_id: str,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord:
+        """Cancel provider work while preserving budget expiry as the cause."""
+
+        stored = self._require_run(agent_run_id)
+        self._authorize_context(stored, context)
+        if stored.projection.status in {
+            "cancelled",
+            "completed",
+            "completed_degraded",
+            "failed",
+            "timed_out",
+        }:
+            return stored
+        adapter = self._adapter(stored.definition.agent_id)
+        self._authorize(adapter.profile, context, execution_mode="deterministic")
+        refreshed = _merge_events(stored, adapter.cancel(stored, context))
+        if refreshed.projection.status in {
+            "completed",
+            "completed_degraded",
+            "failed",
+        }:
+            return self._store.put(_unverified_artifacts(refreshed))
+        timed_out = replace(
+            refreshed,
+            projection=replace(
+                refreshed.projection,
+                status="timed_out",
+                error="child Agent exceeded its delegated time budget",
+            ),
+        )
+        timed_out = self._append_event(
+            timed_out,
+            "timed_out",
+            {"status": "timed_out", "provider_status": refreshed.projection.status},
+        )
+        return self._store.put(_unverified_artifacts(timed_out))
 
     def stream(self, agent_run_id: str, context: AgentGatewayContext) -> Iterator[ChildAgentRunEvent]:
         stored = self._require_run(agent_run_id)
@@ -421,15 +508,20 @@ class AgentGateway:
 
     @staticmethod
     def _authorize_grant(
-        agent_id: str,
+        profile: SubagentProfile,
         context: AgentGatewayContext,
         grant: DelegationGrant,
     ) -> None:
+        agent_id = profile.agent_id
         if grant.agent_binding_ref.rsplit(":", 1)[-1] != agent_id:
             raise PermissionError("delegation grant is bound to a different agent")
         action_id = context.execution_scope.task_id
         if action_id and grant.action_ref != action_id:
             raise PermissionError("delegation grant is bound to a different child start")
+        if grant.time_budget_seconds > profile.max_runtime_seconds:
+            raise PermissionError(
+                "delegation time budget exceeds agent runtime limit"
+            )
 
     @staticmethod
     def _append_event(run: ChildAgentRunRecord, event_type, payload: dict[str, object]) -> ChildAgentRunRecord:

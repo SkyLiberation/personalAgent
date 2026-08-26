@@ -1,0 +1,12 @@
+diff --git a/src/personal_agent/application/conversation/service.py b/src/personal_agent/application/conversation/service.py
+--- a/src/personal_agent/application/conversation/service.py
++++ b/src/personal_agent/application/conversation/service.py
+@@ -2661,7 +2661,7 @@ class ConversationService:
+             while run.projection.status in {"created", "queued", "running"}:
+                 remaining = deadline - monotonic()
+                 if remaining <= 0:
+-                    run = self._agent_port.timeout(
++                    run = self._agent_port.cancel(
+                         run.definition.agent_run_id,
+                         gateway_context,
+                     )

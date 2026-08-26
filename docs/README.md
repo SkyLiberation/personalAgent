@@ -8,6 +8,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 
 当前系统分层、框架不变量、目标责任链、LLM/确定性边界、Capability/MCP/A2A、知识与运行时事实
 统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
+用例状态、归档数据和证据限制只在[当前端到端用例盘点](evals/02-current-case-inventory.md)维护，不再复制到架构摘要或生产风险文档。
 
 ## 目录分工
 
@@ -17,7 +18,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
 | `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
-| `interview/` | 面试材料：能力轴主文档、讲稿、请求走查、证据口径与速答；补充规则见 `interview/00-writing-spec.md` |
+| `interview/` | 面试材料：项目讲稿、请求走查、能力轴、Memory 架构、证据口径与速答；补充规则见 `interview/00-writing-spec.md` |
 | `mermaid/` | Model / Layer 依赖类图 |
 | `future/` | 未来能力与优化设想 |
 | `adr/` | 已接受的跨模块架构决策、baseline、迁移和退出条件 |
@@ -51,7 +52,8 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | --- | --- |
 | 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
 | Durable Investigation Project 当前实现与证据边界 | [summary/durable-investigation-project-current-state.md](summary/durable-investigation-project-current-state.md) |
-| Phase 0 能力目录、运行时清单与发布基线 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
+| 当前用例、机制证据与发布限制 | [evals/02-current-case-inventory.md](evals/02-current-case-inventory.md) |
+| Phase 0 历史边界与当前证据入口 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
 | Memory 与知识事实边界 | [topics/memory.md](topics/memory.md) |
@@ -90,7 +92,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | LLM 提示词清单 | [llm-prompts.md](llm-prompts.md) |
 | 评测分层、E2E 与发布证据 | [evals/README.md](evals/README.md) |
 | Golden Set 设计 | [golden-set-design.md](golden-set-design.md) |
-| 生产风险优化计划 | [production-risk-optimization-plan.md](production-risk-optimization-plan.md) |
+| 生产风险与优化准入 | [production-risk-optimization-plan.md](production-risk-optimization-plan.md) |
 | Review digest | [review-digest.md](review-digest.md) |
 
 > 各子目录另有更细的索引：[workflow/README.md](workflow/README.md)、[interview/INDEX.md](interview/INDEX.md)。

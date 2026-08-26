@@ -62,6 +62,16 @@ def create_app() -> FastAPI:
 
     register_api_routes(app, context)
 
+    @app.api_route(
+        "/api/{unknown_path:path}",
+        methods=("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"),
+    )
+    def reject_unknown_api_route(unknown_path: str) -> None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"API route not found: /api/{unknown_path}",
+        )
+
     frontend_dist = _frontend_dist_dir()
     assets_dir = frontend_dist / "assets"
     if frontend_dist.exists() and assets_dir.exists():

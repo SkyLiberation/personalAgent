@@ -13,6 +13,7 @@
 | `L06` | 同一 workload 曾 5/9，Runtime-owned verification 后 9/9 | draft verification owner 和发送产物绑定解决该场景错误 | 所有回答都需要独立 verifier loop |
 | `CTX-001/E21` | 大结果曾以 1,940,197 chars、776,720 tokens 进入上下文，或 hash/重复 refetch 导致失败 | 大 Observation 需要 artifact-backed bounded reread | 所有 Tool 输出都应采用同一分页策略 |
 | `IP01` | B03/IP01 历史链暴露 verification repair lineage 死锁和无法交付报告 | 已存在 Project 的 repair lineage/completion 缺口 | Project 产品需求真实性 |
+| `INVESTIGATION-CONSOLIDATION-001-BACKGROUND` | `20260824T161211.968242Z-9412-a35dc537`：20 个自然请求均创建 Project，9 个因整批委托预算暂停，11 个因产物内容摘要不一致失败，`0/20 delivered` | 无新请求的独立生命周期有真实产品需求；当前 Project 子智能体结果链无法交付 | 修复候选有效，或后台调查已可发布；候选 target 尚无合格归档 |
 
 ## 2. 当前是回归，不是需求 baseline
 

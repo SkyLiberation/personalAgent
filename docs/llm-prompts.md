@@ -12,7 +12,6 @@
 | `structured.system` | 通用 structured model adapter | 要求符合调用方给出的 schema，不定义业务 schema |
 | `delete_candidate_resolve.user` | 删除候选解析 | 只能选择已有候选 id，不能执行删除 |
 | `solidify_draft.user` | Conversation solidify | 只形成待准入草稿，不能直接写长期知识 |
-| `thread_digest.user` / `thread_context_compression.user` | 短期会话压缩 | 生成非权威上下文投影 |
 | `graphiti.custom_extraction` | Graphiti adapter | 约束外部图谱抽取，不替代 Personal Knowledge admission |
 
 动态 Agent loop、grounding judge 与领域 extraction 的提示在各自 owner 内组装，因为其 typed schema 和 validator 属于该决策点；它们仍通过 `StructuredModelRequest` 记录 schema、模型和调用结果。

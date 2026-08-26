@@ -58,6 +58,15 @@ class KnowledgeStore(Protocol):
     def get_evidence_span(self, evidence_span_id: str) -> EvidenceSpan | None: ...
     def list_evidence_spans(self, owner_id: str, *, limit: int = 100) -> list[EvidenceSpan]: ...
     def list_claims(self, owner_id: str, *, state: str | None = None, limit: int = 100) -> list[Claim]: ...
+    def search_claims(
+        self,
+        owner_id: str,
+        query_terms: tuple[str, ...],
+        *,
+        states: tuple[str, ...] = (),
+        support_statuses: tuple[str, ...] = (),
+        limit: int = 100,
+    ) -> list[Claim]: ...
     def list_knowledge_relations(
         self,
         owner_id: str,
@@ -226,6 +235,41 @@ class InMemoryKnowledgeStore:
         ]
         claims.sort(key=lambda item: item.created_at, reverse=True)
         return claims[:max(1, limit)]
+
+    def search_claims(
+        self,
+        owner_id: str,
+        query_terms: tuple[str, ...],
+        *,
+        states: tuple[str, ...] = (),
+        support_statuses: tuple[str, ...] = (),
+        limit: int = 100,
+    ) -> list[Claim]:
+        normalized_terms = tuple({term.lower() for term in query_terms if term})
+        scored: list[tuple[int, Claim]] = []
+        for claim in self.claims.values():
+            if claim.owner_id != owner_id:
+                continue
+            if states and claim.state not in states:
+                continue
+            if support_statuses and claim.support_status not in support_statuses:
+                continue
+            searchable = " ".join((
+                claim.statement,
+                claim.subject,
+                claim.predicate,
+                claim.object,
+                claim.scope,
+                claim.condition,
+            )).lower()
+            overlap = sum(term in searchable for term in normalized_terms)
+            if overlap:
+                scored.append((overlap, claim))
+        scored.sort(
+            key=lambda item: (item[0], item[1].created_at),
+            reverse=True,
+        )
+        return [claim for _, claim in scored[:max(1, limit)]]
 
     def list_knowledge_relations(
         self,

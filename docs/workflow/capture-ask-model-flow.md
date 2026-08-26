@@ -7,10 +7,12 @@
 ```mermaid
 flowchart LR
     U["用户消息"] --> C["ConversationService"]
-    C --> P["按 principal/scope 预取个人证据"]
-    P --> L["模型决策循环"]
+    C --> L["模型决策循环"]
+    L -->|"需要已保存事实"| P["search_personal_knowledge"]
+    P --> K["按 principal/scope 与生命周期选择个人证据"]
+    K --> O["Bounded Observation"]
     L -->|"需要外部事实"| T["受治理只读 Tool，例如 web_search"]
-    T --> O["Bounded Observation"]
+    T --> O
     O --> L
     L --> F["唯一 FinalMessage"]
     L -->|"用户明确保存"| S["Prepare + Confirmation + Knowledge write"]
@@ -33,9 +35,9 @@ Ask 不是独立 Workflow、Runtime facade 或 HTTP 路由。产品只有 Conver
 
 ## Grounded read 路径
 
-1. Conversation 用认证 principal 调用 `KnowledgeService.select_evidence()`；先 scope/visibility，再按当前问题选择最多 8 条证据。
-2. 结果被投影为 `personal_knowledge_context` Observation，包含原文 citation、claim summary、conflict ids；它是只读上下文，不是答案。
-3. 用户明确禁止上网时，模型从个人证据直接回答，web Tool invocation 必须为零。
+1. Conversation 只在模型选择 `search_personal_knowledge` 后调用 `ConversationKnowledgeReadPort.select_personal_evidence()`；服务端先校验当前 principal 和作用域，再按查询选择最多 8 条证据。
+2. 结果成为 `search_personal_knowledge` 的有界 `tool_result`，包含原文 citation、claim summary 和 conflict ids；它是只读上下文，不是答案。
+3. 用户明确禁止上网且正向要求使用已保存事实时，模型可以从个人证据回答，外部搜索调用必须为零。
 4. 用户要求官方/当前外部资料时，模型必须调用可见的只读搜索 Tool；Observation 与个人证据进入同一个 loop。
 5. Conversation 生成唯一 FinalMessage。没有足够证据时必须给 limitation，不能把 Tool success 当完成。
 
@@ -46,7 +48,7 @@ Ask 不是独立 Workflow、Runtime facade 或 HTTP 路由。产品只有 Conver
 | 对象 | Owner | 不能做什么 |
 | --- | --- | --- |
 | Artifact / Evidence / Claim | Knowledge Application | 不能生成通用 FinalMessage |
-| personal evidence projection | Conversation context materialization | 不能成为第二写入口 |
+| personal evidence projection | Conversation context materialization | 不能无模型选择进入上下文，也不能成为第二写入口 |
 | Tool Observation | Gateway / execution system | 不能证明 Goal 完成 |
 | FinalMessage | Conversation semantic loop | 不能无确认写回长期知识 |
 | save/delete Command 与 Receipt | 对应 Knowledge lifecycle Application | 不能由模型伪造执行事实 |

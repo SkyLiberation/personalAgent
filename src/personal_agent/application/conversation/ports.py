@@ -68,6 +68,24 @@ class InteractionAgentPort(Protocol):
         submission_key: str,
     ) -> ChildAgentRunRecord: ...
 
+    def poll(
+        self,
+        agent_run_id: str,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord: ...
+
+    def cancel(
+        self,
+        agent_run_id: str,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord: ...
+
+    def timeout(
+        self,
+        agent_run_id: str,
+        context: AgentGatewayContext,
+    ) -> ChildAgentRunRecord: ...
+
 
 class InteractionArtifactPort(Protocol):
     def read_text(
@@ -92,19 +110,6 @@ class InteractionArtifactPort(Protocol):
         evidence_refs: tuple[str, ...],
         limitations: tuple[str, ...] = (),
     ) -> ResourceRef: ...
-
-    def poll(
-        self,
-        agent_run_id: str,
-        context: AgentGatewayContext,
-    ) -> ChildAgentRunRecord: ...
-
-    def cancel(
-        self,
-        agent_run_id: str,
-        context: AgentGatewayContext,
-    ) -> ChildAgentRunRecord: ...
-
 
 class ConversationKnowledgeWriter(Protocol):
     def solidify_conversation(

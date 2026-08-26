@@ -84,7 +84,7 @@ target 必须使用相同 seed、用户输入、principal、正式入口、初�
 
 ### CONV-002 Provider 公平 cohort
 
-比较不同 structured Provider/model 时，必须保持应用 transport 为 `json_object`，并让评测在配置不符时直接失败。下面的命令只替换 Provider、base URL 和 model；API key 由当前 shell 的密钥注入，不写入命令或 archive：
+复现历史 `CONV-002` 公平同配置样本组时，必须保持该组的应用 transport 为 `json_object`，并让评测在配置不符时直接失败。下面的命令只替换 Provider、base URL 和 model；API key 由当前 shell 的密钥注入，不写入命令或 archive。新的服务提供方评测应使用其已准入的能力配置档案，不能把本节的历史 transport 当作全局规则：
 
 ```powershell
 $env:STRUCTURED_OUTPUT_TRANSPORT = "json_object"
@@ -92,8 +92,8 @@ $env:PERSONAL_AGENT_CONV_002_EXPECTED_TRANSPORT = "json_object"
 $env:STRUCTURED_API_KEY = $env:MIMO_API_KEY
 $env:STRUCTURED_BASE_URL = "https://api.xiaomimimo.com/v1"
 $env:STRUCTURED_MODEL = "mimo-v2.5"
-$env:PERSONAL_AGENT_WEB_SEARCH_PROVIDER = "tavily"
-$env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.tavily.com"
+$env:PERSONAL_AGENT_WEB_SEARCH_PROVIDER = "anysearch"
+$env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.anysearch.com"
 
 1..3 | ForEach-Object {
   $env:PERSONAL_AGENT_CONV_002_SAMPLE_ID = "mimo-json-object-$($_)"
@@ -107,14 +107,14 @@ $env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.tavily.com"
 ### PLAN-STAB-001 重复稳定性 baseline
 
 该用例固定来源比较、产品变更和事故分析三类自然请求，每类独立执行五次。它使用正式 Conversation HTTP、真实模型、
-Postgres、Tavily、服务重启和 checksum 归档；一次完整执行包含 15 个真实外部样本，成本较高，不属于普通回归套件：
+Postgres、AnySearch、服务重启和 checksum 归档；一次完整执行包含 15 个真实外部样本，成本较高，不属于普通回归套件：
 
 ```powershell
 $env:PERSONAL_AGENT_PLAN_STAB_001_EVIDENCE_ROLE = "baseline"
 $env:STRUCTURED_OUTPUT_TRANSPORT = "json_object"
 $env:PERSONAL_AGENT_PLAN_STAB_EXPECTED_TRANSPORT = "json_object"
-$env:PERSONAL_AGENT_WEB_SEARCH_PROVIDER = "tavily"
-$env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.tavily.com"
+$env:PERSONAL_AGENT_WEB_SEARCH_PROVIDER = "anysearch"
+$env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.anysearch.com"
 
 uv run pytest -q -s `
   evals/product_baselines/test_plan_stab_001_working_plan_stability.py
@@ -136,8 +136,8 @@ $env:PERSONAL_AGENT_PLAN_REAL_EXPECTED_TRANSPORT = "json_object"
 $env:STRUCTURED_API_KEY = $env:MIMO_API_KEY
 $env:STRUCTURED_BASE_URL = "https://api.xiaomimimo.com/v1"
 $env:STRUCTURED_MODEL = "mimo-v2.5"
-$env:PERSONAL_AGENT_WEB_SEARCH_PROVIDER = "tavily"
-$env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.tavily.com"
+$env:PERSONAL_AGENT_WEB_SEARCH_PROVIDER = "anysearch"
+$env:PERSONAL_AGENT_WEB_SEARCH_BASE_URL = "https://api.anysearch.com"
 
 uv run pytest -q -s `
   evals/product_baselines/test_plan_real_001_real_provider_recovery.py

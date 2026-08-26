@@ -14,6 +14,10 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
 ConversationInteractionMode = Literal["default", "auto"]
+ConversationInteractionPhase = Literal[
+    "ordinary", "review_plan", "deliver_final_result"
+]
+ConversationExecutionLifecycle = Literal["conversation", "durable_investigation"]
 
 
 class _StrictModel(BaseModel):
@@ -74,7 +78,7 @@ class ConversationWorkingPlanStep(_StrictModel):
             "The admitted verifiable work result and its explicit completion condition."
         ),
     )
-    status: Literal["pending", "completed"]
+    status: Literal["pending", "completed", "superseded"]
     completion_action_ids: tuple[str, ...] = ()
 
 
@@ -109,7 +113,7 @@ class AgentDelegationProposal(_StrictModel):
     expected_artifact_types: tuple[str, ...] = ()
     token_budget: int = Field(default=4_000, ge=1)
     cost_budget: float = Field(default=1.0, ge=0)
-    time_budget_seconds: int = Field(default=180, ge=1, le=180)
+    time_budget_seconds: int = Field(default=240, ge=1, le=240)
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
@@ -149,6 +153,17 @@ class ReadActionOutputArguments(_StrictModel):
 
 class ListPersonalKnowledgeArguments(_StrictModel):
     limit: int = Field(default=20, ge=1, le=50)
+
+
+class SearchPersonalKnowledgeArguments(_StrictModel):
+    query: str = Field(
+        min_length=1,
+        max_length=4_000,
+        description=(
+            "The current user's positive request for which stored personal facts are needed."
+        ),
+    )
+    limit: int = Field(default=8, ge=1, le=8)
 
 
 class PersonalKnowledgeEvidenceCitation(_StrictModel):
@@ -322,11 +337,19 @@ class ReviewCriteria(_StrictModel):
 
     criteria: tuple[str, ...] = ()
     ungrounded_spans: tuple[str, ...] = ()
-    plan_review_required: bool = False
+    interaction_phase: ConversationInteractionPhase = "ordinary"
 
     @property
     def requires_review(self) -> bool:
         return bool(self.criteria)
+
+    @property
+    def plan_review_required(self) -> bool:
+        return self.interaction_phase == "review_plan"
+
+    @property
+    def final_result_required(self) -> bool:
+        return self.interaction_phase == "deliver_final_result"
 
 
 class DecisionFeedback(_StrictModel):
@@ -363,6 +386,15 @@ class ActionObservation(_StrictModel):
     status: Literal["succeeded", "failed", "running", "cancelled"]
     payload: dict[str, Any] = Field(default_factory=dict)
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
+    execution_request_digest: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        description=(
+            "Canonical digest of the admitted tool name and arguments that produced "
+            "this observation. It identifies an exact retry; it is not authorization."
+        ),
+    )
 
 
 InteractionInput = DecisionFeedback | ActionObservation
@@ -515,6 +547,7 @@ class InteractionTrace(_StrictModel):
     concurrent_batches: tuple[tuple[str, ...], ...] = ()
     context_composition: tuple[TurnContextComposition, ...] = ()
     review_criteria: ReviewCriteria | None = None
+    execution_lifecycle: ConversationExecutionLifecycle = "conversation"
     final_message: FinalMessage | None = None
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
     knowledge_delete_command_ref: str | None = None
@@ -549,6 +582,7 @@ __all__ = [
     "AgentTurnDecision",
     "CommittedUsage",
     "ContinueTurnProposal",
+    "ConversationExecutionLifecycle",
     "ConversationInteractionMode",
     "ConversationMessage",
     "ConversationWorkingPlan",
@@ -569,6 +603,7 @@ __all__ = [
     "KnowledgeSaveArguments",
     "KnowledgeSaveSelection",
     "ListPersonalKnowledgeArguments",
+    "SearchPersonalKnowledgeArguments",
     "PersonalKnowledgeEvidenceCitation",
     "PersonalKnowledgeEvidenceSnapshot",
     "PrepareKnowledgeDeleteArguments",

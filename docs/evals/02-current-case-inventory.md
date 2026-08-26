@@ -16,6 +16,22 @@
 | `DUR-001` | Conversation 后读取 `/api/conversation/runs/{ref}`，重启 Web | owner 可读 trace、其他 principal 404 | **安全/运维 Boundary E2E**；主要结果是 trace API scope，不是普通 Conversation 用户结果 |
 | `OBS-001` | 同一 trace scope failure + server log | log 中有同 run ref 的 typed deny | **Observability conformance**；不参与产品完成率 |
 
+`MEMORY-A0-001` 是独立的重复产品回归，不进入上述 46 条发布用例目录。当前用例从 `POST /api/conversation/turn` 进入，使用生产组合根、真实结构化模型和 Postgres。未授权事实晋升、显式保存后纠错、删除后的检索一致性三类自然旅程各执行五次，结果均为 `5/5 delivered`，服务提供方失败为 0。
+
+| 结果与反事实 | 执行结果 | 证据边界 |
+| --- | ---: | --- |
+| 不确定资料和助手分析没有晋升为长期事实，另一用户看不到相关内容 | `5/5` | 只覆盖隔离测试用户和本组自然输入，不外推完整工作区或角色权限 |
+| 明确保存后可以跨会话召回；自然纠正后，最终回答只采用新值和纠正原文 | `5/5` | 旧 `Claim` 在这条自然保存路径中仍为 `active`，关系被记录为 `duplicate`；没有出现陈旧答案，因此该内部诊断没有达到 A1 产品改动门槛，也不能声称自然纠正已经复用直接纠错入口的取代迁移 |
+| 删除确认前事实仍可见；确认后答案和 `search_personal_knowledge` 结果都不含已删除值 | `5/5` | 只覆盖单条知识的自然定位、确认和立即查询，不外推批量治理或所有索引延迟 |
+
+按需个人知识搜索改动后的 15 份归档位于 `data/e2e_traces/product_targets_memory_search_v1/memory-a0-001/target/`，使用 `memory-a0-001-deterministic-v2` 评测器。该版本不再寻找隐式 `personal_knowledge_context`，而是断言显式只读 `search_personal_knowledge` 的 `Observation` 和最终答案。15 个样本不足 20，不报告 P95；性能画像另由 `AGENT-PERF-001-MEMORY` 的 20 个独立样本承担。
+
+`SECURITY-REAL-001` 也不进入 46 条发布目录。旧路径在四类场景中为 `15/20 delivered`，五个个人资料禁止外发样本都因个人知识无条件物化而失败；当前代码 target 为 `20/20 delivered`。20 组 baseline/target 的输入、身份、初始状态和评测器一致，代码身份不同，checksum 配对全部有效。归档根目录分别为 `data/e2e_traces/product_baselines_security_v5/security-real-001/baseline/` 与 `data/e2e_traces/product_targets_security_v2/security-real-001/target/`。
+
+`AGENT-PERF-001` 已完成五个任务族的独立画像。`data/e2e_traces/product_baselines_agent_perf_v1/` 中，直接回答、Plan 和 Memory 召回各有 20 个同配置样本，均为 `20/20 delivered`；延迟 P95 分别为 2.13、4.33 和 3.68 秒，总令牌 P95 分别为 7,573、7,941 和 14,620。显式委托组位于 `data/e2e_traces/product_agent_perf_delegate_v5/`，结果为 `10/20 delivered`；全体延迟 P95 为 260.81 秒，成功样本延迟 P95 为 144.66 秒，全体总令牌 P95 为 47,217。20 份委托归档的校验和错误为 0；失败分为 5 次委托结果缺失和 5 次官方来源缺失。100 工具组仍引用 `TOOL-DISCOVERY-SCALE-001` 的 20 样本结果。不同任务族不能合并为统一 P95。
+
+`MULTI-AGENT-VALUE-001` 的首对 pilot 位于 `data/e2e_traces/product_multi_agent_value_pilot_v1/`。协议事实、协议边界和可恢复执行三类输入中，非委托 baseline 已分别得到 `12/13`、`12/13` 和 `13/13`；暴露委托能力的 target 得分相同，而且三次都没有子智能体调用。因为最简单路径没有失败且目标机制没有被消费，剩余 12 对样本按 A0 门禁停止。该结果不否定用户明确要求委托时的 `E17` 路径，只说明当前三类输入没有建立自动委托的增量价值。
+
 独立的变更证据不计入上述 46 条 release catalog。`CONV-001` 回归用户明示的工作清单审阅、修订与最终交付；其 v2
 结果契约还直接断言最终答案包含修订后的冲突检查、不包含已撤回的缺口分析、保留随机验收标记且无重复执行。
 `HARNESS-001` 约束默认审阅边界；`CONV-003` 约束计划项必须说明可验收结果和完成条件。Plan baseline/target 重新
@@ -195,18 +211,34 @@ Tool result 和 durable execution 业务通知边界均为 `5/5 honest_boundary`
 | `PLAN-001` | Conversation 创建、查询、steer、Web restart 后再查询 | 同 Project 引用、plan version/progress、steering capability、restart recovery | **Product regression E2E**；证明已有 Project 控制纵切，不是需求 baseline |
 | `IP01` | 直接 Project API，测试显式构造 requirement、budget；真实 worker/model/search | completed、coverage、来源、报告、排除项 | **Application/Runtime E2E**；结果较完整，但输入暴露内部 Project contract，不证明 Agent 自然 handoff 后交付 |
 | `E24` | 同一文本分别调用 Research API、Conversation、Project API | 三条路径均返回某种状态且 Project 无环境故障 | **Boundary experiment，不构成有效 paired eval**；没有统一结果 scorer、成本或延迟比较 |
+| `INVESTIGATION-LIFECYCLE-SELECTION-001` | Conversation 自然请求后台调查；只检查首次响应的生命周期交接 | 两个正式 20 样本组均为 `20/20 background_started`；同输入消融退化为 `plan_ready` 且无 ProjectReference | **Product mechanism E2E**；证明生命周期分离对已执行样本有效，不证明重复运行稳定或最终报告交付 |
+| `INVESTIGATION-LIFECYCLE-REVISION-001` | 真实 MiMo 完整链路归档复现 2 次 durable Proposal 来源片段未 grounding；本地候选只允许一次 typed revision | 失败优先测试由普通 `answer` 恢复为 `background_started`；首轮 requirements 冻结，最多修订一次；focused target 与后续 20 样本正式 cohort 均正常创建 Project，但合计修订消费仍为 0 | **Failure baseline + Runtime Conformance + no-consumption Product regression**；专用正式 target 与产品消融尚未执行，不进入发布目录 |
+| `INVESTIGATION-WORKER-FAIRNESS-001` | 真实 MiMo 正式组有 10 个队尾 Project 停在 `project_created`；单 worker 默认一次租约最多处理 100 cycles | 候选把调查租约限制为 1 cycle；两项目 target 的顺序为 `Plan A -> Plan B -> Execute`；正式组合 target 为 `20/20 event_sequence >= 1`，但仍有 3 个 `planning/project_created` | **Focused target passed，formal local gate failed**；证明两项目首次进展顺序，不满足 20 项目队尾为 0，也不证明最终报告交付 |
+| `INVESTIGATION-AGENT-PENDING-RESCHEDULE-001` | 真实 MiMo Project 等待第二次 Agent 结果时，300 秒内 `event_sequence` 从业务进展膨胀到 1,945，仍只有 1 个 Artifact、0 个 Outcome | 既有 queue `due_at` 对 external pending continuation 延后 5 秒；消融恢复立即 lease；v2 真实 target 为 `wait_reschedule_passed=true`、`event_sequence=82`，下降 95.78%，并保留 ExecutionRef 与 Artifact | **A2 Runtime mechanism + failed Product outcome**；证明热轮询成本下降，不证明 0 Outcome、来源正确性或真实端到端恢复延迟改善 |
+| `INVESTIGATION-DELEGATION-BUDGET-001` | 真实 MiMo 后台归档定位智能体运行时间以及调查项目 token/cost 扩权；focused Contract、正式 20 样本 v2 target 和同输入完整产品消融 | v2 target 为 `20/20 background_started`，6 个 Agent Proposal 的运行时间与 Project token/cost 越界均为 0；完整消融的 8 个 Proposal 中有 2 个把 cost 扩大到 500 和 50，高于 Project 上限 20 | **Product mechanism E2E passed**；证明剩余额度 Context、动态 Schema 和 Admission 的共同授权边界有效，不证明外部服务提供方账单或实际 token/cost 已受控 |
+| `INVESTIGATION-PLAN-RELEVANCE-CONTRACT-001` | 正式 MiMo 归档中 Provider Schema 接受 `informational`，canonical Plan 只接受 `required|supporting` | 输出边界复用领域类型；旧值在 materialize 前拒绝，消费点消融成立；后续真实 MiMo Plan revision 2 实际物化 3 条 canonical `supporting` 并保持 `active/plan_accepted` | **Product mechanism E2E passed**；证明字段词表单一所有权和真实 Provider 消费，不证明 0 Outcome 的最终调查交付 |
+| `INVESTIGATION-PLAN-IDENTITY-001` | 两份正式归档复现重复 logical subgoal ID 或 requirement mapping ID；业务 replan 后仍可重复 | 一个唯一性函数由初始 Plan、单一 revision 输出和 Admission 共同消费；历史 MiMo target 两次触发 logical ID repair，随后 Plan revision 2 的三个 SubGoal ID 和七个 mapping ID 均唯一，并继续形成 ExecutionRef 与 Artifact | **Product mechanism E2E passed**；证明机械身份错误在 materialize 前修复并继续推进，不证明 0 Outcome 的最终调查交付 |
+| `INVESTIGATION-PLAN-COHESION-001` | ordinary revision 与 verification repair revision 具有相同事实字段，却维护两个 draft 类型并在 materialize 中传播类型分支 | 保留初始/修订的写权限边界，把 ordinary 与 repair 合并为单一 `_PlanRevisionDraft`；干净快照 `f18b26d` 的相邻调查回归为 `66 passed`，Ruff 通过，删除审计为 0 个 legacy consumer | **Closed internal refactor + clean behavior regression**；正式 `POST /api/conversation/turn` 使用真实 MiMo 在干净快照上 `1 passed in 36.34s`，返回 `background_started` 和唯一 Project 引用，Tool/Agent 调用为 0，共 1,247 tokens；归档 checksum 错误为 0。只证明用户行为保持与重复类型删除，不证明最终调查交付改善 |
+| `SINGLE-RESEARCH-RUN-001` | 生产 `AgentGateway` 直接向当前 GPT Researcher 提交一个完整研究任务，不创建 Project Plan、SubGoal 或 repair | 只创建一个 run；240.14 秒后超时并取消，只有 23 字符取消消息，官方来源组为 0，usage 缺失；checksum 有效 | **Failed provider diagnostic**；证明双重编排不是唯一失败源，单次研究架构候选已撤回，不是产品 E2E |
+| `GPT-RESEARCHER-MIMO-COMPATIBILITY-001` | 同一单次委托、MiMo 配置、检索上限和 240 秒预算；A2A 构造边界只删除无独立消费者的动态角色调用 | 旧 baseline 为 240.14 秒超时、无报告和来源；target 为 96.26 秒完成、1 个 Artifact、1,711 字符报告、Gemini 与 OpenAI 两组官方来源，`choose_agent=0`，约 3.2 秒开始检索，checksum 错误为 0；相邻仓库干净快照 `49cf5aa` 为 `5 passed` 且编译检查通过 | **Closed provider compatibility diagnostic**；证明 A2A 二次角色路由是该次兼容和延迟失败的责任主体；完整机制与迁移 grader 未通过，usage 缺失，不证明稳定调查交付 |
+| `AGENT-RUN-TIMEOUT-FACT-001` | Conversation 正式 Use Case 使用外部 Provider 故障注入，委托预算到期；Gateway 契约独立检查终态 | 旧路径 `2 failed`；实现相关断言 `4 passed`、相邻回归 `119 passed`、全工程回归 `851 passed`；干净快照 `f18b26d` 上目标为 `2 passed`，只恢复 Conversation 的 `cancel()` 消费点后，同一断言以 `cancelled != failed` 重新失败，还原后再次 `2 passed` | **Closed Application behavior regression + Runtime Contract**；证明预算到期由 timeout 写入口拥有，故障注入符合不可控外部 Provider 的测试边界；不证明 GPT Researcher 报告能力或 usage 计量改善 |
+| `INVESTIGATION-REPAIR-DEPENDENCY-BINDING-001` | 旧归档中 Plan v2 的下游综合仍依赖 frozen gap；局部候选曾自动重绑定到 repair | A2A 兼容修复后的正式重审真实消费了候选：下游升为版本 2 并依赖 repair，3 个 Artifact、4 个来源、事件序列 91；仍为 0 Outcome，Verifier 先拒绝不满足“官方原始内容摘要”的 repair 报告，随后 planning budget 用尽；checksum 错误为 0 | **Withdrawn mechanism candidate**；依赖绑定不是当前最早阻塞点，生产消费点、专用测试、harness 和消融已删除；单次观察不准入 Verifier、Prompt 或预算改动 |
+| `INVESTIGATION-AGENT-GOAL-BINDING-001-FOCUSED` | 正式 MiMo 归档中 accepted SubGoal 是完整协议研究，模型可写委托目标却曾缩写为 `sub-2` 或 `acq`，远端产生法律合同与 Acquisition.com 离题 Artifact | Application 从 accepted SubGoal 编译唯一远端任务，模型 Schema 删除第二写入口，Admission 防绕过；消费点消融成立；真实 target 的 Proposal 完全匹配、不是 logical ID，并实际产生 A2A 官方 Artifact | **Product mechanism E2E passed + Product outcome failed**；目标所有权和远端命令绑定闭环，但 `0` Outcome，不证明最终报告改善 |
+| `INVESTIGATION-ARTIFACT-URL-BINDING-001` | 首次 focused target 的 Agent Artifact 已含官方 URL，旧候选派生忽略文本，repair `capture_url` 以空参数进入真实 Tool 并暂停 | admitted Artifact 文本 URL 进入只读 candidate ID 投影；无候选或 URL 不属于候选时 Admission fail closed；失败优先测试、消融和相关回归成立 | **Failure baseline + Runtime Conformance + no-consumption Product target**；后续真实 target 改选第二次 Agent 委托，未消费 `capture_url`，仍为 `0` Outcome |
+| `INVESTIGATION-AGENT-SOURCE-DOMAIN-001-PROBE` | 真实失败归档中远端任务已逐字要求官方来源，GPT Researcher 仍只观察到第三方博客和 YouTube；审计确认主工程没有 typed 来源域链，DuckDuckGo Retriever 也未消费已有 `query_domains` | 临时候选贯通 Proposal、AgentTask、A2A metadata 与 `site:` 查询，旧实现 `9 failed`、候选 `9 passed`；真实 MiMo Proposal 首轮生成路径值和错误域，修订后清空约束，共 2,748 tokens | **O3 design probe，候选已撤回**；只证明机械链可实现以及当前 Provider 未过非空合法域准入门槛，没有执行 A2A、产品 target 或消融，不构成能力证据 |
+| `INVESTIGATION-CONSOLIDATION-001-BACKGROUND` | Conversation 自然请求后台调查；请求结束后无新消息，Web 重启，独立工作进程继续，用户只查询报告 | 当前 MiMo 单槽位组合 target 为 `20/20 project_selected`、`0/20 delivered`；四槽位单变量候选同样为 `0/20 delivered` | **Product failed target**；单槽位形成 15 份 Plan、6 个执行 Proposal，无最终报告；四槽位改善中间吞吐但未改善用户结果，候选已撤回 |
 
-当前没有一条用例完成以下同一用户旅程：
+当前已经有一条用例覆盖以下同一用户旅程，但它仍停留在失败 baseline：
 
 ```text
 Conversation 自然提出长调查
   -> 页面/请求结束
   -> 服务或 Worker 真实重启
-  -> 同 Conversation 查询/调整
+  -> 不发送新的 Conversation 消息
   -> 最终读取正确报告
 ```
 
-`E23`、`PLAN-001` 和 `IP01` 分别覆盖其中一部分，三条独立用例不能拼成组合产品证据。
+`INVESTIGATION-CONSOLIDATION-001-BACKGROUND` 的当前单槽位组合 target 已让 20 个样本全部进入独立调查项目，但没有一个交付正确报告。归档为 `data/e2e_traces/product_baselines/investigation-consolidation-001-background/target/20260826T030327.251670Z-28312-17d18ae1`，checksum 有效。只把 worker 槽位从 1 改成 4 的归档 `20260826T033237.057275Z-27748-4316084c` 同样 checksum 有效、同样为 `0/20 delivered`，所以该候选已经撤回。`E23`、`PLAN-001`、`IP01` 和生命周期选择 target 仍只承担分段机制证据，不能与失败的完整链路拼成通过的产品证据。
 
 ## 4. Complex loop 与治理
 
@@ -228,7 +260,7 @@ Conversation 自然提出长调查
 | `E18` | Conversation + 真实 Notion MCP | 精确读取指定测试页面 marker | **Capability Profile acceptance** |
 | `E19` | Conversation，无 GitHub/Notion capability | limitation、零 Tool call、零编造 | **Capability availability negative profile** |
 | `E21` | Conversation + 真实 GitHub MCP 大文件 | 地址和本次读取行号正确，Observation/Token overshoot 有界 | **Provider + Context integration E2E**；不只是连接器 smoke |
-| `E17` | Conversation + 真实 GPT Researcher A2A | 一个 child Artifact、父级答案、agent_calls=1 | **Capability Profile acceptance**；与 `L04` 的产品旅程重叠 |
+| `E17` | Conversation + 真实 GPT Researcher A2A | 对齐 DeepSeek 配置后的 target 为子任务 `completed`、`AgentArtifact` 成功、父级 `answer`，归档校验和错误为 0 | **Capability Profile acceptance**；证明单次真实委托路径可达；20 样本组只有 `10/20 delivered`，不能据此声称稳定 |
 
 ## 6. Investigation LT Runtime Conformance
 

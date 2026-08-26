@@ -102,8 +102,8 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "E01", "E14", "E22", "E23", "L01", "L02", "L03", "L05", "L06",
     ),
     _cases(
-        "src/personal_agent/application/conversation/review_admission.py",
-        "Derives and freezes ReviewCriteria; only the review journey depends on it.",
+        "src/personal_agent/application/conversation/interaction_intent.py",
+        "Derives and freezes Application lifecycle and ReviewCriteria.",
         "L06",
     ),
     _cases(

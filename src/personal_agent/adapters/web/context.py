@@ -28,6 +28,7 @@ from personal_agent.application.review.delivery import (
 )
 from personal_agent.application.research import ResearchScheduler, ResearchSchedulerRunner
 from personal_agent.infra.storage.postgres_review_digest_store import PostgresReviewDigestStore
+from personal_agent.infra.storage.postgres_common import close_postgres_connection_pools
 from personal_agent.application.knowledge import KnowledgeService
 
 
@@ -69,6 +70,7 @@ class WebAppContext:
         self.review_digest_runner.stop()
         self.knowledge_gap_runner.stop()
         self.research_runner.stop()
+        close_postgres_connection_pools()
 
 
 class _GapSubscriptionStore:

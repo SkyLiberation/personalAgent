@@ -100,6 +100,9 @@ def build_runtime_capability_inventory(
             ),
             protocol=profile.protocol if profile is not None else None,
             capability_ids=profile.capability_ids if profile is not None else (),
+            max_runtime_seconds=(
+                profile.max_runtime_seconds if profile is not None else None
+            ),
         ))
     return RuntimeCapabilityInventory(
         local_tools=tuple(sorted(local_tools, key=lambda item: item.tool_name)),

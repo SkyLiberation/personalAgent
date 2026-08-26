@@ -16,6 +16,45 @@ class BudgetExceeded(RuntimeError):
 
 
 class ProjectBudgetLedger:
+    @staticmethod
+    def remaining_total_tokens(project: InvestigationProject) -> int:
+        return max(
+            0,
+            project.definition.budget.total_tokens
+            - project.charged_tokens()
+            - project.reserved_tokens(),
+        )
+
+    @staticmethod
+    def remaining_category_tokens(
+        project: InvestigationProject,
+        category: BudgetCategory,
+    ) -> int:
+        return max(
+            0,
+            project.definition.budget.category_token_limit(category)
+            - project.charged_tokens(category)
+            - project.reserved_tokens(category),
+        )
+
+    def remaining_tokens(
+        self,
+        project: InvestigationProject,
+        *,
+        category: BudgetCategory,
+    ) -> int:
+        return min(
+            self.remaining_total_tokens(project),
+            self.remaining_category_tokens(project, category),
+        )
+
+    @staticmethod
+    def remaining_cost(project: InvestigationProject) -> float:
+        committed = sum(item.cost for item in project.usages) + sum(
+            item.cost for item in project.active_reservations.values()
+        )
+        return max(0.0, project.definition.budget.total_cost - committed)
+
     def reserve(
         self,
         project: InvestigationProject,
@@ -36,30 +75,17 @@ class ProjectBudgetLedger:
             agent_calls=agent_calls,
         )
         limit = project.definition.budget
-        total_tokens = (
-            project.charged_tokens()
-            + project.reserved_tokens()
-            + requested.tokens
-        )
-        category_tokens = (
-            project.charged_tokens(category)
-            + project.reserved_tokens(category)
-            + requested.tokens
-        )
-        total_cost = sum(item.cost for item in project.usages) + sum(
-            item.cost for item in project.active_reservations.values()
-        ) + requested.cost
         total_tool_calls = sum(item.tool_calls for item in project.usages) + sum(
             item.tool_calls for item in project.active_reservations.values()
         ) + requested.tool_calls
         total_agent_calls = sum(item.agent_calls for item in project.usages) + sum(
             item.agent_calls for item in project.active_reservations.values()
         ) + requested.agent_calls
-        if total_tokens > limit.total_tokens:
+        if requested.tokens > self.remaining_total_tokens(project):
             raise BudgetExceeded("project total token budget exhausted")
-        if category_tokens > limit.category_token_limit(category):
+        if requested.tokens > self.remaining_category_tokens(project, category):
             raise BudgetExceeded(f"{category} token budget exhausted")
-        if total_cost > limit.total_cost:
+        if requested.cost > self.remaining_cost(project):
             raise BudgetExceeded("project cost budget exhausted")
         if total_tool_calls > limit.max_tool_calls:
             raise BudgetExceeded("project tool-call budget exhausted")
@@ -82,4 +108,3 @@ class CompletionGate:
 
 
 __all__ = ["BudgetExceeded", "CompletionGate", "ProjectBudgetLedger"]
-

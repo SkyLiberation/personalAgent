@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 import threading
+import time
 from typing import Callable
 
 from fastapi import FastAPI
@@ -21,6 +23,9 @@ from personal_agent.adapters.web.routes.investigation_projects import (
     register_investigation_project_routes,
 )
 from personal_agent.application.artifacts import ArtifactService
+from personal_agent.application.investigation_project.admission import (
+    compiled_agent_bounded_sub_goal,
+)
 from personal_agent.application.investigation_project import (
     ApproveInvestigationCommand,
     CreateInvestigationProject,
@@ -31,6 +36,8 @@ from personal_agent.application.investigation_project import (
     ModelDecision,
     PauseInvestigationProject,
     ProcessInvestigationProject,
+    ProjectAgentCapacityUnavailable,
+    ProjectAgentExecutionFailed,
     ProjectAgentOutcomeUnknown,
     ProjectExecutionPolicy,
     QueryInvestigationProject,
@@ -358,6 +365,8 @@ class _AgentPort:
         barrier_size: int = 0,
         crash_after_submit_once: bool = False,
         return_pending_once: bool = False,
+        capacity_unavailable_once: bool = False,
+        execution_failed_once: bool = False,
         outcome_unknown: bool = False,
         crash_cancel_once: bool = False,
     ) -> None:
@@ -367,12 +376,16 @@ class _AgentPort:
         self.barrier = threading.Barrier(barrier_size) if barrier_size else None
         self.crash_after_submit_once = crash_after_submit_once
         self.return_pending_once = return_pending_once
+        self.capacity_unavailable_once = capacity_unavailable_once
+        self.execution_failed_once = execution_failed_once
         self.outcome_unknown = outcome_unknown
         self.crash_cancel_once = crash_cancel_once
         self.crashed = False
         self.cancel_crashed = False
         self.cancel_effect_count = 0
         self.pending_returned: set[str] = set()
+        self.capacity_rejected = False
+        self.execution_failed = False
         self.cancelled: list[str] = []
 
     def submit_or_reconcile(
@@ -384,6 +397,11 @@ class _AgentPort:
         authorization_digest=None,
         execution_command_digest=None,
     ):
+        if self.capacity_unavailable_once and not self.capacity_rejected:
+            self.capacity_rejected = True
+            raise ProjectAgentCapacityUnavailable(
+                "provider execution slots exhausted"
+            )
         if self.outcome_unknown:
             raise ProjectAgentOutcomeUnknown(
                 "provider accepted state cannot be reconciled"
@@ -397,6 +415,23 @@ class _AgentPort:
             if self.crash_after_submit_once and not self.crashed:
                 self.crashed = True
                 raise RuntimeError("injected crash after provider accept")
+        if self.execution_failed_once and not self.execution_failed:
+            self.execution_failed = True
+            raise ProjectAgentExecutionFailed(
+                agent_run_id=task_id,
+                status="failed",
+                detail="provider research failed",
+                execution_ref=ExecutionRef(
+                    execution_id=task_id,
+                    execution_kind="agent",
+                    owner_ref=proposal.proposal_id,
+                    execution_digest=canonical_digest({
+                        "submission_key": submission_key,
+                        "provider_task_id": task_id,
+                        "status": "failed",
+                    }),
+                ),
+            )
         self.dispatches.append(logical_id)
         if self.barrier is not None:
             self.barrier.wait(timeout=5)
@@ -855,7 +890,7 @@ class InvestigationScenarioHarness:
             if subgoal.logical_subgoal_id == "external-review":
                 return AgentExecutionOperation(
                     agent_id="research_agent",
-                    bounded_sub_goal=subgoal.objective,
+                    bounded_sub_goal=compiled_agent_bounded_sub_goal(subgoal),
                     context_artifact_refs=(artifact_ref,),
                     expected_artifact_types=("review",),
                     token_budget=10,
@@ -965,7 +1000,7 @@ class InvestigationScenarioHarness:
             ),
         )
 
-    def parallel_budget_exhaustion_fails_closed(self):
+    def parallel_budget_dispatches_affordable_subset(self):
         subgoals = (
             _subgoal("first", operation="github_read", kind="tool"),
             _subgoal("second", operation="notion_read", kind="tool"),
@@ -1004,6 +1039,163 @@ class InvestigationScenarioHarness:
             first_dispatches=bundle.tools.dispatch_count["first"],
             second_dispatches=bundle.tools.dispatch_count["second"],
             completion_report=view.completion_report,
+        )
+
+    def pending_agent_yields_current_process_cycle(self):
+        subgoals = (
+            _subgoal("external", operation="research_agent", kind="agent"),
+        )
+        agents = _AgentPort(return_pending_once=True)
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                subgoals,
+                {"architecture": ("external",)},
+            ),
+            agents=("research_agent",),
+            agent_port=agents,
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            idempotency_key="create:pending-agent-yield",
+        )
+
+        queue = bundle.service.queue
+        initial_task = queue.lease_next(
+            queue="investigation",
+            worker_id="pending-agent-worker",
+        )
+        if initial_task is None:
+            raise AssertionError("pending project was not enqueued")
+        first = self._run(bundle, project_id, max_cycles=100)
+        queue.complete(initial_task.task_id)
+        first_dispatches = len(agents.dispatches)
+        first_project = bundle.service.store.load(self.principal, project_id)
+        if first_project is None:
+            raise AssertionError("pending project was not persisted")
+        continuation = next(
+            task
+            for task in queue.list_tasks(
+                queue="investigation",
+                statuses=["queued"],
+            )
+            if ":continue:" in task.idempotency_key
+        )
+        immediate = queue.lease_next(
+            queue="investigation",
+            worker_id="pending-agent-worker",
+        )
+        resumed = immediate
+        if resumed is None:
+            wait_seconds = max(
+                0.0,
+                (continuation.due_at - datetime.now(UTC)).total_seconds(),
+            )
+            time.sleep(wait_seconds + 0.1)
+            resumed = queue.lease_next(
+                queue="investigation",
+                worker_id="pending-agent-worker",
+            )
+        if resumed is None:
+            raise AssertionError("pending continuation was not leaseable after due_at")
+        second = self._run(bundle, project_id, max_cycles=100)
+        queue.complete(resumed.task_id)
+
+        return SimpleNamespace(
+            first_state=first.state,
+            first_dispatches=first_dispatches,
+            linked_agent_run_count=len(first_project.agent_runs),
+            continuation_delay_seconds=(
+                continuation.due_at - continuation.created_at
+            ).total_seconds(),
+            continuation_immediately_leaseable=immediate is not None,
+            continuation_resume_lag_seconds=(
+                datetime.now(UTC) - continuation.due_at
+            ).total_seconds(),
+            completed_state=second.state,
+            total_dispatches=len(agents.dispatches),
+        )
+
+    def provider_capacity_wait_releases_budget_and_yields(self):
+        subgoals = (
+            _subgoal("external", operation="research_agent", kind="agent"),
+        )
+        agents = _AgentPort(capacity_unavailable_once=True)
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                subgoals,
+                {"architecture": ("external",)},
+            ),
+            agents=("research_agent",),
+            agent_port=agents,
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            idempotency_key="create:provider-capacity-yield",
+        )
+
+        first = self._run(bundle, project_id, max_cycles=100)
+        first_provider_submissions = agents.provider_submission_count
+        first_project = bundle.service.store.load(self.principal, project_id)
+        if first_project is None:
+            raise AssertionError("capacity-wait project was not persisted")
+        second = self._run(bundle, project_id, max_cycles=100)
+
+        return SimpleNamespace(
+            first_state=first.state,
+            active_reservations=tuple(first_project.active_reservations),
+            first_provider_submissions=first_provider_submissions,
+            completed_state=second.state,
+            total_provider_submissions=agents.provider_submission_count,
+        )
+
+    def parallel_provider_capacity_wait_retries_without_waiting_reason(self):
+        subgoals = (
+            _subgoal("external-a", operation="research_agent", kind="agent"),
+            _subgoal("external-b", operation="research_agent", kind="agent"),
+        )
+        agents = _AgentPort(capacity_unavailable_once=True)
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                subgoals,
+                {"architecture": ("external-a", "external-b")},
+            ),
+            agents=("research_agent",),
+            agent_port=agents,
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            idempotency_key="create:parallel-provider-capacity-yield",
+        )
+
+        first = self._run(bundle, project_id, max_cycles=100)
+        first_provider_submissions = agents.provider_submission_count
+        first_project = bundle.service.store.load(self.principal, project_id)
+        if first_project is None:
+            raise AssertionError("parallel capacity-wait project was not persisted")
+        second = self._run(bundle, project_id, max_cycles=100)
+
+        return SimpleNamespace(
+            first_state=first.state,
+            first_waiting_reasons=first.waiting_reasons,
+            first_active_reservations=tuple(first_project.active_reservations),
+            first_provider_submissions=first_provider_submissions,
+            completed_state=second.state,
+            total_provider_submissions=agents.provider_submission_count,
         )
 
     def pause_resume_boundaries(self):
@@ -1107,6 +1299,79 @@ class InvestigationScenarioHarness:
             waiting_reasons=view.waiting_reasons,
             provider_submissions=bundle.agents.provider_submission_count,
             outcomes=view.outcomes,
+        )
+
+    def terminal_agent_failure_replans_without_crashing_worker(self):
+        initial_subgoal = _subgoal(
+            "external-research",
+            operation="research_agent",
+            kind="agent",
+        )
+
+        def revised(owner, seq, revision, request):
+            previous = next(
+                item
+                for item in owner.accepted_plan.proposal.subgoals
+                if item.logical_subgoal_id == "external-research"
+            )
+            repair = _subgoal(
+                "external-research-repair",
+                operation="research_agent",
+                kind="agent",
+                repairs=(SubGoalVersionRef(
+                    logical_subgoal_id=previous.logical_subgoal_id,
+                    subgoal_version=previous.subgoal_version,
+                ),),
+            )
+            return _plan(
+                owner,
+                seq,
+                revision,
+                (previous, repair),
+                {
+                    "architecture": (
+                        (
+                            "external-research",
+                            "external-research-repair",
+                        )
+                        if request.trigger_kind == "verification_gap"
+                        else ("external-research-repair",)
+                    )
+                },
+                revision_reason=request.request_id,
+            )
+
+        agents = _AgentPort(execution_failed_once=True)
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (initial_subgoal,),
+                {"architecture": ("external-research",)},
+            ),
+            revision=revised,
+            agents=("research_agent",),
+            agent_port=agents,
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            budget=ProjectBudgetLimit(max_evidence_repair_revisions=2),
+        )
+        view = self._run(bundle, project_id)
+        aggregate = bundle.service.store.load(self.principal, project_id)
+        assert aggregate is not None
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            plan_version=view.accepted_plan.plan_version,
+            provider_submissions=agents.provider_submission_count,
+            waiting_reasons=view.waiting_reasons,
+            coverage=aggregate.requirement_coverage(),
+            outcomes=view.outcomes,
+            active_reservations=tuple(aggregate.active_reservations.values()),
         )
 
     def completing_state_recovers_after_process_crash(self):
@@ -1608,6 +1873,65 @@ class InvestigationScenarioHarness:
             tool_dispatches=bundle.tools.dispatch_count["architecture"],
         )
 
+    def agent_budget_admission_repairs_locally(self):
+        research = _subgoal(
+            "external-research",
+            operation="research_agent",
+            kind="agent",
+        )
+        proposal_attempt = 0
+
+        def operation(subgoal, _scope):
+            nonlocal proposal_attempt
+            proposal_attempt += 1
+            if proposal_attempt == 1:
+                token_budget, cost_budget = 10, 20.01
+            elif proposal_attempt == 2:
+                token_budget, cost_budget = 20_001, 1.0
+            else:
+                token_budget, cost_budget = 10, 1.0
+            return AgentExecutionOperation(
+                agent_id="research_agent",
+                bounded_sub_goal=compiled_agent_bounded_sub_goal(subgoal),
+                expected_artifact_types=("evidence",),
+                token_budget=token_budget,
+                cost_budget=cost_budget,
+                time_budget_seconds=30,
+            )
+
+        agents = _AgentPort()
+        bundle = self._bundle(
+            initial=lambda owner, seq, revision, _: _plan(
+                owner,
+                seq,
+                revision,
+                (research,),
+                {"architecture": ("external-research",)},
+            ),
+            operation_factory=operation,
+            agents=("research_agent",),
+            agent_port=agents,
+            requirements=("architecture",),
+        )
+        project_id = self._create(
+            bundle,
+            requirements=("architecture",),
+            idempotency_key="create:agent-budget-local-repair",
+        )
+
+        view = self._run(bundle, project_id, max_cycles=30)
+        accepted = view.accepted_execution_proposals[0].operation
+        return SimpleNamespace(
+            state=view.state,
+            state_reason=view.last_state_reason,
+            plan_version=view.accepted_plan.plan_version,
+            planner_calls=bundle.planner.calls,
+            proposer_calls=bundle.proposer.calls,
+            provider_submissions=agents.provider_submission_count,
+            accepted_token_budget=accepted.token_budget,
+            accepted_cost_budget=accepted.cost_budget,
+        )
+
     def repeated_execution_admission_feedback_pauses_locally(self):
         research = _subgoal(
             "architecture",
@@ -1643,101 +1967,6 @@ class InvestigationScenarioHarness:
             planner_calls=bundle.planner.calls,
             proposer_calls=bundle.proposer.calls,
             tool_dispatches=bundle.tools.dispatch_count["architecture"],
-            waiting_reasons=view.waiting_reasons,
-        )
-
-    def transitive_deadlock_replans_after_repair(self):
-        discovery = _subgoal(
-            "candidate-discovery",
-            operation="github_read",
-            kind="tool",
-        )
-        trigger_kinds: list[str] = []
-
-        def revised(owner, seq, revision, request):
-            trigger_kinds.append(request.trigger_kind)
-            previous = next(
-                item
-                for item in owner.accepted_plan.proposal.subgoals
-                if item.logical_subgoal_id == "candidate-discovery"
-            )
-            repair = next(
-                (
-                    item
-                    for item in owner.accepted_plan.proposal.subgoals
-                    if item.logical_subgoal_id == "candidate-discovery-repair"
-                ),
-                _subgoal(
-                    "candidate-discovery-repair",
-                    operation="github_read",
-                    kind="tool",
-                    repairs=(
-                        SubGoalVersionRef(
-                            logical_subgoal_id=previous.logical_subgoal_id,
-                            subgoal_version=previous.subgoal_version,
-                        ),
-                    ),
-                ),
-            )
-            if request.trigger_kind == "verification_gap":
-                blocked_summary = _subgoal(
-                    "blocked-summary",
-                    operation="github_read",
-                    kind="tool",
-                    depends_on=("candidate-discovery",),
-                )
-                return _plan(
-                    owner,
-                    seq,
-                    revision,
-                    (previous, repair, blocked_summary),
-                    {
-                        "architecture": (
-                            "candidate-discovery-repair",
-                            "blocked-summary",
-                        )
-                    },
-                    revision_reason=request.request_id,
-                )
-            assert request.trigger_kind == "coverage_deadlock"
-            return _plan(
-                owner,
-                seq,
-                revision,
-                (previous, repair),
-                {"architecture": ("candidate-discovery-repair",)},
-                revision_reason=request.request_id,
-            )
-
-        bundle = self._bundle(
-            initial=lambda owner, seq, revision, _: _plan(
-                owner,
-                seq,
-                revision,
-                (discovery,),
-                {"architecture": ("candidate-discovery",)},
-            ),
-            revision=revised,
-            tools=("github_read",),
-            unsatisfied_subgoal="candidate-discovery",
-            requirements=("architecture",),
-        )
-        project_id = self._create(bundle, requirements=("architecture",))
-        view = self._run(bundle, project_id)
-        final_mapping = next(
-            item.logical_subgoal_ids
-            for item in view.accepted_plan.proposal.requirement_mappings
-            if item.requirement_id == "architecture"
-        )
-        return SimpleNamespace(
-            state=view.state,
-            state_reason=view.last_state_reason,
-            plan_version=view.accepted_plan.plan_version,
-            trigger_kinds=tuple(trigger_kinds),
-            final_mapping=final_mapping,
-            original_dispatches=bundle.tools.dispatch_count["candidate-discovery"],
-            repair_dispatches=bundle.tools.dispatch_count["candidate-discovery-repair"],
-            blocked_summary_dispatches=bundle.tools.dispatch_count["blocked-summary"],
             waiting_reasons=view.waiting_reasons,
         )
 
@@ -1820,7 +2049,7 @@ class InvestigationScenarioHarness:
         def operation(item, scope):
             return AgentExecutionOperation(
                 agent_id="research_agent",
-                bounded_sub_goal=item.objective,
+                bounded_sub_goal=compiled_agent_bounded_sub_goal(item),
                 context_artifact_refs=(context_ref,) if governed else (),
                 expected_artifact_types=("review",),
                 token_budget=10,
@@ -1925,6 +2154,7 @@ class InvestigationScenarioHarness:
         service = InvestigationProjectService(
             store=PostgresInvestigationProjectStore(self.postgres_url),
             queue=PostgresWorkerQueueStore(self.postgres_url),
+            clock=lambda: datetime.now(UTC),
             capabilities=RuntimeCapabilitySnapshot(capability_source),
             planner=planner,
             execution_proposer=proposer,
@@ -2047,7 +2277,7 @@ def _default_operation(subgoal: SubGoalDefinitionVersion, scope: ExecutionScope)
     if kind == "agent":
         return AgentExecutionOperation(
             agent_id=subgoal.capability_contract.operation,
-            bounded_sub_goal=subgoal.objective,
+            bounded_sub_goal=compiled_agent_bounded_sub_goal(subgoal),
             expected_artifact_types=("evidence",),
             token_budget=10,
             cost_budget=1,

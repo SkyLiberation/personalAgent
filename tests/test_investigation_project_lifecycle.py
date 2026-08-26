@@ -47,6 +47,23 @@ def test_agent_submission_outcome_unknown_pauses_without_blind_retry(
     assert result.outcomes == ()
 
 
+def test_terminal_child_agent_failure_replans_without_crashing_worker(
+    postgres_url,
+    temp_dir,
+):
+    result = InvestigationScenarioHarness(
+        postgres_url,
+        temp_dir,
+    ).terminal_agent_failure_replans_without_crashing_worker()
+
+    assert result.waiting_reasons == (), result.waiting_reasons
+    assert result.state == "completed", result
+    assert result.plan_version == 2
+    assert result.provider_submissions == 2
+    assert len(result.outcomes) == 1
+    assert result.active_reservations == ()
+
+
 def test_completing_state_recovers_without_repeating_final_synthesis(
     postgres_url,
     temp_dir,
@@ -118,7 +135,10 @@ def test_verification_gap_requires_runnable_repair_without_replaying_frozen_work
     assert result.final_mapping == ("candidate-discovery-repair",)
     assert result.waiting_reasons == ()
     assert len(result.feedback_received) == 1
-    assert "frozen unsatisfied execution" in result.feedback_received[0].required_repair
+    assert (
+        "independently runnable repair work"
+        in result.feedback_received[0].required_repair
+    )
 
 
 def test_repeated_equivalent_repair_feedback_pauses_at_configured_limit(
@@ -153,6 +173,24 @@ def test_execution_admission_rejection_repairs_locally_without_replanning(
     assert result.tool_dispatches == 1
 
 
+def test_agent_budget_admission_repairs_locally_before_provider_submission(
+    postgres_url,
+    temp_dir,
+):
+    result = InvestigationScenarioHarness(
+        postgres_url,
+        temp_dir,
+    ).agent_budget_admission_repairs_locally()
+
+    assert result.state == "completed"
+    assert result.plan_version == 1
+    assert result.planner_calls == 1
+    assert result.proposer_calls == 3
+    assert result.provider_submissions == 1
+    assert result.accepted_token_budget == 10
+    assert result.accepted_cost_budget == 1.0
+
+
 def test_repeated_execution_admission_feedback_pauses_without_replanning(
     postgres_url,
     temp_dir,
@@ -172,37 +210,70 @@ def test_repeated_execution_admission_feedback_pauses_without_replanning(
     assert "repair limit reached" in result.waiting_reasons[0].detail
 
 
-def test_transitive_frozen_dependency_deadlock_requests_a_new_plan_revision(
+def test_parallel_budget_dispatches_affordable_work_before_pausing(
     postgres_url,
     temp_dir,
 ):
     result = InvestigationScenarioHarness(
         postgres_url,
         temp_dir,
-    ).transitive_deadlock_replans_after_repair()
-
-    assert result.state == "completed", result
-    assert result.plan_version == 3
-    assert result.trigger_kinds == ("verification_gap", "coverage_deadlock")
-    assert result.final_mapping == ("candidate-discovery-repair",)
-    assert result.original_dispatches == 1
-    assert result.repair_dispatches == 1
-    assert result.blocked_summary_dispatches == 0
-    assert result.waiting_reasons == ()
-
-
-def test_parallel_budget_admission_releases_prepared_work_and_pauses(
-    postgres_url,
-    temp_dir,
-):
-    result = InvestigationScenarioHarness(
-        postgres_url,
-        temp_dir,
-    ).parallel_budget_exhaustion_fails_closed()
+    ).parallel_budget_dispatches_affordable_subset()
 
     assert result.state == "paused"
     assert result.state_reason == "budget_exhausted"
     assert [item.reason for item in result.waiting_reasons] == ["budget_exhausted"]
-    assert result.first_dispatches == 0
+    assert result.first_dispatches == 1
     assert result.second_dispatches == 0
     assert result.completion_report is None
+
+
+def test_pending_agent_result_yields_the_current_process_cycle(
+    postgres_url,
+    temp_dir,
+):
+    result = InvestigationScenarioHarness(
+        postgres_url,
+        temp_dir,
+    ).pending_agent_yields_current_process_cycle()
+
+    assert result.first_state == "active"
+    assert result.first_dispatches == 1
+    assert result.linked_agent_run_count == 1
+    assert result.continuation_delay_seconds >= 4.5
+    assert result.continuation_immediately_leaseable is False
+    assert 0 <= result.continuation_resume_lag_seconds < 1
+    assert result.completed_state == "completed"
+    assert result.total_dispatches == 2
+
+
+def test_provider_capacity_wait_releases_budget_and_yields_worker_cycle(
+    postgres_url,
+    temp_dir,
+):
+    result = InvestigationScenarioHarness(
+        postgres_url,
+        temp_dir,
+    ).provider_capacity_wait_releases_budget_and_yields()
+
+    assert result.first_state == "active"
+    assert result.active_reservations == ()
+    assert result.first_provider_submissions == 0
+    assert result.completed_state == "completed"
+    assert result.total_provider_submissions == 1
+
+
+def test_parallel_provider_capacity_wait_is_retryable_not_persistently_blocked(
+    postgres_url,
+    temp_dir,
+):
+    result = InvestigationScenarioHarness(
+        postgres_url,
+        temp_dir,
+    ).parallel_provider_capacity_wait_retries_without_waiting_reason()
+
+    assert result.first_state == "active"
+    assert result.first_waiting_reasons == ()
+    assert result.first_active_reservations == ()
+    assert result.first_provider_submissions == 1
+    assert result.completed_state == "completed"
+    assert result.total_provider_submissions == 2

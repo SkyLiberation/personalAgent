@@ -15,7 +15,7 @@ from personal_agent.kernel.contracts.capability_values import (
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
-DEFAULT_GENERATIVE_MODEL = "gpt-5.4-mini"
+DEFAULT_GENERATIVE_MODEL = "deepseek-v4-flash"
 
 
 class _StrictBase(BaseModel):
@@ -96,7 +96,7 @@ class FirecrawlConfig(_StrictBase):
 
 
 class WebSearchConfig(_StrictBase):
-    provider: str = "tavily"
+    provider: str = "anysearch"
     api_key: str | None = None
     base_url: str | None = None
     timeout_ms: int = 60000
@@ -106,13 +106,14 @@ class WebSearchConfig(_StrictBase):
 
 class GPTResearcherA2AConfig(_StrictBase):
     enabled: bool = False
-    endpoint: str = "http://127.0.0.1:8001/a2a"
-    agent_card_url: str = "http://127.0.0.1:8001/.well-known/agent-card.json"
-    timeout_seconds: float = 120.0
+    endpoint: str = "http://127.0.0.1:18001/a2a"
+    agent_card_url: str = "http://127.0.0.1:18001/.well-known/agent-card.json"
+    timeout_seconds: float = 240.0
     report_type: str = "research_report"
     report_source: str = "web"
     tone: str = "Objective"
     max_search_results: int | None = None
+    max_concurrent_runs: int = Field(default=4, ge=1)
 
 
 class InteractionLoopConfig(_StrictBase):
@@ -271,7 +272,7 @@ class LangExtractConfig(_StrictBase):
     """
 
     api_key: str | None = None
-    base_url: str = "https://n.tokeness.io/v1"
+    base_url: str = "https://api.deepseek.com"
     model_id: str = DEFAULT_GENERATIVE_MODEL
     max_char_buffer: int = 6000
     extraction_passes: int = 1
@@ -326,21 +327,6 @@ class AskConfig(_StrictBase):
     knowledge_claim_sensitive_quota: int = 3
 
 
-class ShortTermMemoryConfig(_StrictBase):
-    """短期记忆（thread 对话）进 prompt 前的统一裁剪策略。"""
-
-    max_messages: int = 12              # 进 prompt 的对话最大消息数
-    token_budget: int = 1500            # 对话上下文总 token 预算
-    per_message_char_limit: int = 1200  # 单条消息截断阈值（字符）
-    char_budget: int = 800              # planner 等纯文本场景的字符预算
-    rolling_summary_enabled: bool = True
-    rolling_summary_trigger: int = 20   # 累计消息数达到此值才触发溢出滚动摘要
-    tokenizer_enabled: bool = True      # 优先使用 tiktoken，缺失时回退到字符启发式
-    tokenizer_encoding: str = "cl100k_base"
-    cjk_chars_per_token: float = 1.5
-    latin_chars_per_token: float = 4.0
-
-
 class PolicyConfig(_StrictBase):
     """Programmable allow/deny overrides for the unified policy engine.
 
@@ -356,19 +342,6 @@ class PolicyConfig(_StrictBase):
     deny_tools: tuple[str, ...] = ()
     deny_scopes: tuple[str, ...] = ()
     require_confirmation_for_high_risk: bool = True
-
-
-class GuardrailsConfig(_StrictBase):
-    """Content guardrails: prompt-injection / PII / sensitive-output handling.
-
-    Default ``mode='sanitize'`` neutralizes/redacts and lets content through;
-    only ``mode='block'`` rejects high-confidence malicious input. ``log_only``
-    records verdicts without changing content (rollout/observation phase).
-    """
-
-    enabled: bool = True
-    mode: str = "sanitize"  # sanitize | block | log_only
-    redact_pii: bool = True
 
 
 class ReflectionReplaySettings(_StrictBase):

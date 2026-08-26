@@ -1,5 +1,6 @@
 from personal_agent.application.capture.models import UploadCaptureRequest, UrlCaptureResult
 from personal_agent.application.capture.providers import (
+    AnySearchWebSearchProvider,
     BuiltinUrlCaptureProvider,
     DefaultUploadCaptureProvider,
     FirecrawlUrlCaptureProvider,
@@ -14,6 +15,7 @@ from personal_agent.application.capture.ingestion_pipeline import IngestionPipel
 from personal_agent.application.capture.service import CaptureService
 
 __all__ = [
+    "AnySearchWebSearchProvider",
     "BuiltinUrlCaptureProvider",
     "CaptureService",
     "DefaultUploadCaptureProvider",

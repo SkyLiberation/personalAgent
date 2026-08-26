@@ -62,7 +62,8 @@ Retriever/Evidence Engine 负责候选归一、去重、融合、rerank、压缩
 
 ```text
 Conversation
-  -> KnowledgeService.select_evidence() -> personal_knowledge_context
+  -> model-selected search_personal_knowledge
+  -> scope-filtered personal evidence tool_result
   -> optional governed read-only Tool Observations
   -> one FinalMessage
 ```

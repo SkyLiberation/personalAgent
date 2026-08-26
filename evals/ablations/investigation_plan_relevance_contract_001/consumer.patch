@@ -1,0 +1,12 @@
+diff --git a/src/personal_agent/application/investigation_project/model_ports.py b/src/personal_agent/application/investigation_project/model_ports.py
+--- a/src/personal_agent/application/investigation_project/model_ports.py
++++ b/src/personal_agent/application/investigation_project/model_ports.py
+@@ -100,7 +100,7 @@ class _DerivedRequirementDraft(_Model):
+     requirement_id: str = Field(min_length=1)
+     statement: str = Field(min_length=1)
+     acceptance_contract: str = Field(min_length=1)
+-    completion_relevance: RequirementRelevance = "required"
++    completion_relevance: Literal["required", "informational"] = "required"
+     mapped_logical_subgoal_ids: tuple[str, ...] = Field(min_length=1)
+
+

@@ -23,6 +23,7 @@ from personal_agent.capabilities.contracts.model import (
     sealed_context_projection_ref,
 )
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
+from personal_agent.kernel.contracts.derivation import canonical_digest
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
 from personal_agent.kernel.contracts.scope import (
     ExecutionScope,
@@ -39,7 +40,7 @@ from .context_materialization import (
     READ_ACTION_OUTPUT_CAPABILITY,
     materialize_interaction_inputs,
 )
-from .interaction_prompt import build_interaction_system_prompt
+from .interaction_prompt import _review_instruction, build_interaction_system_prompt
 from .errors import (
     ConversationOperationConflict,
     ConversationOperationNotFound,
@@ -57,6 +58,7 @@ from .models import (
     AgentTurnDecisionWithPlan,
     CommittedUsage,
     ConversationInteractionMode,
+    ConversationExecutionLifecycle,
     ConversationKnowledgeSaveOperation,
     ConversationMessage,
     ConversationTurnView,
@@ -73,6 +75,8 @@ from .models import (
     PrepareKnowledgeDeleteArguments,
     ProjectReference,
     ReadActionOutputArguments,
+    ReviewCriteria,
+    SearchPersonalKnowledgeArguments,
     StartDurableInvestigationArguments,
     SteerInvestigationProjectArguments,
     ToolCallProposal,
@@ -87,11 +91,12 @@ from .ports import (
     InteractionArtifactPort,
     InteractionToolPort,
 )
-from .review_admission import (
-    ReviewCriteria,
-    derive_review_criteria,
-    ungrounded_criteria_feedback,
+from .interaction_intent import (
+    AdmittedInteractionIntent,
+    derive_interaction_intent,
+    ungrounded_lifecycle_feedback,
 )
+from .interaction_intent import ungrounded_criteria_feedback
 from .verification_admission import observed_receipts
 from .working_plan import (
     admit_action_plan_bindings,
@@ -99,14 +104,16 @@ from .working_plan import (
     admit_new_plan_interaction_mode,
     admit_plan_wait_boundary,
     admit_working_plan,
+    is_terminal_working_plan,
     required_plan_review_feedback,
+    supersede_pending_working_plan,
 )
 
 
 _KNOWLEDGE_SAVE_CAPABILITY = "prepare_conversation_knowledge_save"
 _VERIFICATION_CAPABILITY = "verify_interaction_draft"
 _LIST_PERSONAL_KNOWLEDGE_CAPABILITY = "list_personal_knowledge"
-_PERSONAL_KNOWLEDGE_CONTEXT_CAPABILITY = "personal_knowledge_context"
+_SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY = "search_personal_knowledge"
 _PREPARE_KNOWLEDGE_DELETE_CAPABILITY = "prepare_knowledge_delete"
 _START_DURABLE_INVESTIGATION_CAPABILITY = "start_durable_investigation"
 _PROJECT_CONTEXT_CAPABILITY = "investigation_project_context"
@@ -153,6 +160,9 @@ class ConversationService:
         self._project_port = project_port
         self._run_conversation_ids: dict[str, str] = {}
         self._run_project_references: dict[str, ProjectReference] = {}
+        self._run_execution_lifecycles: dict[
+            str, ConversationExecutionLifecycle
+        ] = {}
         if agent_port is not None and artifact_port is None:
             raise ValueError(
                 "agent delegation requires the canonical Artifact read port"
@@ -202,6 +212,9 @@ class ConversationService:
             else self._journal.working_plan(conversation_id, principal)
         )
         self._run_conversation_ids[run_ref] = conversation_id
+        self._run_execution_lifecycles[run_ref] = (
+            prior.execution_lifecycle if prior is not None else "conversation"
+        )
         if linked_project is not None:
             self._run_project_references[run_ref] = linked_project
         capabilities = self._effective_capabilities(
@@ -271,33 +284,8 @@ class ConversationService:
         answer_only_pending = bool(
             prior is not None
             and prior.final_message is None
-            and working_plan is not None
-            and all(step.status == "completed" for step in working_plan.steps)
+            and is_terminal_working_plan(working_plan)
         )
-        if self._knowledge_reader is not None and not any(
-            isinstance(item, ActionObservation)
-            and item.capability_id == _PERSONAL_KNOWLEDGE_CONTEXT_CAPABILITY
-            for item in inputs
-        ):
-            evidence = self._knowledge_reader.select_personal_evidence(
-                question=messages[-1].content,
-                owner_id=principal.principal_id,
-                user_id=principal.user_id,
-                limit=8,
-            )
-            if (
-                evidence.citations
-                or evidence.claim_summaries
-                or evidence.conflicted_claim_ids
-                or evidence.potential_conflicted_claim_ids
-            ):
-                inputs.append(ActionObservation(
-                    kind="context_evidence",
-                    action_id="context-personal-knowledge",
-                    capability_id=_PERSONAL_KNOWLEDGE_CONTEXT_CAPABILITY,
-                    status="succeeded",
-                    payload=evidence.model_dump(mode="json"),
-                ))
         if (
             linked_project is not None
             and self._project_port is not None
@@ -330,10 +318,21 @@ class ConversationService:
                         "error": str(error),
                     },
                 ))
+        execution_lifecycle = self._run_execution_lifecycles[run_ref]
         if review_criteria is None:
-            review_criteria, derivation_response = self._derive_review_criteria(messages)
-            if derivation_response is not None:
+            intent, derivation_responses, derivation_feedback = (
+                self._derive_interaction_intent(messages)
+            )
+            review_criteria = intent.review_criteria
+            execution_lifecycle = (
+                "conversation"
+                if linked_project is not None
+                else intent.execution_lifecycle
+            )
+            self._run_execution_lifecycles[run_ref] = execution_lifecycle
+            for derivation_response in derivation_responses:
                 usage = self._record_model_usage(usage, derivation_response)
+            inputs.extend(derivation_feedback)
             if review_criteria.requires_review and not self._verification_available():
                 inputs.append(self._verification_unavailable_feedback())
                 review_criteria = ReviewCriteria()
@@ -341,6 +340,14 @@ class ConversationService:
                 review_criteria.ungrounded_spans and not review_criteria.requires_review
             ):
                 inputs.append(ungrounded_criteria_feedback(review_criteria))
+            if not intent.lifecycle_grounded:
+                inputs.append(ungrounded_lifecycle_feedback())
+            if (
+                working_plan is not None
+                and review_criteria.final_result_required
+                and any(step.status == "pending" for step in working_plan.steps)
+            ):
+                working_plan = supersede_pending_working_plan(working_plan)
             self._commit(
                 run_ref,
                 principal,
@@ -353,8 +360,33 @@ class ConversationService:
                 review_criteria=review_criteria,
                 working_plan=working_plan,
             )
+        if execution_lifecycle == "durable_investigation":
+            return self._start_durable_investigation(
+                conversation_id=conversation_id,
+                run_ref=run_ref,
+                principal=principal,
+                owner=owner,
+                messages=messages,
+                inputs=inputs,
+                usage=usage,
+                execution_order=execution_order,
+                concurrent_batches=concurrent_batches,
+                context_composition=context_composition,
+                review_criteria=review_criteria,
+                linked_project=linked_project,
+                working_plan=working_plan,
+            )
 
         while True:
+            # A completed canonical plan has no executable work left.  Force the
+            # runtime-owned completion phase even if the last model proposal also
+            # contains speculative tool calls; otherwise those calls can consume
+            # every model turn after all required steps are already complete.
+            if (
+                working_plan is not None
+                and is_terminal_working_plan(working_plan)
+            ):
+                answer_only_pending = True
             if answer_only_pending:
                 if usage.total_tokens >= self._budget_policy.max_total_tokens:
                     return self._budget_exhausted(
@@ -373,6 +405,8 @@ class ConversationService:
                 decision, completion_response = self._decide_answer_only(
                     messages=messages,
                     inputs=tuple(inputs),
+                    review_criteria=review_criteria,
+                    working_plan=working_plan,
                 )
                 usage = self._record_model_usage(
                     usage,
@@ -470,6 +504,33 @@ class ConversationService:
                         working_plan=working_plan,
                     )
                     continue
+                if (
+                    decision.disposition != "answer"
+                    and self._has_failed_action_observation(inputs)
+                ):
+                    self._commit(
+                        run_ref,
+                        principal,
+                        messages,
+                        inputs,
+                        usage,
+                        execution_order,
+                        concurrent_batches,
+                        context_composition,
+                        review_criteria=review_criteria,
+                        final_message=decision,
+                        working_plan=working_plan,
+                    )
+                    return ConversationTurnView(
+                        interaction_run_ref=run_ref,
+                        conversation_id=conversation_id,
+                        disposition=decision.disposition,
+                        message=ConversationMessage(
+                            role="assistant", content=decision.message.strip()
+                        ),
+                        project_reference=self._run_project_references.get(run_ref),
+                        working_plan=working_plan,
+                    )
                 if review_criteria.requires_review and decision.disposition != "answer":
                     inputs.append(self._review_answer_required_feedback(decision))
                     self._commit(
@@ -632,36 +693,6 @@ class ConversationService:
                         working_plan=working_plan,
                     )
                     continue
-                if decision.wait_for_user and review_criteria.requires_review:
-                    verified, result, usage = self._verify_plan_before_review(
-                        decision,
-                        working_plan=decision.working_plan,
-                        review_criteria=review_criteria,
-                        conversation_id=conversation_id,
-                        run_ref=run_ref,
-                        principal=principal,
-                        owner=owner,
-                        source_platform=source_platform,
-                        usage=usage,
-                        attempt=len(execution_order),
-                    )
-                    inputs.append(result.interaction_input)
-                    execution_order.append(result.action_id)
-                    if not verified:
-                        inputs.append(self._plan_verification_feedback(result))
-                        self._commit(
-                            run_ref,
-                            principal,
-                            messages,
-                            inputs,
-                            usage,
-                            execution_order,
-                            concurrent_batches,
-                            context_composition,
-                            review_criteria=review_criteria,
-                            working_plan=working_plan,
-                        )
-                        continue
                 feedback, admitted_plan = admit_working_plan(
                     decision.working_plan,
                     current=working_plan,
@@ -690,14 +721,14 @@ class ConversationService:
                         continue
                 working_plan = admitted_plan
                 answer_only_pending = bool(
-                    working_plan is not None
-                    and all(step.status == "completed" for step in working_plan.steps)
+                    is_terminal_working_plan(working_plan)
                     and not decision.actions
                     and not decision.wait_for_user
                 )
             action_plan_feedback = admit_action_plan_bindings(
                 decision.actions,
                 working_plan=working_plan,
+                inputs=tuple(inputs),
             )
             if action_plan_feedback is not None:
                 inputs.append(action_plan_feedback)
@@ -869,78 +900,6 @@ class ConversationService:
                     conversation_id,
                     run_ref,
                     operation,
-                )
-
-            project_actions = [
-                action
-                for action in decision.actions
-                if isinstance(action, ToolCallProposal)
-                and action.tool_name == _START_DURABLE_INVESTIGATION_CAPABILITY
-            ]
-            if project_actions:
-                action = project_actions[0]
-                feedback, arguments = self._admit_project_start(
-                    action,
-                    all_actions=decision.actions,
-                    linked_project_reference=linked_project,
-                )
-                if feedback is not None:
-                    inputs.append(feedback)
-                    self._commit(
-                        run_ref,
-                        principal,
-                        messages,
-                        inputs,
-                        usage,
-                        execution_order,
-                        concurrent_batches,
-                        context_composition,
-                    review_criteria=review_criteria,
-                    working_plan=working_plan,
-                )
-                    continue
-                try:
-                    project_reference = self._project_port.start(
-                        principal=principal,
-                        owner=owner,
-                        request=arguments,
-                        idempotency_key=sha256(
-                            f"{run_ref}:{action.action_id}".encode("utf-8")
-                        ).hexdigest(),
-                    )
-                except (KeyError, PermissionError, ValueError) as error:
-                    inputs.append(self._application_operation_feedback(action, error))
-                    self._commit(
-                        run_ref,
-                        principal,
-                        messages,
-                        inputs,
-                        usage,
-                        execution_order,
-                        concurrent_batches,
-                        context_composition,
-                        review_criteria=review_criteria,
-                    )
-                    continue
-                execution_order.append(action.action_id)
-                self._run_project_references[run_ref] = project_reference
-                self._commit(
-                    run_ref,
-                    principal,
-                    messages,
-                    inputs,
-                    usage,
-                    execution_order,
-                    concurrent_batches,
-                    context_composition,
-                    review_criteria=review_criteria,
-                    project_reference=project_reference,
-                    working_plan=working_plan,
-                )
-                return self._project_turn_view(
-                    conversation_id,
-                    run_ref,
-                    project_reference,
                 )
 
             results, usage, concurrent = self._execute_actions(
@@ -1204,8 +1163,8 @@ class ConversationService:
             project_reference=project_reference,
         )
 
-    def _derive_review_criteria(self, messages):
-        """Derive this interaction's frozen verification standard.
+    def _derive_interaction_intent(self, messages):
+        """Derive this interaction's lifecycle and frozen verification standard.
 
         Runs once per interaction, before the first decision turn, so the
         standard exists before there is any answer to measure against it. A
@@ -1213,9 +1172,220 @@ class ConversationService:
         runtime-invented criterion.
         """
         try:
-            return derive_review_criteria(self._model_client, messages=messages)
+            return derive_interaction_intent(self._model_client, messages=messages)
         except Exception:
-            return ReviewCriteria(), None
+            return AdmittedInteractionIntent(), (), ()
+
+    def _compile_durable_investigation(self, messages):
+        visible_messages = [{
+            "role": "system",
+            "content": (
+                "Compile the user-selected durable investigation into its canonical "
+                "request. Preserve the complete user goal and every explicit result, "
+                "source, language, timing, and acceptance condition. Requirements "
+                "describe necessary user-visible results with testable acceptance "
+                "contracts. Do not choose tools, agents, plans, or implementation steps, "
+                "and do not add scope."
+            ),
+        }]
+        visible_messages.extend(
+            message.model_dump(mode="json") for message in messages
+        )
+        response = self._generate_model(StructuredModelRequest(
+            operation="durable_investigation_start_proposal",
+            version="v1",
+            messages=visible_messages,
+            output_type=StartDurableInvestigationArguments,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="durable_investigation_start_proposal",
+                messages=visible_messages,
+            ),
+            temperature=0,
+            max_tokens=1_200,
+            metadata={"component": "conversation_durable_investigation_start"},
+        ))
+        return response.value, response
+
+    def _start_durable_investigation(
+        self,
+        *,
+        conversation_id,
+        run_ref,
+        principal,
+        owner,
+        messages,
+        inputs,
+        usage,
+        execution_order,
+        concurrent_batches,
+        context_composition,
+        review_criteria,
+        linked_project,
+        working_plan,
+    ):
+        action_id = "start-durable-investigation"
+        if self._project_port is None:
+            feedback = DecisionFeedback(
+                action_id=action_id,
+                reason_code="capability_missing",
+                message="Durable investigation is unavailable.",
+                immutable_fields=("messages",),
+                required_repair=(
+                    "Explain the limitation; do not claim background work started."
+                ),
+                disposition="fail_closed",
+            )
+            return self._durable_start_failure(
+                conversation_id=conversation_id,
+                run_ref=run_ref,
+                principal=principal,
+                messages=messages,
+                inputs=inputs,
+                usage=usage,
+                execution_order=execution_order,
+                concurrent_batches=concurrent_batches,
+                context_composition=context_composition,
+                review_criteria=review_criteria,
+                working_plan=working_plan,
+                feedback=feedback,
+            )
+        try:
+            arguments, response = self._compile_durable_investigation(messages)
+            usage = self._record_model_usage(usage, response, model_turn=True)
+        except ConversationUnavailable:
+            feedback = DecisionFeedback(
+                action_id=action_id,
+                reason_code="durable_investigation_compilation_unavailable",
+                message="The durable investigation request could not be compiled.",
+                immutable_fields=("messages",),
+                required_repair=(
+                    "Do not start foreground work or claim that background work started."
+                ),
+                disposition="fail_closed",
+            )
+            return self._durable_start_failure(
+                conversation_id=conversation_id,
+                run_ref=run_ref,
+                principal=principal,
+                messages=messages,
+                inputs=inputs,
+                usage=usage,
+                execution_order=execution_order,
+                concurrent_batches=concurrent_batches,
+                context_composition=context_composition,
+                review_criteria=review_criteria,
+                working_plan=working_plan,
+                feedback=feedback,
+            )
+        action = ToolCallProposal(
+            action_id=action_id,
+            tool_name=_START_DURABLE_INVESTIGATION_CAPABILITY,
+            arguments=arguments.model_dump(mode="json"),
+        )
+        feedback, admitted_arguments = self._admit_project_start(
+            action,
+            all_actions=(action,),
+            linked_project_reference=linked_project,
+        )
+        if feedback is not None:
+            return self._durable_start_failure(
+                conversation_id=conversation_id,
+                run_ref=run_ref,
+                principal=principal,
+                messages=messages,
+                inputs=inputs,
+                usage=usage,
+                execution_order=execution_order,
+                concurrent_batches=concurrent_batches,
+                context_composition=context_composition,
+                review_criteria=review_criteria,
+                working_plan=working_plan,
+                feedback=feedback,
+            )
+        try:
+            project_reference = self._project_port.start(
+                principal=principal,
+                owner=owner,
+                request=admitted_arguments,
+                idempotency_key=sha256(
+                    f"{run_ref}:{action_id}".encode("utf-8")
+                ).hexdigest(),
+            )
+        except (KeyError, PermissionError, ValueError) as error:
+            return self._durable_start_failure(
+                conversation_id=conversation_id,
+                run_ref=run_ref,
+                principal=principal,
+                messages=messages,
+                inputs=inputs,
+                usage=usage,
+                execution_order=execution_order,
+                concurrent_batches=concurrent_batches,
+                context_composition=context_composition,
+                review_criteria=review_criteria,
+                working_plan=working_plan,
+                feedback=self._application_operation_feedback(action, error),
+            )
+        execution_order.append(action_id)
+        self._run_project_references[run_ref] = project_reference
+        self._commit(
+            run_ref,
+            principal,
+            messages,
+            inputs,
+            usage,
+            execution_order,
+            concurrent_batches,
+            context_composition,
+            review_criteria=review_criteria,
+            project_reference=project_reference,
+            working_plan=working_plan,
+        )
+        return self._project_turn_view(conversation_id, run_ref, project_reference)
+
+    def _durable_start_failure(
+        self,
+        *,
+        conversation_id,
+        run_ref,
+        principal,
+        messages,
+        inputs,
+        usage,
+        execution_order,
+        concurrent_batches,
+        context_composition,
+        review_criteria,
+        working_plan,
+        feedback,
+    ):
+        inputs.append(feedback)
+        final = FinalMessage(
+            disposition="limitation",
+            message=(
+                "无法启动后台调查；当前请求未降级为前台执行，也没有创建调查项目。"
+            ),
+        )
+        self._commit(
+            run_ref,
+            principal,
+            messages,
+            inputs,
+            usage,
+            execution_order,
+            concurrent_batches,
+            context_composition,
+            review_criteria=review_criteria,
+            final_message=final,
+            working_plan=working_plan,
+        )
+        return ConversationTurnView(
+            interaction_run_ref=run_ref,
+            conversation_id=conversation_id,
+            disposition="limitation",
+            message=ConversationMessage(role="assistant", content=final.message),
+            working_plan=working_plan,
+        )
 
     @staticmethod
     def _record_model_usage(usage, response, *, model_turn=False):
@@ -1278,6 +1448,18 @@ class ConversationService:
                 "review or verification was performed."
             ),
             disposition="fail_closed",
+        )
+
+    @staticmethod
+    def _has_failed_action_observation(inputs) -> bool:
+        return any(
+            isinstance(item, ActionObservation)
+            and item.kind == "tool_result"
+            and (
+                item.status == "failed"
+                or item.payload.get("ok") is False
+            )
+            for item in inputs
         )
 
     @staticmethod
@@ -1348,10 +1530,10 @@ class ConversationService:
         return next(iter(offloaded), None)
 
     @staticmethod
-    def _unread_offloaded_resources(inputs) -> dict[str, str]:
-        """Map unread artifact ids to the capability that produced them."""
+    def _unread_offloaded_resources(inputs) -> dict[str, tuple[str, str | None]]:
+        """Map unread artifact ids to the exact request that produced them."""
 
-        offloaded: dict[str, str] = {}
+        offloaded: dict[str, tuple[str, str | None]] = {}
         for item in inputs:
             if not isinstance(item, ActionObservation):
                 continue
@@ -1365,7 +1547,10 @@ class ConversationService:
             if isinstance(reference, dict) and "resource_ref" in reference:
                 resource_id = str(reference["resource_ref"].get("resource_id", ""))
                 if resource_id:
-                    offloaded[resource_id] = item.capability_id
+                    offloaded[resource_id] = (
+                        item.capability_id,
+                        item.execution_request_digest,
+                    )
         return offloaded
 
     def _verify_before_send(
@@ -1401,6 +1586,12 @@ class ConversationService:
                 arguments={
                     "draft": decision.message,
                     "success_criteria": list(review_criteria.criteria),
+                    "evidence_refs": list(
+                        self._journal.conversation_evidence_refs(
+                            conversation_id,
+                            principal,
+                        )
+                    ),
                 },
             ),
             (conversation_id, run_ref, principal, owner, source_platform),
@@ -1420,75 +1611,6 @@ class ConversationService:
             FinalMessage(disposition="answer", message=passed.verified_draft),
             result,
             usage,
-        )
-
-    def _verify_plan_before_review(
-        self,
-        decision,
-        *,
-        working_plan,
-        review_criteria,
-        conversation_id,
-        run_ref,
-        principal,
-        owner,
-        source_platform,
-        usage,
-        attempt,
-    ):
-        """Verify the exact user-visible plan projection before exposing it."""
-        action_id = f"runtime-verify-plan-{attempt}"
-        draft = json.dumps(
-            {
-                "message": decision.message.strip(),
-                "working_plan": working_plan.model_dump(mode="json"),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        result = self._execute_one(
-            ToolCallProposal(
-                action_id=action_id,
-                tool_name=_VERIFICATION_CAPABILITY,
-                arguments={
-                    "draft": draft,
-                    "success_criteria": list(review_criteria.criteria),
-                },
-            ),
-            (conversation_id, run_ref, principal, owner, source_platform),
-        )
-        usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
-        receipts = observed_receipts(
-            (result.interaction_input,),
-            capability_names=frozenset({_VERIFICATION_CAPABILITY}),
-        )
-        return (
-            any(receipt.verdict == "passed" for receipt in receipts),
-            result,
-            usage,
-        )
-
-    @staticmethod
-    def _plan_verification_feedback(result):
-        receipts = observed_receipts(
-            (result.interaction_input,),
-            capability_names=frozenset({_VERIFICATION_CAPABILITY}),
-        )
-        repair = next(
-            (
-                receipt.revision_feedback
-                for receipt in receipts
-                if receipt.revision_feedback
-            ),
-            "Revise the visible plan so it satisfies every frozen user criterion.",
-        )
-        return DecisionFeedback(
-            action_id="working_plan",
-            reason_code="plan_verification_failed",
-            message="The proposed user-visible plan did not satisfy its review criteria.",
-            repairable_fields=("working_plan", "message"),
-            immutable_fields=("messages", "inputs"),
-            required_repair=repair,
         )
 
     def _decide(
@@ -1571,7 +1693,22 @@ class ConversationService:
         )
         return decision, response, composition
 
-    def _decide_answer_only(self, *, messages, inputs):
+    def _decide_answer_only(
+        self,
+        *,
+        messages,
+        inputs,
+        review_criteria,
+        working_plan,
+    ):
+        plan_goal_instruction = (
+            " Use this admitted working plan goal only to recover named subjects or "
+            "scope that the latest criteria refer to indirectly. The latest user "
+            "criteria override withdrawn work and transient instructions such as "
+            f"waiting for confirmation. Plan goal: {working_plan.goal}"
+            if working_plan is not None
+            else ""
+        )
         visible_messages = [{
             "role": "system",
             "content": (
@@ -1583,11 +1720,29 @@ class ConversationService:
                 "exhaustion unless the typed inputs contain a budget-exhaustion fact. Preserve opaque "
                 "identifiers, dates, quantities, version strings, and other exact requested "
                 "values byte-for-byte."
-            ),
+            ) + plan_goal_instruction + _review_instruction(review_criteria),
         }]
         visible_messages.extend(item.model_dump(mode="json") for item in messages)
         if inputs:
-            visible_inputs = materialize_interaction_inputs(inputs)
+            latest_verification_index = next(
+                (
+                    index
+                    for index in range(len(inputs) - 1, -1, -1)
+                    if isinstance(inputs[index], ActionObservation)
+                    and inputs[index].capability_id == _VERIFICATION_CAPABILITY
+                ),
+                None,
+            )
+            completion_inputs = tuple(
+                item
+                for index, item in enumerate(inputs)
+                if not (
+                    isinstance(item, ActionObservation)
+                    and item.capability_id == _VERIFICATION_CAPABILITY
+                    and index != latest_verification_index
+                )
+            )
+            visible_inputs = materialize_interaction_inputs(completion_inputs)
             visible_messages.append({
                 "role": "system",
                 "content": "Typed execution inputs:\n"
@@ -1608,7 +1763,7 @@ class ConversationService:
                     messages=visible_messages,
                 ),
                 temperature=0,
-                max_tokens=1_600,
+                max_tokens=3_200,
                 metadata={"component": "conversation_completion_answer"},
             )
         )
@@ -1664,11 +1819,30 @@ class ConversationService:
         if self._knowledge_reader is not None:
             tools.append(
                 EffectiveToolCapability(
+                    name=_SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY,
+                    description=(
+                        "Search the caller's personal knowledge for evidence only when the latest "
+                        "user request asks to recall or use their stored facts. Questions such as "
+                        "'what is my saved X?' or 'do I still have X saved?' are already sufficient "
+                        "requests: call without asking for a storage location or separate consent. "
+                        "Do not call when personal data is mentioned only to exclude, withhold, "
+                        "protect, or forbid its use. Return original evidence quotes and conflict "
+                        "facts."
+                    ),
+                    input_schema=SearchPersonalKnowledgeArguments.model_json_schema(),
+                    read_only=True,
+                    planning_safe=True,
+                    safely_retryable=True,
+                )
+            )
+            tools.append(
+                EffectiveToolCapability(
                     name=_LIST_PERSONAL_KNOWLEDGE_CAPABILITY,
                     description=(
                         "List the caller's current personal knowledge items with canonical "
-                        "knowledge_item_id, title, summary, and state. Use this before answering "
-                        "questions about stored personal facts or selecting a delete target."
+                        "knowledge_item_id, title, summary, and state. Use only to inspect the "
+                        "inventory or select a delete target; do not use it to answer from stored "
+                        "personal facts."
                     ),
                     input_schema=ListPersonalKnowledgeArguments.model_json_schema(),
                     read_only=True,
@@ -1685,21 +1859,6 @@ class ConversationService:
                         "knowledge item. This does not delete anything; user confirmation is required."
                     ),
                     input_schema=PrepareKnowledgeDeleteArguments.model_json_schema(),
-                    read_only=False,
-                    planning_safe=False,
-                    safely_retryable=False,
-                )
-            )
-        if self._project_port is not None and linked_project_reference is None:
-            tools.append(
-                EffectiveToolCapability(
-                    name=_START_DURABLE_INVESTIGATION_CAPABILITY,
-                    description=(
-                        "Start a durable background investigation only when the user's goal requires "
-                        "continuity across turns plus later progress inspection, pause, or steering. "
-                        "Return a project reference; do not wait for the report in this interaction."
-                    ),
-                    input_schema=StartDurableInvestigationArguments.model_json_schema(),
                     read_only=False,
                     planning_safe=False,
                     safely_retryable=False,
@@ -1991,11 +2150,16 @@ class ConversationService:
             return None
         if isinstance(action, ToolCallProposal):
             unread = self._unread_offloaded_resources(committed_inputs)
+            request_digest = canonical_digest({
+                "tool_name": action.tool_name,
+                "arguments": action.arguments,
+            })
             unread_resource = next(
                 (
                     resource_id
-                    for resource_id, capability_id in unread.items()
+                    for resource_id, (capability_id, prior_digest) in unread.items()
                     if capability_id == action.tool_name
+                    and prior_digest == request_digest
                 ),
                 None,
             )
@@ -2014,6 +2178,43 @@ class ConversationService:
                         f"for resource_id {unread_resource!r} and a keyword or start_line."
                     ),
                 )
+        if (
+            isinstance(action, ToolCallProposal)
+            and action.tool_name == _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+        ):
+            if self._knowledge_reader is None:
+                return DecisionFeedback(
+                    action_id=action.action_id,
+                    reason_code="capability_missing",
+                    message=f"Tool {action.tool_name!r} is not currently available.",
+                    immutable_fields=("action_id",),
+                    required_repair="Explain the capability limitation.",
+                    disposition="fail_closed",
+                )
+            try:
+                SearchPersonalKnowledgeArguments.model_validate(action.arguments)
+            except ValidationError as error:
+                return self._invalid_special_arguments(action, error)
+            if any(
+                isinstance(item, ActionObservation)
+                and item.capability_id == _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+                and item.status == "succeeded"
+                for item in committed_inputs
+            ):
+                return DecisionFeedback(
+                    action_id=action.action_id,
+                    reason_code="personal_knowledge_already_searched",
+                    message=(
+                        "The current interaction already has a successful authoritative "
+                        "personal-knowledge search Observation."
+                    ),
+                    immutable_fields=("action_id", "tool_name"),
+                    required_repair=(
+                        "Use the committed search Observation to continue or answer; do not "
+                        "repeat the read in this interaction."
+                    ),
+                )
+            return None
         if (
             isinstance(action, ToolCallProposal)
             and action.tool_name == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY
@@ -2323,6 +2524,27 @@ class ConversationService:
             return self._read_action_output(action, principal=principal, owner=owner)
         if (
             isinstance(action, ToolCallProposal)
+            and action.tool_name == _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+        ):
+            arguments = SearchPersonalKnowledgeArguments.model_validate(action.arguments)
+            evidence = self._knowledge_reader.select_personal_evidence(
+                question=arguments.query,
+                owner_id=owner.principal_id,
+                user_id=principal.user_id,
+                limit=arguments.limit,
+            )
+            return _ActionResult(
+                action.action_id,
+                ActionObservation(
+                    kind="tool_result",
+                    action_id=action.action_id,
+                    capability_id=action.tool_name,
+                    status="succeeded",
+                    payload=evidence.model_dump(mode="json"),
+                ),
+            )
+        if (
+            isinstance(action, ToolCallProposal)
             and action.tool_name == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY
         ):
             arguments = ListPersonalKnowledgeArguments.model_validate(action.arguments)
@@ -2400,6 +2622,10 @@ class ConversationService:
                     action_id=action.action_id,
                     capability_id=action.tool_name,
                     status="succeeded" if result.get("ok") else "failed",
+                    execution_request_digest=canonical_digest({
+                        "tool_name": action.tool_name,
+                        "arguments": action.arguments,
+                    }),
                     payload=self._fit_observation_payload(
                         result,
                         action_id=action.action_id,
@@ -2435,7 +2661,7 @@ class ConversationService:
             while run.projection.status in {"created", "queued", "running"}:
                 remaining = deadline - monotonic()
                 if remaining <= 0:
-                    run = self._agent_port.cancel(
+                    run = self._agent_port.timeout(
                         run.definition.agent_run_id,
                         gateway_context,
                     )
@@ -2619,6 +2845,10 @@ class ConversationService:
                 concurrent_batches=tuple(concurrent_batches),
                 context_composition=tuple(context_composition),
                 review_criteria=review_criteria,
+                execution_lifecycle=self._run_execution_lifecycles.get(
+                    run_ref,
+                    prior.execution_lifecycle if prior is not None else "conversation",
+                ),
                 final_message=final_message,
                 knowledge_save_operation=knowledge_save_operation,
                 knowledge_delete_command_ref=(

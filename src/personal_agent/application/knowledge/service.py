@@ -1487,8 +1487,15 @@ class KnowledgeService:
         q_terms = evidence_terms(question)
         if not q_terms:
             return []
+        candidates = self.store.search_claims(
+            owner_id,
+            tuple(q_terms),
+            states=("active", "conflicted"),
+            support_statuses=("supported", "user_asserted"),
+            limit=max(50, limit * 10),
+        )
         scored: list[tuple[int, Claim]] = []
-        for claim in self.store.list_claims(owner_id, limit=500):
+        for claim in candidates:
             if not self._claim_projection_eligible(claim, "ask"):
                 continue
             claim_terms = evidence_terms(" ".join([

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import logging
 from typing import TYPE_CHECKING
 
@@ -18,7 +19,6 @@ from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.application.knowledge import KnowledgeConsolidationUseCase
 from personal_agent.application.insight import KnowledgeGapAnalyzer, KnowledgeGapUseCase
-from personal_agent.governance.guardrails import configure_guardrails
 from personal_agent.governance.policy import PolicyEngine, PolicyRules
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
@@ -152,7 +152,6 @@ from personal_agent.orchestration.runtime_helpers import (
     _top_sentences,
 )
 from personal_agent.infra.runtime_llm import LlmClient
-from personal_agent.memory.thread_summarizer import ThreadSummarizer
 from personal_agent.application.runtime_results import (
     CaptureResult,
     DigestResult,
@@ -475,9 +474,6 @@ class AgentRuntime:
         self.store = store
         self.graph_store = graph_store
         self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
-        # Install the process-wide content guard so the entry/finalize/web seams
-        # (nodes without a context param) share one configured instance.
-        self._content_guard = configure_guardrails(settings.guardrails)
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
         self.procedure_definition_store = PostgresProcedureDefinitionStore(
             settings.postgres_url
@@ -651,6 +647,7 @@ class AgentRuntime:
         self.investigation_project_service = InvestigationProjectService(
             store=self.investigation_project_store,
             queue=self.worker_queue_store,
+            clock=lambda: datetime.now(UTC),
             capabilities=RuntimeCapabilitySnapshot(self.capability_inventory),
             planner=investigation_planner,
             execution_proposer=investigation_execution_proposer,
@@ -658,7 +655,10 @@ class AgentRuntime:
                 self._tool_executor,
                 self.artifact_service,
             ),
-            agent_port=DurableProjectAgentAdapter(self._agent_gateway),
+            agent_port=DurableProjectAgentAdapter(
+                self._agent_gateway,
+                self.artifact_service,
+            ),
             synthesis_port=investigation_synthesis,
             verifier=investigation_verifier,
             artifact_writer=self.artifact_service,
@@ -692,7 +692,6 @@ class AgentRuntime:
         self._step_projection_validator = StepProjectionValidator(
             tool_executor=self._tool_executor
         )
-        self._summarizer = ThreadSummarizer(self._llm)
 
     @property
     def agent_gateway(self) -> AgentGateway:
@@ -914,12 +913,6 @@ class AgentRuntime:
 
     def _generate_answer_stream(self, prompt: str):
         return self._llm.generate_answer_stream(prompt)
-
-    def summarize_chat(self, messages_text: str, user_id: str = "default") -> str:
-        return self._summarizer.summarize_chat(messages_text, user_id)
-
-    def compress_context(self, messages_text: str, user_id: str = "default") -> str:
-        return self._summarizer.compress_context(messages_text, user_id)
 
     # ---- ingestion pipeline (capture → graph) ----
 

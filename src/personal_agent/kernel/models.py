@@ -33,41 +33,6 @@ class EntryInput(BaseModel):
     artifacts: list[ResourceRef] = Field(default_factory=list)
 
 
-class ThreadSummary(BaseModel):
-    """Structured short-term summary persisted in the thread checkpoint.
-
-    This is a dialogue cue, not a factual evidence source. Fields deliberately
-    separate confirmed user state from assistant-side guesses and unverified
-    claims so prompt rendering can preserve that boundary.
-    """
-
-    user_goals: list[str] = Field(default_factory=list)
-    user_constraints: list[str] = Field(default_factory=list)
-    confirmed_decisions: list[str] = Field(default_factory=list)
-    pending_tasks: list[str] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-    assistant_assumptions: list[str] = Field(default_factory=list)
-    unverified_claims: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    context_notes: list[str] = Field(default_factory=list)
-    updated_at: datetime = Field(default_factory=local_now)
-
-    def is_empty(self) -> bool:
-        return not any(
-            (
-                self.user_goals,
-                self.user_constraints,
-                self.confirmed_decisions,
-                self.pending_tasks,
-                self.open_questions,
-                self.assistant_assumptions,
-                self.unverified_claims,
-                self.evidence_refs,
-                self.context_notes,
-            )
-        )
-
-
 class Citation(BaseModel):
     note_id: str = ""
     title: str

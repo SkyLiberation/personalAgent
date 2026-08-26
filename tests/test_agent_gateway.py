@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from personal_agent.agents import AgentGateway, InMemoryAgentRunStore
+import pytest
+
+from personal_agent.agents import (
+    AgentCapacityUnavailable,
+    AgentGateway,
+    InMemoryAgentRunStore,
+)
 from personal_agent.governance.policy import PolicyEngine
 from personal_agent.capabilities.contracts.grants import DelegationGrant, GrantDependencySet
 from personal_agent.kernel.contracts.resource import (
@@ -112,6 +118,90 @@ def test_agent_gateway_submit_poll_cancel_and_stream():
     assert gateway.cancel(cancellable.definition.agent_run_id, _ctx()) == canceled
 
 
+def test_agent_gateway_records_budget_expiry_as_timeout_not_user_cancellation():
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
+    gateway.register(_FakeAgent("researcher", output="partial report"))
+    submitted = gateway.submit(
+        "researcher",
+        AgentTask("topic"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="timeout-1",
+    )
+
+    timed_out = gateway.timeout(submitted.definition.agent_run_id, _ctx())
+
+    assert timed_out.projection.status == "timed_out"
+    assert timed_out.projection.error == (
+        "child Agent exceeded its delegated time budget"
+    )
+    assert timed_out.events[-1].type == "timed_out"
+
+
+def test_agent_gateway_admits_new_async_runs_only_when_provider_slot_exists():
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
+    adapter = _FakeAgent(
+        "researcher",
+        output="report",
+        max_concurrent_runs=2,
+    )
+    gateway.register(adapter)
+
+    first = gateway.submit(
+        "researcher",
+        AgentTask("topic one"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="capacity-1",
+    )
+    gateway.submit(
+        "researcher",
+        AgentTask("topic two"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="capacity-2",
+    )
+
+    same_first = gateway.submit(
+        "researcher",
+        AgentTask("topic one"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="capacity-1",
+    )
+    assert same_first.definition.agent_run_id == first.definition.agent_run_id
+    with pytest.raises(AgentCapacityUnavailable):
+        gateway.submit(
+            "researcher",
+            AgentTask("topic three"),
+            _ctx(),
+            _grant("researcher"),
+            submission_key="capacity-3",
+        )
+    assert adapter.submit_count == 2
+    assert len(gateway.list_runs(agent_id="researcher")) == 2
+
+    gateway.poll(first.definition.agent_run_id, _ctx())
+    third = gateway.submit(
+        "researcher",
+        AgentTask("topic three"),
+        _ctx(),
+        _grant("researcher"),
+        submission_key="capacity-3",
+    )
+    assert third.projection.status == "running"
+    assert adapter.submit_count == 3
+
+
+def test_agent_governance_rejects_a_non_positive_run_capacity():
+    with pytest.raises(ValueError, match="max_concurrent_runs"):
+        AgentGovernance(max_concurrent_runs=0)
+
+
 def test_agent_gateway_keeps_multiple_agent_definitions_separate():
     gateway = AgentGateway(
         policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
@@ -130,6 +220,31 @@ def test_agent_gateway_keeps_multiple_agent_definitions_separate():
 
     assert result.run.definition.agent_id == "writer"
     assert result.output_text == "write"
+
+
+def test_agent_gateway_rejects_grant_above_registered_runtime_limit():
+    gateway = AgentGateway(
+        policy_engine=PolicyEngine(), store=InMemoryAgentRunStore()
+    )
+    adapter = _FakeAgent("researcher", output="research")
+    gateway.register(adapter)
+    oversized = _grant("researcher").model_copy(update={
+        "time_budget_seconds": adapter.profile.max_runtime_seconds + 1,
+    })
+
+    with pytest.raises(
+        PermissionError,
+        match="delegation time budget exceeds agent runtime limit",
+    ):
+        gateway.invoke(
+            "researcher",
+            AgentTask("research"),
+            _ctx(),
+            oversized,
+            submission_key="oversized-runtime-grant",
+        )
+
+    assert adapter.invoke_count == 0
 
 
 def _ctx() -> AgentGatewayContext:
@@ -173,16 +288,26 @@ def _grant(agent_id: str) -> DelegationGrant:
 
 
 class _FakeAgent:
-    def __init__(self, agent_id: str, *, output: str) -> None:
+    def __init__(
+        self,
+        agent_id: str,
+        *,
+        output: str,
+        max_concurrent_runs: int | None = None,
+    ) -> None:
         self.profile = SubagentProfile(
             agent_id=agent_id,
             provider=agent_id,
             protocol="local",
             task_types=("research",),
-            governance=AgentGovernance(permission_scope=f"a2a:{agent_id}:invoke"),
+            governance=AgentGovernance(
+                permission_scope=f"a2a:{agent_id}:invoke",
+                max_concurrent_runs=max_concurrent_runs,
+            ),
         )
         self._output = output
         self.invoke_count = 0
+        self.submit_count = 0
 
     def invoke(self, task: AgentTask, context: AgentGatewayContext) -> ChildAgentRunOutcome:
         self.invoke_count += 1
@@ -196,6 +321,7 @@ class _FakeAgent:
         *,
         submission_key: str,
     ) -> ChildAgentRunRecord:
+        self.submit_count += 1
         return self._run(task, context, status="running")
 
     def lookup_submission(

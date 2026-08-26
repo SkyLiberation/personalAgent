@@ -27,7 +27,6 @@ from personal_agent.kernel.config_models import (
     ReflectionReplaySettings,
     ResearchConfig,
     ReviewDigestConfig,
-    ShortTermMemoryConfig,
     StructuredConfig,
     WebApiConfig,
     WebSearchConfig,
@@ -181,13 +180,13 @@ def settings_from_env(settings_cls: type):
         ),
         gpt_researcher_a2a=GPTResearcherA2AConfig(
             enabled=_as_bool(os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED", "false")),
-            endpoint=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT", "http://127.0.0.1:8001/a2a"),
+            endpoint=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT", "http://127.0.0.1:18001/a2a"),
             agent_card_url=os.getenv(
                 "PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL",
-                "http://127.0.0.1:8001/.well-known/agent-card.json",
+                "http://127.0.0.1:18001/.well-known/agent-card.json",
             ),
             timeout_seconds=float(
-                os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS", "120")
+                os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS", "240")
             ),
             report_type=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_TYPE", "research_report"),
             report_source=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_SOURCE", "web"),
@@ -195,9 +194,15 @@ def settings_from_env(settings_cls: type):
             max_search_results=_parse_optional_int(
                 os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS", "")
             ),
+            max_concurrent_runs=int(
+                os.getenv(
+                    "PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_CONCURRENT_RUNS",
+                    "4",
+                )
+            ),
         ),
         web_search=WebSearchConfig(
-            provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "tavily"),
+            provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "anysearch"),
             api_key=os.getenv("PERSONAL_AGENT_WEB_SEARCH_API_KEY"),
             base_url=os.getenv("PERSONAL_AGENT_WEB_SEARCH_BASE_URL"),
             timeout_ms=int(
@@ -314,7 +319,7 @@ def settings_from_env(settings_cls: type):
             or structured_api_key,
             base_url=os.getenv("PERSONAL_AGENT_EXTRACT_BASE_URL")
             or structured_base_url
-            or "https://n.tokeness.io/v1",
+            or "https://api.deepseek.com",
             model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL")
             or structured_model,
             max_char_buffer=int(
@@ -412,38 +417,6 @@ def settings_from_env(settings_cls: type):
             ),
             llm_rerank_gated_preserve_top_k=int(
                 os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_PRESERVE_TOP_K", "0")
-            ),
-        ),
-        short_term=ShortTermMemoryConfig(
-            max_messages=int(
-                os.getenv("PERSONAL_AGENT_STM_MAX_MESSAGES", "12")
-            ),
-            token_budget=int(
-                os.getenv("PERSONAL_AGENT_STM_TOKEN_BUDGET", "1500")
-            ),
-            per_message_char_limit=int(
-                os.getenv("PERSONAL_AGENT_STM_PER_MESSAGE_CHAR_LIMIT", "1200")
-            ),
-            char_budget=int(
-                os.getenv("PERSONAL_AGENT_STM_CHAR_BUDGET", "800")
-            ),
-            rolling_summary_enabled=_as_bool(
-                os.getenv("PERSONAL_AGENT_STM_ROLLING_SUMMARY_ENABLED", "true")
-            ),
-            rolling_summary_trigger=int(
-                os.getenv("PERSONAL_AGENT_STM_ROLLING_SUMMARY_TRIGGER", "20")
-            ),
-            tokenizer_enabled=_as_bool(
-                os.getenv("PERSONAL_AGENT_STM_TOKENIZER_ENABLED", "true")
-            ),
-            tokenizer_encoding=os.getenv(
-                "PERSONAL_AGENT_STM_TOKENIZER_ENCODING", "cl100k_base"
-            ),
-            cjk_chars_per_token=float(
-                os.getenv("PERSONAL_AGENT_STM_CJK_CHARS_PER_TOKEN", "1.5")
-            ),
-            latin_chars_per_token=float(
-                os.getenv("PERSONAL_AGENT_STM_LATIN_CHARS_PER_TOKEN", "4.0")
             ),
         ),
         policy=PolicyConfig(

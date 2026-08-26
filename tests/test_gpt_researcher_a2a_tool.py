@@ -69,6 +69,27 @@ def test_gpt_researcher_a2a_adapter_uses_canonical_async_run_identity():
     assert client.calls[0]["topic"] == "Agent2Agent protocol adoption"
 
 
+def test_gpt_researcher_a2a_adapter_forwards_search_result_limit():
+    client = FakeGPTResearcherA2AClient()
+    adapter = GPTResearcherA2AAdapter(
+        GPTResearcherA2AConfig(max_search_results=5),
+        _ArtifactWriter(),
+        client,
+    )
+
+    adapter.submit(
+        AgentTask("Compare two official protocol sources"),
+        _ctx(),
+        submission_key="submission-search-limit",
+    )
+
+    assert client.calls == [{
+        "topic": "Compare two official protocol sources",
+        "submission_key": "submission-search-limit",
+        "max_search_results": 5,
+    }]
+
+
 def test_gpt_researcher_a2a_adapter_governance_metadata():
     adapter = GPTResearcherA2AAdapter(
         GPTResearcherA2AConfig(),
@@ -81,6 +102,21 @@ def test_gpt_researcher_a2a_adapter_governance_metadata():
     assert governance.side_effects == ("external_network",)
     assert governance.permission_scope == "a2a:gpt_researcher:research"
     assert governance.rate_limit_per_minute == 5
+    assert governance.max_concurrent_runs == 4
+    assert adapter.profile.max_runtime_seconds == 240
+
+
+def test_gpt_researcher_profile_declares_single_delegation_multi_source_scope():
+    adapter = GPTResearcherA2AAdapter(
+        GPTResearcherA2AConfig(),
+        _ArtifactWriter(),
+    )
+
+    description = adapter.profile.description
+
+    assert "single delegated task" in description
+    assert "multiple search queries" in description
+    assert "multiple authoritative web sources" in description
 
 
 def _ctx() -> AgentGatewayContext:

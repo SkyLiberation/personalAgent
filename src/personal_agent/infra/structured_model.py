@@ -617,7 +617,16 @@ class OpenAIModelClient:
             return "", None, str(exc)
         content = (message.content or "").strip()
         if not content:
-            return "", None, "provider returned empty structured content"
+            choice = _require_chat_choices(response)[0]
+            details: list[str] = []
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason:
+                details.append(f"finish_reason={finish_reason}")
+            output_tokens = _usage(response).get("output_tokens")
+            if output_tokens is not None:
+                details.append(f"output_tokens={output_tokens}")
+            suffix = f" ({', '.join(details)})" if details else ""
+            return "", None, "provider returned empty structured content" + suffix
         if request.output_type is BaseModel:
             return content, self._default_value(request), None
         parse_result = parse_structured(

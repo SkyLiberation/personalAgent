@@ -23,7 +23,7 @@ from personal_agent.application.conversation import (
     FinalMessage,
     InMemoryInteractionJournal,
     LoopBudgetPolicy,
-    ReviewIntent,
+    InteractionIntentProposal,
     ReviewRequirement,
     ToolCallProposal,
     WorkingPlanProposal,
@@ -42,11 +42,14 @@ from personal_agent.application.conversation.models import (
     InvestigationRequirementProgress,
     InvestigationSubgoalProgress,
     InteractionTrace,
+    StartDurableInvestigationArguments,
 )
 from personal_agent.application.conversation.working_plan import (
     admit_action_plan_bindings,
     admit_final_plan_resolution,
     admit_working_plan,
+    is_terminal_working_plan,
+    supersede_pending_working_plan,
 )
 from personal_agent.application.conversation.interaction_prompt import (
     build_interaction_system_prompt,
@@ -55,8 +58,10 @@ from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
     KnowledgeDeleteOperationView,
 )
-from personal_agent.application.conversation.review_admission import (
-    admit_review_intent,
+from personal_agent.application.conversation.interaction_intent import (
+    _DERIVATION_INSTRUCTION,
+    admit_interaction_intent,
+    derive_interaction_intent,
     ungrounded_criteria_feedback,
 )
 from personal_agent.application.conversation.verification_admission import (
@@ -115,16 +120,33 @@ class _Decisions:
     verification setup it does not exercise.
     """
 
-    def __init__(self, *items, review_intent: ReviewIntent | None = None) -> None:
+    def __init__(
+        self,
+        *items,
+        review_intent: InteractionIntentProposal | None = None,
+        review_intents: tuple[InteractionIntentProposal, ...] = (),
+        durable_request: StartDurableInvestigationArguments | None = None,
+    ) -> None:
         self.items = list(items)
         self.requests = []
-        self.review_intent = review_intent or ReviewIntent(requires_review=False)
+        self.review_intent = review_intent or InteractionIntentProposal()
+        self.review_intents = list(review_intents)
+        self.durable_request = durable_request
         self.decision_requests = []
 
     def generate(self, request):
         self.requests.append(request)
-        if request.operation == "interaction_review_criteria":
-            return self._response(self.review_intent)
+        if request.operation == "interaction_intent":
+            intent = (
+                self.review_intents.pop(0)
+                if self.review_intents
+                else self.review_intent
+            )
+            return self._response(intent)
+        if request.operation == "durable_investigation_start_proposal":
+            if self.durable_request is None:
+                raise AssertionError("unexpected durable investigation compilation")
+            return self._response(self.durable_request)
         self.decision_requests.append(request)
         item = self.items.pop(0)
         if isinstance(item, BaseException):
@@ -344,13 +366,21 @@ def test_prompt_requires_exact_preservation_of_cited_opaque_values():
     assert "must not erase them" in prompt
 
 
-def _tool(name, function, *, side_effects=("none",), emits_verified_artifact=False):
+def _tool(
+    name,
+    function,
+    *,
+    exposure="public_agent",
+    side_effects=("none",),
+    emits_verified_artifact=False,
+):
     return StructuredTool.from_function(
         func=function,
         name=name,
         description=f"Contract tool {name}",
         response_format="content_and_artifact",
         extras=governance_extras(
+            exposure=exposure,
             side_effects=side_effects,
             permission_scope=f"test:{name}",
             timeout_seconds=5,
@@ -1100,6 +1130,75 @@ def test_bound_observation_does_not_block_a_follow_up_action_for_the_same_pendin
     assert feedback is None
 
 
+def test_offloaded_result_window_can_materialize_its_completed_plan_step():
+    owner = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default")
+    resource_ref = ResourceRef(
+        resource_id="gen-completed",
+        resource_type="artifact",
+        owner=owner,
+        revision=1,
+    )
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-completed",
+        revision=2,
+        goal="Read two files",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="read-large",
+                description="Read the large file",
+                status="completed",
+                completion_action_ids=("read-large",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="summarize",
+                description="Summarize both files",
+                status="pending",
+            ),
+        ),
+    )
+    observation = ActionObservation(
+        kind="tool_result",
+        action_id="read-large",
+        capability_id="read_big",
+        status="succeeded",
+        plan_step_id="read-large",
+        payload={
+            "ok": True,
+            "retrieval": {"resource_ref": resource_ref.model_dump(mode="json")},
+        },
+    )
+    materialization = ToolCallProposal(
+        action_id="read-window",
+        tool_name="read_action_output",
+        arguments={
+            "resource_ref": resource_ref.model_dump(mode="json"),
+            "keyword": "heading",
+        },
+        plan_step_id="read-large",
+    )
+
+    assert admit_action_plan_bindings(
+        (materialization,),
+        working_plan=plan,
+        inputs=(observation,),
+    ) is None
+
+    wrong_reference = materialization.model_copy(update={
+        "arguments": {
+            "resource_ref": resource_ref.model_copy(
+                update={"resource_id": "gen-other"}
+            ).model_dump(mode="json"),
+            "keyword": "heading",
+        }
+    })
+    feedback = admit_action_plan_bindings(
+        (wrong_reference,),
+        working_plan=plan,
+        inputs=(observation,),
+    )
+    assert feedback.reason_code == "plan_step_not_pending"
+
+
 def test_final_answer_resolves_only_the_remaining_delivery_step():
     plan = ConversationWorkingPlan(
         plan_id="wplan-1",
@@ -1139,6 +1238,43 @@ def test_final_answer_resolves_only_the_remaining_delivery_step():
     assert resolved.revision == 3
     assert all(step.status == "completed" for step in resolved.steps)
     assert resolved.steps[0].completion_action_ids == ("search-1",)
+
+
+def test_final_result_contract_supersedes_only_pending_plan_steps():
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-review-transition",
+        revision=3,
+        goal="Prepare a staged report",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="observed",
+                description="Keep the already observed source trace",
+                status="completed",
+                completion_action_ids=("search-1",),
+            ),
+            ConversationWorkingPlanStep(
+                step_id="withdrawn",
+                description="Run the withdrawn performance benchmark",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="release",
+                description="Check release conditions",
+                status="pending",
+            ),
+        ),
+    )
+
+    superseded = supersede_pending_working_plan(plan)
+
+    assert superseded.revision == 4
+    assert [step.status for step in superseded.steps] == [
+        "completed", "superseded", "superseded",
+    ]
+    assert superseded.steps[0].completion_action_ids == ("search-1",)
+    assert all(not step.completion_action_ids for step in superseded.steps[1:])
+    assert is_terminal_working_plan(superseded)
+    assert is_terminal_working_plan(plan) is False
 
 
 def test_final_answer_resolves_execution_steps_and_runtime_binds_their_evidence():
@@ -1458,6 +1594,7 @@ def test_completed_plan_update_enters_runtime_owned_completion_call():
     assert '"revision"' not in completion_prompt
     assert '"plan_id"' not in completion_prompt
     assert "completion_action_ids" not in completion_prompt
+    assert plan.goal in completion_prompt
 
 
 def test_answer_cannot_silently_complete_a_pending_working_plan():
@@ -1752,6 +1889,71 @@ def test_working_plan_observation_projection_excludes_other_scope_and_failures()
     )
 
     assert tuple(item.action_id for item in projected) == ("accepted",)
+
+
+def test_conversation_evidence_refs_are_scoped_typed_execution_projections():
+    journal = InMemoryInteractionJournal()
+    principal = AuthenticatedPrincipal(
+        tenant_id="tenant-evidence-projection",
+        user_id="user-evidence-projection",
+    )
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-evidence-projection",
+        conversation_id="conversation-evidence-projection",
+        principal=principal,
+        messages=(ConversationMessage(role="user", content="Find sources."),),
+        inputs=(ActionObservation(
+            kind="tool_result",
+            action_id="search",
+            capability_id="web_search",
+            status="succeeded",
+            payload={
+                "ok": True,
+                "evidence": [
+                    {
+                        "source_type": "web",
+                        "source_id": "https://example.com/official",
+                        "title": "Official source",
+                        "url": "https://example.com/official",
+                    },
+                    {"url": "https://invalid-without-source-type.example"},
+                ],
+            },
+        ),),
+    ))
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-evidence-projection-other-user",
+        conversation_id="conversation-evidence-projection",
+        principal=AuthenticatedPrincipal(
+            tenant_id="tenant-evidence-projection",
+            user_id="other-user",
+        ),
+        messages=(ConversationMessage(role="user", content="Find sources."),),
+        inputs=(ActionObservation(
+            kind="tool_result",
+            action_id="other-search",
+            capability_id="web_search",
+            status="succeeded",
+            payload={
+                "ok": True,
+                "evidence": [{
+                    "source_type": "web",
+                    "source_id": "https://secret.example/source",
+                    "title": "Other user's source",
+                    "url": "https://secret.example/source",
+                }],
+            },
+        ),),
+    ))
+
+    refs = journal.conversation_evidence_refs(
+        "conversation-evidence-projection",
+        principal,
+    )
+
+    assert refs == (
+        '{"title":"Official source","url":"https://example.com/official"}',
+    )
 
 
 def test_completed_working_plan_can_be_superseded_by_a_new_frontstage_goal():
@@ -2141,6 +2343,77 @@ def test_refetching_a_tool_with_unread_offloaded_output_is_rejected_without_spen
     assert [item.reason_code for item in feedback] == ["offloaded_output_refetch"]
     assert "gen_0" in feedback[0].required_repair
     assert trace.usage.tool_calls == 2
+
+
+def test_same_tool_with_different_arguments_is_not_treated_as_offloaded_refetch():
+    late_fact = "linux-xfs@vger.kernel.org"
+    calls: list[str] = []
+
+    def read_big(path: str):
+        calls.append(path)
+        if path == "SECURITY.md":
+            return tool_response(tool_success({"content": "# Security Policy"}))
+        filler = "\n".join(f"line {index}" for index in range(200_000))
+        return tool_response(tool_success({"content": f"{filler}\n{late_fact}\n"}))
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="read-big",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="read-security",
+                tool_name="read_big",
+                arguments={"path": "SECURITY.md"},
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="reread",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "keyword": "xfs",
+                },
+            )
+        ),
+        FinalMessage(
+            disposition="answer",
+            message=f"Security Policy; XFS address: {late_fact}.",
+        ),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=_ArtifactTexts(),
+    )
+
+    view = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-different-arguments",
+        interaction_run_ref="irun-different-arguments",
+        messages=[ConversationMessage(role="user", content="Read both files.")],
+    )
+    trace = _trace(service, "irun-different-arguments")
+
+    assert view.disposition == "answer"
+    assert calls == ["MAINTAINERS", "SECURITY.md"]
+    assert not any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "offloaded_output_refetch"
+        for item in trace.inputs
+    )
+    assert trace.usage.tool_calls == 3
 
 
 def test_offload_failure_is_reported_in_the_observation_not_swallowed():
@@ -2578,11 +2851,11 @@ def test_independent_user_results_instruction_does_not_require_named_capabilitie
 
 
 def test_interaction_delegation_budget_cannot_exceed_synchronous_policy_limit():
-    with pytest.raises(ValueError, match="less than or equal to 180"):
+    with pytest.raises(ValueError, match="less than or equal to 240"):
         AgentDelegationProposal(
             agent_id="specialist",
             bounded_sub_goal="Research a bounded question.",
-            time_budget_seconds=181,
+            time_budget_seconds=241,
         )
 
 
@@ -2754,6 +3027,67 @@ def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegati
         and item.reason_code == "agent_artifact_already_returned"
         for item in trace.inputs
     )
+
+
+def test_delegated_agent_budget_expiry_is_observed_as_timeout_failure():
+    class _NeverCompletesSpecialist(_AsyncSpecialist):
+        def poll(
+            self,
+            run: ChildAgentRunRecord,
+            context: AgentGatewayContext,
+        ) -> ChildAgentRunRecord:
+            self.poll_calls += 1
+            return self._run(
+                run.definition.task,
+                context,
+                status="running",
+                agent_run_id=run.definition.agent_run_id,
+            )
+
+    gateway = AgentGateway(policy_engine=PolicyEngine(), store=InMemoryAgentRunStore())
+    specialist = _NeverCompletesSpecialist()
+    gateway.register(specialist)
+    model = _Decisions(
+        _continue(AgentDelegationProposal(
+            action_id="specialist-timeout",
+            agent_id="specialist",
+            bounded_sub_goal="Research until the delegated budget expires.",
+            expected_artifact_types=("report",),
+            time_budget_seconds=1,
+        )),
+        FinalMessage(
+            disposition="limitation",
+            message="The delegated research timed out before completion.",
+        ),
+    )
+    service = ConversationService(
+        model,
+        agent_port=gateway,
+        artifact_port=_ArtifactTexts(),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-agent-timeout",
+        interaction_run_ref="irun-agent-timeout",
+        messages=[ConversationMessage(
+            role="user",
+            content="Delegate this research within the stated time budget.",
+        )],
+    )
+    trace = _trace(service, "irun-agent-timeout")
+    observation = next(
+        item
+        for item in trace.inputs
+        if item.action_id == "specialist-timeout"
+    )
+
+    assert result.disposition == "limitation"
+    assert observation.status == "failed"
+    assert observation.payload["status"] == "timed_out"
+    stored = gateway.get_run(observation.payload["child_agent_run_ref"])
+    assert stored is not None
+    assert stored.projection.status == "timed_out"
 
 
 def test_l05_budget_exhaustion_fails_closed_after_committed_result():
@@ -2930,8 +3264,7 @@ _REVIEW_REQUEST = (
 
 
 def _review_intent(*criteria_and_spans):
-    return ReviewIntent(
-        requires_review=True,
+    return InteractionIntentProposal(
         requirements=tuple(
             ReviewRequirement(criterion=criterion, source_span=span)
             for criterion, span in criteria_and_spans
@@ -2965,6 +3298,90 @@ def _verifier_tool(recorder, *, verdicts):
     )
 
 
+def test_completion_answer_consumes_frozen_review_criteria_and_rejection():
+    criterion = "each recommendation must use the named official source"
+    model = _Decisions(FinalMessage(disposition="answer", message="revised"))
+    service = ConversationService(model)
+
+    service._decide_answer_only(
+        messages=(ConversationMessage(role="user", content="finish"),),
+        inputs=(
+            _receipt_observation(
+                "obsolete rejected draft",
+                verdict="needs_revision",
+                action_id="verify-old",
+                criterion=criterion,
+            ),
+            _receipt_observation(
+                "latest rejected draft",
+                verdict="needs_revision",
+                action_id="verify-latest",
+                criterion=criterion,
+            ),
+        ),
+        review_criteria=ReviewCriteria(criteria=(criterion,)),
+        working_plan=None,
+    )
+
+    request = next(
+        item
+        for item in model.requests
+        if item.operation == "interaction_completion_answer"
+    )
+    prompt = "\n".join(message["content"] for message in request.messages)
+    assert criterion in prompt
+    assert "needs_revision" in prompt
+    assert "latest rejected draft" in prompt
+    assert "obsolete rejected draft" not in prompt
+    assert "apply it and do not repeat a rejected claim verbatim" in prompt
+    assert request.max_tokens == 3_200
+
+
+def test_completion_uses_plan_goal_only_as_scope_context_not_verification_criteria():
+    criterion = "最终交付必须包含结构化边界章节"
+    stale_goal = "形成阶段性分析清单，等待用户确认范围"
+    plan = _plan(
+        ("draft", "Result: draft; Complete when: prepared"),
+        ("done", "Result: final answer; Complete when: delivered"),
+    )
+    plan = plan.model_copy(update={"goal": stale_goal})
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    model = _Decisions(FinalMessage(disposition="answer", message="final"))
+    service = ConversationService(
+        model,
+        tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
+    )
+
+    decision, _ = service._decide_answer_only(
+        messages=(ConversationMessage(role="user", content="现在完成。"),),
+        inputs=(),
+        review_criteria=ReviewCriteria(criteria=(criterion,)),
+        working_plan=plan,
+    )
+    service._verify_before_send(
+        decision,
+        review_criteria=ReviewCriteria(criteria=(criterion,)),
+        conversation_id="conversation-plan-scope-context",
+        run_ref="irun-plan-scope-context",
+        principal=_conversation_scope()["principal"],
+        owner=_conversation_scope()["principal"],
+        source_platform="web",
+        usage=CommittedUsage(),
+        attempt=0,
+    )
+
+    completion_request = next(
+        item
+        for item in model.requests
+        if item.operation == "interaction_completion_answer"
+    )
+    prompt = "\n".join(message["content"] for message in completion_request.messages)
+    assert stale_goal in prompt
+    assert "only to recover named subjects or scope" in prompt
+    assert "latest user criteria override withdrawn work" in prompt
+    assert recorder == [("final", (criterion,))]
+
+
 def test_review_criteria_must_be_traceable_to_the_user_verbatim():
     """A criterion the user did not write is dropped, not repaired.
 
@@ -2974,7 +3391,7 @@ def test_review_criteria_must_be_traceable_to_the_user_verbatim():
     """
     messages = [ConversationMessage(role="user", content=_REVIEW_REQUEST)]
 
-    admitted = admit_review_intent(
+    admitted = admit_interaction_intent(
         _review_intent(
             ("must not claim writes occurred", "不能声称写入已经发生"),
             ("text should be enthusiastic", "make it sound great"),
@@ -2982,32 +3399,129 @@ def test_review_criteria_must_be_traceable_to_the_user_verbatim():
         messages=messages,
     )
 
-    assert admitted.criteria == ("must not claim writes occurred",)
-    assert admitted.ungrounded_spans == ("make it sound great",)
-    assert admitted.requires_review is True
+    assert admitted.review_criteria.criteria == ("must not claim writes occurred",)
+    assert admitted.review_criteria.ungrounded_spans == ("make it sound great",)
+    assert admitted.review_criteria.requires_review is True
+
+
+def test_lifecycle_revision_cannot_replace_first_proposal_requirements():
+    messages = [ConversationMessage(
+        role="user",
+        content=(
+            "Investigate in the background and ensure every claim cites an official "
+            "source."
+        ),
+    )]
+    model = _Decisions(review_intents=(
+        InteractionIntentProposal(
+            requirements=(ReviewRequirement(
+                criterion="Every claim must cite an official source.",
+                source_span="ensure every claim cites an official source",
+            ),),
+            execution_lifecycle="durable_investigation",
+            lifecycle_source_span="continue after this response",
+        ),
+        InteractionIntentProposal(
+            requirements=(ReviewRequirement(
+                criterion="The report must recommend a vendor.",
+                source_span="ensure every claim cites an official source",
+            ),),
+            execution_lifecycle="durable_investigation",
+            lifecycle_source_span="in the background",
+        ),
+    ))
+
+    admitted, responses, feedback = derive_interaction_intent(
+        model,
+        messages=messages,
+    )
+
+    assert admitted.execution_lifecycle == "durable_investigation"
+    assert admitted.review_criteria.criteria == (
+        "Every claim must cite an official source.",
+    )
+    assert len(responses) == 2
+    assert [item.reason_code for item in feedback] == [
+        "interaction_lifecycle_revision_required",
+    ]
+
+
+def test_lifecycle_admission_allows_only_one_revision_attempt():
+    messages = [ConversationMessage(
+        role="user",
+        content="Investigate in the background and let me inspect it later.",
+    )]
+    model = _Decisions(review_intents=(
+        InteractionIntentProposal(
+            execution_lifecycle="durable_investigation",
+            lifecycle_source_span="continue after this response",
+        ),
+        InteractionIntentProposal(
+            execution_lifecycle="durable_investigation",
+            lifecycle_source_span="remain active after I leave",
+        ),
+    ))
+
+    admitted, responses, feedback = derive_interaction_intent(
+        model,
+        messages=messages,
+    )
+
+    assert admitted.execution_lifecycle == "conversation"
+    assert admitted.lifecycle_grounded is False
+    assert len(responses) == 2
+    assert len(feedback) == 1
+    assert len(model.requests) == 2
 
 
 def test_plan_review_boundary_must_be_traceable_to_user_text():
     request = "先给我一份计划，等我确认后再执行。"
 
-    admitted = admit_review_intent(
-        ReviewIntent(
-            requires_review=False,
-            plan_review_source_span="等我确认后再执行",
+    admitted = admit_interaction_intent(
+        InteractionIntentProposal(
+            interaction_phase="review_plan",
+            phase_source_span="等我确认后再执行",
         ),
         messages=[ConversationMessage(role="user", content=request)],
     )
-    rejected = admit_review_intent(
-        ReviewIntent(
-            requires_review=False,
-            plan_review_source_span="wait for approval",
+    rejected = admit_interaction_intent(
+        InteractionIntentProposal(
+            interaction_phase="review_plan",
+            phase_source_span="wait for approval",
         ),
         messages=[ConversationMessage(role="user", content=request)],
     )
 
-    assert admitted.plan_review_required is True
-    assert rejected.plan_review_required is False
-    assert rejected.ungrounded_spans == ("wait for approval",)
+    assert admitted.review_criteria.plan_review_required is True
+    assert rejected.review_criteria.plan_review_required is False
+    assert rejected.review_criteria.ungrounded_spans == ("wait for approval",)
+
+
+def test_plan_review_boundary_from_an_older_user_turn_is_not_current():
+    admitted = admit_interaction_intent(
+        InteractionIntentProposal(
+            requirements=(ReviewRequirement(
+                criterion="the final answer must contain the new condition",
+                source_span="现在完成",
+            ),),
+            interaction_phase="review_plan",
+            phase_source_span="供我确认范围",
+        ),
+        messages=[
+            ConversationMessage(
+                role="user",
+                content="先形成一份阶段性分析清单供我确认范围。",
+            ),
+            ConversationMessage(
+                role="user",
+                content="现在完成，并新增发布失败条件。",
+            ),
+        ],
+    )
+
+    assert admitted.review_criteria.requires_review is True
+    assert admitted.review_criteria.plan_review_required is False
+    assert admitted.review_criteria.ungrounded_spans == ("供我确认范围",)
 
 
 def test_explicit_plan_review_request_cannot_end_as_a_prose_final_plan():
@@ -3021,9 +3535,9 @@ def test_explicit_plan_review_request_cannot_end_as_a_prose_final_plan():
             ),
             wait_for_user=True,
         ),
-        review_intent=ReviewIntent(
-            requires_review=False,
-            plan_review_source_span="等我确认后再执行",
+        review_intent=InteractionIntentProposal(
+            interaction_phase="review_plan",
+            phase_source_span="等我确认后再执行",
         ),
     )
     service = ConversationService(model)
@@ -3048,16 +3562,16 @@ def test_explicit_plan_review_request_cannot_end_as_a_prose_final_plan():
 def test_a_review_request_with_no_grounded_criterion_is_not_silently_downgraded():
     messages = [ConversationMessage(role="user", content=_REVIEW_REQUEST)]
 
-    admitted = admit_review_intent(
+    admitted = admit_interaction_intent(
         _review_intent(("text should be enthusiastic", "make it sound great")),
         messages=messages,
     )
 
-    assert admitted.criteria == ()
-    assert admitted.requires_review is False
-    assert admitted.ungrounded_spans == ("make it sound great",)
+    assert admitted.review_criteria.criteria == ()
+    assert admitted.review_criteria.requires_review is False
+    assert admitted.review_criteria.ungrounded_spans == ("make it sound great",)
     assert (
-        ungrounded_criteria_feedback(admitted).reason_code
+        ungrounded_criteria_feedback(admitted.review_criteria).reason_code
         == "review_criteria_not_grounded"
     )
 
@@ -3068,7 +3582,7 @@ def test_criteria_are_never_taken_from_an_assistant_message():
     Otherwise a turn could state a lenient criterion in its own prose and have it
     admitted on the next turn -- self-authored criteria via the conversation.
     """
-    admitted = admit_review_intent(
+    admitted = admit_interaction_intent(
         _review_intent(("any claim is fine", "any claim is fine")),
         messages=[
             ConversationMessage(role="user", content="审查这段话。"),
@@ -3076,8 +3590,8 @@ def test_criteria_are_never_taken_from_an_assistant_message():
         ],
     )
 
-    assert admitted.criteria == ()
-    assert admitted.requires_review is False
+    assert admitted.review_criteria.criteria == ()
+    assert admitted.review_criteria.requires_review is False
 
 
 def test_an_ordinary_request_is_answered_without_any_verification():
@@ -3108,9 +3622,9 @@ def test_an_ordinary_request_is_answered_without_any_verification():
 def test_the_real_verifier_is_not_a_capability_the_model_can_see():
     """The runtime-owned verifier stays out of the model-visible projection.
 
-    This is a visibility assertion, not an authorization proof: the runtime can
-    still resolve the internal tool for its mandatory verification step. The
-    ordinary-user prompt-injection boundary is covered separately by GOV-001.
+    The runtime can still resolve the internal tool for its mandatory
+    verification step, while model-proposed ordinary calls are rejected by the
+    same exposure rule that builds the visible projection.
     """
     verifier = build_verify_interaction_draft_tool(_Decisions())
     executor = _executor(verifier)
@@ -3120,12 +3634,157 @@ def test_the_real_verifier_is_not_a_capability_the_model_can_see():
 
     assert "verify_interaction_draft" not in visible
     assert executor.get("verify_interaction_draft") is verifier
-    assert (
-        executor.validate_interaction_call(
-            "verify_interaction_draft",
-            {"draft": "d", "success_criteria": ["c"]},
-        ).status
-        == "accepted"
+    assert executor.validate_interaction_call(
+        "verify_interaction_draft",
+        {"draft": "d", "success_criteria": ["c"]},
+    ).status == "capability_missing"
+
+
+def test_hidden_workflow_tool_cannot_execute_through_ordinary_conversation():
+    """Runtime conformance: hidden exposure must also be an execution boundary."""
+    executions: list[str] = []
+
+    def hidden_probe(marker: str):
+        executions.append(marker)
+        return tool_response(tool_success({"marker": marker}))
+
+    executor = _executor(
+        _tool(
+            "hidden_workflow_probe",
+            hidden_probe,
+            exposure="workflow_activity",
+            side_effects=("write_longterm",),
+        )
+    )
+    model = _Decisions(
+        _continue(ToolCallProposal(
+            action_id="hidden-1",
+            tool_name="hidden_workflow_probe",
+            arguments={"marker": "must-not-execute"},
+        )),
+        FinalMessage(disposition="limitation", message="The action is unavailable."),
+    )
+    service = ConversationService(model, tool_port=executor)
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-hidden-tool-auth",
+        interaction_run_ref="irun-hidden-tool-auth",
+        messages=[ConversationMessage(role="user", content="Run the requested operation.")],
+    )
+    trace = _trace(service, "irun-hidden-tool-auth")
+
+    assert result.disposition == "limitation"
+    assert executions == []
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "capability_missing"
+        for item in trace.inputs
+    )
+
+
+def test_interaction_verifier_checks_each_item_and_rejects_malformed_urls():
+    from personal_agent.capabilities.contracts.verification import (
+        SemanticVerificationReport,
+        VerificationCriterionResult,
+    )
+
+    class CaptureVerifierModel:
+        def __init__(self):
+            self.request = None
+
+        def generate(self, request):
+            self.request = request
+            return StructuredModelResponse(
+                    value=SemanticVerificationReport(
+                        criterion_results=(VerificationCriterionResult(
+                        criterion="每条建议必须有官方 URL 与验证条件",
+                        status="not_satisfied",
+                        feedback="第二条缺少 URL，Hermes URL 含空格。",
+                    ),),
+                    revision_feedback="补齐每条 URL 并修复 Hermes 地址。",
+                ),
+                model="contract-model",
+                latency_ms=1,
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+            )
+
+    model = CaptureVerifierModel()
+    verifier = build_verify_interaction_draft_tool(model)
+    verifier.invoke({
+        "draft": (
+            "1. 建议一：https://example.com/source\n"
+            "2. 建议二：无链接\n"
+            "3. Hermes：https://github.com/ NousResearch/hermes-agent"
+        ),
+        "success_criteria": ("每条建议必须有官方 URL 与验证条件",),
+    })
+
+    instruction = model.request.messages[0]["content"]
+    assert "enumerate every relevant entry" in instruction
+    assert "cannot satisfy another entry" in instruction
+    assert "contains whitespace" in instruction
+    assert "do not silently repair" in instruction
+    assert "allowed evidence inventory, not additional criteria" in instruction
+    assert "must not be used to infer hidden plan items" in instruction
+    assert "compare the draft's cited identity and URL with that ref" in instruction
+    assert "does not satisfy the criterion merely because the draft labels it official" in (
+        instruction
+    )
+    assert "exactly one criterion_result for every supplied criterion" in instruction
+
+
+def test_interaction_verifier_rejects_an_incomplete_criterion_report():
+    from personal_agent.capabilities.contracts.verification import (
+        SemanticVerificationReport,
+        VerificationCriterionResult,
+    )
+
+    class IncompleteVerifierModel:
+        def generate(self, request):
+            return StructuredModelResponse(
+                value=SemanticVerificationReport(
+                    criterion_results=(VerificationCriterionResult(
+                        criterion="first criterion",
+                        status="satisfied",
+                        feedback="",
+                    ),),
+                    revision_feedback="",
+                ),
+                model="contract-model",
+                latency_ms=1,
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+            )
+
+    verifier = build_verify_interaction_draft_tool(IncompleteVerifierModel())
+
+    with pytest.raises(
+        ValueError,
+        match="exactly one result for every criterion",
+    ):
+        verifier.invoke({
+            "draft": "draft",
+            "success_criteria": ("first criterion", "second criterion"),
+        })
+
+
+def test_review_criteria_derivation_requires_self_contained_expansion():
+    assert "self-contained and judgeable without conversation history" in (
+        _DERIVATION_INSTRUCTION
+    )
+    assert "keep the original scope" in _DERIVATION_INSTRUCTION
+    assert "is still an acceptance condition and must not be omitted" in (
+        _DERIVATION_INSTRUCTION
+    )
+    assert "explicitly listing every referenced subject" in _DERIVATION_INSTRUCTION
+    assert "an unstated set as the only identity" in _DERIVATION_INSTRUCTION
+    assert "Preserve every proper noun and qualified product" in _DERIVATION_INSTRUCTION
+    assert "dropping a CLI, SDK, repository, or Agent qualifier" in (
+        _DERIVATION_INSTRUCTION
     )
 
 
@@ -3171,36 +3830,83 @@ def test_a_review_answer_is_verified_before_it_can_be_sent():
     ]
 
 
-def test_reviewable_plan_is_verified_against_frozen_user_criteria():
+def test_failed_action_ends_a_review_turn_fail_closed_without_verifier_loop():
+    def unavailable_search(query: str):
+        raise RuntimeError("Web Search Provider is unavailable")
+
+    model = _Decisions(
+        ContinueTurnProposal(
+            working_plan=_plan(
+                ("search", "Result: official source; Complete when: source is read"),
+                ("answer", "Result: reviewed answer; Complete when: criteria are met"),
+            ),
+            actions=(ToolCallProposal(
+                action_id="search-1",
+                tool_name="unavailable_search",
+                arguments={"query": "official docs"},
+                plan_step_id="search",
+            ),),
+        ),
+        FinalMessage(
+            disposition="limitation",
+            message="无法取得官方来源，因此不能完成核验。",
+        ),
+        review_intent=_review_intent(("must include a source", "官方来源")),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(
+            _tool("unavailable_search", unavailable_search),
+            _verifier_tool([], verdicts=("passed",)),
+        ),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-provider-fail-closed",
+        interaction_run_ref="irun-provider-fail-closed",
+        interaction_mode="auto",
+        messages=[ConversationMessage(
+            role="user", content="请查阅官方来源并给出结果，必须包含官方来源。"
+        )],
+    )
+    trace = _trace(service, "irun-provider-fail-closed")
+
+    assert trace.review_criteria.requires_review
+    assert result.disposition == "limitation"
+    assert result.message.content == "无法取得官方来源，因此不能完成核验。"
+    assert [item.action_id for item in trace.inputs if isinstance(item, ActionObservation)] == [
+        "search-1",
+    ]
+    assert trace.execution_order == ("search-1",)
+    assert not any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "review_requires_sendable_answer"
+        for item in trace.inputs
+    )
+    assert not any(
+        item.capability_id == "verify_interaction_draft"
+        for item in trace.inputs
+        if isinstance(item, ActionObservation)
+    )
+
+
+def test_reviewable_plan_is_not_judged_as_the_final_deliverable():
     request = "先给我计划，计划必须包含来源链接，等我确认后再执行。"
     recorder: list[tuple[str, tuple[str, ...]]] = []
     first = _plan(
         ("inspect", "Inspect the source"),
         ("change", "Propose the change"),
     )
-    revised = WorkingPlanProposal(
-        goal=first.goal,
-        steps=(
-            WorkingPlanStepProposal(
-                step_id="inspect",
-                description="Inspect https://example.test/source",
-            ),
-            WorkingPlanStepProposal(
-                step_id="change",
-                description="Propose the change",
-            ),
-        ),
-    )
     model = _Decisions(
         ContinueTurnProposal(working_plan=first, wait_for_user=True),
-        ContinueTurnProposal(working_plan=revised, wait_for_user=True),
-        review_intent=ReviewIntent(
-            requires_review=True,
+        review_intent=InteractionIntentProposal(
             requirements=(ReviewRequirement(
                 criterion="the plan must include a source link",
                 source_span="计划必须包含来源链接",
             ),),
-            plan_review_source_span="等我确认后再执行",
+            interaction_phase="review_plan",
+            phase_source_span="等我确认后再执行",
         ),
     )
     service = ConversationService(
@@ -3220,20 +3926,10 @@ def test_reviewable_plan_is_verified_against_frozen_user_criteria():
     trace = _trace(service, "irun-verified-plan")
 
     assert result.disposition == "plan_ready"
-    assert "https://example.test/source" in str(result.working_plan)
-    assert [criteria for _, criteria in recorder] == [
-        ("the plan must include a source link",),
-        ("the plan must include a source link",),
-    ]
-    assert trace.execution_order == (
-        "runtime-verify-plan-0",
-        "runtime-verify-plan-1",
-    )
-    assert any(
-        isinstance(item, DecisionFeedback)
-        and item.reason_code == "plan_verification_failed"
-        for item in trace.inputs
-    )
+    assert result.working_plan is not None
+    assert "https://example.test/source" not in str(result.working_plan)
+    assert recorder == []
+    assert trace.execution_order == ()
 
 
 def test_a_review_request_cannot_be_ended_without_a_verified_answer():
@@ -3311,7 +4007,7 @@ def test_the_frozen_criteria_are_reused_for_every_verification_in_the_turn():
     assert trace.review_criteria.criteria == ("must not claim writes occurred",)
     assert (
         sum(
-            request.operation == "interaction_review_criteria"
+            request.operation == "interaction_intent"
             for request in model.requests
         )
         == 1
@@ -3348,7 +4044,7 @@ def test_a_failed_criteria_derivation_answers_without_claiming_review():
 
     class _FailingDerivation(_Decisions):
         def generate(self, request):
-            if request.operation == "interaction_review_criteria":
+            if request.operation == "interaction_intent":
                 raise RuntimeError("derivation provider unavailable")
             return super().generate(request)
 
@@ -3587,9 +4283,14 @@ def test_governed_knowledge_save_rejects_fabricated_selection():
 
 
 class _KnowledgeKnowledgeReader:
+    def __init__(self):
+        self.searches = []
+
     def select_personal_evidence(self, *, question, owner_id, user_id, limit):
         assert owner_id == "tenant-1:default"
         assert user_id == "default"
+        assert limit <= 8
+        self.searches.append(question)
         return PersonalKnowledgeEvidenceSnapshot(
             question=question,
             citations=(),
@@ -3610,6 +4311,66 @@ class _KnowledgeKnowledgeReader:
                 state="active",
             ),
         )
+
+
+def test_personal_knowledge_crosses_model_context_only_after_explicit_search_action():
+    reader = _KnowledgeKnowledgeReader()
+    service = ConversationService(
+        _Decisions(
+            _continue(
+                ToolCallProposal(
+                    action_id="search-personal-knowledge",
+                    tool_name="search_personal_knowledge",
+                    arguments={"query": "What is my saved launch window?"},
+                )
+            ),
+            FinalMessage(
+                disposition="answer",
+                message="No matching personal knowledge was found.",
+            ),
+        ),
+        knowledge_reader=reader,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-1",
+        interaction_run_ref="irun_search_personal_knowledge",
+        messages=[ConversationMessage(
+            role="user",
+            content="What is my saved launch window?",
+        )],
+    )
+    trace = _trace(service, "irun_search_personal_knowledge")
+
+    assert result.disposition == "answer"
+    assert reader.searches == ["What is my saved launch window?"]
+    assert [item.capability_id for item in trace.inputs] == [
+        "search_personal_knowledge"
+    ]
+
+
+def test_personal_knowledge_is_not_prefetched_for_answer_without_search_action():
+    reader = _KnowledgeKnowledgeReader()
+    service = ConversationService(
+        _Decisions(FinalMessage(disposition="answer", message="Public answer.")),
+        knowledge_reader=reader,
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-1",
+        interaction_run_ref="irun_no_personal_knowledge_search",
+        messages=[ConversationMessage(
+            role="user",
+            content="Do not output my personal data; summarize the public document.",
+        )],
+    )
+    trace = _trace(service, "irun_no_personal_knowledge_search")
+
+    assert result.disposition == "answer"
+    assert reader.searches == []
+    assert trace.inputs == ()
 
 
 class _KnowledgeDeleteLifecycle:
@@ -3755,25 +4516,23 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
 
 def test_goal_entry_starts_one_existing_project_and_replay_returns_same_reference():
     project_port = _ProjectStarter()
-    service = ConversationService(
-        _Decisions(
-            _continue(
-                ToolCallProposal(
-                    action_id="start-project",
-                    tool_name="start_durable_investigation",
-                    arguments={
-                        "title": "Protocol changes",
-                        "goal": "Investigate protocol changes and deliver a sourced report.",
-                        "requirements": [
-                            {
-                                "statement": "Use official sources.",
-                                "acceptance_contract": "Every material claim has an official source.",
-                            }
-                        ],
-                    },
-                )
-            )
+    durable_request = StartDurableInvestigationArguments(
+        title="Protocol changes",
+        goal="Investigate protocol changes and deliver a sourced report.",
+        requirements=({
+            "statement": "Use official sources.",
+            "acceptance_contract": "Every material claim has an official source.",
+        },),
+    )
+    model = _Decisions(
+        review_intent=InteractionIntentProposal(
+            execution_lifecycle="durable_investigation",
+            lifecycle_source_span="in the background so I can pause or steer it later",
         ),
+        durable_request=durable_request,
+    )
+    service = ConversationService(
+        model,
         project_port=project_port,
     )
     kwargs = {
@@ -3797,26 +4556,69 @@ def test_goal_entry_starts_one_existing_project_and_replay_returns_same_referenc
     assert project_port.calls == 1
     assert trace.project_reference == started.project_reference
     assert trace.knowledge_delete_command_ref is None
+    assert trace.execution_lifecycle == "durable_investigation"
+    assert trace.usage.model_turns == 1
+    assert not any(
+        request.operation == "agent_interaction_turn" for request in model.requests
+    )
+
+
+def test_ungrounded_durable_lifecycle_is_revised_before_conversation_fallback():
+    project_port = _ProjectStarter()
+    model = _Decisions(
+        FinalMessage(
+            disposition="answer",
+            message="I cannot continue after this response.",
+        ),
+        review_intents=(
+            InteractionIntentProposal(
+                execution_lifecycle="durable_investigation",
+                lifecycle_source_span="continue independently after this response",
+            ),
+            InteractionIntentProposal(
+                execution_lifecycle="durable_investigation",
+                lifecycle_source_span="在后台持续调研",
+            ),
+        ),
+        durable_request=StartDurableInvestigationArguments(
+            title="Protocol changes",
+            goal="Investigate protocol changes and deliver a sourced report.",
+            requirements=({
+                "statement": "Use official sources.",
+                "acceptance_contract": "Every material claim has an official source.",
+            },),
+        ),
+    )
+    service = ConversationService(model, project_port=project_port)
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-revised-project-lifecycle",
+        interaction_run_ref="irun_revised_project_lifecycle",
+        messages=[ConversationMessage(
+            role="user",
+            content="请在后台持续调研协议变化，稍后我会回来查看报告。",
+        )],
+    )
+    trace = _trace(service, "irun_revised_project_lifecycle")
+
+    assert result.disposition == "background_started"
+    assert result.project_reference is not None
+    assert trace.execution_lifecycle == "durable_investigation"
+    assert trace.usage.model_calls == 3
+    assert trace.usage.model_turns == 1
+    assert sum(
+        request.operation == "interaction_intent" for request in model.requests
+    ) == 2
+    assert not any(
+        request.operation == "agent_interaction_turn" for request in model.requests
+    )
 
 
 def test_later_turn_reads_and_steers_only_the_project_linked_to_its_conversation():
     project_port = _ProjectStarter()
     service = ConversationService(
         _Decisions(
-            _continue(
-                ToolCallProposal(
-                    action_id="start-project",
-                    tool_name="start_durable_investigation",
-                    arguments={
-                        "title": "Protocol changes",
-                        "goal": "Investigate protocol changes and deliver a sourced report.",
-                        "requirements": [{
-                            "statement": "Use official sources.",
-                            "acceptance_contract": "Every material claim has an official source.",
-                        }],
-                    },
-                )
-            ),
             _continue(ToolCallProposal(
                 action_id="steer-project",
                 tool_name="steer_investigation_project",
@@ -3831,6 +4633,23 @@ def test_later_turn_reads_and_steers_only_the_project_linked_to_its_conversation
             FinalMessage(
                 disposition="answer",
                 message="Plan version 2 is active.",
+            ),
+            review_intents=(
+                InteractionIntentProposal(
+                    execution_lifecycle="durable_investigation",
+                    lifecycle_source_span="in the background so I can steer it later",
+                ),
+                InteractionIntentProposal(),
+            ),
+            durable_request=StartDurableInvestigationArguments(
+                title="Protocol changes",
+                goal="Investigate protocol changes and deliver a sourced report.",
+                requirements=({
+                    "statement": "Use official sources.",
+                    "acceptance_contract": (
+                        "Every material claim has an official source."
+                    ),
+                },),
             ),
         ),
         project_port=project_port,
@@ -3910,6 +4729,7 @@ class _AsyncSpecialist:
         protocol="local",
         task_types=("research",),
         allowed_operations=("delegate",),
+        max_runtime_seconds=240,
         governance=AgentGovernance(permission_scope="a2a:specialist:invoke"),
     )
 

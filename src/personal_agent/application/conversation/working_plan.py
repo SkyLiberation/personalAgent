@@ -11,8 +11,36 @@ from .models import (
     ConversationWorkingPlan,
     ConversationWorkingPlanStep,
     DecisionFeedback,
+    ReadActionOutputArguments,
+    ToolCallProposal,
     WorkingPlanProposal,
 )
+
+
+_TERMINAL_STEP_STATUSES = frozenset({"completed", "superseded"})
+
+
+def is_terminal_working_plan(plan: ConversationWorkingPlan | None) -> bool:
+    """Return whether every admitted step has a terminal execution fact."""
+    return bool(plan is not None and all(
+        step.status in _TERMINAL_STEP_STATUSES for step in plan.steps
+    ))
+
+
+def supersede_pending_working_plan(
+    working_plan: ConversationWorkingPlan,
+) -> ConversationWorkingPlan:
+    """End provisional obligations without fabricating execution evidence."""
+    if not any(step.status == "pending" for step in working_plan.steps):
+        return working_plan
+    return working_plan.model_copy(update={
+        "revision": working_plan.revision + 1,
+        "steps": tuple(
+            step.model_copy(update={"status": "superseded"})
+            if step.status == "pending" else step
+            for step in working_plan.steps
+        ),
+    })
 
 
 def _same_plan_content(
@@ -237,6 +265,7 @@ def admit_action_plan_bindings(
     actions,
     *,
     working_plan: ConversationWorkingPlan | None,
+    inputs: tuple = (),
 ) -> DecisionFeedback | None:
     if working_plan is None:
         return next(
@@ -257,6 +286,9 @@ def admit_action_plan_bindings(
     pending_ids = {
         step.step_id for step in working_plan.steps if step.status == "pending"
     }
+    completed_ids = {
+        step.step_id for step in working_plan.steps if step.status == "completed"
+    }
     for action in actions:
         if action.plan_step_id is None:
             return DecisionFeedback(
@@ -267,7 +299,11 @@ def admit_action_plan_bindings(
                 immutable_fields=("action_id",),
                 required_repair="Set plan_step_id to one current pending step.",
             )
-        if action.plan_step_id not in pending_ids:
+        materializes_completed_output = (
+            action.plan_step_id in completed_ids
+            and _materializes_committed_step_output(action, inputs)
+        )
+        if action.plan_step_id not in pending_ids and not materializes_completed_output:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="plan_step_not_pending",
@@ -277,6 +313,26 @@ def admit_action_plan_bindings(
                 required_repair="Bind the action to one current pending step.",
             )
     return None
+
+
+def _materializes_committed_step_output(action, inputs: tuple) -> bool:
+    """Whether an action reads the remainder of its step's committed observation."""
+
+    if not isinstance(action, ToolCallProposal) or action.tool_name != "read_action_output":
+        return False
+    try:
+        arguments = ReadActionOutputArguments.model_validate(action.arguments)
+    except ValueError:
+        return False
+    expected_ref = arguments.resource_ref.model_dump(mode="json")
+    return any(
+        isinstance(item, ActionObservation)
+        and item.status == "succeeded"
+        and item.plan_step_id == action.plan_step_id
+        and isinstance(item.payload.get("retrieval"), dict)
+        and item.payload["retrieval"].get("resource_ref") == expected_ref
+        for item in inputs
+    )
 
 
 def incomplete_working_plan_feedback(
@@ -353,5 +409,7 @@ __all__ = [
     "admit_plan_wait_boundary",
     "admit_working_plan",
     "incomplete_working_plan_feedback",
+    "is_terminal_working_plan",
     "required_plan_review_feedback",
+    "supersede_pending_working_plan",
 ]

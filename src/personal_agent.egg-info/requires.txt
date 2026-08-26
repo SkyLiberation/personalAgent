@@ -6,6 +6,7 @@ openai>=2.36.0
 pydantic>=2.8.0
 pyyaml>=6.0.0
 psycopg[binary]>=3.2.12
+psycopg-pool>=3.3.1
 pypdf>=5.9.0
 python-multipart>=0.0.20
 python-dotenv>=1.0.1
@@ -16,6 +17,7 @@ langgraph-checkpoint-postgres>=2.0.0
 markdown>=3.6
 neo4j>=6.0.0
 langextract>=1.5.0
+jsonschema>=4.23.0
 unstructured>=0.18.0
 
 [dev]

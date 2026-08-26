@@ -35,6 +35,27 @@ class ProjectAgentOutcomeUnknown(RuntimeError):
     """A child submission may exist, but no safe provider binding is known."""
 
 
+class ProjectAgentCapacityUnavailable(RuntimeError):
+    """The selected child-Agent provider has no execution slot yet."""
+
+
+class ProjectAgentExecutionFailed(RuntimeError):
+    """A bound child-Agent run reached a terminal unsuccessful state."""
+
+    def __init__(
+        self,
+        *,
+        agent_run_id: str,
+        status: str,
+        detail: str,
+        execution_ref: ExecutionRef,
+    ) -> None:
+        super().__init__(detail)
+        self.agent_run_id = agent_run_id
+        self.status = status
+        self.execution_ref = execution_ref
+
+
 @dataclass(frozen=True, slots=True)
 class ModelDecision(Generic[T]):
     value: T
@@ -272,6 +293,8 @@ __all__ = [
     "InvestigationProjectStorePort",
     "ModelDecision",
     "ProjectAgentPort",
+    "ProjectAgentCapacityUnavailable",
+    "ProjectAgentExecutionFailed",
     "ProjectAgentOutcomeUnknown",
     "ProjectDelegationPolicyPort",
     "ProjectSynthesisPort",

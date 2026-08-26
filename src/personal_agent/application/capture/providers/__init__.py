@@ -2,6 +2,7 @@ from personal_agent.application.capture.providers.base import UploadCaptureProvi
 from personal_agent.application.capture.providers.upload import DefaultUploadCaptureProvider
 from personal_agent.application.capture.providers.url import BuiltinUrlCaptureProvider, FirecrawlUrlCaptureProvider
 from personal_agent.application.capture.providers.web_search import (
+    AnySearchWebSearchProvider,
     SerpApiWebSearchProvider,
     TavilyWebSearchProvider,
     WebSearchProvider,
@@ -9,6 +10,7 @@ from personal_agent.application.capture.providers.web_search import (
 )
 
 __all__ = [
+    "AnySearchWebSearchProvider",
     "BuiltinUrlCaptureProvider",
     "DefaultUploadCaptureProvider",
     "FirecrawlUrlCaptureProvider",

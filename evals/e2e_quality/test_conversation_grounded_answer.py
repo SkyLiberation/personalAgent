@@ -11,6 +11,7 @@ import pytest
 from evals.e2e_quality.test_product_capability_outcomes import (
     _knowledge_ingest,
     _record,
+    live_web_search_process as _product_live_web_search_process,
 )
 from evals.e2e_quality.test_release_user_outcomes import _get_json, _post_json
 
@@ -20,6 +21,7 @@ pytest_plugins = (
     "evals.e2e_quality.test_release_user_outcomes",
     "evals.e2e_quality.test_product_capability_outcomes",
 )
+live_web_search_process = _product_live_web_search_process
 
 
 def _conversation(server, *, conversation_id: str, user_id: str, text: str):

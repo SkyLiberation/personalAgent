@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from personal_agent.agents import AgentGateway
 from personal_agent.agents.gateway import AgentSubmissionOutcomeUnknown
 from personal_agent.capabilities.contracts.grants import (
@@ -74,6 +76,42 @@ def test_reserved_agent_submission_reconciles_after_gateway_restart(
     assert provider.lookup_count == 1
     assert reconciled.projection.external_task_id == "provider-task-1"
     assert restarted.get_run(reconciled.definition.agent_run_id) is not None
+
+
+def test_postgres_store_atomically_bounds_active_runs_for_one_agent(
+    postgres_url,
+    clean_postgres_business_tables,
+):
+    store = PostgresAgentRunStore(postgres_url)
+    context = AgentGatewayContext(
+        execution_scope=interaction_execution_scope(
+            tenant_id="tenant-1",
+            user_id="alice",
+            execution_id="capacity-load",
+            task_id="subgoal",
+        ),
+    )
+
+    def reserve(index: int):
+        definition = ChildAgentRunDefinition(
+            agent_run_id=new_agent_run_id(),
+            agent_id="researcher",
+            task=AgentTask(f"bounded investigation {index}"),
+            context=context,
+            submission_key=f"capacity-{index}",
+        )
+        return store.reserve_submission(
+            submission_key=definition.submission_key,
+            definition_digest=f"definition-{index}",
+            definition=definition,
+            max_active_runs=4,
+        )
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        reservations = tuple(executor.map(reserve, range(20)))
+
+    assert sum(item is not None for item in reservations) == 4
+    assert len(store.list(agent_id="researcher")) == 4
 
 
 class _OutcomeUnknownProvider:

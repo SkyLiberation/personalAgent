@@ -618,9 +618,16 @@ def test_json_object_adapter_fails_closed_after_one_empty_repair(monkeypatch):
         def _create(self, **kwargs):
             calls.append(kwargs)
             return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content=""),
+                    finish_reason="length",
+                )],
                 model="structured-model",
-                usage=None,
+                usage=SimpleNamespace(
+                    prompt_tokens=100,
+                    completion_tokens=1600,
+                    total_tokens=1700,
+                ),
             )
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
@@ -631,7 +638,7 @@ def test_json_object_adapter_fails_closed_after_one_empty_repair(monkeypatch):
         output_transport="json_object",
     ))
 
-    with pytest.raises(ValueError, match="empty structured content"):
+    with pytest.raises(ValueError, match="finish_reason=length, output_tokens=1600"):
         client.generate(_request())
 
     assert len(calls) == 2

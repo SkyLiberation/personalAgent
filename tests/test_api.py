@@ -865,11 +865,11 @@ class TestRemovedWorkspaceContract:
         assert api_client.post(
             "/api/workspace/ask",
             json={"question": "legacy", "workspace_id": "legacy"},
-        ).status_code == 405
+        ).status_code == 404
         assert api_client.post(
             "/api/knowledge/ask",
             json={"question": "legacy", "workspace_id": "legacy"},
-        ).status_code == 405
+        ).status_code == 404
         assert api_client.post(
             "/api/tools/search_knowledge/execute",
             json={

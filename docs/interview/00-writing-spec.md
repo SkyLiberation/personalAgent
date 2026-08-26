@@ -13,9 +13,10 @@
 | `01-project-story.md` | 项目定位与总责任链 |
 | `02-request-walkthroughs.md` | 用户请求的生产路径 |
 | `03-capability-axes.md` | 智能体运行外壳和跨业务运行机制 |
-| `04-knowledge-and-domain-workflows.md` | 领域事实与生命周期 |
-| `05-evidence-and-release.md` | 证据强度、测量与发布状态 |
-| `06-qa-and-tradeoffs.md` | 高频问题的短答和主讲链接 |
+| `04-memory-architecture.md` | Memory 分类、当前路径、证据和未落地边界 |
+| `05-knowledge-and-domain-workflows.md` | 领域事实与生命周期 |
+| `06-evidence-and-release.md` | 证据强度、测量与发布状态 |
+| `07-qa-and-tradeoffs.md` | 高频问题的短答和主讲链接 |
 
 `INDEX.md` 只维护阅读顺序和关键能力的唯一主讲位置，不复制正文结论。
 
@@ -68,7 +69,7 @@
 
 ## 5. 证据决定措辞
 
-详细归档坐标和发布结论只在 `05-evidence-and-release.md` 或其链接的评测盘点中展开。其他文档可以保留判断证据强度所需的最小指标，但不复制完整归档清单和排查过程。
+详细归档坐标和发布结论只在 `06-evidence-and-release.md` 或其链接的评测盘点中展开。其他文档可以保留判断证据强度所需的最小指标，但不复制完整归档清单和排查过程。
 
 未实际执行时使用“代码设计为”“文档记录为”或“仍需验证”，不得写“已验证”。工具被调用、对象存在、状态为成功、数据库新增记录或追踪命中步骤，都不能单独替代用户结果。
 

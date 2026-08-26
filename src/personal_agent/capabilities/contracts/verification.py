@@ -27,17 +27,16 @@ class VerificationCriterionResult(BaseModel):
 
 
 class SemanticVerificationReport(BaseModel):
-    """The model-authored judgment. Every field here is open semantics.
+    """The model-authored per-criterion judgments.
 
     This is the verifier's ``output_type``, so the model owns all of it. It
-    deliberately carries no identity and no digest: anything a later admission
-    decision depends on must be computed by the tool, never proposed by the
-    model.
+    deliberately carries no aggregate verdict, identity, or digest: anything a
+    later admission decision can derive from these judgments is computed by the
+    tool, never proposed redundantly by the model.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    verdict: VerificationVerdict
     criterion_results: tuple[VerificationCriterionResult, ...] = Field(min_length=1)
     revision_feedback: str = ""
 
@@ -58,6 +57,7 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    verdict: VerificationVerdict
     receipt_id: str = Field(pattern=r"^svr_[0-9a-f]{20}$")
     verified_draft: str = Field(min_length=1, max_length=20_000)
     draft_digest: str = Field(pattern=r"^[0-9a-f]{64}$")

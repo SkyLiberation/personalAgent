@@ -89,10 +89,11 @@ EvidenceSpan
 
 **Personal Knowledge 只提供 canonical evidence selection，不再拥有独立最终回答。**
 
-1. `KnowledgeService.select_evidence()` 按 authenticated principal 和问题返回 EvidenceSpan、AnswerCitation、selected Claim 与 conflict facts；
-2. Conversation 将结果物化为有界 `personal_knowledge_context` Observation；
-3. 模型可结合其他已准入只读 Tool Observation 生成唯一 FinalMessage；
-4. Ask 前后 Claim/Artifact 写入 delta 必须为零，只有显式 save/solidify 才进入写路径。
+1. 模型在当前目标需要已保存事实时选择只读 `search_personal_knowledge`；
+2. `ConversationKnowledgeReadPort.select_personal_evidence()` 按认证 principal 和问题返回 EvidenceSpan、AnswerCitation、selected Claim 与 conflict facts；
+3. Conversation 将结果物化为有界 `tool_result`；
+4. 模型可结合其他已准入只读工具的 `Observation` 生成唯一 FinalMessage；
+5. Ask 前后 Claim/Artifact 写入 delta 必须为零，只有显式 save/solidify 才进入写路径。
 
 产品不存在独立 `/api/knowledge/ask` 或第二个 answer DTO/verifier；Knowledge 与 Conversation 不会同时拥有 answer/citation/completion 语义。Claim support、conflict 与 scope 仍由 Knowledge owner 决定，融合层不能覆盖。
 

@@ -50,14 +50,25 @@ def live_web_search_process(
     server_temp_dir: Path,
 ) -> Iterator[LiveWebProcess]:
     settings = _require_live_dependencies()
-    provider = settings.web_search.provider.strip().lower()
     _require_profile(
         settings.web_search_available,
         "web-search product E2E requires the configured provider API key",
     )
+    overrides = _web_search_child_overrides(settings)
+    yield from _yield_started_server(
+        _new_live_web_process(server_temp_dir, settings, child_env_overrides=overrides)
+    )
+
+
+def _web_search_child_overrides(settings) -> dict[str, str]:
+    """Isolate the web-search profile from unrelated opt-in resources."""
+
     overrides = {
-        "PERSONAL_AGENT_WEB_SEARCH_PROVIDER": provider,
+        "PERSONAL_AGENT_WEB_SEARCH_PROVIDER": settings.web_search.provider.strip().lower(),
         "PERSONAL_AGENT_URL_CAPTURE_PROVIDER": "builtin",
+        "PERSONAL_AGENT_MCP_SERVERS": '{"enabled":false}',
+        "PERSONAL_AGENT_GITHUB_MCP_ENABLED": "false",
+        "PERSONAL_AGENT_NOTION_MCP_ENABLED": "false",
     }
     overrides.update({
         "PERSONAL_AGENT_WEB_SEARCH_API_KEY": str(settings.web_search.api_key),
@@ -65,9 +76,7 @@ def live_web_search_process(
             settings.web_search.base_url or ""
         ),
     })
-    yield from _yield_started_server(
-        _new_live_web_process(server_temp_dir, settings, child_env_overrides=overrides)
-    )
+    return overrides
 
 
 @pytest.fixture(scope="module")
@@ -958,7 +967,8 @@ def test_product_e14_conversation_governed_save(
     live_web_process.restart()
     recovered_trace = _get_json(
         f"{live_web_process.base_url}/api/conversation/runs/"
-        f"{prepared['interaction_run_ref']}"
+        f"{prepared['interaction_run_ref']}?"
+        + urlencode({"user_id": owner_id})
     )
     assert recovered_trace["knowledge_save_operation"]["command"] == command
     assert recovered_trace["knowledge_save_operation"]["status"] == "awaiting_confirmation"
@@ -1086,7 +1096,8 @@ def test_product_e22_governed_delete_from_goal_entry(
     )
     initial_trace = _get_json(
         f"{live_web_process.base_url}/api/conversation/runs/"
-        f"{prepared['interaction_run_ref']}"
+        f"{prepared['interaction_run_ref']}?"
+        + urlencode({"user_id": owner_id})
     )
     _record(
         trace_archive,

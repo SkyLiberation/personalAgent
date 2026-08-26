@@ -11,6 +11,7 @@ from personal_agent.application.investigation_project.capability_matching import
     contract_has_execution_path,
     matching_execution_inventory,
 )
+from personal_agent.application.investigation_project.budget import ProjectBudgetLedger
 from personal_agent.application.investigation_project.ports import EvidenceMaterial
 from personal_agent.domain.investigation_project import (
     AcceptedPlanVersion,
@@ -49,6 +50,7 @@ def observed_url_locators(
     )
     locators = list(_URL_PATTERN.findall("\n".join(visible_contract_parts)))
     for material in evidence_material:
+        locators.extend(_URL_PATTERN.findall(material.content))
         try:
             results = json.loads(material.content)["data"]["results"]
         except (KeyError, TypeError, json.JSONDecodeError):
@@ -85,8 +87,48 @@ def subgoal_definition_digest(subgoal: SubGoalDefinitionVersion) -> str:
     return canonical_digest(payload)
 
 
+def compiled_agent_bounded_sub_goal(
+    subgoal: SubGoalDefinitionVersion,
+) -> str:
+    """Compile the accepted SubGoal facts into the remote Agent task."""
+    return (
+        f"Objective:\n{subgoal.objective}\n\n"
+        f"Required output:\n{subgoal.required_output}"
+    )
+
+
 def plan_proposal_digest(proposal: PlanProposal) -> str:
     return canonical_digest(proposal)
+
+
+def plan_identity_uniqueness_error(
+    *,
+    logical_subgoal_ids: tuple[str, ...],
+    derived_requirement_ids: tuple[str, ...],
+    requirement_mapping_ids: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """Return the canonical Plan identity uniqueness failure, if any."""
+
+    for ids, reason, field in (
+        (
+            logical_subgoal_ids,
+            "logical subgoal ids must be unique",
+            "subgoals",
+        ),
+        (
+            derived_requirement_ids,
+            "derived requirement ids must be unique",
+            "derived_requirements",
+        ),
+        (
+            requirement_mapping_ids,
+            "requirement mapping ids must be unique",
+            "requirement_mappings",
+        ),
+    ):
+        if len(ids) != len(set(ids)):
+            return reason, field
+    return None
 
 
 def unverified_tool_execution_operations(
@@ -190,6 +232,20 @@ class PlanAdmission:
                 "proposal is based on a stale project sequence",
                 repairable=("based_on_event_sequence",),
             )
+        identity_error = plan_identity_uniqueness_error(
+            logical_subgoal_ids=tuple(
+                item.logical_subgoal_id for item in proposal.subgoals
+            ),
+            derived_requirement_ids=tuple(
+                item.requirement_id for item in proposal.derived_requirements
+            ),
+            requirement_mapping_ids=tuple(
+                item.requirement_id for item in proposal.requirement_mappings
+            ),
+        )
+        if identity_error is not None:
+            reason, field = identity_error
+            self._reject(reason, repairable=(field,))
         self._validate_subgoals(proposal)
         self._validate_capabilities(proposal, capabilities)
         self._validate_requirements(project, proposal)
@@ -235,8 +291,6 @@ class PlanAdmission:
 
     def _validate_subgoals(self, proposal: PlanProposal) -> None:
         subgoals = {item.logical_subgoal_id: item for item in proposal.subgoals}
-        if len(subgoals) != len(proposal.subgoals):
-            self._reject("logical subgoal ids must be unique", repairable=("subgoals",))
         for subgoal in proposal.subgoals:
             if not subgoal.capability_contract.operation.strip():
                 self._reject(
@@ -287,14 +341,9 @@ class PlanAdmission:
             for item in project.user_requirements.requirements
             if item.status == "active"
         }
-        derived_requirement_ids = [
+        derived_requirement_ids = {
             item.requirement_id for item in proposal.derived_requirements
-        ]
-        if len(set(derived_requirement_ids)) != len(derived_requirement_ids):
-            self._reject(
-                "derived requirement ids must be unique",
-                repairable=("derived_requirements",),
-            )
+        }
         collisions = user_requirement_ids.intersection(
             derived_requirement_ids
         )
@@ -312,11 +361,6 @@ class PlanAdmission:
             if item.completion_relevance == "required"
         )
         mapped = {item.requirement_id for item in proposal.requirement_mappings}
-        if len(mapped) != len(proposal.requirement_mappings):
-            self._reject(
-                "requirement mapping ids must be unique",
-                repairable=("requirement_mappings",),
-            )
         missing = required - mapped
         if missing:
             self._reject(
@@ -735,7 +779,6 @@ class ExecutionProposalAdmission:
                 ))
             if (
                 proposal.operation.tool_name == "capture_url"
-                and observed_url_locators
                 and proposal.operation.typed_arguments.get("url")
                 not in observed_url_locators
             ):
@@ -779,13 +822,29 @@ class ExecutionProposalAdmission:
                     revision_scope=(subgoal.logical_subgoal_id,),
                 ))
         elif proposal.operation.kind == "agent":
-            available_agents = {
-                item.agent_id
-                for item in matching_execution_inventory(
-                    capabilities,
-                    subgoal.capability_contract,
-                ).a2a_agents
-            }
+            expected_bounded_sub_goal = compiled_agent_bounded_sub_goal(subgoal)
+            if proposal.operation.bounded_sub_goal != expected_bounded_sub_goal:
+                raise ProposalRejected(DecisionFeedback(
+                    reason=(
+                        "agent bounded sub-goal does not match the accepted SubGoal"
+                    ),
+                    repairable_fields=("operation",),
+                    immutable_fields=(
+                        "project_id",
+                        "plan_version",
+                        "logical_subgoal_id",
+                    ),
+                    required_repair=(
+                        "Preserve the accepted SubGoal objective and required output; "
+                        "Application compiles the remote Agent task."
+                    ),
+                    revision_scope=(subgoal.logical_subgoal_id,),
+                ))
+            matching_agents = matching_execution_inventory(
+                capabilities,
+                subgoal.capability_contract,
+            ).a2a_agents
+            available_agents = {item.agent_id for item in matching_agents}
             if proposal.operation.agent_id not in available_agents:
                 raise ProposalRejected(DecisionFeedback(
                     reason=(
@@ -793,6 +852,73 @@ class ExecutionProposalAdmission:
                         f"{subgoal.capability_contract.operation}"
                     ),
                     disposition="capability_missing",
+                ))
+            selected_agent = next(
+                item
+                for item in matching_agents
+                if item.agent_id == proposal.operation.agent_id
+            )
+            if (
+                selected_agent.max_runtime_seconds is not None
+                and proposal.operation.time_budget_seconds
+                > selected_agent.max_runtime_seconds
+            ):
+                raise ProposalRejected(DecisionFeedback(
+                    reason=(
+                        "agent time budget exceeds the registered runtime limit"
+                    ),
+                    repairable_fields=("operation",),
+                    immutable_fields=(
+                        "project_id",
+                        "plan_version",
+                        "logical_subgoal_id",
+                    ),
+                    required_repair=(
+                        "Set operation.time_budget_seconds to an integer between "
+                        f"1 and {selected_agent.max_runtime_seconds}."
+                    ),
+                    revision_scope=(subgoal.logical_subgoal_id,),
+                ))
+            budget = ProjectBudgetLedger()
+            remaining_tokens = budget.remaining_tokens(
+                project,
+                category="external_delegation",
+            )
+            if proposal.operation.token_budget > remaining_tokens:
+                raise ProposalRejected(DecisionFeedback(
+                    reason=(
+                        "agent token budget exceeds the remaining Project "
+                        "delegation budget"
+                    ),
+                    repairable_fields=("operation",),
+                    immutable_fields=(
+                        "project_id",
+                        "plan_version",
+                        "logical_subgoal_id",
+                    ),
+                    required_repair=(
+                        "Set operation.token_budget to an integer between 1 and "
+                        f"{remaining_tokens}."
+                    ),
+                    revision_scope=(subgoal.logical_subgoal_id,),
+                ))
+            remaining_cost = budget.remaining_cost(project)
+            if proposal.operation.cost_budget > remaining_cost:
+                raise ProposalRejected(DecisionFeedback(
+                    reason=(
+                        "agent cost budget exceeds the remaining Project cost budget"
+                    ),
+                    repairable_fields=("operation",),
+                    immutable_fields=(
+                        "project_id",
+                        "plan_version",
+                        "logical_subgoal_id",
+                    ),
+                    required_repair=(
+                        "Set operation.cost_budget to a number between 0 and "
+                        f"{remaining_cost}."
+                    ),
+                    revision_scope=(subgoal.logical_subgoal_id,),
                 ))
         if execution_scope.project_id != project.definition.project_id:
             raise ProposalRejected(DecisionFeedback(
@@ -839,6 +965,7 @@ __all__ = [
     "execution_evidence_subgoal_keys",
     "frozen_subgoal_keys",
     "observed_url_locators",
+    "plan_identity_uniqueness_error",
     "plan_proposal_digest",
     "repair_subgoal_logical_id",
     "subgoal_definition_digest",

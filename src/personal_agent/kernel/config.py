@@ -13,7 +13,6 @@ from personal_agent.kernel.config_models import (
     FirecrawlConfig,
     GraphitiConfig,
     GPTResearcherA2AConfig,
-    GuardrailsConfig,
     LangExtractConfig,
     LangSmithConfig,
     KnowledgeGapConfig,
@@ -24,7 +23,6 @@ from personal_agent.kernel.config_models import (
     ReflectionReplaySettings,
     ResearchConfig,
     ReviewDigestConfig,
-    ShortTermMemoryConfig,
     StructuredConfig,
     WebApiConfig,
     WebSearchConfig,
@@ -58,9 +56,7 @@ class Settings(_StrictBase):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     enterprise_knowledge: EnterpriseKnowledgeConfig = Field(default_factory=EnterpriseKnowledgeConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
-    short_term: ShortTermMemoryConfig = Field(default_factory=ShortTermMemoryConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
-    guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     reflection_replay: ReflectionReplaySettings = Field(default_factory=ReflectionReplaySettings)
 
     @property

@@ -5,12 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 
-from personal_agent.agents.gateway import AgentGateway, AgentSubmissionOutcomeUnknown
+from personal_agent.agents.gateway import (
+    AgentCapacityUnavailable,
+    AgentGateway,
+    AgentSubmissionOutcomeUnknown,
+)
 from personal_agent.application.investigation_project.ports import (
     CapabilitySnapshotPort,
     DelegationPolicyDecision,
     ExecutionResult,
     GeneratedArtifactWritePort,
+    ProjectAgentCapacityUnavailable,
+    ProjectAgentExecutionFailed,
     ProjectAgentOutcomeUnknown,
 )
 from personal_agent.capabilities.contracts.grants import (
@@ -215,8 +221,13 @@ class ScopeBoundDisclosureManifest:
 class DurableProjectAgentAdapter:
     """Project adapter over the canonical durable AgentGateway lifecycle."""
 
-    def __init__(self, gateway: AgentGateway) -> None:
+    def __init__(
+        self,
+        gateway: AgentGateway,
+        artifact_reader: GeneratedArtifactWritePort,
+    ) -> None:
         self._gateway = gateway
+        self._artifact_reader = artifact_reader
 
     def submit_or_reconcile(
         self,
@@ -268,7 +279,7 @@ class DurableProjectAgentAdapter:
             context_projection_refs=tuple(
                 item.resource_id for item in operation.context_artifact_refs
             ),
-            token_budget=max(operation.token_budget, 1),
+            token_budget=operation.token_budget,
             cost_budget=operation.cost_budget,
             time_budget_seconds=operation.time_budget_seconds,
             completion_contract="AgentArtifact",
@@ -291,6 +302,8 @@ class DurableProjectAgentAdapter:
                 grant,
                 submission_key=submission_key,
             )
+        except AgentCapacityUnavailable as exc:
+            raise ProjectAgentCapacityUnavailable(str(exc)) from exc
         except AgentSubmissionOutcomeUnknown as exc:
             raise ProjectAgentOutcomeUnknown(str(exc)) from exc
         if run.projection.status in {"created", "queued", "running", "waiting"}:
@@ -306,19 +319,30 @@ class DurableProjectAgentAdapter:
                 submission_key=submission_key,
             )
         if run.projection.status not in {"completed", "completed_degraded"}:
-            raise RuntimeError(
-                run.projection.error
-                or f"child Agent ended with status={run.projection.status}"
+            raise ProjectAgentExecutionFailed(
+                agent_run_id=run.definition.agent_run_id,
+                status=run.projection.status,
+                execution_ref=_agent_execution_ref(
+                    proposal,
+                    run.definition.agent_run_id,
+                    run.projection.result,
+                ),
+                detail=(
+                    run.projection.error
+                    or f"child Agent ended with status={run.projection.status}"
+                ),
             )
         execution_ref = _agent_execution_ref(
             proposal, run.definition.agent_run_id, run.projection.result
         )
         evidence: list[EvidenceRef] = []
         for artifact in run.artifact_index.artifacts:
-            body_digest = canonical_digest({
-                "kind": artifact.kind,
-                "artifact_ref": artifact.artifact_ref.model_dump(mode="json"),
-            })
+            stored = self._artifact_reader.read_generated(
+                artifact.artifact_ref,
+                principal=execution_scope.principal,
+                owner=execution_scope.principal,
+            )
+            body_digest = stored.content_digest
             evidence.append(EvidenceRef(
                 evidence_id=f"ipev_{body_digest[:20]}",
                 execution_ref=execution_ref,

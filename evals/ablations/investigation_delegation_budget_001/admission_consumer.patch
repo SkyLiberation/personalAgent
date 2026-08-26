@@ -1,0 +1,36 @@
+diff --git a/src/personal_agent/application/investigation_project/admission.py b/src/personal_agent/application/investigation_project/admission.py
+--- a/src/personal_agent/application/investigation_project/admission.py
++++ b/src/personal_agent/application/investigation_project/admission.py
+@@ -792,32 +792,6 @@ class ExecutionProposalAdmission:
+                     ),
+                     disposition="capability_missing",
+                 ))
+-            selected_agent = next(
+-                item
+-                for item in matching_agents
+-                if item.agent_id == proposal.operation.agent_id
+-            )
+-            if (
+-                selected_agent.max_runtime_seconds is not None
+-                and proposal.operation.time_budget_seconds
+-                > selected_agent.max_runtime_seconds
+-            ):
+-                raise ProposalRejected(DecisionFeedback(
+-                    reason=(
+-                        "agent time budget exceeds the registered runtime limit"
+-                    ),
+-                    repairable_fields=("operation",),
+-                    immutable_fields=(
+-                        "project_id",
+-                        "plan_version",
+-                        "logical_subgoal_id",
+-                    ),
+-                    required_repair=(
+-                        "Set operation.time_budget_seconds to an integer between "
+-                        f"1 and {selected_agent.max_runtime_seconds}."
+-                    ),
+-                    revision_scope=(subgoal.logical_subgoal_id,),
+-                ))
+         if execution_scope.project_id != project.definition.project_id:
+             raise ProposalRejected(DecisionFeedback(
+                 reason="execution scope project binding mismatch",

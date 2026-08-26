@@ -13,6 +13,7 @@ Requires-Dist: openai>=2.36.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: pyyaml>=6.0.0
 Requires-Dist: psycopg[binary]>=3.2.12
+Requires-Dist: psycopg-pool>=3.3.1
 Requires-Dist: pypdf>=5.9.0
 Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: python-dotenv>=1.0.1
@@ -23,6 +24,7 @@ Requires-Dist: langgraph-checkpoint-postgres>=2.0.0
 Requires-Dist: markdown>=3.6
 Requires-Dist: neo4j>=6.0.0
 Requires-Dist: langextract>=1.5.0
+Requires-Dist: jsonschema>=4.23.0
 Requires-Dist: unstructured>=0.18.0
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0.0; extra == "dev"
@@ -101,7 +103,7 @@ External Cron / Manual Research
 | `Investigation Project` | [application/investigation_project/](src/personal_agent/application/investigation_project), [domain/investigation_project/](src/personal_agent/domain/investigation_project), [infra/storage/postgres_investigation_project.py](src/personal_agent/infra/storage/postgres_investigation_project.py) | 动态路径且跨进程/轮次/审批的调查；Plan 实际驱动 ready/join/coverage，journal 支持恢复、steering、预算和 Completion | [docs/summary/durable-investigation-project-current-state.md](docs/summary/durable-investigation-project-current-state.md) |
 | `运行时 / 编排层` | [runtime.py](src/personal_agent/orchestration/runtime.py), [service.py](src/personal_agent/orchestration/service.py), [worker.py](src/personal_agent/orchestration/worker.py) | `AgentRuntime` 集中装配 Port/Adapter；`AgentService` 暴露用例 facade；worker 消费 durable queue，不成为业务事实 owner | [当前核心架构](docs/summary/core-architecture-current-state.md) |
 | `工具层` | [tools/](src/personal_agent/tools), [application/capture/service.py](src/personal_agent/application/capture/service.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、研究/订阅管理、知识生命周期、worker 诊断、run 诊断、delete/restore、consolidate 等动作 | [docs/topics/tools.md](docs/topics/tools.md) |
-| `记忆与事实层` | [application/knowledge/](src/personal_agent/application/knowledge), [memory/](src/personal_agent/memory), [infra/storage/](src/personal_agent/infra/storage) | Interaction journal、personal knowledge canonical facts、Artifact、Research/Project journal 与可重建检索投影按生命周期分开 | [当前核心架构](docs/summary/core-architecture-current-state.md) |
+| `记忆与事实层` | [application/knowledge/](src/personal_agent/application/knowledge), [memory/](src/personal_agent/memory), [infra/storage/](src/personal_agent/infra/storage) | Interaction journal、Personal Knowledge canonical knowledge、Artifact、Research/Project journal 与可重建检索投影按生命周期分开 | [当前核心架构](docs/summary/core-architecture-current-state.md) |
 | `检索与推理层` | [orchestration/ask/](src/personal_agent/orchestration/ask), [application/verifier.py](src/personal_agent/application/verifier.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 支持图谱、结构、本地、网络、情景和反思多路召回，RRF/MMR、上下文压缩、反证检索、引用生成和蕴含级校验 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
 | `主动知识循环` | [application/review/](src/personal_agent/application/review), [application/insight/](src/personal_agent/application/insight), [application/knowledge/](src/personal_agent/application/knowledge) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
 | `持续研究层` | [application/research/](src/personal_agent/application/research), [infra/storage/postgres_research_store.py](src/personal_agent/infra/storage/postgres_research_store.py), [adapters/web/routes/research.py](src/personal_agent/adapters/web/routes/research.py) | 支持一次性研究、定时订阅、来源归一、事件聚类、可信度、个人关联、情报简报、反馈偏好和确认入库 | [docs/workflow/research-once-workflow.md](docs/workflow/research-once-workflow.md)、[docs/env.md](docs/env.md#research--定时情报简报) |
@@ -109,18 +111,18 @@ External Cron / Manual Research
 | `执行与反馈层` | [adapters/web/routes/](src/personal_agent/adapters/web/routes), [application/conversation/](src/personal_agent/application/conversation), [orchestration/worker.py](src/personal_agent/orchestration/worker.py) | 支持同步 API、SSE、typed Observation/Feedback、受治理确认、异步 worker 与 Project projection | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
 | `观测、治理与评测层` | [kernel/observability.py](src/personal_agent/kernel/observability.py), [adapters/web/auth.py](src/personal_agent/adapters/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、执行回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
 
-## 执行主链
+## 目标入口与执行责任
 
-普通输入进入 Conversation ReAct；固定事务直接进入领域 Use Case；显式 Investigation Project
-通过 HTTP 创建后由 `investigation` worker 驱动。历史 LangGraph 图不再定义这些 canonical
-主链，当前事实统一见
+普通用户只向 Conversation 描述目标；模型按需选择 request-local capability、具体领域 Use Case，
+或在目标明确要求跨交互持续和后续控制时创建 Investigation Project。专用 UI/自动化仍可直接调用
+同一 Application Use Case。历史 LangGraph 图不再定义这些 canonical owner，当前事实统一见
 [核心架构](docs/summary/core-architecture-current-state.md)。
 
 ## 当前技术栈
 
 - `Python 3.11+`
 - `FastAPI`
-- `LangGraph checkpoint packages`（遗留数据/迁移依赖，不是当前三条主链的共同编排器）
+- `LangGraph checkpoint packages`（遗留数据/迁移依赖，不是当前目标责任链的共同编排器）
 - `Graphiti`
 - `Neo4j`
 - `Postgres`
@@ -181,12 +183,15 @@ README 只保留最短路径：
 - Tool/Agent 结果形成 `ActionObservation`，拒绝形成 `DecisionFeedback`，共同驱动下一模型轮
 - 模型不可用、能力不足或信息不足时进入 typed failure/limitation/clarification，不使用关键词
   fallback 生成业务答案
+- 当前粗粒度 Application capability 包括 canonical personal knowledge knowledge list、确认式保存、确认式
+  删除和 durable investigation handoff；Conversation 只保存跨领域 ref，不复制 delete/Project 状态
 
 ### 5. Knowledge Lifecycle
 
-- `KnowledgeLifecycleService` 是删除与恢复的唯一写入口，普通 Conversation Tool 和直接 DELETE API 不可执行删除
+- `KnowledgeLifecycleService` 是删除与恢复的唯一写入口；Conversation 和直接 API 都只能调用该
+  owner，prepare 不执行删除
 - prepare 只创建 durable operation；客户端按 command/run 标识确认，服务端内部 `command_digest` 绑定 immutable Command 与 Receipt，重启后仍可继续
-- confirm 在单事务中更新 Knowledge Item/Claim、记录 Knowledge 状态事件并写 Receipt；replay 返回同一 Receipt
+- confirm 在单事务中更新 Knowledge Item/Claim、记录 Personal Knowledge 状态事件并写 Receipt；replay 返回同一 Receipt
 - restore 引用已执行的 delete command，并按 delete receipt 中的 previous states 精确恢复
 - `solidify_conversation` 已具备草稿生成、`draft_ready` 事件和 `capture_text` 入库工具基础
 - 知识版本支持 supersede 与 conflicted 状态，为自动整理和冲突治理提供基础
@@ -235,7 +240,7 @@ README 只保留最短路径：
 - 飞书条目支持 `N1 展开 / 有用 / 不感兴趣 / 收藏 / 入库`
 - 用户反馈会更新订阅内容偏好；“入库”会保存事件摘要、可信度与来源
 
-当前一次性研究流程见 [research_once workflow](docs/workflow/research-once-workflow.md)，订阅、调度和运行配置见 [Research环境配置](docs/env.md#research--定时情报简报)；尚未落地的来源验证与事件触发能力见 [持续研究 P1/P2](docs/future/scheduled-intelligence-research.md)。
+当前一次性研究流程见 [research_once workflow](docs/workflow/research-once-workflow.md)，订阅、调度和运行配置见 [Research环境配置](docs/env.md#research--定时情报简报)。
 
 ### 10. Agent Harness, Capability & Durable Execution
 
@@ -259,7 +264,7 @@ README 只保留最短路径：
 - LangSmith trace 默认脱敏，不上传用户正文和工具参数
 - Interaction/Project journal、execution event、trace archive 和 receipt replay 支持问题定位
 - `tests/` 覆盖单元、集成、Postgres、API 和完整 Agent flow
-- `evals/` 覆盖 Conversation、Gateway、Knowledge/RAG、Research、Investigation 和组合用户旅程
+- `evals/` 覆盖 Conversation、Gateway、Personal Knowledge/RAG、Research、Investigation 和组合用户旅程
 - Research 评测包含事件召回/精度、去重质量、一手来源率和不确定性校准
 
 ### 12. Web UI
@@ -289,7 +294,7 @@ personalAgent/                  # 项目根目录
       ├─ application/
       │  ├─ conversation/       # 短 typed Interaction loop
       │  ├─ investigation_project/ # durable Project 应用编排
-      │  ├─ knowledge/          # Artifact/Evidence/Claim/Knowledge 生命周期
+      │  ├─ personal knowledge/          # Artifact/Evidence/Claim/Knowledge 生命周期
       │  ├─ knowledge_lifecycle/# 删除、恢复、Command 与 Receipt
       │  ├─ capture/            # 文本、URL、上传采集
       │  ├─ research/           # 一次性研究、订阅、Digest 与 Delivery
@@ -326,9 +331,8 @@ Project journal：历史对话只辅助理解追问与更正，事实结论必�
 - [docs/review-digest.md](docs/review-digest.md) - 知识简报、订阅投递和复习反馈
 - [docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) - 自动整理与知识缺口主动追问
 - [docs/future/README.md](docs/future/README.md) - 仅包含尚未落地且由目标 E2E 驱动的未来设计
-- [docs/future/trusted-agent-runtime-evolution.md](docs/future/trusted-agent-runtime-evolution.md) - 当前文档、架构门禁和 clean release 收敛
-- [docs/future/scheduled-intelligence-research.md](docs/future/scheduled-intelligence-research.md) - 持续研究尚未落地的来源验证、connector 和事件触发 P1/P2
-- [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 框架理念、系统分层、三条主链、知识与运行时当前事实
+- [docs/future/design-optimization-backlog.md](docs/future/design-optimization-backlog.md) - 所有待优化设计的总清单、状态与详细设计入口
+- [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 框架理念、系统分层、目标责任链、知识与运行时当前事实
 
 ## 文档导航
 

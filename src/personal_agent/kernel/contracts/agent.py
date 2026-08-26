@@ -12,6 +12,14 @@ ChildAgentRunStatus = Literal[
     "cancel_requested", "cancelling", "completed", "completed_degraded",
     "cancelled", "failed", "timed_out",
 ]
+CAPACITY_OCCUPYING_AGENT_RUN_STATUSES: tuple[ChildAgentRunStatus, ...] = (
+    "created",
+    "queued",
+    "running",
+    "waiting",
+    "cancel_requested",
+    "cancelling",
+)
 ChildAgentRunEventType = Literal[
     "submitted",
     "status_changed",
@@ -20,6 +28,7 @@ ChildAgentRunEventType = Literal[
     "completed",
     "failed",
     "cancelled",
+    "timed_out",
 ]
 
 
@@ -33,7 +42,12 @@ class AgentGovernance:
     trust_level: str = "external"
     timeout_seconds: float = 120.0
     rate_limit_per_minute: int | None = None
+    max_concurrent_runs: int | None = None
     allowed_domains: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.max_concurrent_runs is not None and self.max_concurrent_runs < 1:
+            raise ValueError("max_concurrent_runs must be positive when configured")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +188,7 @@ def new_agent_artifact_id() -> str:
 __all__ = [
     "AgentAdapter",
     "AgentArtifact",
+    "CAPACITY_OCCUPYING_AGENT_RUN_STATUSES",
     "ChildAgentArtifactIndex",
     "ChildAgentRunDefinition",
     "ChildAgentRunEvent",

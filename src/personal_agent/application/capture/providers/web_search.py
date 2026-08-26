@@ -98,6 +98,93 @@ class TavilyWebSearchProvider(WebSearchProvider):
         return results
 
 
+class AnySearchWebSearchProvider(WebSearchProvider):
+    """Call AnySearch's unified search endpoint and normalize search results."""
+
+    name = "anysearch"
+
+    def __init__(self, settings: Settings, _logger: logging.Logger | None = None) -> None:
+        self._settings = settings
+        if _logger is not None:
+            self.logger = _logger
+
+    def search(self, query: str, limit: int = 5) -> list[WebSearchResult]:
+        base_url = (
+            self._settings.web_search.base_url or "https://api.anysearch.com"
+        ).rstrip("/")
+        endpoint = base_url if base_url.endswith("/v1/search") else f"{base_url}/v1/search"
+        payload = {
+            "query": query,
+            "max_results": min(limit, 10),
+        }
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Anysearch-Client": "personal-agent/1.0",
+        }
+        if self._settings.web_search.api_key:
+            headers["Authorization"] = f"Bearer {self._settings.web_search.api_key}"
+        request = Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        timeout_seconds = max(5, self._settings.web_search.timeout_ms / 1000)
+
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read()[:500]
+            logger.error("AnySearch HTTP %s for query=%s", exc.code, query[:80])
+            message = f"AnySearch rejected the request with HTTP {exc.code}: {detail!r}"
+            if exc.code in {401, 403}:
+                raise PermissionError(message) from exc
+            if exc.code == 429 or exc.code >= 500:
+                raise ConnectionError(message) from exc
+            raise ValueError(message) from exc
+        except URLError as exc:
+            logger.error("AnySearch URL error for query=%s: %s", query[:80], exc)
+            raise ConnectionError(f"AnySearch is unavailable: {exc}") from exc
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.error("AnySearch invalid JSON for query=%s: %s", query[:80], exc)
+            raise RuntimeError("AnySearch returned an invalid response") from exc
+
+        if not isinstance(data, dict):
+            raise RuntimeError("AnySearch returned an invalid response")
+        business_code = data.get("code")
+        if business_code != 0:
+            provider_message = data.get("message")
+            message = f"AnySearch failed with code {business_code}: {provider_message!r}"
+            if business_code in {401, 403}:
+                raise PermissionError(message)
+            if business_code in {429, 500, 502, 503, 504}:
+                raise ConnectionError(message)
+            raise ValueError(message)
+        nested_data = data.get("data")
+        if not isinstance(nested_data, dict):
+            raise RuntimeError("AnySearch response has no data object")
+        results_raw = nested_data.get("results")
+        if not isinstance(results_raw, list):
+            raise RuntimeError("AnySearch response has no results list")
+        return [
+            WebSearchResult(
+                title=str(item.get("title", "")),
+                url=str(item.get("url", "")),
+                snippet=str(item.get("content", item.get("snippet", ""))),
+                source=self.name,
+                published_at=(
+                    item.get("published_at")
+                    or item.get("publishedAt")
+                    or item.get("date")
+                ),
+            )
+            for item in results_raw[: min(limit, 10)]
+            if isinstance(item, dict)
+        ]
+
+
 class SerpApiWebSearchProvider(WebSearchProvider):
     """Call SerpAPI Google Search through the generic web-search credential."""
 
@@ -183,6 +270,7 @@ class SerpApiWebSearchProvider(WebSearchProvider):
 def build_web_search_provider(settings: Settings) -> WebSearchProvider:
     provider = settings.web_search.provider.strip().lower()
     providers = {
+        AnySearchWebSearchProvider.name: AnySearchWebSearchProvider,
         SerpApiWebSearchProvider.name: SerpApiWebSearchProvider,
         TavilyWebSearchProvider.name: TavilyWebSearchProvider,
     }

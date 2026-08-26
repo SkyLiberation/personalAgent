@@ -19,13 +19,16 @@ from pydantic import (
 )
 
 from personal_agent.application.investigation_project.admission import (
+    compiled_agent_bounded_sub_goal,
     execution_evidence_subgoal_keys,
     frozen_subgoal_keys,
     observed_url_locators,
+    plan_identity_uniqueness_error,
     repair_subgoal_logical_id,
     subgoal_definition_digest,
     unverified_tool_execution_operations,
 )
+from personal_agent.application.investigation_project.budget import ProjectBudgetLedger
 from personal_agent.application.investigation_project.capability_matching import (
     matching_execution_inventory,
 )
@@ -51,6 +54,7 @@ from personal_agent.domain.investigation_project import (
     PlanProposal,
     ProjectUsage,
     ReplanRequest,
+    RequirementRelevance,
     RequirementMapping,
     SubGoalDefinitionVersion,
     SubGoalExecutionProposal,
@@ -98,7 +102,7 @@ class _DerivedRequirementDraft(_Model):
     requirement_id: str = Field(min_length=1)
     statement: str = Field(min_length=1)
     acceptance_contract: str = Field(min_length=1)
-    completion_relevance: Literal["required", "informational"] = "required"
+    completion_relevance: RequirementRelevance = "required"
     mapped_logical_subgoal_ids: tuple[str, ...] = Field(min_length=1)
 
 
@@ -108,14 +112,14 @@ class _PlanDraft(_Model):
     subgoals: tuple[_SubGoalDraft, ...]
     requirement_mappings: tuple[RequirementMapping, ...]
 
-
-class _PlanRevisionDraft(_Model):
-    """Semantic changes only; frozen SubGoals are not model-writable fields."""
-
-    assumptions: tuple[PlanAssumption, ...] = ()
-    derived_requirements: tuple[_DerivedRequirementDraft, ...] = ()
-    revisable_subgoals: tuple[_SubGoalDraft, ...] = ()
-    requirement_mappings: tuple[RequirementMapping, ...]
+    @model_validator(mode="after")
+    def _require_unique_plan_identities(self) -> "_PlanDraft":
+        _validate_plan_draft_identities(
+            subgoals=self.subgoals,
+            derived_requirements=self.derived_requirements,
+            requirement_mappings=self.requirement_mappings,
+        )
+        return self
 
 
 class _IndependentRepairSubGoalDraft(_SubGoalDraft):
@@ -126,17 +130,28 @@ class _IndependentRepairSubGoalDraft(_SubGoalDraft):
     )
 
 
-class _RepairPlanRevisionDraft(_Model):
+class _PlanRevisionDraft(_Model):
+    """One revision contract; frozen SubGoals are not model-writable fields."""
+
     assumptions: tuple[PlanAssumption, ...] = ()
     derived_requirements: tuple[_DerivedRequirementDraft, ...] = ()
     revisable_subgoals: tuple[_SubGoalDraft, ...] = ()
     independent_repair_subgoals: tuple[
         _IndependentRepairSubGoalDraft,
         ...,
-    ] = Field(min_length=1)
+    ] = ()
+    requirement_mappings: tuple[RequirementMapping, ...] = ()
 
     @model_validator(mode="after")
-    def _require_one_unique_repair_per_gap(self) -> "_RepairPlanRevisionDraft":
+    def _require_unique_plan_identities(self) -> "_PlanRevisionDraft":
+        _validate_plan_draft_identities(
+            subgoals=(
+                *self.revisable_subgoals,
+                *self.independent_repair_subgoals,
+            ),
+            derived_requirements=self.derived_requirements,
+            requirement_mappings=self.requirement_mappings,
+        )
         logical_ids = [
             item.logical_subgoal_id
             for item in self.independent_repair_subgoals
@@ -152,6 +167,27 @@ class _RepairPlanRevisionDraft(_Model):
         return self
 
 
+def _validate_plan_draft_identities(
+    *,
+    subgoals: tuple[_SubGoalDraft, ...],
+    derived_requirements: tuple[_DerivedRequirementDraft, ...],
+    requirement_mappings: tuple[RequirementMapping, ...],
+) -> None:
+    error = plan_identity_uniqueness_error(
+        logical_subgoal_ids=tuple(
+            item.logical_subgoal_id for item in subgoals
+        ),
+        derived_requirement_ids=tuple(
+            item.requirement_id for item in derived_requirements
+        ),
+        requirement_mapping_ids=tuple(
+            item.requirement_id for item in requirement_mappings
+        ),
+    )
+    if error is not None:
+        raise ValueError(error[0])
+
+
 class _ToolOperationDraft(_Model):
     kind: Literal["tool"]
     tool_name: str
@@ -162,10 +198,9 @@ class _ToolOperationDraft(_Model):
 class _AgentOperationDraft(_Model):
     kind: Literal["agent"]
     agent_id: str
-    bounded_sub_goal: str
     context_artifact_refs: tuple[ResourceRef, ...] = ()
     expected_artifact_types: tuple[str, ...]
-    token_budget: int = Field(ge=0)
+    token_budget: int = Field(ge=1)
     cost_budget: float = Field(ge=0)
     time_budget_seconds: int = Field(ge=1)
 
@@ -197,6 +232,7 @@ class _ExecutionDraft(_Model):
 
 
 def _execution_output_type(
+    project: InvestigationProject,
     inventory: RuntimeCapabilityInventory,
     subgoal: SubGoalDefinitionVersion,
     *,
@@ -275,10 +311,38 @@ def _execution_output_type(
     ))
     if "agent" in subgoal.capability_contract.allowed_execution_kinds and agent_ids:
         agent_id_type = Literal.__getitem__(agent_ids)
+        agent_fields: dict[str, tuple[Any, Any]] = {
+            "agent_id": (agent_id_type, ...),
+        }
+        runtime_limits = tuple(
+            item.max_runtime_seconds
+            for item in matching.a2a_agents
+            if item.max_runtime_seconds is not None
+        )
+        if len(runtime_limits) == len(matching.a2a_agents):
+            agent_fields["time_budget_seconds"] = (
+                int,
+                Field(ge=1, le=max(runtime_limits)),
+            )
+        budget = ProjectBudgetLedger()
+        agent_fields["token_budget"] = (
+            int,
+            Field(
+                ge=1,
+                le=budget.remaining_tokens(
+                    project,
+                    category="external_delegation",
+                ),
+            ),
+        )
+        agent_fields["cost_budget"] = (
+            float,
+            Field(ge=0, le=budget.remaining_cost(project)),
+        )
         operation_types.append(create_model(
             "_AgentOperationWithAdmittedCapability",
             __base__=_AgentOperationDraft,
-            agent_id=(agent_id_type, ...),
+            **agent_fields,
         ))
     if "synthesis" in subgoal.capability_contract.allowed_execution_kinds:
         operation_types.append(_SynthesisOperationDraft)
@@ -303,7 +367,7 @@ def _execution_output_type(
 
 class _ObservationDraft(_Model):
     statement: str
-    evidence_refs: tuple[str, ...]
+    evidence_refs: tuple[str, ...] = Field(min_length=1)
     contradicted_assumption_ids: tuple[str, ...] = ()
     affected_logical_subgoal_ids: tuple[str, ...] = ()
 
@@ -324,9 +388,9 @@ class _VerificationDraft(_Model):
 
 
 class _GeneratedContentDraft(_Model):
-    content: str
     evidence_refs: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
+    content: str
 
 
 class _FinalVerificationDraft(_Model):
@@ -835,48 +899,48 @@ def _revision_output_type(
         __base__=_SubGoalDraft,
         capability_contract=(capability_type, ...),
     )
-    if not repair_gap_ids:
-        return create_model(
-            "_PlanRevisionWithAdmittedCapabilityDomains",
-            __base__=_PlanRevisionDraft,
-            revisable_subgoals=(tuple[revisable_type, ...], ()),
-        )
-    repair_types = []
-    for index, repair_gap_id in enumerate(repair_gap_ids):
-        repair_id_type = Literal.__getitem__((repair_gap_id,))
-        logical_id_type = Literal.__getitem__((
-            repair_subgoal_logical_id(repair_gap_id),
-        ))
-        repair_types.append(create_model(
-            (
-                "_AdmittedIndependentRepairSubGoalDraft"
-                if len(repair_gap_ids) == 1
-                else f"_AdmittedIndependentRepairSubGoalDraft{index}"
-            ),
-            __base__=_IndependentRepairSubGoalDraft,
-            logical_subgoal_id=(logical_id_type, ...),
-            capability_contract=(capability_type, ...),
-            repairs_frozen_logical_subgoal_ids=(
-                tuple[repair_id_type, ...],
-                Field(min_length=1, max_length=1),
-            ),
-        ))
-    repair_type: Any = repair_types[0]
-    for candidate in repair_types[1:]:
-        repair_type = repair_type | candidate
-    if len(repair_types) > 1:
-        repair_type = Annotated[
-            repair_type,
-            Field(discriminator="logical_subgoal_id"),
-        ]
-    return create_model(
-        "_RepairPlanRevisionWithAdmittedCapabilityDomains",
-        __base__=_RepairPlanRevisionDraft,
-        revisable_subgoals=(tuple[revisable_type, ...], ()),
-        independent_repair_subgoals=(
+    repair_field: tuple[Any, Any] = (
+        tuple[_IndependentRepairSubGoalDraft, ...],
+        Field(default=(), max_length=0),
+    )
+    if repair_gap_ids:
+        repair_types = []
+        for index, repair_gap_id in enumerate(repair_gap_ids):
+            repair_id_type = Literal.__getitem__((repair_gap_id,))
+            logical_id_type = Literal.__getitem__((
+                repair_subgoal_logical_id(repair_gap_id),
+            ))
+            repair_types.append(create_model(
+                (
+                    "_AdmittedIndependentRepairSubGoalDraft"
+                    if len(repair_gap_ids) == 1
+                    else f"_AdmittedIndependentRepairSubGoalDraft{index}"
+                ),
+                __base__=_IndependentRepairSubGoalDraft,
+                logical_subgoal_id=(logical_id_type, ...),
+                capability_contract=(capability_type, ...),
+                repairs_frozen_logical_subgoal_ids=(
+                    tuple[repair_id_type, ...],
+                    Field(min_length=1, max_length=1),
+                ),
+            ))
+        repair_type: Any = repair_types[0]
+        for candidate in repair_types[1:]:
+            repair_type = repair_type | candidate
+        if len(repair_types) > 1:
+            repair_type = Annotated[
+                repair_type,
+                Field(discriminator="logical_subgoal_id"),
+            ]
+        repair_field = (
             tuple[repair_type, ...],
             Field(min_length=1),
-        ),
+        )
+    return create_model(
+        "_PlanRevisionWithAdmittedCapabilityDomains",
+        __base__=_PlanRevisionDraft,
+        revisable_subgoals=(tuple[revisable_type, ...], ()),
+        independent_repair_subgoals=repair_field,
     )
 
 
@@ -934,10 +998,20 @@ class StructuredInvestigationPlanner:
                 "user requirements. Choose a supplied capability class, never a Provider "
                 "binding, authorization, state, or completion. Copy its exact "
                 "identity_operation when multiple classes share broad dimensions. When "
-                "acceptance "
-                "requires independently verified facts from multiple named sources, "
-                "protocols, or subjects, create separate evidence-acquisition subgoals so "
-                "one broad retrieval is not the sole evidence for every required item. "
+                "acceptance requires facts from multiple named sources, protocols, or "
+                "subjects, first inspect the supplied capability descriptions and "
+                "dimensions. If one Agent capability explicitly researches authoritative "
+                "web sources and returns an evidence-backed report, use one bounded "
+                "evidence-acquisition SubGoal whose objective and required_output "
+                "enumerate every named source and comparison. Do not split named sources "
+                "merely because there are several. Split acquisition only when the user "
+                "contract requires separately owned execution results or no single "
+                "supplied capability covers all required sources and outputs. Keep final "
+                "report synthesis as its own dependent SubGoal and map requirements to "
+                "both the acquisition and synthesis outcomes. This is capability-aware "
+                "planning, not a numerical call limit. Do not preallocate speculative "
+                "repair SubGoals in an initial plan; create repair work only after an "
+                "actual Verifier gap. "
                 "Every SubGoal is automatically checked by the Project semantic Verifier; "
                 "semantic verification or validation is never a Plan SubGoal of any "
                 "execution kind. Do not create a verification-domain SubGoal to check "
@@ -1239,7 +1313,7 @@ class StructuredInvestigationPlanner:
 
     @staticmethod
     def _materialize_revision(
-        draft: _PlanRevisionDraft | _RepairPlanRevisionDraft,
+        draft: _PlanRevisionDraft,
         *,
         project_id: str,
         based_on_event_sequence: int,
@@ -1256,14 +1330,9 @@ class StructuredInvestigationPlanner:
             item.logical_subgoal_id: item for item in previous_subgoals
         }
         explicit_subgoals = (
-            draft.revisable_subgoals
-            + (
-                draft.independent_repair_subgoals
-                if isinstance(draft, _RepairPlanRevisionDraft)
-                else ()
-            )
+            draft.revisable_subgoals + draft.independent_repair_subgoals
         )
-        if isinstance(draft, _RepairPlanRevisionDraft):
+        if frozen_gap_ids:
             frozen_ids = {
                 item.logical_subgoal_id for item in frozen_subgoals
             }
@@ -1328,7 +1397,7 @@ class StructuredInvestigationPlanner:
                 previous_requirement_mappings=previous_requirement_mappings,
                 frozen_gap_ids=frozen_gap_ids,
             )
-            if isinstance(draft, _RepairPlanRevisionDraft)
+            if frozen_gap_ids
             else draft.requirement_mappings
         )
         requirement_mappings = (
@@ -1388,15 +1457,34 @@ class StructuredInvestigationPlanner:
 
     @staticmethod
     def _repair_requirement_mappings(
-        draft: _RepairPlanRevisionDraft,
+        draft: _PlanRevisionDraft,
         *,
         previous_requirement_mappings: tuple[RequirementMapping, ...],
         frozen_gap_ids: tuple[str, ...],
     ) -> tuple[RequirementMapping, ...]:
+        replacements = StructuredInvestigationPlanner._repair_replacements(
+            draft,
+            frozen_gap_ids=frozen_gap_ids,
+        )
+        mappings = []
+        for mapping in previous_requirement_mappings:
+            logical_ids: list[str] = []
+            for logical_id in mapping.logical_subgoal_ids:
+                logical_ids.append(replacements.get(logical_id, logical_id))
+            mappings.append(RequirementMapping(
+                requirement_id=mapping.requirement_id,
+                logical_subgoal_ids=tuple(dict.fromkeys(logical_ids)),
+            ))
+        return tuple(mappings)
+
+    @staticmethod
+    def _repair_replacements(
+        draft: _PlanRevisionDraft,
+        *,
+        frozen_gap_ids: tuple[str, ...],
+    ) -> dict[str, str]:
         gap_ids = set(frozen_gap_ids)
-        replacements: dict[str, list[str]] = {
-            gap_id: [] for gap_id in frozen_gap_ids
-        }
+        replacements: dict[str, str] = {}
         for repair in draft.independent_repair_subgoals:
             unknown = set(repair.repairs_frozen_logical_subgoal_ids) - gap_ids
             if unknown:
@@ -1404,28 +1492,17 @@ class StructuredInvestigationPlanner:
                     f"repair references unknown frozen gaps: {sorted(unknown)}"
                 )
             for gap_id in repair.repairs_frozen_logical_subgoal_ids:
-                replacements[gap_id].append(repair.logical_subgoal_id)
-        missing = sorted(
-            gap_id for gap_id, ids in replacements.items() if not ids
-        )
+                if gap_id in replacements:
+                    raise ValueError(
+                        f"frozen verification gap has multiple repairs: {gap_id}"
+                    )
+                replacements[gap_id] = repair.logical_subgoal_id
+        missing = sorted(gap_ids - set(replacements))
         if missing:
             raise ValueError(
                 f"frozen verification gaps lack repair work: {missing}"
             )
-        mappings = []
-        for mapping in previous_requirement_mappings:
-            logical_ids: list[str] = []
-            for logical_id in mapping.logical_subgoal_ids:
-                if logical_id in gap_ids:
-                    logical_ids.extend(replacements[logical_id])
-                else:
-                    logical_ids.append(logical_id)
-            mappings.append(RequirementMapping(
-                requirement_id=mapping.requirement_id,
-                logical_subgoal_ids=tuple(dict.fromkeys(logical_ids)),
-            ))
-        return tuple(mappings)
-
+        return replacements
 
 class StructuredExecutionProposer:
     def __init__(self, model: StructuredModelClient) -> None:
@@ -1469,6 +1546,7 @@ class StructuredExecutionProposer:
         response = self._model.generate(_request(
             operation="investigation_subgoal_execution_proposal",
             output_type=_execution_output_type(
+                project,
                 capabilities,
                 subgoal,
                 observed_url_locators=observed_locators,
@@ -1528,6 +1606,13 @@ class StructuredExecutionProposer:
                     item.model_dump(mode="json")
                     for item in decision_feedback
                 ],
+                "remaining_agent_budget": {
+                    "tokens": ProjectBudgetLedger().remaining_tokens(
+                        project,
+                        category="external_delegation",
+                    ),
+                    "cost": ProjectBudgetLedger().remaining_cost(project),
+                },
                 "capabilities": _execution_inventory_payload(capabilities, subgoal),
                 "execution_scope": execution_scope.model_dump(mode="json"),
             },
@@ -1535,6 +1620,7 @@ class StructuredExecutionProposer:
         ))
         operation = _operation_from_draft(
             response.value.operation,
+            subgoal=subgoal,
             observed_url_candidates=observed_url_candidates,
         )
         proposal_id = new_proposal_id()
@@ -1777,9 +1863,12 @@ class UnavailableInvestigationModelPorts(
 def _operation_from_draft(
     draft,
     *,
+    subgoal: SubGoalDefinitionVersion,
     observed_url_candidates: tuple[dict[str, str], ...] = (),
 ):
     payload = draft.model_dump(mode="python")
+    if draft.kind == "agent":
+        payload["bounded_sub_goal"] = compiled_agent_bounded_sub_goal(subgoal)
     if draft.kind == "tool" and draft.tool_name == "capture_url":
         candidate_id = payload["typed_arguments"].get("candidate_id")
         if candidate_id is not None:

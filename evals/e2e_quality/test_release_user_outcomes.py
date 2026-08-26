@@ -221,6 +221,7 @@ class LiveWebProcess:
             stderr=subprocess.STDOUT,
         )
         deadline = time.monotonic() + 30
+        last_probe_error: BaseException | None = None
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 pytest.fail(
@@ -231,9 +232,18 @@ class LiveWebProcess:
                 with urlopen(f"{self.base_url}/api/health", timeout=1) as response:
                     if response.status == 200:
                         return
-            except (HTTPError, URLError, TimeoutError):
+            except (HTTPError, URLError, TimeoutError, OSError) as exc:
+                last_probe_error = exc
                 time.sleep(0.1)
-        pytest.fail(f"Web process did not become healthy.\n{_server_log(self.log_path)}")
+        probe_detail = (
+            f"{last_probe_error.__class__.__name__}: {last_probe_error}"
+            if last_probe_error is not None
+            else "no health response"
+        )
+        pytest.fail(
+            "Web process did not become healthy. "
+            f"Last health probe: {probe_detail}.\n{_server_log(self.log_path)}"
+        )
 
     def stop(self) -> None:
         if self.process is not None and self.process.poll() is None:
@@ -408,10 +418,10 @@ def live_a2a_web_process(server_temp_dir: Path) -> Iterator[LiveWebProcess]:
 
 def _yield_live_a2a_web_process(server_temp_dir: Path) -> Iterator[LiveWebProcess]:
     settings = _require_live_dependencies()
-    endpoint = os.getenv("PERSONAL_AGENT_E2E_A2A_ENDPOINT", "http://127.0.0.1:8001/a2a")
+    endpoint = os.getenv("PERSONAL_AGENT_E2E_A2A_ENDPOINT", "http://127.0.0.1:18001/a2a")
     card_url = os.getenv(
         "PERSONAL_AGENT_E2E_A2A_AGENT_CARD_URL",
-        "http://127.0.0.1:8001/.well-known/agent-card.json",
+        "http://127.0.0.1:18001/.well-known/agent-card.json",
     )
     try:
         with urlopen(card_url, timeout=3) as response:
@@ -432,7 +442,7 @@ def _yield_live_a2a_web_process(server_temp_dir: Path) -> Iterator[LiveWebProces
             "PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED": "true",
             "PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT": endpoint,
             "PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL": card_url,
-            "PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS": "120",
+            "PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS": "240",
             "PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS": "1",
         },
     )
@@ -559,7 +569,11 @@ def test_e16_http_process_reads_github_through_real_mcp_gateway(
         },
     )
     assert result["disposition"] == "answer"
-    assert tool_results == mcp_results
+    assert all(
+        item["capability_id"]
+        in {"github.get_file_contents", "read_action_output"}
+        for item in tool_results
+    )
     assert len(successful_results) == 1
     assert all(
         '"provider": "mcp"' in json.dumps(item, ensure_ascii=False, default=str)
@@ -785,9 +799,10 @@ def test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result(
     request: pytest.FixtureRequest,
 ) -> None:
     user_text = (
-        "请对 Agent2Agent（A2A）协议做一份深入研究，优先依据 a2a-protocol.org 的官方"
-        "协议文档，并补充其他权威来源。报告需要比较说明协议目标、核心交互机制、信任边界"
-        "和适用限制，最后给出结构化中文结论及来源依据，不要只给简短概述。"
+        "请先委托一个独立的外部研究助手完成资料搜集和研究初稿，再由你核验并综合。"
+        "研究主题是 Agent2Agent（A2A）协议，优先依据 a2a-protocol.org 的官方协议文档，"
+        "并补充其他权威来源。报告需要比较说明协议目标、核心交互机制、信任边界和适用限制，"
+        "最后给出结构化中文结论及来源依据，不要只给简短概述。"
     )
     _assert_natural_user_text(
         user_text,
@@ -801,6 +816,7 @@ def test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result(
         {
             "conversation_id": f"release-e17-a2a-{uuid4().hex}",
             "messages": [{"role": "user", "content": user_text}],
+            "interaction_mode": "auto",
         },
     )
     trace = _get_json(

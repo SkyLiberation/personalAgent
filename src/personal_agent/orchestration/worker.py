@@ -14,6 +14,8 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 logger = logging.getLogger(__name__)
 
+_INVESTIGATION_PROJECT_CYCLES_PER_LEASE = 1
+
 
 @dataclass(slots=True)
 class WorkerRunStats:
@@ -154,6 +156,7 @@ class WorkflowWorker:
                     user_id=user_id,
                 ),
                 project_id=project_id,
+                max_cycles=_INVESTIGATION_PROJECT_CYCLES_PER_LEASE,
             )
         )
         return True

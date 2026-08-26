@@ -54,7 +54,7 @@ Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构�
 
 ## Conversation Grounded Answer
 
-**Personal Knowledge 不再生成独立 Answer assessment；它只返回可验证的选择事实。** `KnowledgeService.select_evidence()` 拥有 selected EvidenceSpan、Claim 状态、conflict 与 scope，Conversation 将其作为 `personal_knowledge_context` Observation 消费，并与其他 Tool Observation 共同生成唯一 FinalMessage。
+**Personal Knowledge 不再生成独立 Answer assessment；它只返回可验证的选择事实。** 模型选择 `search_personal_knowledge` 后，`KnowledgeService` 按 EvidenceSpan、Claim 状态、conflict 和 scope 产生有界结果。Conversation 把该 `tool_result` 与其他工具的 `Observation` 共同交给唯一 FinalMessage 责任主体。
 
 执行事实、语义验证和完成仍分离：Tool/selection success 只证明读取发生；模型必须根据引用与冲突事实形成回答；缺 required evidence 时不能宣称完成。回答不会自动写回 Claim，显式保存必须另走确认写路径。
 

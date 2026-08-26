@@ -1,241 +1,43 @@
-# 生产风险优化方案
+# 生产风险与优化准入
 
-## 结论
+> 本文只提供当前生产风险的摘要和准入边界。唯一开放开发队列是[设计优化队列](future/design-optimization-backlog.md)；本文不维护 P0–P5 第二份状态，也不保留已完成实施流水。
 
-本文是生产风险与改进方向的 owner；[面试追问](interview/06-qa-and-tradeoffs.md) 只提供当前取舍的简短讲法，
-不再复制风险清单。当前项目已经具备 checkpoint、tool audit、Postgres 幂等账本、删除前确认、知识版本链等
-基础能力，但距离生产可控仍有几个关键缺口。
+## 1. 当前判断
 
-其中最大的生产风险曾是：**高风险知识删除缺少可恢复确认、幂等执行和精确恢复依据**。当前 P0 由固定的 `KnowledgeLifecycleService` 主链承担。
+当前最高的产品风险是 Durable Investigation Project 能创建和推进，却不能在当前 MiMo + GPT Researcher 样本组交付最终报告。主工程的局部 Plan、预算、调度和权限机制有各自证据，但不能代替 `0/20 delivered` 的产品结果。
 
-这个风险优先级最高的原因是：
+第二类风险是运行事实与外部服务证据不完整。预算超时已与用户取消分离，但 GPT Researcher 尚未返回可核验 usage，其角色选择调用也没有类型化输出契约。
 
-- 删除属于不可逆副作用，影响用户长期记忆和信任。
-- prepare 与 confirm 分离，prepare 不产生业务副作用并可跨进程恢复。
-- 客户端用 path command id 与认证身份选择待确认操作；服务端 `command_digest` 绑定 immutable Command、Operation 与 Receipt。
-- Operation、Personal Knowledge 状态迁移和 Receipt 在事务边界内保持一致。
-- Delete Receipt 保存 Item/Claim previous states，Restore 以它作为唯一恢复依据。
-- 相同 Command replay 返回同一 Receipt，不重复删除或恢复。
+第三类风险是发布证据与当前工作树未绑定。定向回归和历史 archive 可以支撑限定机制结论，但不能建立 clean-revision 发布资格。
 
-因此，后续优化应优先围绕“删除安全、审计可查、权限约束、事实固化、冲突治理、回放治理”逐层推进。
+## 2. 当前风险映射
 
-## 优先级总览
-
-| 优先级 | 方向 | 目标 |
+| 风险 | 当前证据 | 唯一下一门禁 |
 | --- | --- | --- |
-| P0 | 删除安全与恢复 | 删除可撤销、可追踪、可补偿 |
-| P1 | 工具审计产品化 | 高风险操作可查询、可脱敏、可告警 |
-| P2 | 生产权限模型 | personal knowledge/tenant/RBAC/ABAC 可落地 |
-| P3 | 固化质量候选假设 | 先用 baseline 验证长会话噪声是否造成错误知识 |
-| P4 | 知识冲突治理 | 自动发现冲突，降低错误覆盖 |
-| P5 | replay 治理 | 保留现网问题复现价值，同时约束副作用 |
+| 调查报告不交付 | 正式样本为 `20/20 project_selected`、`0/20 delivered` | 先定位最早阻止用户结果的单一责任主体，再做同输入 target 与消融 |
+| GPT Researcher 角色输出不可靠 | 单次委托约第 172 秒才因 JSON 形状错误回退，240 秒内未交付 | 只对照远端 typed `AgentRoleSelection` 与删除动态角色调用，不扩大资源 |
+| Agent usage 证据缺失 | 远端结果没有可核验 usage，投影也没有 typed usage 字段 | 先建立真实返回缺口与消费者，禁止为形式完整新增空字段 |
+| repair 依赖仍可能指向 frozen gap | 本地消融成立，真实 Outcome target 未消费该候选 | 只在它重新成为最早用户结果阻断时恢复 A1 |
+| 当前版本发布资格未建立 | 全量回归在 dirty worktree 通过，没有干净目标版本的完整产品矩阵 | 绑定可还原代码身份、配置样本组、评测器、Trace、report 和 checksum |
 
-## P0：删除安全与恢复
+## 3. 已有治理机制的表述边界
 
-### 当前状态
+下列机制已有生产代码和指定范围证据，不再作为本文的未完成实施计划：
 
-当前工程已具备 durable prepare/confirm、scope 校验、单 digest、事务 Receipt、
-exactly-once replay 和精确恢复。删除确认后，Personal Knowledge Knowledge Item/Claim
-进入 deleted 状态；如果用户后悔，可以基于已执行 delete command 创建独立
-restore command。
+- 知识删除与恢复的 immutable Command、确认绑定、Receipt 和幂等重放；
+- 工具风险、Policy、审计与作用域校验；
+- Memory 的授权召回、检索投影与 canonical fact 分离；
+- Conversation 工作项清单的审阅、修订、失效义务和 Completion 边界；
+- Agent 委托的 scope、budget、submission binding、ArtifactRef 和 timeout 事实。
 
-剩余风险是恢复冲突处理还比较基础：如果删除后同一知识已被新版本替代，当前恢复会按快照恢复原记录，尚未进入 `pending_restore_review` 或自动冲突合并流程。
+这些机制的具体证据强度与限制只在[当前端到端用例盘点](evals/02-current-case-inventory.md)维护。没有新的自然用户失败时，不为它们增加表、状态、Planner、Workflow 或第二写入口。
 
-### 优化方案
+## 4. 准入与停止规则
 
-1. 删除和恢复只有一个 Application 写入口。**已落地**
-2. prepare/decision 使用 `knowledge_lifecycle_operations`，执行结果使用
-   `knowledge_lifecycle_receipts`。**已落地**
-3. 双 digest、六张生命周期表、无消费者 Event、通用 Procedure/Tool 和 snapshot
-   写路径已移除。**已落地**
-4. 增加恢复冲突处理。**待落地**
-   - 如果原 note 已被新 note 替代，恢复时不直接覆盖。
-   - 进入 `conflicted` 或 `pending_restore_review` 状态，由人工确认是否恢复、合并或保持删除。
+1. 产品风险先通过正式入口的失败 baseline 复现用户结果缺口。
+2. 一次优化只定位一个责任主体，只关闭一个生产消费变量。
+3. target 与消融使用同一入口、输入、身份、初始事实、配置和评测器。
+4. target 失败后只能撤回、冻结或转入架构评审；不在同一轮增加预算、超时、重试或 Provider 专用提示词。
+5. 已完成、已撤回和未达到准入门槛的方案不继续留在开放队列。
 
-### 验收标准
-
-- 已删除知识不会出现在普通检索结果中。**已验证**
-- 删除 Command/Receipt 保存原因、执行人、确认引用和 affected facts。**已落地**
-- 删除后的 Item/Claim 可以通过 delete receipt 精确恢复。**已验证**
-- 重启与 replay 不重复副作用。**已验证**
-- 恢复冲突进入人工 review。**待落地**
-
-## P1：工具审计产品化
-
-### 当前风险
-
-工具审计事件已经落到 Postgres，但主要还是底层数据能力。生产上还需要查询、脱敏、告警、确认人记录和后台视图，否则问题发生后定位成本高，也难以满足高风险操作留痕要求。
-
-### 优化方案
-
-1. 增加审计查询 API。**已落地**
-   - 按 `user_id`、`run_id`、`thread_id`、`tool_name`、`risk_level`、`execution_mode`、`side_effect_id`、`artifact_ok`、时间范围查询：`GET /api/audit/events`。
-   - 按 idempotency key 追踪一次工具调用生命周期（账本 + 审计事件）：`GET /api/audit/events/by-idempotency/{key}`。
-   - 策略决策查询：`GET /api/audit/policy-decisions`（gateway 与 facade 两条路径的决策都经 `set_policy_decision_sink` 落到 `tool_policy_decisions` 表）。
-
-2. 增加审计脱敏策略。**已落地**
-   - `storage/audit_redaction.py` 按字段脱敏：`input` 内容字段（text/content/title/url/note_id 等）、`output.data`、`evidence` 默认掩码为 `<redacted:N chars>`，治理结构字段（tool_name/risk_level/side_effects/artifact_ok 等）保留。
-   - 仅管理员 API key 可传 `reveal=true` 查看原始 payload；普通用户查询强制限定到自身 `user_id` 且恒定脱敏。
-
-3. 增加高风险确认记录。**已落地**
-   - `tool_audit_events` 提升一等列：`run_id`、`confirmed`、`requires_confirmation`、`risk_level`、`side_effect_id`、`error`、`latency_ms`、`attempts`。
-   - 配合幂等账本（confirmer=user_id、committed_at）与删除快照（deleted_by/delete_reason/run_id），可回答“谁在什么时候确认了什么”。
-
-4. 增加指标和告警。**已落地**
-   - `GET /api/audit/metrics` 聚合：删除失败率、失败率、高风险调用数、重复 idempotency（幂等拦截特征）、策略拒绝数。
-   - 超阈值产生 `alerts` 并打点 `audit.alert` 指标。
-
-### 验收标准
-
-- 能通过 API 查询某次高风险工具调用的完整链路。**已满足**
-- 审计查询默认脱敏。**已满足**
-- 高风险操作能明确回答“谁在什么时候确认了什么”。**已满足**
-- 异常删除或重复调用能触发指标或告警。**已满足**
-
-## P2：生产权限模型
-
-### 当前风险
-
-PolicyEngine 已有基础策略拦截，但还缺 personal knowledge、tenant、RBAC、ABAC、API key 生命周期等生产级权限模型。多用户、多空间或管理后台接入后，权限边界容易变成隐性约定。
-
-### 优化方案
-
-1. 引入 personal knowledge/tenant 上下文。
-   - 所有 run、thread、note、tool audit、checkpoint 关联 personal knowledge。
-   - API 层强制传递并校验 personal knowledge scope。
-
-2. 增加 RBAC。
-   - 普通用户：只能管理自己的记忆。
-   - 管理员：可查询审计、执行受控恢复。
-   - 运维/调试角色：可 replay，但默认 dry-run。
-
-3. 增加 ABAC。
-   - 根据工具风险等级、数据敏感级别、来源、用户状态、时间窗口做动态策略。
-
-4. 完善 API key 和服务身份。
-   - key 绑定 personal knowledge、角色、过期时间和允许工具集合。
-   - 所有后台操作写入 actor 类型：user、admin、service、system。
-
-### 验收标准
-
-- 跨 personal knowledge 访问被拒绝。
-- replay、restore、delete 等高风险接口需要明确角色授权。
-- 审计记录能区分用户、管理员、服务账号和系统任务。
-
-## P3：固化事实收敛
-
-### 当前风险
-
-Conversation governed save 已只冻结模型从 user message 中逐字选择、由 Admission 机械校验
-来源的知识 span，确认后复用 Personal Knowledge `solidify_conversation`；assistant message 和保存/确认
-控制语义不会成为写入内容。B02 -> E14 已闭合单个明确结论场景；长 user message 中的临时假设、
-否定或修正仍未由正式入口 baseline 证明，因此以下内容只是待验证假设，不是实现授权。
-
-### 优化方案
-
-先执行同一自然输入的 baseline E2E，自动断言错误 Claim 内容；baseline 未失败或失败来自测试/
-环境时停止。只有产品错误成立后才选择最小方案：
-
-1. 将 solidify 输入约束为确认事实。
-   - 只消费 `confirmed_user_facts`、明确用户声明、明确用户修正。
-   - 禁止消费助手推断、未确认总结、临时上下文。
-
-2. 增加事实来源证据。
-   - 每条候选知识绑定原始消息 ID、摘要字段、置信度和确认状态。
-
-3. 增加固化前校验。
-   - 缺少证据、来源为 assistant-only、置信度不足时进入 review，不直接写入。
-
-4. 增加回归评测。
-   - 长会话噪声、用户纠正、否定事实、临时假设、角色扮演等用例。
-
-### 验收标准
-
-- assistant 推断不会被直接固化为用户知识。
-- 用户明确否定或修正后，旧事实不会继续被固化。
-- 固化候选可追溯到具体消息或 summary 字段。
-
-## P4：知识冲突治理
-
-### 当前风险
-
-知识版本链和 `conflicted` 状态已经存在，但冲突发现主要依赖显式流程。生产上，用户偏好、身份信息、长期事实会随时间变化，需要自动冲突检测和置信度模型辅助决策。
-
-### 优化方案
-
-1. 增加冲突检测。
-   - 对同一 subject、predicate、scope 的知识进行语义相似和矛盾判断。
-   - 检测到冲突后进入 `conflicted` 或 `pending_review`。
-
-2. 增加置信度模型。
-   - 用户直接声明 > 用户修正 > 多轮一致出现 > 助手推断。
-   - 越新的明确修正优先级越高。
-
-3. 增加冲突处理视图。
-   - 展示旧事实、新事实、证据消息、影响范围。
-   - 支持保留旧事实、接受新事实、合并、标记已过期。
-
-### 验收标准
-
-- 明显互斥知识不会静默覆盖。
-- 冲突知识不会直接进入默认检索结果。
-- 人工处理后版本链保持可追踪。
-
-## P5：replay 治理
-
-### 当前价值
-
-`replay_from_checkpoint` 的关键价值不是用户级删除恢复，而是现网问题复现。它可以定位某个用户、某个 run、某个 checkpoint 的失败状态，并从该状态 fork 回放，从而复现当时的候选知识、确认状态、工具输入和编排路径。
-
-### 当前风险
-
-如果 replay 不加治理，可能重复触发外部副作用，或者让调试能力变成绕过正常权限与确认流程的入口。
-
-### 优化方案
-
-1. replay 默认 dry-run。
-   - 默认禁用真实外部写入和真实删除。
-   - 工具调用进入 shadow mode，记录将要执行的工具与参数。
-
-2. replay 需要独立权限。
-   - 只允许管理员、运维或调试角色使用。
-   - 必须绑定 incident、run_id、thread_id 和操作原因。
-
-3. replay 写入审计。
-   - 记录 replay 发起人、源 checkpoint、fork 后 checkpoint、输入覆盖、工具策略。
-
-4. replay 与幂等账本配合。
-   - 默认使用新的 replay namespace，避免污染原始执行账本。
-   - 允许只读重放、工具 mock 重放、受控真实重放三种模式。
-
-### 验收标准
-
-- replay 可以复现线上失败路径。
-- 默认不会重复执行真实删除或外部写入。
-- 所有 replay 行为可审计、可追踪、可按 incident 查询。
-
-## 推荐实施顺序
-
-1. **P1 工具审计产品化**：P0 数据恢复闭环已落地，下一步要让删除、恢复、replay 和外部副作用都能被查、被解释、被告警。
-2. **P2 生产权限模型**：在管理后台和多用户场景扩展前，先建立明确授权边界。
-3. **P5 replay 治理**：已有 replay 能力应尽快约束默认行为，避免调试接口变成副作用入口。
-4. **P3 固化事实收敛**：降低错误知识进入长期记忆的概率。
-5. **P4 知识冲突治理**：在长期记忆规模增长后，提升质量和人工处理效率。
-6. **P0 恢复冲突补强**：为 restore 增加冲突检测、人工 review 和合并策略。
-
-## 第一阶段落地建议
-
-第一阶段建议只做 P0 与 P1 的最小闭环：
-
-- 删除改软删除。
-- 增加删除前快照。
-- 增加 restore API。
-- 恢复操作接入 ToolGateway、PolicyEngine、幂等账本和审计。
-- 增加最小审计查询 API，支持按 run、thread、tool、risk 查询。
-- 给删除和恢复补充单元测试与集成测试。
-
-完成后，系统至少能回答三个生产问题：
-
-- 这条知识是谁、什么时候、因为什么删掉的？
-- 删除前它的完整内容是什么？
-- 如果误删，能否在业务层恢复？
+当前开放编号、状态和下一门禁见[设计优化队列](future/design-optimization-backlog.md)。

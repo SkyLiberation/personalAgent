@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import ConfigDict, Field, create_model
 
 from personal_agent.infra.mcp import MCPError, MCPJsonRpcClient, MCPToolDefinition
 from personal_agent.capabilities.contracts.execution import MCPCapability
 from personal_agent.kernel.config_models import MCPConfig, MCPServerConfig, MCPToolConfig
-from personal_agent.tools.base import governance_extras, tool_response, tool_success
+from personal_agent.tools.base import ToolError, governance_extras, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,11 @@ def build_mcp_tool(
         tool_name=tool_name,
         description=description,
     )
+    output_validator = _output_validator(
+        server_id=server.server_id,
+        remote_name=mapping.remote_name,
+        output_schema=mapping.output_schema,
+    )
 
     def _invoke(**kwargs: Any):
         arguments = _remote_arguments(
@@ -90,6 +98,12 @@ def build_mcp_tool(
             omit_none_arg_names=omit_none_arg_names,
         )
         result = client.call_tool(mapping.remote_name, arguments)
+        _validate_mcp_result(
+            server_id=server.server_id,
+            remote_name=mapping.remote_name,
+            result=result,
+            output_validator=output_validator,
+        )
         return tool_response(tool_success(_normalize_mcp_result(
             server_id=server.server_id,
             remote_name=mapping.remote_name,
@@ -214,6 +228,75 @@ def _json_schema_to_args_model(tool_name: str, schema: dict[str, Any]):
         additional,
         frozenset(omit_none_arg_names),
     )
+
+
+def _output_validator(
+    *,
+    server_id: str,
+    remote_name: str,
+    output_schema: dict[str, Any] | None,
+) -> Draft202012Validator | None:
+    if output_schema is None:
+        return None
+    try:
+        Draft202012Validator.check_schema(output_schema)
+    except SchemaError as error:
+        raise MCPError(
+            f"MCP tool {server_id}.{remote_name} has an invalid output schema: "
+            f"{error.message}"
+        ) from error
+    return Draft202012Validator(output_schema)
+
+
+def _validate_mcp_result(
+    *,
+    server_id: str,
+    remote_name: str,
+    result: dict[str, Any],
+    output_validator: Draft202012Validator | None,
+) -> None:
+    tool_identity = f"{server_id}.{remote_name}"
+    if result.get("isError") is True:
+        raise ToolError(
+            f"MCP tool {tool_identity} returned an error result.",
+            kind="unrecoverable",
+        )
+    if output_validator is None:
+        return
+    structured_content = result.get("structuredContent")
+    try:
+        output_validator.validate(structured_content)
+    except ValidationError as error:
+        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+        raise ToolError(
+            f"MCP tool {tool_identity} result violates its declared output schema "
+            f"at {location}: {error.message}",
+            kind="unrecoverable",
+        ) from error
+
+    serialized_text = _single_json_text_content(result.get("content"))
+    if serialized_text is not None and serialized_text != structured_content:
+        raise ToolError(
+            f"MCP tool {tool_identity} result violates its declared output schema: "
+            "structuredContent conflicts with its JSON text content.",
+            kind="unrecoverable",
+        )
+
+
+def _single_json_text_content(content: Any) -> Any | None:
+    if not isinstance(content, list) or len(content) != 1:
+        return None
+    item = content[0]
+    if not isinstance(item, dict) or item.get("type") != "text":
+        return None
+    text = item.get("text")
+    if not isinstance(text, str):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, (dict, list)) else None
 
 
 def _remote_arguments(

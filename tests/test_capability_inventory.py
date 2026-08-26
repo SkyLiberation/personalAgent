@@ -83,6 +83,7 @@ def test_runtime_inventory_keeps_definition_configuration_and_health_separate() 
             provider="gpt_researcher",
             protocol="a2a_jsonrpc",
             capability_ids=("agent:gpt_researcher",),
+            max_runtime_seconds=240,
         ),),
         a2a_assembly=(A2AAssemblyDefinition(
             agent_id="gpt_researcher",
@@ -104,6 +105,7 @@ def test_runtime_inventory_keeps_definition_configuration_and_health_separate() 
     assert inventory.a2a_agents[0].implementation_present is True
     assert inventory.a2a_agents[0].discovery_state == "registered_profile"
     assert inventory.a2a_agents[0].provider_availability == "not_observed"
+    assert inventory.a2a_agents[0].max_runtime_seconds == 240
 
 
 def test_disabled_remote_config_is_reported_without_inventing_discovery() -> None:

@@ -1,0 +1,11 @@
+diff --git a/src/personal_agent/orchestration/worker.py b/src/personal_agent/orchestration/worker.py
+--- a/src/personal_agent/orchestration/worker.py
++++ b/src/personal_agent/orchestration/worker.py
+@@ -160,7 +160,6 @@ class WorkflowWorker:
+                     user_id=user_id,
+                 ),
+                 project_id=project_id,
+-                max_cycles=_INVESTIGATION_PROJECT_CYCLES_PER_LEASE,
+             )
+         )
+         return True

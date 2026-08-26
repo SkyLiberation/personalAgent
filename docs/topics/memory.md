@@ -90,7 +90,8 @@ Graph 与 Retrieval Index 是可重建读投影，不是长期事实 owner。Per
 
 ```text
 Conversation turn
-  -> visibility/scope-filtered personal evidence prefetch
+  -> model selects search_personal_knowledge when current goal needs saved facts
+  -> visibility/scope-filtered personal evidence tool_result
   -> model may call admitted read-only tools such as web_search
   -> bounded Observations
   -> one Conversation FinalMessage

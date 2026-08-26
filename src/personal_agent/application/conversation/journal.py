@@ -12,6 +12,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.evidence import EvidenceItem
 
 from .errors import ConversationOperationNotFound
 from .models import (
@@ -123,6 +124,42 @@ class InMemoryInteractionJournal:
             for observation in observations_by_step[step.step_id]
         )
 
+    def conversation_evidence_refs(
+        self,
+        conversation_id: str,
+        principal: AuthenticatedPrincipal,
+    ) -> tuple[str, ...]:
+        """Project scoped URL evidence produced by successful execution facts."""
+
+        with self._lock:
+            traces = tuple(self._traces.values())
+        refs: dict[str, str] = {}
+        for trace in sorted(traces, key=lambda item: item.interaction_run_ref):
+            if trace.conversation_id != conversation_id or trace.principal != principal:
+                continue
+            for observation in trace.inputs:
+                if (
+                    not isinstance(observation, ActionObservation)
+                    or observation.status != "succeeded"
+                ):
+                    continue
+                evidence_items = observation.payload.get("evidence", ())
+                if not isinstance(evidence_items, list):
+                    continue
+                for payload in evidence_items:
+                    try:
+                        evidence = EvidenceItem.model_validate(payload)
+                    except ValidationError:
+                        continue
+                    if not evidence.url or evidence.url in refs:
+                        continue
+                    refs[evidence.url] = json.dumps(
+                        {"title": evidence.title, "url": evidence.url},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+        return tuple(refs.values())
+
 
 class FileInteractionJournal(InMemoryInteractionJournal):
     """Durable append-only snapshots of committed interaction facts."""
@@ -207,6 +244,15 @@ class FileInteractionJournal(InMemoryInteractionJournal):
             principal,
             working_plan,
         )
+
+    def conversation_evidence_refs(
+        self,
+        conversation_id: str,
+        principal: AuthenticatedPrincipal,
+    ) -> tuple[str, ...]:
+        for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
+            self.get(run_dir.name)
+        return super().conversation_evidence_refs(conversation_id, principal)
 
 
 __all__ = [

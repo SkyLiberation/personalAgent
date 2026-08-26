@@ -1,7 +1,7 @@
 """Reading semantic verification receipts out of committed interaction facts.
 
 One concern remains here. The runtime owns when verification happens and what
-criteria it uses (see :mod:`review_admission`), so there is nothing left to admit
+criteria it uses (see :mod:`interaction_intent`), so there is nothing left to admit
 about a model's verification behavior -- the model can no longer see the verifier,
 let alone call it, skip it, or choose its criteria. What is still needed is a
 typed read of what verification actually produced.

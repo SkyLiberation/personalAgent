@@ -1,0 +1,68 @@
+diff --git a/src/personal_agent/application/conversation/interaction_intent.py b/src/personal_agent/application/conversation/interaction_intent.py
+--- a/src/personal_agent/application/conversation/interaction_intent.py
++++ b/src/personal_agent/application/conversation/interaction_intent.py
+@@ -184,60 +184,12 @@ def derive_interaction_intent(
+         max_tokens=800,
+         metadata={"component": "conversation_intent_admission"},
+     ))
+     admitted = admit_interaction_intent(response.value, messages=messages)
+-    if admitted.lifecycle_grounded:
+-        return admitted, (response,), ()
+-
+-    feedback = lifecycle_revision_feedback()
+-    revision_messages = [
+-        {
+-            "role": "system",
+-            "content": (
+-                f"{_DERIVATION_INSTRUCTION}\n\n"
+-                "The previous lifecycle proposal was rejected by deterministic "
+-                "Admission. Revise only execution_lifecycle, lifecycle_source_span, "
+-                "interaction_phase, and phase_source_span. Requirements remain frozen "
+-                "and any changed requirements will be ignored. If the latest user "
+-                "message does require independent work after this response, copy the "
+-                "smallest exact proving substring. Otherwise return conversation with "
+-                "an empty lifecycle_source_span. Previous proposal: "
+-                f"{response.value.model_dump_json()}. Typed feedback: "
+-                f"{feedback.model_dump_json()}."
+-            ),
+-        },
+-        *(message.model_dump(mode="json") for message in messages),
+-    ]
+-    try:
+-        revision = model_client.generate(StructuredModelRequest(
+-            operation="interaction_intent",
+-            version="v2",
+-            messages=revision_messages,
+-            output_type=InteractionIntentProposal,
+-            context_projection_ref=sealed_context_projection_ref(
+-                purpose="interaction_intent_revision",
+-                messages=revision_messages,
+-            ),
+-            temperature=0,
+-            max_tokens=800,
+-            metadata={
+-                "component": "conversation_intent_admission",
+-                "revision_attempt": 1,
+-            },
+-        ))
+-    except Exception:
+-        return admitted, (response,), (feedback,)
+-
+-    revised_proposal = response.value.model_copy(update={
+-        "execution_lifecycle": revision.value.execution_lifecycle,
+-        "lifecycle_source_span": revision.value.lifecycle_source_span,
+-        "interaction_phase": revision.value.interaction_phase,
+-        "phase_source_span": revision.value.phase_source_span,
+-    })
+-    return (
+-        admit_interaction_intent(revised_proposal, messages=messages),
+-        (response, revision),
+-        (feedback,),
++    return admitted, (response,), (
++        ()
++        if admitted.lifecycle_grounded
++        else (lifecycle_revision_feedback(),)
+     )
+ 
+ 
+ def lifecycle_revision_feedback() -> DecisionFeedback:

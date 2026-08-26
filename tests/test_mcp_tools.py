@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from personal_agent.capabilities.contracts.grants import AtomicCapabilityGrant, GrantDependencySet
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.governance import ToolGateway, ToolGatewayContext
@@ -30,7 +32,12 @@ from personal_agent.tools import (
     tool_schema,
     tool_success,
 )
-from personal_agent.tools.mcp import build_mcp_tool
+from personal_agent.tools.mcp import (
+    _output_validator,
+    _validate_mcp_result,
+    build_mcp_tool,
+)
+from personal_agent.tools.base import ToolError
 from personal_agent.tools.mcp_capability import capability_from_tool
 from langchain_core.tools import tool
 from tests.test_tools import _scope
@@ -422,6 +429,183 @@ def test_mcp_optional_non_nullable_argument_accepts_none_and_omits_it():
         "remote_name": "read_text_file",
         "arguments": {"path": "D:/docs/architecture.md"},
     }]
+
+
+def test_mcp_declared_output_schema_rejects_malformed_structured_content():
+    class MalformedResultClient:
+        def call_tool(self, remote_name: str, arguments: dict):
+            assert remote_name == "search"
+            assert arguments == {"query": "agent"}
+            return {
+                "content": [{"type": "text", "text": "found one result"}],
+                "structuredContent": {"count": "one"},
+            }
+
+    mapping = _parse_mcp_config(json.dumps({
+        "enabled": True,
+        "servers": [{
+            "server_id": "docs",
+            "endpoint": "https://mcp.example/rpc",
+            "tools": [{
+                "remote_name": "search",
+                "name": "enterprise.search_docs",
+                "semantic_domains": ["docs"],
+                "resource_types": ["page"],
+                "operations": ["search"],
+                "trust_level": "scoped",
+                "credential_mode": "delegated_token",
+                "data_egress_class": "content",
+                "attestation_status": "pinned",
+                "freshness_profile": "near_realtime",
+                "output_contract": "ToolResult",
+                "evidence_contract": "provider_output",
+                "failure_semantics": "return_typed_failure",
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"count": {"type": "integer"}},
+                    "required": ["count"],
+                    "additionalProperties": False
+                }
+            }]
+        }]
+    })).servers[0].tools[0]
+    remote = MCPToolDefinition(
+        name="search",
+        description="Search documents",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+        raw={},
+    )
+    built = build_mcp_tool(
+        MalformedResultClient(),
+        MCPServerConfig(server_id="docs", endpoint="https://mcp.example/rpc"),
+        mapping,
+        remote,
+    )
+    executor = ToolExecutor(audit_sink=InMemoryToolAuditSink())
+    executor.register(built)
+
+    result = executor.invoke_direct(
+        built.name,
+        execution_scope=_scope(),
+        query="agent",
+        user_id="u1",
+    )
+
+    assert result["ok"] is False
+    assert result["error_kind"] == "unrecoverable"
+    assert "output schema" in result["error"].lower()
+
+
+@pytest.mark.parametrize(
+    ("provider_result", "error_fragment"),
+    [
+        (
+            {
+                "structuredContent": {"account_id": "MISSING"},
+                "content": [{
+                    "type": "text",
+                    "text": '{"account_id":"MISSING"}',
+                }],
+            },
+            "required property",
+        ),
+        (
+            {
+                "structuredContent": {
+                    "account_id": "WRONG_TYPE",
+                    "verified_limit": "9102",
+                },
+                "content": [{
+                    "type": "text",
+                    "text": '{"account_id":"WRONG_TYPE","verified_limit":"9102"}',
+                }],
+            },
+            "not of type 'integer'",
+        ),
+        (
+            {
+                "structuredContent": {
+                    "account_id": "CONFLICT",
+                    "verified_limit": 4200,
+                },
+                "content": [{
+                    "type": "text",
+                    "text": '{"account_id":"CONFLICT","verified_limit":9900}',
+                }],
+            },
+            "conflicts with its JSON text content",
+        ),
+        (
+            {
+                "isError": True,
+                "content": [{"type": "text", "text": "provider unavailable"}],
+            },
+            "returned an error result",
+        ),
+    ],
+    ids=("missing-required", "wrong-type", "text-conflict", "provider-error"),
+)
+def test_mcp_result_contract_classifies_protocol_violations(
+    provider_result: dict,
+    error_fragment: str,
+) -> None:
+    validator = _output_validator(
+        server_id="docs",
+        remote_name="lookup_account_limit",
+        output_schema={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string"},
+                "verified_limit": {"type": "integer"},
+            },
+            "required": ["account_id", "verified_limit"],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ToolError, match=error_fragment):
+        _validate_mcp_result(
+            server_id="docs",
+            remote_name="lookup_account_limit",
+            result=provider_result,
+            output_validator=validator,
+        )
+
+
+def test_mcp_result_contract_accepts_matching_structured_and_json_text() -> None:
+    validator = _output_validator(
+        server_id="docs",
+        remote_name="lookup_account_limit",
+        output_schema={
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string"},
+                "verified_limit": {"type": "integer"},
+            },
+            "required": ["account_id", "verified_limit"],
+            "additionalProperties": False,
+        },
+    )
+
+    _validate_mcp_result(
+        server_id="docs",
+        remote_name="lookup_account_limit",
+        result={
+            "structuredContent": {
+                "account_id": "VALID",
+                "verified_limit": 7301,
+            },
+            "content": [{
+                "type": "text",
+                "text": '{"account_id":"VALID","verified_limit":7301}',
+            }],
+        },
+        output_validator=validator,
+    )
 
 
 def test_mcp_gateway_enforces_grant_resource_locator_binding():

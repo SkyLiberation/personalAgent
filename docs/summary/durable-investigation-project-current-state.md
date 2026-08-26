@@ -1,210 +1,74 @@
-# Durable Investigation Project 当前实现
+# Durable Investigation Project 当前状态
 
-## 1. 结论与证据边界
+> 本文只记录 2026-08-26 的生产路径、事实归属和证据边界。历史失败与机制对照由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的候选由[设计优化队列](../future/design-optimization-backlog.md)拥有。
 
-Investigation Project 已成为独立的 durable 产品入口，而不是 Conversation 的隐藏模式。
-正式 API 可以异步创建、只读查询、steering、审批、暂停、恢复和取消；worker 从 PostgreSQL
-journal 重建 Project，并按 accepted Plan 计算 ready set、dispatch、join、coverage 与
-Completion。
+## 1. 当前判断
 
-**该纵切的生产可达性和回归覆盖不等于产品必要性已经准入。** 后续审计确认：实现前没有来自
-真实用户、工单、公开契约或同输入正式入口失败的证据；原 LT09 没有运行 Conversation 对照，
-`E23` 只证明已有 Project 的 Conversation handoff 缺口。因此当前禁止据此扩张 Project 机制，
-也不能在没有消费者、迁移和行为 baseline 的情况下删除已公开入口或持久化事实。
+Investigation Project 已具备独立持久化生命周期，但尚未证明当前 MiMo + GPT Researcher 路径能交付最终调查报告。正式 Conversation 请求可以创建 Project，worker 也可以恢复并推进 journal；当前权威产品样本仍为 `20/20 project_selected`、`0/20 delivered`。
 
-当前 LT01–LT08、LT10–LT13 使用生产 Domain、Application、PostgreSQL store、worker queue 和 Artifact owner，
-但 semantic model 与外部 Provider 是 scripted/frozen Port。B03 已补正式 HTTP/worker、真实模型
-和 Web Search baseline，并证明 verification repair 的生产死锁；相关 runtime 缺口已修复。
-Firecrawl Web Search Adapter 已删除，当前生产搜索绑定为 Tavily；URL 正文读取仍显式绑定
-builtin，不存在运行时 Provider fallback。SerpAPI 仅作为显式历史/对照 Adapter 保留。IP01
-历史归档曾从正式 HTTP/worker 入口经过真实模型、SerpAPI、URL reader、Verifier、Synthesis
-和 Completion Gate 交付最终报告：archive
-`20260729T101501.732689Z-53628-6c5f02f2`，`1 passed in 86.42s`，3/3 outcome satisfied，
-5 条 admitted evidence，`environment_failed=false`。这证明 IP01 repair 缺口已闭合，但不替代
-尚未执行的完整 live GitHub/Notion/Web/A2A 发布矩阵和重复运行方差。
+因此，Project 生命周期可达和最终报告交付必须分开陈述。accepted Plan、ExecutionRef、Artifact 或调度事件的增加都不能替代用户结果。
 
-## 2. Canonical owners
+## 2. 事实归属
 
-| 事实 | 唯一 owner/写入口 |
+| 事实 | 唯一责任主体与写入口 |
 | --- | --- |
-| Project definition、accepted Plan、SubGoal、waiting、budget、verification、completion | 事实 owner 是 `InvestigationProject` aggregate；唯一 Application 写入口是 `InvestigationProjectService`，通过 typed event 追加 |
-| Project persistence | `PostgresInvestigationProjectStore` definition + append-only events |
-| child Agent definition、submission binding、projection | `AgentGateway` + `PostgresAgentRunStore` |
-| Artifact 正文与私有路径 | `ArtifactService` |
-| Tool 执行事实、policy、idempotency、audit | `ToolGateway` |
-| Web Search Provider 与凭据 | `Settings.web_search` + `PERSONAL_AGENT_WEB_SEARCH_*`；当前生产绑定 Tavily，SerpAPI 仅显式对照 |
-| URL 正文 Provider 绑定 | `Settings.url_capture_provider` + Composition Root；单值绑定，无 runtime fallback |
-| repair-to-frozen-gap lineage | accepted `SubGoalDefinitionVersion.repairs_frozen_subgoals`；仅随 Plan 接受写入 |
-| Execution Proposal 拒绝事实 | Project journal `ExecutionProposalRejectedData`；仅由 `InvestigationProjectService` append |
-| queue lease/retry/dead letter | `PostgresWorkerQueueStore` |
-| 开放语义 Proposal/Assessment | Project structured-model Ports |
+| Project definition、accepted Plan、SubGoal、budget、Outcome 与 Completion | `InvestigationProject` Aggregate，由 `InvestigationProjectService` 追加 typed event |
+| Project 持久化 | `PostgresInvestigationProjectStore` 保存 definition 和 append-only journal |
+| worker lease、retry 与死信 | `PostgresWorkerQueueStore` |
+| 子智能体 definition、submission binding 与终态 | `AgentGateway` 与 `PostgresAgentRunStore` |
+| Artifact 正文和私有路径 | `ArtifactService`；Project 只保存带作用域的 `ArtifactRef` |
+| Tool 权限、幂等与执行事实 | `ToolGateway` |
+| 开放语义 Plan、Execution Proposal 与 Verification | 对应模型 Port 产生 Proposal，Application Admission 决定是否接受 |
 
-Project 只保存 Artifact `ResourceRef`；AgentRun 不保存 Provider 正文；Gateway context 只接收
-canonical `ExecutionScope`。API key 配置映射到 typed `AuthenticatedPrincipal`，不再使用
-`key:user` 字符串映射。
+API 查询只读 projection，不调用模型，也不借查询推进 Project。
 
 ## 3. 生产主链
 
 ```text
 POST /api/investigation-projects
-  -> persist immutable definition
-  -> enqueue investigation worker task
+  -> 保存 immutable definition
+  -> 向 investigation queue 入队
   -> 202 + project_id
 
 worker lease
-  -> rehydrate Project journal
+  -> 从 journal 恢复 Project
   -> Planner Proposal -> Plan Admission -> accepted Plan
-  -> deterministic ready set
-  -> Execution Proposal -> capability/policy admission
-  -> ToolGateway | durable AgentGateway | synthesis
-  -> Evidence Admission -> semantic Verifier
-  -> committed SubGoal Outcome
-  -> deterministic Completion Gate
-  -> generated final ArtifactRef + CompletionReport
+  -> 确定性计算 ready set
+  -> Execution Proposal -> Tool / Agent / synthesis
+  -> Evidence Admission -> Verification -> SubGoalOutcome
+  -> Completion -> final ArtifactRef / report
 ```
 
-GET 只读取 projection，不驱动 worker，不调用模型，也不推进状态。worker 启动到
-`investigation` queue 时扫描 recoverable Project 并用稳定 idempotency key 重新入队，覆盖
-create 已提交但 enqueue 前崩溃的窗口。
+Project 恢复时只能继续已提交事实。相同 submission key 不得盲目重提外部智能体；无法确认提交结果时必须 fail closed。用户暂停、系统暂停、取消与运行超时各自保留 typed 原因，不共用模糊终态。
 
-## 4. Durable Agent 与 Artifact
+## 4. Plan 的内聚边界
 
-Agent submission 顺序是：
+初始 Plan 与修订 Plan 必须分离。初始 Plan 定义完整待执行图；修订 Plan 只能修改未冻结部分，并保护已发生的 Proposal、ExecutionRef、Artifact 和 Outcome。
 
-1. 以 stable submission key 和 immutable definition digest 写 reservation；
-2. 调用 registered Provider Adapter；
-3. 将 provider task id 与同一 run commit；
-4. 重启后若 reservation 已存在但 binding 缺失，只允许 `lookup_submission(key)`；
-5. Provider 不支持 lookup 或查不到时返回 `AgentSubmissionOutcomeUnknown`，禁止盲目重提。
+普通修订与 verification repair 不是两个事实责任主体。当前实现使用单一 `_PlanRevisionDraft`、单一物化路径和单一 Admission 语义；动态 Schema 只在存在冻结 verification gap 时允许 `independent_repair_subgoals`。初始 Plan 不与修订 Plan 合并，因为两者的写权限不同。
 
-Grant 的 AuthorizationDigest、ExecutionCommandDigest 和 submission key 写入 canonical child
-definition。Provider Artifact 先通过 `ArtifactService.write_generated` 落入 owner scope，
-AgentRun 只保存 `ResourceRef`。Conversation 或 Project 读取正文时必须再次通过 principal 和
-resource owner 校验。
+Verifier 拒绝已执行 SubGoal 时，旧执行事实保持冻结。修订 Plan 必须新增可运行 repair work，并将需求映射指向新 Outcome。工程曾尝试把所有非 frozen 下游依赖自动改指向 repair；正式 target 虽真实消费该机制，仍因 repair 结果契约不满足而得到 0 Outcome，因此自动重绑定及专用测试已经撤回。
 
-## 5. Project state and control
+## 5. 外部智能体边界
 
-Project 状态为 `planning -> active -> paused/cancelling/completing -> terminal`。steering 只修订
-未冻结 SubGoal；accepted/running/completed work 不被 revision 覆盖。审批绑定
-AuthorizationDigest；取消会调用已关联 child run，并将终态后返回的 Artifact quarantine，
-不会重新打开 Project。
+GPT Researcher 本身拥有规划、检索、迭代和综合循环。Project 外层又拥有 Plan、SubGoal Verification、repair 和 final Completion，因此当前路径存在重复编排风险。只移除 Project 外层循环的旧单次委托曾在 240 秒超时；根因定位到 A2A 内部无独立消费者的动态角色调用，而不是主工程 `json_schema`。
 
-暂停原因是 Project journal 的 canonical fact。`resume` 只解除 `user_paused`；预算、能力、
-审批或修复条件造成的系统暂停必须由对应 typed condition 解除。恢复扫描不会重新入队任何
-paused Project。
+A2A 构造边界现已绑定确定性通用研究角色，其他 GPT Researcher 入口仍保留原行为。同任务单变量诊断由 240.14 秒超时变为 96.26 秒完成，生成两个官方来源组且 `choose_agent=0`；完整内容 grader 和 usage 契约仍未通过。随后正式 Project 重审形成 3 个 Artifact 和 4 个来源，但 repair 报告被 Verifier 拒绝，planning budget 随后用尽，仍为 0 Outcome。当前没有准入中的生产优化条目。
 
-Verifier 判定已执行 SubGoal 不满足时，原 Proposal、ExecutionRef 和 Evidence 保持冻结；Plan
-revision 必须新增独立可运行 repair work，并把 required mapping 转向其可验证 outcome。
-PlanAdmission 接受 remap 后才清除旧 verification wait。拒绝产生的 typed `DecisionFeedback`
-按决策范围分别处理：Plan Admission 拒绝由 `ReplanRequest` 返回 Replanner；普通 Execution
-Admission 拒绝写入 `ExecutionProposalRejectedData`，在同一 accepted Plan/SubGoal 上局部重提。
-等价反馈按不含 event sequence 的 digest 计数，达到 `same_feedback_revision_limit` 后局部
-fail closed，禁止用全局 Replan 掩盖来源选择错误或重放原 Tool。
+## 6. Verification 与 Completion
 
-repair SubGoal 必须保存被修复 frozen SubGoal 的 canonical version ref。Execution Proposer 只
-获得依赖与递归 repair-lineage 闭包中的 admitted evidence；不同主题的候选不会进入其 schema。
-模型对 observed URL 选择 candidate id，确定性代码再绑定 canonical URL，避免要求模型复制 locator。
-verification gap 使用独立 `max_evidence_repair_revisions`；steering、assumption、coverage 和
-capability 变化继续使用 `max_plan_revisions`，两类预算不相互吞噬。
+Tool/Agent success 不能直接完成 SubGoal。Evidence Admission 先校验来源、作用域和契约，Verifier 再判断用户要求是否语义满足。Completion 只能消费 active requirement 的 verified Outcome、最终 Artifact 和 required report contract。
 
-预算按 planning、execution proposal、external delegation、verification 和 synthesis 分类，
-先 reserve 再调用外部能力，最后 charge/release。Tool/Agent success、Artifact 存在、Verifier
-单独通过都不能直接完成 Project；Completion Gate 要求全部 active requirement 已 verified 或
-由用户显式 waived，且 final Artifact 与 assessment evidence 齐全。
+当前 `0/20 delivered` 表明这条产品纵切尚未闭环。局部调度优化、预算边界、目标绑定或 Plan Schema 修复只能按各自证据强度陈述，不能合并为最终报告能力。
 
-## 6. Conversation boundary
+## 7. 运维入口
 
-普通 Conversation 保持前台 Interaction loop，并可在用户明确要求，或模型判断存在漏项、重复、恢复或
-steering 收益时持久化独立的 `ConversationWorkingPlan`，用于展示和修订当前目标的可验收工作项。它不包含 Project definition、ready set、
-queue/lease、审批、budget 或 Completion obligation，也不驱动 durable dispatch。用户明确要求跨交互持续
-和后续控制时，Conversation 才调用 `InvestigationProjectService.create`，并只保存
-`ProjectReference`；Project definition、accepted Plan、状态和 Completion 仍由 Project aggregate 唯一拥有。
-
-## 7. 已执行验证
-
-本轮当前工作树定向验证：
-
-- 历史 B03 live baseline：passed（仅证明当时 revision 的 `delivered=false`），archive
-  `20260728T123013.176272Z-42316-76b47a9c`；
-- IP01 在无限同反馈问题修复前 600 秒仍 active，archive
-  `20260728T125249.466459Z-45552-410f6188`；修复后同反馈有界暂停，未重复原 Tool；
-- IP01 搜索质量失败 archive `20260728T130808.632067Z-17988-0d9bfe10`，Verifier 拒绝无关来源；
-- strict `json_schema` 与 DeepSeek 不兼容的 baseline 为
-  `20260728T135746.012529Z-20360-ce914ffb`；显式 JSON Object Adapter + 关闭 thinking 后，
-  `20260728T143217.175037Z-28784-bb0ed0e8` 在 59.7 秒内所有 typed parse 通过，
-  `environment_failed=false`，可计 28,828 token；
-- 同一最新 archive 仍以 `verification_repair` 暂停：MCP/A2A evidence 不满足时间、版本、来源
-  要求，后续 revision 又试图覆盖 frozen work；这是一项新的 Project 行为缺口，不属于
-  Provider Adapter；
-- Tavily 达到 1000/1000 plan usage 后，运行配置已显式切换至 Firecrawl；archive
-  `20260728T154127.518791Z-8584-3899be03` 证明三次生产 Search 成功、无 Tavily 调用且
-  `environment_failed=false`；Plan v2 新增并执行一次 repair、未重放原 execution，随后因 evidence
-  仍不足和 SubGoal version/supersession 违反 Admission 而暂停，因此 Provider 已解除、repair 有
-  局部收益，但用户报告仍未交付；
-- `20260729T074104.409971Z-17204-9d2e066f` 证明 `web_search` 的搜索加两次正文读取超过旧
-  20 秒治理窗口；契约调整为 60 秒后，相关 Tool 测试 29 passed；
-- `20260729T074537.177810Z-46796-aeb55489` 证明能力不匹配拒绝分支错误地用位置参数构造
-  `DecisionFeedback`，且 Execution Proposal 的开放字符串允许选择未被当前 SubGoal 匹配的 Tool；
-  当前 schema 已把 Tool/Agent identity 收窄为 deterministic matching inventory；
-- `20260729T075635.355657Z-17460-0a4c21f8` 在 120.5 秒内执行 8 次真实搜索、无重复 proposal，
-  并找到含 2025-06-30 与 2025-06-09 变化的 A2A Releases 页面；但 Project 最终因 A2A repair
-  证据未被完整物化而暂停。该 archive 同时出现 Firecrawl 429/402，故 release harness 将其标为
-  环境失败，不能作为 target acceptance；
-- `20260729T080725.690825Z-11020-b4ee8959` 在新显式 URL reader 绑定下仍因 Firecrawl
-  `/v2/search` 账户级 HTTP 402 终止，确认剩余重跑阻塞在搜索 Provider 外部状态，而非 URL reader；
-- Firecrawl Web Search Adapter 已删除；SerpAPI 真实冒烟取得 GitHub Releases，Provider 合约
-  覆盖 Google organic results、合法空结果、错误和 limit；本地密钥只保存于 ignored `.env`；
-- SerpAPI IP01 archive `20260729T084450.226963Z-52148-7d7045a6` 已由 Verifier 确认 MCP
-  `2025-03-26`、`2025-06-18`；`20260729T085601.806550Z-18988-2e0c1eba` 暴露 repair evidence
-  跨主题消费并耗尽 revision 的产品缺口，均未交付报告，不能作为 acceptance；
-- 后续同输入失败 trace 依次证明并收敛：repair-of-repair 丢失同主题 ancestor evidence、精确
-  capture/search 重放、evidence repair 吞噬 semantic Plan budget，以及模型复制 URL 导致的
-  structured parse 假性 `provider_unavailable`；完整因果与 archive 见 ADR 0008；
-- IP01 target archive `20260729T101501.732689Z-53628-6c5f02f2`：`completed /
-  completion_gate_passed`，Plan v3，3/3 outcome satisfied、5 条 admitted evidence、可读报告存在，
-  `environment_failed=false`，`1 passed in 86.42s`；
-- 最新封闭环境全仓回归：705 passed、4 warnings、116.10 秒；变更范围 Ruff：通过。
-
-以下完整低层回归不等于 clean release E2E：
-
-- Provider 迁移前全仓 `uv run pytest -q tests`：694 passed、0 failed、4 warnings，
-  213.42 秒；本轮第一次未隔离开发机 MCP 的全仓运行为 704 passed、1 个 Notion MCP
-  initialize setup timeout。显式关闭外部 MCP 后该节点 1 passed，最终同配置全仓 705 passed；
-  MCP contract tests 仍由用例自行启用 fixture。前一次错误保留为测试环境隔离风险；
-- 历史 LT01–LT13 diagnostic matrix：13 passed；其中 LT09 后续审计发现没有实际运行 Conversation
-  baseline，其对比结论已撤销，当前 catalog 为 LT01–LT08、LT10–LT13；
-- AgentGateway quality gate：1 passed；
-- durable Agent uncertain-submit/restart reconcile 自动断言 Provider submit count=1；
-- user pause/resume、system pause non-bypass、OutcomeUnknown fail-closed 已通过应用路径测试；
-- `completing` 与 `cancelling` 进程崩溃恢复已通过故障注入；恢复不重复 final synthesis，
-  Provider cancel effect=1；
-- changed Python files `ruff check`：通过；
-- `scripts/check_layers.py`：unknown/missing package、cycle、forbidden edge 均为 0；
-- Python `compileall`：通过。
-
-IP01 不再是开放发布阻塞。完整发布前仍必须执行并归档：
-
-- live GitHub/Notion/Web/A2A 正式入口矩阵和重复运行方差；
-- 若要提出 Project 优于 Conversation 的恢复声明，需新增真实同输入 paired baseline，比较完成率、
-  错误副作用、模型轮次、token、延迟和恢复结果；
-- clean matching revision 的 release E2E、layer gate 和 revision-bound trace archive。
-
-## 8. 运维入口
-
-Project worker 使用独立 queue：
+Project worker 使用独立队列：
 
 ```powershell
 uv run personal-agent worker --queue investigation
 ```
 
-API key 环境变量使用 JSON principal mapping：
+直接 Project API 和 Conversation 创建路径复用 `InvestigationProjectService`。身份必须物化为 `AuthenticatedPrincipal`，读取、steering、审批、暂停、恢复和取消都校验 tenant/user scope。
 
-```text
-PERSONAL_AGENT_API_KEYS={"key":{"tenant_id":"tenant-a","user_id":"alice"}}
-PERSONAL_AGENT_ADMIN_API_KEYS={"admin-key":{"tenant_id":"tenant-a","user_id":"root"}}
-```
-
-旧 `key:user` 格式会 fail closed，不提供兼容解析。
-
-鉴权启用时，直接 Tool HTTP 入口中的 tenant/user 必须与 authenticated principal 一致；调试
-数据库重置只允许管理员 key。
+当前评测身份、失败阶段和归档坐标统一见[当前端到端用例盘点](../evals/02-current-case-inventory.md)中的“Research、Schedule 与 Investigation”。

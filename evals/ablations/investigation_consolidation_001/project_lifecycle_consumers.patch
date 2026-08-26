@@ -1,0 +1,52 @@
+diff --git a/src/personal_agent/application/investigation_project/service.py b/src/personal_agent/application/investigation_project/service.py
+--- a/src/personal_agent/application/investigation_project/service.py
++++ b/src/personal_agent/application/investigation_project/service.py
+@@ -556,8 +556,8 @@ class InvestigationProjectService:
+                         reservation_id=f"agent:{proposal.proposal_digest}",
+                     )
+             except BudgetExceeded as exc:
+-                if prepared:
+-                    break
++                for _, _, prepared_reservation, _ in prepared:
++                    project = self._release(project, prepared_reservation)
+                 return _ProcessCycle(self._pause_with_wait(
+                     project,
+                     logical_subgoal_id=proposal.logical_subgoal_id,
+@@ -618,7 +619,6 @@ class InvestigationProjectService:
+                 )
+                 continue
+             if result.pending:
+-                yield_for_external = True
+                 data: list = [BudgetReleasedData(
+                     reservation_id=reservation.reservation_id,
+                     category=reservation.category,
+@@ -1108,8 +1108,7 @@ class InvestigationProjectService:
+                     submission_key=submission_key,
+                 ))
+             return _ProcessCycle(
+-                self._append(project, *data),
+-                yield_for_external=True,
++                self._append(project, *data),
+             )
+         return _ProcessCycle(
+             self._commit_execution(project, proposal, result, reservation, scope)
+diff --git a/src/personal_agent/orchestration/investigation_project_adapters.py b/src/personal_agent/orchestration/investigation_project_adapters.py
+--- a/src/personal_agent/orchestration/investigation_project_adapters.py
++++ b/src/personal_agent/orchestration/investigation_project_adapters.py
+@@ -325,12 +325,10 @@ class DurableProjectAgentAdapter:
+         )
+         evidence: list[EvidenceRef] = []
+         for artifact in run.artifact_index.artifacts:
+-            stored = self._artifact_reader.read_generated(
+-                artifact.artifact_ref,
+-                principal=execution_scope.principal,
+-                owner=execution_scope.principal,
+-            )
+-            body_digest = stored.content_digest
++            body_digest = canonical_digest({
++                "kind": artifact.kind,
++                "artifact_ref": artifact.artifact_ref.model_dump(mode="json"),
++            })
+             evidence.append(EvidenceRef(
+                 evidence_id=f"ipev_{body_digest[:20]}",
+                 execution_ref=execution_ref,

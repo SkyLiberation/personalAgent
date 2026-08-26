@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import json
 import re
+from typing import Callable
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +34,8 @@ from personal_agent.application.investigation_project.ports import (
     GeneratedContent,
     InvestigationPlannerPort,
     InvestigationProjectStorePort,
+    ProjectAgentCapacityUnavailable,
+    ProjectAgentExecutionFailed,
     ProjectAgentPort,
     ProjectAgentOutcomeUnknown,
     ProjectDelegationPolicyPort,
@@ -148,6 +152,13 @@ class ProjectExecutionPolicy:
     verification_reservation_tokens: int = 800
     synthesis_reservation_tokens: int = 2_000
     external_delegation_reservation_tokens: int = 4_000
+    external_wait_retry_seconds: int = 5
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessCycle:
+    project: InvestigationProject
+    yield_for_external: bool = False
 
 
 class InvestigationProjectService:
@@ -158,6 +169,7 @@ class InvestigationProjectService:
         *,
         store: InvestigationProjectStorePort,
         queue: WorkerQueuePort,
+        clock: Callable[[], datetime],
         capabilities: CapabilitySnapshotPort,
         planner: InvestigationPlannerPort,
         execution_proposer: ExecutionProposerPort,
@@ -172,6 +184,7 @@ class InvestigationProjectService:
     ) -> None:
         self.store = store
         self.queue = queue
+        self.clock = clock
         self.capabilities = capabilities
         self.planner = planner
         self.execution_proposer = execution_proposer
@@ -238,11 +251,25 @@ class InvestigationProjectService:
         project = self._require_project(command)
         for _ in range(command.max_cycles):
             before = project.event_sequence
-            project = self._process_once(project)
-            if project.event_sequence == before or project.is_terminal or project.state == "paused":
+            cycle = self._process_once(project)
+            project = cycle.project
+            if (
+                cycle.yield_for_external
+                or project.event_sequence == before
+                or project.is_terminal
+                or project.state == "paused"
+            ):
                 break
         if not project.is_terminal and project.state != "paused":
-            self._enqueue(project, reason=f"continue:{project.event_sequence}")
+            self._enqueue(
+                project,
+                reason=f"continue:{project.event_sequence}",
+                defer_seconds=(
+                    self.execution_policy.external_wait_retry_seconds
+                    if cycle.yield_for_external
+                    else 0
+                ),
+            )
         return project.to_view()
 
     def steer(self, command: SteerInvestigationProject) -> ProjectView:
@@ -445,28 +472,28 @@ class InvestigationProjectService:
             artifact_refs=artifact_refs,
         )).to_view()
 
-    def _process_once(self, project: InvestigationProject) -> InvestigationProject:
+    def _process_once(self, project: InvestigationProject) -> _ProcessCycle:
         if project.is_terminal or project.state == "paused":
-            return project
+            return _ProcessCycle(project)
         if project.state == "cancelling":
-            return self._finish_cancellation(project)
+            return _ProcessCycle(self._finish_cancellation(project))
         if project.state == "completing":
-            return self._complete(project)
+            return _ProcessCycle(self._complete(project))
         if project.state == "planning":
-            return self._plan(
+            return _ProcessCycle(self._plan(
                 project,
                 revision=(
                     self._latest_replan_request(project)
                     if project.replan_request_digests
                     else None
                 ),
-            )
+            ))
         if project.replan_request_digests:
             request = self._latest_replan_request(project)
-            return self._plan(project, revision=request)
+            return _ProcessCycle(self._plan(project, revision=request))
         ready = project.ready_subgoals()
         if ready:
-            return self._propose_execution(project, ready[0])
+            return _ProcessCycle(self._propose_execution(project, ready[0]))
         pending = [
             proposal
             for key, proposal in project.accepted_execution_proposals.items()
@@ -478,8 +505,8 @@ class InvestigationProjectService:
                 return self._dispatch_parallel_batch(project, pending)
             return self._dispatch_proposal(project, pending[0])
         if self.completion_gate.required_coverage_complete(project):
-            return self._complete(project)
-        return self._derive_blocked_state(project)
+            return _ProcessCycle(self._complete(project))
+        return _ProcessCycle(self._derive_blocked_state(project))
 
     def _parallel_batch_allowed(
         self,
@@ -509,7 +536,7 @@ class InvestigationProjectService:
         self,
         project: InvestigationProject,
         proposals: list[SubGoalExecutionProposal],
-    ) -> InvestigationProject:
+    ) -> _ProcessCycle:
         prepared: list[tuple[SubGoalExecutionProposal, ExecutionScope, ProjectUsage, object]] = []
         for proposal in proposals:
             operation = proposal.operation
@@ -544,16 +571,16 @@ class InvestigationProjectService:
                         reservation_id=f"agent:{proposal.proposal_digest}",
                     )
             except BudgetExceeded as exc:
-                for _, _, prepared_reservation, _ in prepared:
-                    project = self._release(project, prepared_reservation)
-                return self._pause_with_wait(
+                if prepared:
+                    break
+                return _ProcessCycle(self._pause_with_wait(
                     project,
                     logical_subgoal_id=proposal.logical_subgoal_id,
                     subgoal_version=proposal.subgoal_version,
                     reason="budget_exhausted",
                     authority="user",
                     detail=str(exc),
-                )
+                ))
             project = self._append(project, BudgetReservedData(usage=reservation))
             prepared.append((proposal, scope, reservation, policy_decision))
 
@@ -586,9 +613,22 @@ class InvestigationProjectService:
                     results.append(future.result())
                 except Exception as exc:
                     results.append(exc)
+        yield_for_external = False
         for item, result in zip(prepared, results, strict=True):
             proposal, scope, reservation, _ = item
             if isinstance(result, Exception):
+                if isinstance(result, ProjectAgentCapacityUnavailable):
+                    project = self._release(project, reservation)
+                    yield_for_external = True
+                    continue
+                if isinstance(result, ProjectAgentExecutionFailed):
+                    project = self._record_agent_execution_failure(
+                        project,
+                        proposal,
+                        reservation,
+                        result,
+                    )
+                    continue
                 project = self._release(project, reservation)
                 reason = (
                     "outcome_unknown"
@@ -607,6 +647,7 @@ class InvestigationProjectService:
                 )
                 continue
             if result.pending:
+                yield_for_external = True
                 data: list = [BudgetReleasedData(
                     reservation_id=reservation.reservation_id,
                     category=reservation.category,
@@ -627,7 +668,7 @@ class InvestigationProjectService:
                 reservation,
                 scope,
             )
-        return project
+        return _ProcessCycle(project, yield_for_external=yield_for_external)
 
     def _plan(
         self,
@@ -882,7 +923,7 @@ class InvestigationProjectService:
         self,
         project: InvestigationProject,
         proposal: SubGoalExecutionProposal,
-    ) -> InvestigationProject:
+    ) -> _ProcessCycle:
         operation = proposal.operation
         scope = self._execution_scope(
             project,
@@ -891,7 +932,7 @@ class InvestigationProjectService:
             proposal.proposal_id,
         )
         if operation.kind == "user_input":
-            return self._pause_if_globally_blocked(self._append(
+            return _ProcessCycle(self._pause_if_globally_blocked(self._append(
                 project,
                 WaitingReasonSetData(waiting_reason=WaitingReason(
                     logical_subgoal_id=proposal.logical_subgoal_id,
@@ -900,7 +941,7 @@ class InvestigationProjectService:
                     recovery_authority="user",
                     detail=operation.question,
                 )),
-            ))
+            )))
         if operation.kind == "agent":
             return self._dispatch_agent(project, proposal, operation, scope)
         category: BudgetCategory = (
@@ -920,14 +961,14 @@ class InvestigationProjectService:
             )
             project = self._append(project, BudgetReservedData(usage=reservation))
         except BudgetExceeded as exc:
-            return self._pause_with_wait(
+            return _ProcessCycle(self._pause_with_wait(
                 project,
                 logical_subgoal_id=proposal.logical_subgoal_id,
                 subgoal_version=proposal.subgoal_version,
                 reason="budget_exhausted",
                 authority="user",
                 detail=str(exc),
-            )
+            ))
         try:
             result = (
                 self.tool_port.execute(proposal, execution_scope=scope)
@@ -936,15 +977,17 @@ class InvestigationProjectService:
             )
         except Exception as exc:
             project = self._release(project, reservation)
-            return self._pause_with_wait(
+            return _ProcessCycle(self._pause_with_wait(
                 project,
                 logical_subgoal_id=proposal.logical_subgoal_id,
                 subgoal_version=proposal.subgoal_version,
                 reason="provider_unavailable",
                 authority="provider",
                 detail=f"{type(exc).__name__}: {exc}",
-            )
-        return self._commit_execution(project, proposal, result, reservation, scope)
+            ))
+        return _ProcessCycle(
+            self._commit_execution(project, proposal, result, reservation, scope)
+        )
 
     def _dispatch_agent(
         self,
@@ -952,17 +995,17 @@ class InvestigationProjectService:
         proposal: SubGoalExecutionProposal,
         operation: AgentExecutionOperation,
         scope: ExecutionScope,
-    ) -> InvestigationProject:
+    ) -> _ProcessCycle:
         decision = self.delegation_policy.evaluate(proposal, execution_scope=scope)
         if not decision.allowed:
-            return self._pause_with_wait(
+            return _ProcessCycle(self._pause_with_wait(
                 project,
                 logical_subgoal_id=proposal.logical_subgoal_id,
                 subgoal_version=proposal.subgoal_version,
                 reason="capability_missing",
                 authority="user",
                 detail=decision.reason or "external delegation denied",
-            )
+            ))
         command = next(
             (
                 item
@@ -1018,9 +1061,9 @@ class InvestigationProjectService:
                     detail=command.command_id,
                 )),
             )
-            return self._pause_if_globally_blocked(project)
+            return _ProcessCycle(self._pause_if_globally_blocked(project))
         if decision.requires_approval and command is not None and not command.approved:
-            return project
+            return _ProcessCycle(project)
         reservation_id = f"agent:{proposal.proposal_digest}"
         reservation = project.active_reservations.get(reservation_id)
         try:
@@ -1038,14 +1081,14 @@ class InvestigationProjectService:
                 )
                 project = self._append(project, BudgetReservedData(usage=reservation))
         except BudgetExceeded as exc:
-            return self._pause_with_wait(
+            return _ProcessCycle(self._pause_with_wait(
                 project,
                 logical_subgoal_id=proposal.logical_subgoal_id,
                 subgoal_version=proposal.subgoal_version,
                 reason="budget_exhausted",
                 authority="user",
                 detail=str(exc),
-            )
+            ))
         submission_key = canonical_digest({
             "project_id": proposal.project_id,
             "plan_version": proposal.plan_version,
@@ -1063,16 +1106,28 @@ class InvestigationProjectService:
                     command.execution_command_digest if command is not None else None
                 ),
             )
+        except ProjectAgentCapacityUnavailable:
+            return _ProcessCycle(
+                self._release(project, reservation),
+                yield_for_external=True,
+            )
+        except ProjectAgentExecutionFailed as exc:
+            return _ProcessCycle(self._record_agent_execution_failure(
+                project,
+                proposal,
+                reservation,
+                exc,
+            ))
         except ProjectAgentOutcomeUnknown as exc:
             project = self._release(project, reservation)
-            return self._pause_with_wait(
+            return _ProcessCycle(self._pause_with_wait(
                 project,
                 logical_subgoal_id=proposal.logical_subgoal_id,
                 subgoal_version=proposal.subgoal_version,
                 reason="outcome_unknown",
                 authority="provider",
                 detail=str(exc),
-            )
+            ))
         if result.pending:
             existing = project.agent_runs.get(
                 (proposal.logical_subgoal_id, proposal.subgoal_version)
@@ -1088,8 +1143,61 @@ class InvestigationProjectService:
                     agent_run_id=result.provider_task_ref,
                     submission_key=submission_key,
                 ))
-            return self._append(project, *data)
-        return self._commit_execution(project, proposal, result, reservation, scope)
+            return _ProcessCycle(
+                self._append(project, *data),
+                yield_for_external=True,
+            )
+        return _ProcessCycle(
+            self._commit_execution(project, proposal, result, reservation, scope)
+        )
+
+    def _record_agent_execution_failure(
+        self,
+        project: InvestigationProject,
+        proposal: SubGoalExecutionProposal,
+        reservation: ProjectUsage,
+        failure: ProjectAgentExecutionFailed,
+    ) -> InvestigationProject:
+        trigger_payload = {
+            "agent_run_id": failure.agent_run_id,
+            "status": failure.status,
+            "detail": str(failure),
+            "proposal_digest": proposal.proposal_digest,
+        }
+        request = ReplanRequest(
+            trigger_kind="verification_gap",
+            trigger_ref=failure.agent_run_id,
+            affected_logical_subgoal_ids=(proposal.logical_subgoal_id,),
+            revision_scope=(proposal.logical_subgoal_id,),
+            trigger_digest=canonical_digest(trigger_payload),
+        )
+        return self._append(
+            project,
+            BudgetChargedData(usage=self._charged_usage(
+                reservation,
+                ProjectUsage(
+                    category=reservation.category,
+                    reservation_id=reservation.reservation_id,
+                    agent_calls=1,
+                ),
+            )),
+            ExecutionCommittedData(
+                logical_subgoal_id=proposal.logical_subgoal_id,
+                subgoal_version=proposal.subgoal_version,
+                execution_ref=failure.execution_ref,
+            ),
+            WaitingReasonSetData(waiting_reason=WaitingReason(
+                logical_subgoal_id=proposal.logical_subgoal_id,
+                subgoal_version=proposal.subgoal_version,
+                reason="verification_repair",
+                recovery_authority="planner",
+                detail=(
+                    f"child Agent run {failure.agent_run_id} ended with "
+                    f"status={failure.status}: {failure}"
+                ),
+            )),
+            ReplanRequestedData(request=request),
+        )
 
     def _execute_synthesis(
         self,
@@ -1852,7 +1960,13 @@ class InvestigationProjectService:
         if project.definition.principal != principal:
             raise PermissionError("investigation project belongs to another principal")
 
-    def _enqueue(self, project: InvestigationProject, *, reason: str) -> None:
+    def _enqueue(
+        self,
+        project: InvestigationProject,
+        *,
+        reason: str,
+        defer_seconds: int = 0,
+    ) -> None:
         self.queue.enqueue(
             queue="investigation",
             task_type="investigation_project",
@@ -1866,6 +1980,11 @@ class InvestigationProjectService:
                 f"investigation:{project.definition.project_id}:{project.event_sequence}:{reason}"
             ),
             max_attempts=5,
+            due_at=(
+                self.clock() + timedelta(seconds=defer_seconds)
+                if defer_seconds > 0
+                else None
+            ),
         )
 
     @staticmethod

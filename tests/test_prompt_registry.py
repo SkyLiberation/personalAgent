@@ -6,8 +6,6 @@ def test_core_prompts_are_registered_with_versions() -> None:
         "answer_generation.system",
         "evidence_rerank.system",
         "evidence_rerank.user",
-        "thread_digest.user",
-        "thread_context_compression.user",
         "graphiti.custom_extraction",
         "react.system",
         "structured.system",
@@ -27,10 +25,5 @@ def test_expanded_registry_prompts_render_with_sample_variables() -> None:
     assert "Question: Q" == render_prompt(
         "evidence_rerank.user",
         rerank_prompt="Question: Q",
-    )
-    assert "群聊消息" in render_prompt("thread_digest.user", messages_text="hello")
-    assert '"user_goals"' in render_prompt(
-        "thread_context_compression.user",
-        messages_text="hello",
     )
     assert "personal knowledge graph" in render_prompt("graphiti.custom_extraction")

@@ -4,37 +4,44 @@ import json
 
 import pytest
 
+import personal_agent.application.investigation_project.model_ports as investigation_model_ports
 from personal_agent.application.investigation_project.admission import (
     ExecutionProposalAdmission,
     PlanAdmission,
     ProposalRejected,
+    compiled_agent_bounded_sub_goal,
     observed_url_locators,
     subgoal_definition_digest,
     unverified_tool_execution_operations,
 )
+from personal_agent.application.investigation_project.budget import ProjectBudgetLedger
 from personal_agent.application.investigation_project.model_ports import (
     StructuredExecutionProposer,
     StructuredInvestigationPlanner,
     StructuredProjectVerifier,
     _PlanDraft,
     _PlanRevisionDraft,
-    _RepairPlanRevisionDraft,
+    _ObservationDraft,
     _VerificationDraft,
     _deterministic_iso_date_facts,
     _execution_output_type,
+    _generated_content_output_type,
     _execution_inventory_payload,
     _inventory_payload,
     _observed_github_repository_paths,
     _planning_evidence_payload,
+    _revision_output_type,
 )
 from personal_agent.application.investigation_project.ports import EvidenceMaterial
 from personal_agent.capabilities.contracts.model import StructuredModelResponse
 from personal_agent.capabilities.inventory import (
+    A2AAgentInventoryItem,
     LocalToolInventoryItem,
     RuntimeCapabilityInventory,
 )
 from personal_agent.domain.investigation_project import (
     AcceptedPlanVersion,
+    AgentExecutionOperation,
     CapabilityContract,
     DecisionFeedback,
     DerivedRequirement,
@@ -43,6 +50,7 @@ from personal_agent.domain.investigation_project import (
     InvestigationProject,
     InvestigationProjectDefinition,
     PlanProposal,
+    ProjectUsage,
     ReplanRequest,
     RequirementMapping,
     SubGoalDefinitionVersion,
@@ -146,6 +154,49 @@ def _project_with_frozen_execution() -> tuple[
     return project, frozen
 
 
+def _project_with_agent_subgoal() -> tuple[
+    InvestigationProject,
+    SubGoalDefinitionVersion,
+    RuntimeCapabilityInventory,
+]:
+    project, original_subgoal = _project_with_frozen_execution()
+    agent_subgoal = original_subgoal.model_copy(update={
+        "capability_contract": CapabilityContract(
+            contract_id="contract:gpt-researcher",
+            operation="gpt_researcher",
+            semantic_domain="external_research",
+            resource_type="report",
+            allowed_execution_kinds=("agent",),
+        ),
+    })
+    agent_subgoal = agent_subgoal.model_copy(update={
+        "definition_digest": subgoal_definition_digest(agent_subgoal),
+    })
+    revised_plan = project.accepted_plan.proposal.model_copy(update={
+        "subgoals": (agent_subgoal,),
+    })
+    project.accepted_plan = AcceptedPlanVersion(
+        plan_version=1,
+        proposal=revised_plan,
+        plan_digest=canonical_digest(revised_plan),
+    )
+    inventory = RuntimeCapabilityInventory(
+        local_tools=(),
+        mcp_connectors=(),
+        a2a_agents=(A2AAgentInventoryItem(
+            agent_id="gpt_researcher",
+            semantic_domains=("external_research",),
+            resource_types=("report",),
+            operations=("gpt_researcher",),
+            implementation_present=True,
+            configuration_state="enabled",
+            discovery_state="registered_profile",
+            max_runtime_seconds=240,
+        ),),
+    )
+    return project, agent_subgoal, inventory
+
+
 class _RevisionModel:
     def __init__(self) -> None:
         self.request = None
@@ -172,6 +223,244 @@ class _RevisionModel:
             latency_ms=1,
             total_tokens=10,
         )
+
+
+class _InitialCapabilityPlannerModel:
+    def __init__(self) -> None:
+        self.request = None
+
+    def generate(self, request):
+        self.request = request
+        return StructuredModelResponse(
+            value=request.output_type.model_validate({
+                "subgoals": [
+                    {
+                        "logical_subgoal_id": "multi-source-research",
+                        "objective": "Research all named official sources.",
+                        "required_output": (
+                            "Evidence-backed comparison covering every named source."
+                        ),
+                        "capability_contract": {
+                            "contract_id": "contract:multi-source-research",
+                            "operation": "gpt_researcher",
+                            "semantic_domain": "external_research",
+                            "resource_type": "report",
+                            "allowed_execution_kinds": ["agent"],
+                        },
+                    },
+                    {
+                        "logical_subgoal_id": "report",
+                        "objective": "Synthesize the final report.",
+                        "depends_on": ["multi-source-research"],
+                        "required_output": "Final report with source URLs.",
+                        "capability_contract": {
+                            "contract_id": "contract:report",
+                            "operation": "synthesize",
+                            "semantic_domain": "synthesis",
+                            "resource_type": "",
+                            "allowed_execution_kinds": ["synthesis"],
+                        },
+                    },
+                ],
+                "requirement_mappings": [{
+                    "requirement_id": "release-change",
+                    "logical_subgoal_ids": [
+                        "multi-source-research",
+                        "report",
+                    ],
+                }],
+            }),
+            model="test-model",
+            latency_ms=1,
+            total_tokens=10,
+        )
+
+
+def _plan_draft_payload() -> dict[str, object]:
+    return {
+        "derived_requirements": [{
+            "requirement_id": "supporting-context",
+            "statement": "Capture contextual evidence that strengthens the answer.",
+            "acceptance_contract": "Cite one relevant official source.",
+            "completion_relevance": "supporting",
+            "mapped_logical_subgoal_ids": ["research"],
+        }],
+        "subgoals": [{
+            "logical_subgoal_id": "research",
+            "objective": "Collect the supporting official context.",
+            "required_output": "One cited supporting observation.",
+            "capability_contract": {
+                "contract_id": "contract:research",
+                "operation": "web_search",
+                "semantic_domain": "investigation",
+                "resource_type": "evidence",
+                "allowed_execution_kinds": ["tool"],
+            },
+        }],
+        "requirement_mappings": [{
+            "requirement_id": "primary-result",
+            "logical_subgoal_ids": ["research"],
+        }],
+    }
+
+
+def test_plan_draft_reuses_canonical_requirement_relevance_contract() -> None:
+    payload = _plan_draft_payload()
+
+    draft = _PlanDraft.model_validate(payload)
+    proposal = StructuredInvestigationPlanner._materialize(
+        draft,
+        project_id="project-1",
+        based_on_event_sequence=0,
+        capability_revision="capability-v1",
+        revision_reason="initial",
+    )
+
+    assert proposal.derived_requirements[0].completion_relevance == "supporting"
+    invalid_payload = {
+        **payload,
+        "derived_requirements": [{
+            **payload["derived_requirements"][0],
+            "completion_relevance": "informational",
+        }],
+    }
+    with pytest.raises(ValueError, match="Input should be 'required' or 'supporting'"):
+        _PlanDraft.model_validate(invalid_payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    (
+        ("subgoals", "logical subgoal ids must be unique"),
+        ("derived_requirements", "derived requirement ids must be unique"),
+        ("requirement_mappings", "requirement mapping ids must be unique"),
+    ),
+)
+def test_plan_draft_rejects_duplicate_identity_fields_before_materialization(
+    field: str,
+    expected: str,
+) -> None:
+    payload = _plan_draft_payload()
+    payload[field] = [*payload[field], payload[field][0]]  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=expected):
+        _PlanDraft.model_validate(payload)
+
+
+def test_plan_revision_drafts_reject_duplicate_logical_ids_before_materialization() -> None:
+    payload = _plan_draft_payload()
+    subgoal = payload["subgoals"][0]  # type: ignore[index]
+    mapping = payload["requirement_mappings"]  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="logical subgoal ids must be unique"):
+        _PlanRevisionDraft.model_validate({
+            "revisable_subgoals": [subgoal, subgoal],
+            "requirement_mappings": mapping,
+        })
+
+    repair = {
+        **subgoal,
+        "repairs_frozen_logical_subgoal_ids": ["frozen-search"],
+    }
+    with pytest.raises(ValueError, match="logical subgoal ids must be unique"):
+        _PlanRevisionDraft.model_validate({
+            "revisable_subgoals": [subgoal],
+            "independent_repair_subgoals": [repair],
+            "requirement_mappings": mapping,
+        })
+
+
+def test_semantic_and_repair_revisions_share_one_canonical_draft_model() -> None:
+    inventory = RuntimeCapabilityInventory(
+        local_tools=(),
+        mcp_connectors=(),
+        a2a_agents=(),
+    )
+
+    semantic_revision_type = _revision_output_type(
+        inventory,
+        repair_gap_ids=(),
+    )
+    repair_revision_type = _revision_output_type(
+        inventory,
+        repair_gap_ids=("frozen-search",),
+    )
+
+    assert issubclass(semantic_revision_type, _PlanRevisionDraft)
+    assert issubclass(repair_revision_type, _PlanRevisionDraft)
+    assert not hasattr(investigation_model_ports, "_RepairPlanRevisionDraft")
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    (
+        ("subgoals", "logical subgoal ids must be unique"),
+        ("requirement_mappings", "requirement mapping ids must be unique"),
+    ),
+)
+def test_plan_admission_retains_typed_duplicate_identity_guard(
+    field: str,
+    expected: str,
+) -> None:
+    project, _ = _project_with_frozen_execution()
+    proposal = project.accepted_plan.proposal
+    duplicate_values = (*getattr(proposal, field), getattr(proposal, field)[0])
+    proposal = proposal.model_copy(update={
+        "based_on_event_sequence": project.event_sequence,
+        field: duplicate_values,
+    })
+
+    with pytest.raises(ProposalRejected, match=expected) as exc_info:
+        PlanAdmission().accept(
+            project,
+            proposal,
+            capabilities=RuntimeCapabilityInventory(
+                local_tools=(),
+                mcp_connectors=(),
+                a2a_agents=(),
+            ),
+        )
+
+    assert exc_info.value.feedback.repairable_fields == (field,)
+
+
+def test_initial_planner_uses_declared_multi_source_agent_scope_without_losing_repair_space() -> None:
+    project, _ = _project_with_frozen_execution()
+    model = _InitialCapabilityPlannerModel()
+    capabilities = RuntimeCapabilityInventory(
+        local_tools=(),
+        mcp_connectors=(),
+        a2a_agents=(A2AAgentInventoryItem(
+            agent_id="gpt_researcher",
+            description=(
+                "Research authoritative web sources and return an evidence-backed "
+                "report for parent synthesis."
+            ),
+            semantic_domains=("external_research",),
+            resource_types=("report",),
+            operations=("gpt_researcher",),
+            implementation_present=True,
+            configuration_state="enabled",
+            discovery_state="registered_profile",
+        ),),
+    )
+
+    decision = StructuredInvestigationPlanner(model).propose_initial(
+        project.definition,
+        based_on_event_sequence=0,
+        repair_request=None,
+        capabilities=capabilities,
+        capability_revision="capability-v1",
+    )
+
+    assert model.request is not None
+    instruction = model.request.messages[0]["content"]
+    assert "Do not split named sources merely because there are several" in instruction
+    assert "Do not preallocate speculative repair SubGoals" in instruction
+    assert sum(
+        "agent" in item.capability_contract.allowed_execution_kinds
+        for item in decision.value.subgoals
+    ) == 1
 
 
 class _VerifierModel:
@@ -215,6 +504,61 @@ class _ExecutionProposalModel:
             latency_ms=1,
             total_tokens=10,
         )
+
+
+class _AgentExecutionProposalModel:
+    def __init__(self) -> None:
+        self.request = None
+
+    def generate(self, request):
+        self.request = request
+        return StructuredModelResponse(
+            value=request.output_type.model_validate({
+                "operation": {
+                    "kind": "agent",
+                    "agent_id": "gpt_researcher",
+                    "expected_artifact_types": ["report"],
+                    "token_budget": 4_000,
+                    "cost_budget": 1.0,
+                    "time_budget_seconds": 240,
+                },
+            }),
+            model="test-model",
+            latency_ms=1,
+            total_tokens=10,
+        )
+
+
+def test_execution_proposer_compiles_agent_goal_from_accepted_subgoal() -> None:
+    project, subgoal, inventory = _project_with_agent_subgoal()
+    model = _AgentExecutionProposalModel()
+
+    decision = StructuredExecutionProposer(model).propose(
+        project,
+        subgoal,
+        evidence_material=(),
+        execution_scope=ExecutionScope(
+            principal=project.definition.principal,
+            thread_id=project.definition.project_id,
+            task_id=subgoal.logical_subgoal_id,
+            project_id=project.definition.project_id,
+            plan_version=project.accepted_plan.plan_version,
+            logical_subgoal_id=subgoal.logical_subgoal_id,
+            subgoal_version=subgoal.subgoal_version,
+            execution_id="agent-proposal-test",
+        ),
+        capabilities=inventory,
+    )
+
+    assert model.request is not None
+    assert "bounded_sub_goal" not in json.dumps(
+        model.request.output_type.model_json_schema()
+    )
+    assert decision.value.operation.kind == "agent"
+    assert decision.value.operation.bounded_sub_goal == (
+        "Objective:\nSearch for the release.\n\n"
+        "Required output:\ninitial-search evidence"
+    )
 
 
 class _CaptureProposalModel:
@@ -288,6 +632,36 @@ def test_execution_proposer_receives_durable_local_admission_feedback() -> None:
     assert payload["prior_execution_proposal_feedback"] == [
         feedback.model_dump(mode="json")
     ]
+    assert payload["remaining_agent_budget"] == {
+        "tokens": 20_000,
+        "cost": 20.0,
+    }
+
+
+def test_project_budget_ledger_derives_remaining_agent_budget_from_committed_facts(
+) -> None:
+    project, _ = _project_with_frozen_execution()
+    project.usages.append(ProjectUsage(
+        category="external_delegation",
+        reservation_id="charged-agent",
+        tokens=3_000,
+        cost=2.5,
+        agent_calls=1,
+    ))
+    project.active_reservations["reserved-planning"] = ProjectUsage(
+        category="planning",
+        reservation_id="reserved-planning",
+        tokens=5_000,
+        cost=1.0,
+    )
+
+    ledger = ProjectBudgetLedger()
+
+    assert ledger.remaining_tokens(
+        project,
+        category="external_delegation",
+    ) == 17_000
+    assert ledger.remaining_cost(project) == 16.5
 
 
 def test_execution_proposer_excludes_previously_failed_capture_url() -> None:
@@ -413,6 +787,30 @@ def test_execution_proposer_excludes_previously_failed_capture_url() -> None:
     assert decision.value.operation.typed_arguments == {"url": new_url}
 
 
+def test_observed_url_locators_include_agent_artifact_text_urls() -> None:
+    project, _ = _project_with_frozen_execution()
+    official_url = "https://a2a-protocol.org/latest/"
+    material = EvidenceMaterial(
+        reference=EvidenceRef(
+            evidence_id="agent-report",
+            execution_ref=ExecutionRef(
+                execution_id="agent-execution",
+                execution_kind="agent",
+                owner_ref="agent-proposal",
+                execution_digest="a" * 64,
+            ),
+            source="agent:gpt_researcher",
+            content_digest="b" * 64,
+        ),
+        content=(
+            "The admitted Agent report cites the official protocol page "
+            f"{official_url} for direct verification."
+        ),
+    )
+
+    assert observed_url_locators(project, (material,)) == (official_url,)
+
+
 def test_subgoal_verifier_rejects_all_insufficient_observations_as_success() -> None:
     project, frozen = _project_with_frozen_execution()
     model = _VerifierModel()
@@ -447,6 +845,36 @@ def test_unsatisfied_verification_schema_requires_actionable_feedback() -> None:
             "satisfied": False,
             "feedback": " ",
         })
+
+
+def test_verifier_observation_schema_rejects_missing_evidence_binding() -> None:
+    with pytest.raises(ValueError, match="at least 1 item"):
+        _ObservationDraft.model_validate({
+            "statement": "This observation has no supporting project evidence.",
+            "evidence_refs": [],
+        })
+
+
+def test_synthesis_schema_materializes_required_lineage_before_long_content() -> None:
+    reference = EvidenceRef(
+        evidence_id="evidence-1",
+        execution_ref=ExecutionRef(
+            execution_id="execution-1",
+            execution_kind="agent",
+            owner_ref="proposal-1",
+            execution_digest="e" * 64,
+        ),
+        source="agent:gpt_researcher",
+        content_digest="c" * 64,
+    )
+
+    schema = _generated_content_output_type((
+        EvidenceMaterial(reference=reference, content="bounded evidence"),
+    )).model_json_schema()
+    fields = list(schema["properties"])
+
+    assert fields.index("evidence_refs") < fields.index("content")
+    assert "evidence_refs" in schema["required"]
 
 
 def test_iso_date_facts_compare_evidence_dates_against_inclusive_window() -> None:
@@ -756,8 +1184,13 @@ def test_repair_lineage_ignores_removed_derived_requirement_mapping() -> None:
 
 def test_repair_revision_preserves_omitted_nonfrozen_subgoals() -> None:
     frozen = _subgoal("initial-search", "Search for the release.")
-    pending = _subgoal("final-report", "Write the final report.")
-    draft = _RepairPlanRevisionDraft.model_validate({
+    pending = _subgoal("final-report", "Write the final report.").model_copy(update={
+        "depends_on": (frozen.logical_subgoal_id,),
+    })
+    pending = pending.model_copy(update={
+        "definition_digest": subgoal_definition_digest(pending),
+    })
+    draft = _PlanRevisionDraft.model_validate({
         "independent_repair_subgoals": [{
             "logical_subgoal_id": "initial-search-repair",
             "objective": "Read the formal release source.",
@@ -794,6 +1227,10 @@ def test_repair_revision_preserves_omitted_nonfrozen_subgoals() -> None:
     assert [
         item.logical_subgoal_id for item in proposal.subgoals
     ] == ["initial-search", "final-report", "initial-search-repair"]
+    preserved_pending = proposal.subgoals[1]
+    assert preserved_pending.depends_on == ("initial-search",)
+    assert preserved_pending.subgoal_version == 1
+    assert preserved_pending.supersedes_version is None
     assert proposal.requirement_mappings[0].logical_subgoal_ids == (
         "initial-search-repair",
         "final-report",
@@ -905,6 +1342,7 @@ def test_execution_admission_rejects_exact_replay_of_unverified_tool_work() -> N
                 mcp_connectors=(),
                 a2a_agents=(),
             ),
+            observed_url_locators=(operation.typed_arguments["url"],),
         )
 
 
@@ -956,7 +1394,375 @@ def test_execution_admission_returns_typed_capability_missing_feedback() -> None
     assert rejected.value.feedback.disposition == "capability_missing"
 
 
+def test_execution_admission_rejects_agent_goal_outside_accepted_subgoal() -> None:
+    project, subgoal, inventory = _project_with_agent_subgoal()
+    operation = AgentExecutionOperation(
+        agent_id="gpt_researcher",
+        bounded_sub_goal=subgoal.logical_subgoal_id,
+        expected_artifact_types=("report",),
+        token_budget=4_000,
+        cost_budget=1.0,
+        time_budget_seconds=240,
+    )
+    binding = {
+        "project_id": project.definition.project_id,
+        "plan_version": 1,
+        "logical_subgoal_id": subgoal.logical_subgoal_id,
+        "subgoal_version": subgoal.subgoal_version,
+        "based_on_event_sequence": project.event_sequence,
+        "proposal_id": "agent-goal-override",
+        "operation": operation,
+    }
+    proposal = SubGoalExecutionProposal(
+        **binding,
+        proposal_digest=canonical_digest({
+            **binding,
+            "operation": operation.model_dump(mode="json"),
+        }),
+    )
+
+    with pytest.raises(
+        ProposalRejected,
+        match="agent bounded sub-goal does not match the accepted SubGoal",
+    ):
+        ExecutionProposalAdmission().accept(
+            project,
+            subgoal,
+            proposal,
+            execution_scope=ExecutionScope(
+                principal=project.definition.principal,
+                project_id=project.definition.project_id,
+                plan_version=1,
+                logical_subgoal_id=subgoal.logical_subgoal_id,
+                subgoal_version=subgoal.subgoal_version,
+                execution_id=proposal.proposal_id,
+            ),
+            capabilities=inventory,
+        )
+
+
+def test_execution_admission_rejects_capture_without_observed_url() -> None:
+    project, original_subgoal = _project_with_frozen_execution()
+    capture_subgoal = original_subgoal.model_copy(update={
+        "capability_contract": CapabilityContract(
+            contract_id="capture_url",
+            operation="capture_url",
+            semantic_domain="web",
+            resource_type="web_page",
+            allowed_execution_kinds=("tool",),
+        ),
+    })
+    capture_subgoal = capture_subgoal.model_copy(update={
+        "definition_digest": subgoal_definition_digest(capture_subgoal),
+    })
+    revised_plan = project.accepted_plan.proposal.model_copy(update={
+        "subgoals": (capture_subgoal,),
+    })
+    project.accepted_plan = AcceptedPlanVersion(
+        plan_version=1,
+        proposal=revised_plan,
+        plan_digest=canonical_digest(revised_plan),
+    )
+    operation = ToolExecutionOperation(
+        tool_name="capture_url",
+        typed_arguments={},
+        expected_artifact_type="web_page",
+    )
+    binding = {
+        "project_id": project.definition.project_id,
+        "plan_version": 1,
+        "logical_subgoal_id": capture_subgoal.logical_subgoal_id,
+        "subgoal_version": capture_subgoal.subgoal_version,
+        "based_on_event_sequence": project.event_sequence,
+        "proposal_id": "capture-without-observed-url",
+        "operation": operation,
+    }
+    proposal = SubGoalExecutionProposal(
+        **binding,
+        proposal_digest=canonical_digest({
+            **binding,
+            "operation": operation.model_dump(mode="json"),
+        }),
+    )
+
+    with pytest.raises(
+        ProposalRejected,
+        match="capture URL was not observed in user input or execution evidence",
+    ):
+        ExecutionProposalAdmission().accept(
+            project,
+            capture_subgoal,
+            proposal,
+            execution_scope=ExecutionScope(
+                principal=project.definition.principal,
+                project_id=project.definition.project_id,
+                plan_version=1,
+                logical_subgoal_id=capture_subgoal.logical_subgoal_id,
+                subgoal_version=capture_subgoal.subgoal_version,
+                execution_id=proposal.proposal_id,
+            ),
+            capabilities=RuntimeCapabilityInventory(
+                local_tools=(LocalToolInventoryItem(
+                    tool_name="capture_url",
+                    semantic_domains=("web",),
+                    resource_types=("web_page",),
+                    operations=("capture_url",),
+                    exposure="workflow_activity",
+                    risk_level="low",
+                    input_schema={"type": "object"},
+                    provider_availability="not_observed",
+                ),),
+                mcp_connectors=(),
+                a2a_agents=(),
+            ),
+            observed_url_locators=(),
+        )
+
+
+def test_execution_admission_rejects_agent_time_budget_above_profile_limit() -> None:
+    project, original_subgoal = _project_with_frozen_execution()
+    agent_subgoal = original_subgoal.model_copy(update={
+        "capability_contract": CapabilityContract(
+            contract_id="contract:gpt-researcher",
+            operation="gpt_researcher",
+            semantic_domain="external_research",
+            resource_type="report",
+            allowed_execution_kinds=("agent",),
+        ),
+    })
+    agent_subgoal = agent_subgoal.model_copy(update={
+        "definition_digest": subgoal_definition_digest(agent_subgoal),
+    })
+    revised_plan = project.accepted_plan.proposal.model_copy(update={
+        "subgoals": (agent_subgoal,),
+    })
+    project.accepted_plan = AcceptedPlanVersion(
+        plan_version=1,
+        proposal=revised_plan,
+        plan_digest=canonical_digest(revised_plan),
+    )
+    operation = AgentExecutionOperation(
+        agent_id="gpt_researcher",
+        bounded_sub_goal=compiled_agent_bounded_sub_goal(agent_subgoal),
+        expected_artifact_types=("report",),
+        token_budget=4_000,
+        cost_budget=1.0,
+        time_budget_seconds=1_000_000,
+    )
+    binding = {
+        "project_id": project.definition.project_id,
+        "plan_version": 1,
+        "logical_subgoal_id": agent_subgoal.logical_subgoal_id,
+        "subgoal_version": agent_subgoal.subgoal_version,
+        "based_on_event_sequence": project.event_sequence,
+        "proposal_id": "oversized-agent-budget",
+        "operation": operation,
+    }
+    proposal = SubGoalExecutionProposal(
+        **binding,
+        proposal_digest=canonical_digest({
+            **binding,
+            "operation": operation.model_dump(mode="json"),
+        }),
+    )
+
+    with pytest.raises(ProposalRejected) as rejected:
+        ExecutionProposalAdmission().accept(
+            project,
+            agent_subgoal,
+            proposal,
+            execution_scope=ExecutionScope(
+                principal=project.definition.principal,
+                project_id=project.definition.project_id,
+                plan_version=1,
+                logical_subgoal_id=agent_subgoal.logical_subgoal_id,
+                subgoal_version=agent_subgoal.subgoal_version,
+                execution_id=proposal.proposal_id,
+            ),
+            capabilities=RuntimeCapabilityInventory(
+                local_tools=(),
+                mcp_connectors=(),
+                a2a_agents=(A2AAgentInventoryItem(
+                    agent_id="gpt_researcher",
+                    semantic_domains=("external_research",),
+                    resource_types=("report",),
+                    operations=("gpt_researcher",),
+                    implementation_present=True,
+                    configuration_state="enabled",
+                    discovery_state="registered_profile",
+                    max_runtime_seconds=240,
+                ),),
+            ),
+        )
+
+    assert rejected.value.feedback.reason == (
+        "agent time budget exceeds the registered runtime limit"
+    )
+    assert rejected.value.feedback.repairable_fields == ("operation",)
+
+
+@pytest.mark.parametrize(
+    ("token_budget", "cost_budget", "expected_reason", "expected_maximum"),
+    (
+        (
+            20_001,
+            1.0,
+            "agent token budget exceeds the remaining Project delegation budget",
+            "20000",
+        ),
+        (
+            4_000,
+            20.01,
+            "agent cost budget exceeds the remaining Project cost budget",
+            "20.0",
+        ),
+    ),
+)
+def test_execution_admission_rejects_agent_budget_above_remaining_project_budget(
+    token_budget: int,
+    cost_budget: float,
+    expected_reason: str,
+    expected_maximum: str,
+) -> None:
+    project, original_subgoal = _project_with_frozen_execution()
+    agent_subgoal = original_subgoal.model_copy(update={
+        "capability_contract": CapabilityContract(
+            contract_id="contract:gpt-researcher",
+            operation="gpt_researcher",
+            semantic_domain="external_research",
+            resource_type="report",
+            allowed_execution_kinds=("agent",),
+        ),
+    })
+    agent_subgoal = agent_subgoal.model_copy(update={
+        "definition_digest": subgoal_definition_digest(agent_subgoal),
+    })
+    revised_plan = project.accepted_plan.proposal.model_copy(update={
+        "subgoals": (agent_subgoal,),
+    })
+    project.accepted_plan = AcceptedPlanVersion(
+        plan_version=1,
+        proposal=revised_plan,
+        plan_digest=canonical_digest(revised_plan),
+    )
+    operation = AgentExecutionOperation(
+        agent_id="gpt_researcher",
+        bounded_sub_goal=compiled_agent_bounded_sub_goal(agent_subgoal),
+        expected_artifact_types=("report",),
+        token_budget=token_budget,
+        cost_budget=cost_budget,
+        time_budget_seconds=240,
+    )
+    binding = {
+        "project_id": project.definition.project_id,
+        "plan_version": 1,
+        "logical_subgoal_id": agent_subgoal.logical_subgoal_id,
+        "subgoal_version": agent_subgoal.subgoal_version,
+        "based_on_event_sequence": project.event_sequence,
+        "proposal_id": "oversized-project-budget",
+        "operation": operation,
+    }
+    proposal = SubGoalExecutionProposal(
+        **binding,
+        proposal_digest=canonical_digest({
+            **binding,
+            "operation": operation.model_dump(mode="json"),
+        }),
+    )
+
+    with pytest.raises(ProposalRejected) as rejected:
+        ExecutionProposalAdmission().accept(
+            project,
+            agent_subgoal,
+            proposal,
+            execution_scope=ExecutionScope(
+                principal=project.definition.principal,
+                project_id=project.definition.project_id,
+                plan_version=1,
+                logical_subgoal_id=agent_subgoal.logical_subgoal_id,
+                subgoal_version=agent_subgoal.subgoal_version,
+                execution_id=proposal.proposal_id,
+            ),
+            capabilities=RuntimeCapabilityInventory(
+                local_tools=(),
+                mcp_connectors=(),
+                a2a_agents=(A2AAgentInventoryItem(
+                    agent_id="gpt_researcher",
+                    semantic_domains=("external_research",),
+                    resource_types=("report",),
+                    operations=("gpt_researcher",),
+                    implementation_present=True,
+                    configuration_state="enabled",
+                    discovery_state="registered_profile",
+                    max_runtime_seconds=240,
+                ),),
+            ),
+        )
+
+    assert rejected.value.feedback.reason == expected_reason
+    assert expected_maximum in rejected.value.feedback.required_repair
+    assert rejected.value.feedback.repairable_fields == ("operation",)
+
+
+def test_execution_output_schema_uses_registered_agent_runtime_limit() -> None:
+    project, _ = _project_with_frozen_execution()
+    subgoal = _subgoal("external-research", "Research the formal release source.")
+    subgoal = subgoal.model_copy(update={
+        "capability_contract": CapabilityContract(
+            contract_id="contract:gpt-researcher",
+            operation="gpt_researcher",
+            semantic_domain="external_research",
+            resource_type="report",
+            allowed_execution_kinds=("agent",),
+        ),
+    })
+    inventory = RuntimeCapabilityInventory(
+        local_tools=(),
+        mcp_connectors=(),
+        a2a_agents=(A2AAgentInventoryItem(
+            agent_id="gpt_researcher",
+            semantic_domains=("external_research",),
+            resource_types=("report",),
+            operations=("gpt_researcher",),
+            implementation_present=True,
+            configuration_state="enabled",
+            discovery_state="registered_profile",
+            max_runtime_seconds=240,
+        ),),
+    )
+    output_type = _execution_output_type(project, inventory, subgoal)
+    payload = {
+        "operation": {
+            "kind": "agent",
+            "agent_id": "gpt_researcher",
+            "expected_artifact_types": ["report"],
+            "token_budget": 4_000,
+            "cost_budget": 1.0,
+            "time_budget_seconds": 240,
+        },
+    }
+
+    accepted = output_type.model_validate(payload)
+
+    assert "bounded_sub_goal" not in json.dumps(output_type.model_json_schema())
+    assert accepted.operation.time_budget_seconds == 240
+    payload["operation"]["time_budget_seconds"] = 241
+    with pytest.raises(ValueError, match="less than or equal to 240"):
+        output_type.model_validate(payload)
+
+    payload["operation"]["time_budget_seconds"] = 240
+    payload["operation"]["token_budget"] = 20_001
+    with pytest.raises(ValueError, match="less than or equal to 20000"):
+        output_type.model_validate(payload)
+
+    payload["operation"]["token_budget"] = 4_000
+    payload["operation"]["cost_budget"] = 20.01
+    with pytest.raises(ValueError, match="less than or equal to 20"):
+        output_type.model_validate(payload)
+
+
 def test_execution_output_schema_constrains_tool_to_matched_capability() -> None:
+    project, _ = _project_with_frozen_execution()
     subgoal = _subgoal("capture-release", "Read the formal release page.")
     subgoal = subgoal.model_copy(update={
         "capability_contract": CapabilityContract(
@@ -993,7 +1799,7 @@ def test_execution_output_schema_constrains_tool_to_matched_capability() -> None
         mcp_connectors=(),
         a2a_agents=(),
     )
-    output_type = _execution_output_type(inventory, subgoal)
+    output_type = _execution_output_type(project, inventory, subgoal)
     operation_schema = output_type.model_json_schema()["$defs"][
         "_ToolOperationWithAdmittedCapability"
     ]
@@ -1011,6 +1817,7 @@ def test_execution_output_schema_constrains_tool_to_matched_capability() -> None
 
 
 def test_web_search_output_rejects_exact_previously_failed_query() -> None:
+    project, _ = _project_with_frozen_execution()
     subgoal = _subgoal("search-release", "Search the formal release page.")
     inventory = RuntimeCapabilityInventory(
         local_tools=(
@@ -1030,6 +1837,7 @@ def test_web_search_output_rejects_exact_previously_failed_query() -> None:
     )
     old_query = "formal release notes"
     output_type = _execution_output_type(
+        project,
         inventory,
         subgoal,
         excluded_tool_operations=(
@@ -1124,6 +1932,7 @@ def test_capture_url_schema_constrains_locator_to_observed_execution_facts() -> 
         a2a_agents=(),
     )
     output_type = _execution_output_type(
+        project,
         inventory,
         subgoal,
         observed_url_locators=observed,
@@ -1153,6 +1962,7 @@ def test_capture_url_schema_constrains_locator_to_observed_execution_facts() -> 
 
 
 def test_investigation_web_search_schema_requires_full_candidate_budget() -> None:
+    project, _ = _project_with_frozen_execution()
     subgoal = _subgoal("search-release", "Search formal release evidence.")
     inventory = RuntimeCapabilityInventory(
         local_tools=(LocalToolInventoryItem(
@@ -1168,7 +1978,7 @@ def test_investigation_web_search_schema_requires_full_candidate_budget() -> Non
         mcp_connectors=(),
         a2a_agents=(),
     )
-    output_type = _execution_output_type(inventory, subgoal)
+    output_type = _execution_output_type(project, inventory, subgoal)
 
     accepted = output_type.model_validate({
         "operation": {

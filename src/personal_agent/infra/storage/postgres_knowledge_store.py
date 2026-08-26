@@ -609,6 +609,61 @@ class PostgresKnowledgeStore(PostgresStoreBase):
                 )
                 return [Claim.model_validate(row["payload"]) for row in cur.fetchall()]
 
+    def search_claims(
+        self,
+        owner_id: str,
+        query_terms: tuple[str, ...],
+        *,
+        states: tuple[str, ...] = (),
+        support_statuses: tuple[str, ...] = (),
+        limit: int = 100,
+    ) -> list[Claim]:
+        self.ensure_schema()
+        terms = tuple(sorted({term.lower() for term in query_terms if term}))
+        if not terms:
+            return []
+        clauses = ["claim.owner_id = %s"]
+        params: list[object] = [owner_id]
+        if states:
+            clauses.append("claim.state = ANY(%s)")
+            params.append(list(states))
+        if support_statuses:
+            clauses.append("claim.support_status = ANY(%s)")
+            params.append(list(support_statuses))
+        params.extend((list(terms), max(1, limit)))
+        searchable_text = """
+            lower(
+                coalesce(claim.payload->>'statement', '') || ' ' ||
+                coalesce(claim.payload->>'subject', '') || ' ' ||
+                coalesce(claim.payload->>'predicate', '') || ' ' ||
+                coalesce(claim.payload->>'object', '') || ' ' ||
+                coalesce(claim.payload->>'scope', '') || ' ' ||
+                coalesce(claim.payload->>'condition', '')
+            )
+        """
+        with self._connect(row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT claim.payload
+                    FROM knowledge_claims AS claim
+                    CROSS JOIN LATERAL (
+                        SELECT count(*) AS overlap
+                        FROM unnest(%s::text[]) AS query_term(term)
+                        WHERE {searchable_text} LIKE '%%' || query_term.term || '%%'
+                    ) AS score
+                    WHERE {' AND '.join(clauses)}
+                      AND score.overlap > 0
+                    ORDER BY score.overlap DESC, claim.created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params[-2:-1] + params[:-2] + params[-1:]),
+                )
+                return [
+                    Claim.model_validate(row["payload"])
+                    for row in cur.fetchall()
+                ]
+
     def list_knowledge_state_events(
         self,
         owner_id: str,

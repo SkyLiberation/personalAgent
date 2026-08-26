@@ -475,6 +475,7 @@ class TestToolExecutor:
 
     def test_web_search_provider_factory_uses_configured_provider(self):
         from personal_agent.application.capture.providers.web_search import (
+            AnySearchWebSearchProvider,
             SerpApiWebSearchProvider,
             TavilyWebSearchProvider,
             build_web_search_provider,
@@ -493,12 +494,18 @@ class TestToolExecutor:
 
         assert isinstance(build_web_search_provider(settings), SerpApiWebSearchProvider)
 
-    def test_web_search_provider_defaults_to_tavily(
+        settings = Settings(
+            web_search=WebSearchConfig(provider="anysearch", api_key="test-key")
+        )
+
+        assert isinstance(build_web_search_provider(settings), AnySearchWebSearchProvider)
+
+    def test_web_search_provider_defaults_to_anysearch(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ):
         from personal_agent.application.capture.providers.web_search import (
-            TavilyWebSearchProvider,
+            AnySearchWebSearchProvider,
             build_web_search_provider,
         )
         from personal_agent.kernel.config import Settings
@@ -506,8 +513,146 @@ class TestToolExecutor:
         monkeypatch.delenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", raising=False)
         settings = Settings.from_env()
 
-        assert settings.web_search.provider == "tavily"
-        assert isinstance(build_web_search_provider(settings), TavilyWebSearchProvider)
+        assert settings.web_search.provider == "anysearch"
+        assert isinstance(build_web_search_provider(settings), AnySearchWebSearchProvider)
+
+    def test_anysearch_provider_uses_unified_search_contract(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import AnySearchWebSearchProvider
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        captured = {}
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "code": 0,
+                    "message": "success",
+                    "data": {
+                        "results": [
+                            {
+                                "title": "Official result",
+                                "url": "https://example.com/result",
+                                "content": "Structured content.",
+                                "published_at": "2026-08-21",
+                            },
+                            {
+                                "title": "Overflow result",
+                                "url": "https://example.com/overflow",
+                                "snippet": "Must be truncated by the Adapter.",
+                            },
+                        ],
+                        "metadata": {"total_results": 2},
+                    },
+                }).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return DummyResponse()
+
+        monkeypatch.setattr(web_search_module, "urlopen", fake_urlopen)
+        settings = Settings(
+            web_search=WebSearchConfig(
+                provider="anysearch",
+                api_key="anysearch-token",
+                base_url="https://api.anysearch.com",
+                timeout_ms=9000,
+            )
+        )
+
+        results = AnySearchWebSearchProvider(settings).search("agent tools", limit=1)
+
+        assert captured["url"] == "https://api.anysearch.com/v1/search"
+        assert captured["headers"]["Authorization"] == "Bearer anysearch-token"
+        assert captured["headers"]["X-anysearch-client"] == "personal-agent/1.0"
+        assert captured["payload"] == {
+            "max_results": 1,
+            "query": "agent tools",
+        }
+        assert captured["timeout"] == 9
+        assert len(results) == 1
+        assert results[0].source == "anysearch"
+        assert results[0].url == "https://example.com/result"
+        assert results[0].snippet == "Structured content."
+        assert results[0].published_at == "2026-08-21"
+
+    def test_anysearch_provider_rejects_http_200_business_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import AnySearchWebSearchProvider
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "code": 401,
+                    "message": "API key authentication failed",
+                    "data": None,
+                }).encode("utf-8")
+
+        monkeypatch.setattr(
+            web_search_module,
+            "urlopen",
+            lambda *_args, **_kwargs: DummyResponse(),
+        )
+        settings = Settings(
+            web_search=WebSearchConfig(provider="anysearch", api_key="invalid")
+        )
+
+        with pytest.raises(PermissionError, match="code 401"):
+            AnySearchWebSearchProvider(settings).search("agent tools")
+
+    def test_anysearch_provider_allows_documented_anonymous_access(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from personal_agent.application.capture.providers import web_search as web_search_module
+        from personal_agent.application.capture.providers.web_search import AnySearchWebSearchProvider
+        from personal_agent.kernel.config import Settings, WebSearchConfig
+
+        captured = {}
+
+        class DummyResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({"code": 0, "data": {"results": []}}).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            captured["headers"] = dict(request.header_items())
+            return DummyResponse()
+
+        monkeypatch.setattr(web_search_module, "urlopen", fake_urlopen)
+        settings = Settings(
+            web_search=WebSearchConfig(provider="anysearch", api_key=None)
+        )
+
+        assert AnySearchWebSearchProvider(settings).search("agent tools") == []
+        assert "Authorization" not in captured["headers"]
 
     def test_serpapi_provider_uses_google_organic_results_contract(
         self,

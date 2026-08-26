@@ -86,13 +86,15 @@ class GPTResearcherA2AAdapter:
             provider="gpt_researcher",
             protocol="a2a_jsonrpc",
             description=(
-                "Deep external research specialist for user requests that require researching authoritative "
-                "web sources and returning an evidence-backed report for parent synthesis."
+                "Deep external research specialist. A single delegated task can generate multiple search "
+                "queries, research multiple authoritative web sources, and return one evidence-backed report "
+                "for parent synthesis."
             ),
             semantic_domains=("external", "external_research", "web_research"),
             task_types=("research", "report"),
             capability_ids=("agent:gpt_researcher",),
             allowed_operations=("delegate",),
+            max_runtime_seconds=max(1, int(config.timeout_seconds)),
             governance=AgentGovernance(
                 risk_level="medium",
                 side_effects=("external_network",),
@@ -101,6 +103,7 @@ class GPTResearcherA2AAdapter:
                 trust_level="external",
                 timeout_seconds=config.timeout_seconds,
                 rate_limit_per_minute=5,
+                max_concurrent_runs=config.max_concurrent_runs,
                 allowed_domains=("localhost", "127.0.0.1"),
             ),
         )
@@ -174,6 +177,8 @@ class GPTResearcherA2AAdapter:
             "topic": topic,
             "submission_key": submission_key,
         }
+        if self._config.max_search_results is not None:
+            kwargs["max_search_results"] = self._config.max_search_results
         for key in ("report_type", "report_source", "tone", "max_search_results"):
             if data.get(key) is not None:
                 kwargs[key] = data[key]
@@ -306,6 +311,8 @@ def _status_from_a2a(state: str) -> str:
         return "failed"
     if normalized in {"canceled", "cancelled"}:
         return "cancelled"
+    if normalized in {"timed_out", "timed-out", "timeout"}:
+        return "timed_out"
     return "running"
 
 

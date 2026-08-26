@@ -116,9 +116,11 @@ PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
 ## LLM 配置
 
 ```env
-STRUCTURED_BASE_URL=https://n.tokeness.io/v1
-STRUCTURED_API_KEY=your_tokeness_key
-STRUCTURED_MODEL=gpt-5.4-mini
+STRUCTURED_BASE_URL=https://api.xiaomimimo.com/v1
+STRUCTURED_API_KEY=your_mimo_key
+STRUCTURED_MODEL=mimo-v2.5
+STRUCTURED_OUTPUT_TRANSPORT=json_schema
+STRUCTURED_EXTRA_BODY={"thinking":{"type":"disabled"}}
 PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS=60
 PERSONAL_AGENT_STRUCTURED_MAX_RETRIES=2
 
@@ -137,17 +139,33 @@ PERSONAL_AGENT_EXTRACT_MODEL=${STRUCTURED_MODEL}
 
 `STRUCTURED_*` 是生成式模型的 canonical 配置。直接回答、结构化决策、Graphiti 生成、
 LangExtract 在没有显式 Adapter override 时均从这里解析；当前部署统一使用
-`gpt-5.4-mini`。embedding 和 transcription 不属于生成式模型切换，继续使用
+`mimo-v2.5`。embedding 和 transcription 不属于生成式模型切换，继续使用
 `EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
 
-`STRUCTURED_*` 也是相邻 GPT Researcher `docker-compose.tokeness.yml` 的唯一配置源；通过
+MiMo 当前使用原生 `json_schema`，并通过 `STRUCTURED_EXTRA_BODY` 关闭思考模式。默认
+思考模式曾把结构化输出预算耗尽为无正文；`json_object` 在正式入口又无法稳定满足
+`WorkingPlan` Schema，因此二者都不是当前配置。
+
+生命周期选择的正式 E2E 已在当前 `max_retries=2` 配置下达到
+`20/20 background_started`、`20/20` 返回 ProjectReference、最终请求失败为 0，P95
+为 36.91 秒。零重试同输入组也达到 `20/20`，P95 为 36.04 秒；因此生命周期结果不依赖
+技术重试。该结果证明自然后台请求能够进入独立调查项目，不证明后台报告已经最终交付，
+也不证明 MiMo 的所有语义操作都达到发布门槛。详细归档和边界见
+[设计优化清单](future/design-optimization-backlog.md) §3。
+
+后续后台最终报告 baseline 在同样 20 个输入中只创建 18 个 Project，说明跨重复样本的
+生命周期选择仍有方差。该 baseline 为 `0/20 delivered`，且只有 3 次真实 GPT Researcher
+调用；因此检索候选数 1 与 5 的对照没有进入 target，当前
+`PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS` 继续保持为 1。
+
+`STRUCTURED_*` 也是相邻 GPT Researcher `docker-compose.deepseek.yml` 的唯一配置源；通过
 `docker compose --env-file ../personalAgent/.env` 注入，不复制令牌。OpenAI SDK transport
 不做隐式 retry，`*_MAX_RETRIES` 由 typed model-operation decorator 唯一执行；流式响应
 在出现部分输出后不会自动重放。release E2E 默认使用
 `PERSONAL_AGENT_E2E_MODEL_PROFILE=configured` 和 120 秒单请求 timeout。
 
 默认值（不设环境变量时）：
-- 所有生成式 Adapter：`gpt-5.4-mini`
+- 所有生成式 Adapter：`deepseek-v4-flash`
 - `OPENAI_EMBEDDING_MODEL`：`BAAI/bge-m3`
 - `OPENAI_TRANSCRIPTION_MODEL`：`whisper-1`
 
@@ -235,18 +253,19 @@ PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL=${STRUCTURED_MODEL}
 
 ## Web 搜索配置
 
-`web_search` 工具的生产默认 Provider 是 `tavily`，使用通用且唯一的
+`web_search` 工具的生产默认 Provider 是 `anysearch`，使用通用且唯一的
 `PERSONAL_AGENT_WEB_SEARCH_*` 凭据：
 
 ```env
-PERSONAL_AGENT_WEB_SEARCH_PROVIDER=tavily
-PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_tavily_api_key
-PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://api.tavily.com
+PERSONAL_AGENT_WEB_SEARCH_PROVIDER=anysearch
+PERSONAL_AGENT_WEB_SEARCH_API_KEY=your_anysearch_api_key
+PERSONAL_AGENT_WEB_SEARCH_BASE_URL=https://api.anysearch.com
 PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS=60000
 PERSONAL_AGENT_URL_CAPTURE_PROVIDER=builtin
 ```
 
-Provider 由 Composition Root 静态绑定，不做运行时 fallback；SerpAPI Adapter 仅保留为显式
+Provider 由 Composition Root 静态绑定，不做运行时 fallback；AnySearch Adapter 使用
+`POST /v1/search`、Bearer API Key 和结构化 `data.results`；SerpAPI Adapter 仅保留为显式
 历史/对照配置，已移除 Firecrawl Web Search Adapter。
 `PERSONAL_AGENT_URL_CAPTURE_PROVIDER` 独立决定 URL 正文读取使用 `firecrawl` 还是 `builtin`；
 它是一个单值绑定，不会在执行失败后自动切换 Provider。未显式设置时，有 Firecrawl key 的
@@ -396,27 +415,43 @@ GitHub MCP 官方镜像支持 `GITHUB_READ_ONLY=1`，建议默认启用，并且
 
 ## GPT Researcher A2A 配置
 
-本工程可把已部署的 `gpt-researcher` A2A JSON-RPC 后端注册为外部 Agent `gpt_researcher`，由 AgentGateway 治理 AgentRun / AgentEvent / AgentArtifact。后端按 `D:\mySoft\workspace\gpt-researcher\docker-compose.a2a.yml` 启动后，默认暴露：
+本工程可把已部署的 `gpt-researcher` A2A JSON-RPC 后端注册为外部 Agent `gpt_researcher`，由 AgentGateway 治理 AgentRun / AgentEvent / AgentArtifact。后端必须同时加载基础 Compose 与 Provider 覆盖，避免回落到 `gpt-researcher/.env` 中的另一套模型配置：
+
+```powershell
+docker compose --env-file ..\personalAgent\.env `
+  -f docker-compose.a2a.yml `
+  -f docker-compose.deepseek.yml `
+  up -d --no-build
+```
+
+容器内监听 `8001`，当前宿主端口为 `18001`：
 
 ```text
-Agent Card: http://127.0.0.1:8001/.well-known/agent-card.json
-A2A JSON-RPC: http://127.0.0.1:8001/a2a
+Agent Card: http://127.0.0.1:18001/.well-known/agent-card.json
+A2A JSON-RPC: http://127.0.0.1:18001/a2a
 ```
 
 personalAgent 侧配置：
 
 ```env
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED=false
-PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT=http://127.0.0.1:8001/a2a
-PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL=http://127.0.0.1:8001/.well-known/agent-card.json
-PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS=120
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT=http://127.0.0.1:18001/a2a
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL=http://127.0.0.1:18001/.well-known/agent-card.json
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS=240
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_TYPE=research_report
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_SOURCE=web
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_TONE=Objective
-PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=1
+PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_CONCURRENT_RUNS=4
 ```
 
 启用后，GPT Researcher 作为 Agent capability 注册。用户明确点名时，Task Analyzer 形成 required provider binding，Executive 产生 delegate，CapabilityResolver 选择 `gpt_researcher` 并通过 AgentGateway 调用。普通研究任务可由 Executive 选择本地研究动作或 `research_once` Protocol。
+
+当前本地深研 profile 还设置 `PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=64000`，为成功 `AgentArtifact` 之后的父级核验、降级修复和最终综合保留预算。代码默认仍为 32,000；没有同类真实深研需求时不得机械提高全局默认。
+
+GPT Researcher 的 OpenAI 兼容客户端把单次请求限制为 60 秒，并允许一次 SDK 重试。该限制只能约束单次服务提供方长尾；一次研究包含多个模型阶段，因此仍可能超过父任务的 240 秒预算。20 个真实委托样本只有 `10/20 delivered`，该配置不得表述为稳定上线。
+
+A2A 入口在构造 GPT Researcher 时绑定一个确定性的通用研究角色，不再额外调用模型生成展示名称和角色 Prompt；普通 GPT Researcher 入口仍保留原有自动角色选择。同任务 MiMo 诊断由 240.14 秒超时改善为 96.26 秒完成并生成两个官方来源组，但完整内容 grader 与 usage 契约仍未通过，因此该配置只关闭角色输出兼容问题，不代表研究能力已经稳定上线。
 
 ## Firecrawl 配置
 
@@ -510,7 +545,7 @@ LANGSMITH_WORKSPACE_ID=
 Investigation Application 组件不读取该开关。该策略不能保证覆盖第三方库自动产生的全部 trace，
 也不能覆盖尚未迁移到统一 Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
 文件内容或密钥。
-完整边界见 [观测与治理层](topics/observability-governance.md#7-llm-trace-脱敏策略)。
+完整边界见 [可观测与治理边界](topics/observability-governance.md#2-llm-trace-脱敏策略)。
 
 ## PostgreSQL 与遗留 Checkpoint 配置
 

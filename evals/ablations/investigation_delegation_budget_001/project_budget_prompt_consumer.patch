@@ -1,0 +1,17 @@
+diff --git a/src/personal_agent/application/investigation_project/model_ports.py b/src/personal_agent/application/investigation_project/model_ports.py
+--- a/src/personal_agent/application/investigation_project/model_ports.py
++++ b/src/personal_agent/application/investigation_project/model_ports.py
+@@ -1618,13 +1618,6 @@ class StructuredExecutionProposer:
+                     item.model_dump(mode="json")
+                     for item in decision_feedback
+                 ],
+-                "remaining_agent_budget": {
+-                    "tokens": ProjectBudgetLedger().remaining_tokens(
+-                        project,
+-                        category="external_delegation",
+-                    ),
+-                    "cost": ProjectBudgetLedger().remaining_cost(project),
+-                },
+                 "capabilities": _execution_inventory_payload(capabilities, subgoal),
+                 "execution_scope": execution_scope.model_dump(mode="json"),
+             },

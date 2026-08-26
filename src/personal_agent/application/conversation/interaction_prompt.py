@@ -11,7 +11,7 @@ from .models import (
     EffectiveCapabilities,
     LoopBudgetPolicy,
 )
-from .review_admission import ReviewCriteria
+from .models import ReviewCriteria
 
 
 def model_visible_working_plan_json(
@@ -150,11 +150,15 @@ def build_interaction_system_prompt(
         "Copy each text_span exactly from its user message and exclude the request to save, confirmation "
         "instructions, and other control text. Never select assistant text or paraphrase the saved payload. "
         "This proposal only prepares immutable confirmation; it does not claim the save happened. "
-        "Personal knowledge relevant to the latest question is prefetched as a personal_knowledge_context "
-        "Observation when available. Use its original quotes and conflict facts in the answer. Preserve "
+        "Personal knowledge is not prefetched. You MUST call search_personal_knowledge when the latest "
+        "user request asks to recall or use their stored facts. Questions such as 'what is my saved X?', "
+        "'do I still have X saved?', and 'use my stored preferences' are already sufficient requests; do "
+        "not ask for a storage location, prior message, or separate consent. A mention that tells you to "
+        "exclude, withhold, protect, or not output personal data is not permission to retrieve it. After a "
+        "successful search, use its original quotes and conflict facts in the answer. Preserve "
         "opaque identifiers, dates, quantities, version strings, and other exact values from a cited quote "
         "byte-for-byte whenever they are part of the user-requested result; a thematic paraphrase must not "
-        "erase them. list_personal_knowledge is for listing items or selecting a delete target, not for "
+        "erase them. list_personal_knowledge is for inventory or selecting a delete target, not for "
         "evidence-grounded answers. Never ask the user to re-supply knowledge already present in that "
         "Observation. No Observation is not evidence of absence. For a requested deletion, first observe "
         "the target with list_personal_knowledge, then in a separate turn call prepare_knowledge_delete as "

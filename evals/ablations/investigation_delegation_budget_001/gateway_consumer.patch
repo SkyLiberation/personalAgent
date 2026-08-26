@@ -1,0 +1,14 @@
+diff --git a/src/personal_agent/agents/gateway.py b/src/personal_agent/agents/gateway.py
+--- a/src/personal_agent/agents/gateway.py
++++ b/src/personal_agent/agents/gateway.py
+@@ -471,10 +471,6 @@ class AgentGateway:
+         action_id = context.execution_scope.task_id
+         if action_id and grant.action_ref != action_id:
+             raise PermissionError("delegation grant is bound to a different child start")
+-        if grant.time_budget_seconds > profile.max_runtime_seconds:
+-            raise PermissionError(
+-                "delegation time budget exceeds agent runtime limit"
+-            )
+ 
+     @staticmethod
+     def _append_event(run: ChildAgentRunRecord, event_type, payload: dict[str, object]) -> ChildAgentRunRecord:

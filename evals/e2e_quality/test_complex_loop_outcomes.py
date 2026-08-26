@@ -231,7 +231,11 @@ def test_l07_http_conversation_save_is_recalled_in_a_new_conversation(
     assert any(
         expected_code in json.dumps(item["payload"], ensure_ascii=False)
         for item in trace["inputs"]
-        if item["kind"] == "tool_result" and item["status"] == "succeeded"
+        if (
+            item["kind"] == "context_evidence"
+            and item["capability_id"] == "personal_knowledge_context"
+            and item["status"] == "succeeded"
+        )
     )
 
 

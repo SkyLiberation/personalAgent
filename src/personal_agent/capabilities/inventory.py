@@ -72,6 +72,7 @@ class A2AAgentInventoryItem(_InventoryModel):
     provider_availability: ProviderAvailability = "not_observed"
     protocol: str | None = None
     capability_ids: tuple[str, ...] = ()
+    max_runtime_seconds: int | None = Field(default=None, ge=1)
     profile_owner: Literal["agent_gateway_profile"] = "agent_gateway_profile"
 
 

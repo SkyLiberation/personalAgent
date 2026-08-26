@@ -1,0 +1,12 @@
+diff --git a/src/personal_agent/agents/gateway.py b/src/personal_agent/agents/gateway.py
+--- a/src/personal_agent/agents/gateway.py
++++ b/src/personal_agent/agents/gateway.py
+@@ -294,7 +294,7 @@ class AgentGateway:
+             submission_key=submission_key,
+             definition_digest=definition_digest,
+             definition=definition,
+-            max_active_runs=adapter.profile.governance.max_concurrent_runs,
++            max_active_runs=None,
+         )
+         if reservation is None:
+             raise AgentCapacityUnavailable(
