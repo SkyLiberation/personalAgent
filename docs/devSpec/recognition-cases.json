@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "metric": "top_1_primary_spec_accuracy",
+  "baseline": {
+    "source": "pre-split AGENTS.md and CLAUDE.md",
+    "sha256": "69888976AC5A7E13C4D63145AD22F4FE1DB8F8D0B000737DF96C4923EF67F693",
+    "bytes_per_entry": 47848,
+    "lines_per_entry": 497
+  },
+  "module_overlay_cases": [
+    {
+      "id": "docs_topic_overlay",
+      "path": "docs/topics/memory.md",
+      "expected": "docs/AGENTS.md"
+    },
+    {
+      "id": "docs_spec_overlay",
+      "path": "docs/devSpec/change-evidence.md",
+      "expected": "docs/AGENTS.md"
+    },
+    {
+      "id": "eval_catalog_overlay",
+      "path": "evals/e2e_quality/evidence_catalog.py",
+      "expected": "evals/AGENTS.md"
+    },
+    {
+      "id": "eval_product_overlay",
+      "path": "evals/product_baselines/evidence.py",
+      "expected": "evals/AGENTS.md"
+    },
+    {
+      "id": "source_no_overlay",
+      "path": "src/personal_agent/application",
+      "expected": null
+    },
+    {
+      "id": "root_test_no_overlay",
+      "path": "tests/test_api.py",
+      "expected": null
+    }
+  ],
+  "cases": [
+    {
+      "id": "evd_new_capability",
+      "task": "新增功能前，怎样从正式入口准备失败 baseline 和真实 target E2E？",
+      "expected": "EVD"
+    },
+    {
+      "id": "evd_ablation",
+      "task": "声称运行机制有收益时，如何设计单变量消融和对照指标？",
+      "expected": "EVD"
+    },
+    {
+      "id": "evd_refactor",
+      "task": "纯工程重构怎样建立工程约束基线并完成复杂度准入？",
+      "expected": "EVD"
+    },
+    {
+      "id": "arc_fact_owner",
+      "task": "新增业务状态和数据库表之前，怎样确定业务事实 owner 与唯一写入口？",
+      "expected": "ARC"
+    },
+    {
+      "id": "arc_layers",
+      "task": "Application Capability、Runtime Mechanism 与 Product Aggregate 应如何分层？",
+      "expected": "ARC"
+    },
+    {
+      "id": "arc_reachability",
+      "task": "新增 Repository 和 Adapter 后，怎样检查 Composition Root 装配与生产可达性？",
+      "expected": "ARC"
+    },
+    {
+      "id": "exe_command_digest",
+      "task": "Approval 之后，Command、digest 与 Receipt 应如何绑定？",
+      "expected": "EXE"
+    },
+    {
+      "id": "exe_completion",
+      "task": "怎样区分 Execution Fact、Verification 与 Completion？",
+      "expected": "EXE"
+    },
+    {
+      "id": "exe_replay",
+      "task": "durable execution 恢复和 replay 时怎样避免重复模型调用与副作用？",
+      "expected": "EXE"
+    },
+    {
+      "id": "ctx_visibility",
+      "task": "Context 检索前怎样先按权限和 scope 做 Visibility 过滤？",
+      "expected": "CTX"
+    },
+    {
+      "id": "ctx_memory",
+      "task": "Memory、Artifact Store 与 Retrieval Index 的存储边界是什么？",
+      "expected": "CTX"
+    },
+    {
+      "id": "ctx_projection",
+      "task": "Capability Projection 和服务提供方等价绑定由谁决定？",
+      "expected": "CTX"
+    },
+    {
+      "id": "cod_module_split",
+      "task": "类或模块拆分时，如何识别 God Service 并说明职责？",
+      "expected": "COD"
+    },
+    {
+      "id": "cod_typed_payload",
+      "task": "内部 payload 为什么不能使用 raw dict，typed 边界应放在哪里？",
+      "expected": "COD"
+    },
+    {
+      "id": "cod_graph_planner",
+      "task": "LangGraph、Router、Planner 与 Workflow 各自负责什么？",
+      "expected": "COD"
+    },
+    {
+      "id": "doc_markdown",
+      "task": "新增 Markdown 架构说明时，应放在哪个文档目录并更新什么索引？",
+      "expected": "DOC"
+    },
+    {
+      "id": "doc_move",
+      "task": "移动权威文档后，怎样删除重复正文并检查失效链接？",
+      "expected": "DOC"
+    },
+    {
+      "id": "doc_chinese",
+      "task": "修改设计文档时需要遵守哪些中文写作规则？",
+      "expected": "DOC"
+    },
+    {
+      "id": "qlt_golden_set",
+      "task": "语义决策变更如何设计 Golden Set 和 Real E2E 评测？",
+      "expected": "QLT"
+    },
+    {
+      "id": "qlt_contract",
+      "task": "Port 与 Adapter 应使用 Contract 还是 Integration 测试？",
+      "expected": "QLT"
+    },
+    {
+      "id": "qlt_trace",
+      "task": "Trace、安全、权限和审计需要记录哪些字段并保护哪些信息？",
+      "expected": "QLT"
+    },
+    {
+      "id": "rel_schema",
+      "task": "Schema 和内部协议迁移时，什么时候允许兼容窗口？",
+      "expected": "REL"
+    },
+    {
+      "id": "rel_adr",
+      "task": "引入新框架或持久化事实时，ADR 必须包含哪些证据？",
+      "expected": "REL"
+    },
+    {
+      "id": "rel_gate",
+      "task": "发布评审和合并验收前，完整完成门禁是什么？",
+      "expected": "REL"
+    }
+  ]
+}

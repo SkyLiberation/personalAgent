@@ -13,7 +13,9 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 
 | 目录 | 定位 |
 | --- | --- |
+| [`AGENTS.md`](AGENTS.md) | `docs/**` 的目录级文档治理入口；继承根主规范并链接中文写作与权威索引 |
 | [`chinese-writing-spec.md`](chinese-writing-spec.md) | `docs/` 全目录的中文语法、术语、证据措辞和存量迁移门禁 |
+| [`devSpec/`](devSpec/README.md) | 根 `AGENTS.md` 与 `CLAUDE.md` 按任务渐进披露的开发、设计、测试、文档和发布细则 |
 | `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
 | `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
