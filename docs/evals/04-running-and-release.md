@@ -1,6 +1,6 @@
 # 运行、归档与发布
 
-**当前 E2E 执行分为 9 条 Product E2E 和 25 条 supporting evidence；12 条 scripted Investigation Runtime Conformance 在独立 suite。**
+**当前 E2E 数量以测试收集与 `evidence_catalog.py` 为准；已撤回的 Investigation Project 及其 scripted conformance 不再属于当前执行矩阵。**
 
 ## 收集当前矩阵
 
@@ -13,9 +13,9 @@ uv run pytest evals/e2e_quality --collect-only -q --e2e-scope=diagnostic
 
 ```text
 release selection: 9
-diagnostic selection: 25
-runtime conformance selection: 12
-catalog total: 46
+diagnostic selection: 21
+retired Investigation conformance: 0
+catalog total: 30
 ```
 
 ## 执行机器 release selection
@@ -39,7 +39,7 @@ uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s
 
 - 真实外部 Provider profile：`E16–E21`；
 - 真实模型 + frozen provider 的 HTTP conformance：`CTX-001/GOV-001/RUN-001`；
-- Investigation 的 12 个 `LT` 用例（`LT01–LT08、LT10–LT13`）已迁移到 `evals/runtime_conformance/investigation_project`，用独立命令执行；`LT09` 已删除。
+- 已撤回机制的 `LT` scripted Investigation 用例已删除；需要解释旧结论时只读取 checksum 有效的历史归档，不把它们作为当前测试矩阵。
 
 `diagnostic` 不是一个同质测试层级。
 
@@ -81,6 +81,74 @@ target 必须使用相同 seed、用户输入、principal、正式入口、初�
 ```
 
 校验会拒绝 checksum 失效、role 错误、输入/身份/入口/交互模式/初始事实/grader 不一致，以及代码与配置身份完全相同的伪配对。旧的固定 `conv-*.json` 只能视为历史调试产物，不能作为 paired baseline/target 或发布证据。
+
+### 逐样本晋级门槛与早停
+
+高成本、重复采样的独立 target 可以使用 typed promotion spec。门禁在每个 `ProductEvidenceRecorder` archive 封存后计算；只在门槛已经数学上不可达到时提前拒绝，绝不因 partial target 暂时良好而提前通过。示例：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -s `
+  evals/product_baselines/test_interaction_intent_delegation_boundary_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/interaction_intent_target_001.json `
+  --product-promotion-output `
+  data/e2e_traces/promotion_gates/interaction-intent-target
+```
+
+spec 固定 `case_id`、target role、stage、`expected_samples` 和 typed constraints。当前约束支持 boolean minimum/maximum count、numeric maximum sum、nearest-rank percentile 上限和 conditional rate 下限；`result_report_missing` 与 `test_failed` 是 recorder/pytest 产生的 boolean 执行事实。runner 还会机械拒绝：
+
+- source archive checksum 无效；
+- case/role、正式入口、交互模式、代码/config、grader 或 evidence class 不同；
+- 同一 archive 被重复消费（相同自然输入的独立重复运行仍合法）；
+- 指标缺失、类型错误或 conditional numerator 不蕴含 denominator；
+- 测试全部结束但仍未收齐预声明样本。
+
+该命令必须只选择一个专用 cohort，不与 `--maxfail` 组合。pytest 自身测试失败、internal error 和 usage error 不会被 promotion pass 覆盖。输出 archive 的 evidence class 是 `evaluation_promotion_decision_not_product_e2e`；它能证明 cohort 晋级决策，不能替代 baseline、单变量消融、完整真实 target 或 release gate。
+
+历史 archive 可只读回放，不重新调用 Provider：
+
+```powershell
+.\.venv\Scripts\python.exe -m evals.e2e_quality.promotion_gate `
+  evals/promotion_specs/interaction_intent_target_001.json `
+  <target-archive-root> `
+  --output-root data/e2e_traces/promotion_gates/replay
+```
+
+默认一次性 `capture` 仍适用于没有 pre-capture 失败 baseline 的用例。已证明昂贵调用可能在结果报告形成前失败时，必须在调用前 enrollment，再在完整 grader report 形成后提交结果：
+
+```python
+product_evidence_recorder.enroll(nodeid=nodeid, identity=identity)
+result = invoke_formal_entrypoint()
+product_evidence_recorder.capture_report(build_grader_report(result))
+```
+
+enrollment 只冻结可在执行前知道的 case、role、正式入口、身份、输入、初始事实、config cohort 和 grader version，不得预填用户结果。call phase 异常会封存 `enrolled_without_result_report`；如果测试返回成功但没有 `capture_report`，pytest 会被强制置为 failed。fixture/setup 在 test body 前失败时仍没有合法场景 identity，不进入 cohort，禁止从 nodeid 或 stdout 补造。
+
+当前已迁移的 Agent 委托 cohort 使用：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -s `
+  evals/product_baselines/test_agent_perf_delegate_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/agent_delegate_target_001.json `
+  --product-promotion-output `
+  data/e2e_traces/promotion_gates/agent-delegate-target
+```
+
+该 spec 对 `result_report_missing` 和 `test_failed` 都要求零容忍，因此任一正式样本在调用阶段失败即可停止余下 cohort。它不改变产品 target 门槛，也不把执行失败解释成用户结果失败类型。
+
+后台持续能力边界已采用同样的逐样本结构，当前可执行入口只保留参数化 v2：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -s `
+  evals/product_baselines/test_background_continuation_limitation_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/background_continuation_target_002.json `
+  --product-promotion-output `
+  data/e2e_traces/promotion_gates/background-continuation-target-002
+```
+
+该命令收集 20 个 pytest item，而不是在一个 item 内循环 20 次。每项只执行一个正式 HTTP 请求并生成一个 archive，因此零容忍失败可以在样本边界立即停止。历史 `grader-v1` 聚合 archive 只服务已经关闭的 ADR 0015 证据；不能与 `v2-per-sample` 合并计算稳定性或晋级结果。
 
 ### CONV-002 Provider 公平 cohort
 

@@ -83,11 +83,6 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                     if result.pending_confirmation is not None
                     else None
                 ),
-                "project_reference": (
-                    result.project_reference.model_dump(mode="json")
-                    if result.project_reference is not None
-                    else None
-                ),
             })
 
         return StreamingResponse(

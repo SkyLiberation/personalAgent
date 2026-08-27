@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import logging
 from typing import TYPE_CHECKING
 
@@ -40,9 +39,6 @@ from personal_agent.infra.storage.postgres_agent_trace_store import (
 )
 from personal_agent.infra.storage.postgres_execution_replay_store import (
     PostgresExecutionReplayStore,
-)
-from personal_agent.infra.storage.postgres_investigation_project import (
-    PostgresInvestigationProjectStore,
 )
 from personal_agent.infra.storage.postgres_agent_run_store import PostgresAgentRunStore
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
@@ -97,24 +93,6 @@ from personal_agent.capabilities.inventory import (
     A2AAssemblyDefinition,
 )
 from personal_agent.application.artifacts import ArtifactService
-from personal_agent.application.investigation_project import (
-    CreateInvestigationProject,
-    InvestigationProjectService,
-    QueryInvestigationProject,
-    SteerInvestigationProject,
-    StructuredExecutionProposer,
-    StructuredInvestigationPlanner,
-    StructuredProjectSynthesis,
-    StructuredProjectVerifier,
-    UnavailableInvestigationModelPorts,
-)
-from personal_agent.orchestration.investigation_project_adapters import (
-    DurableProjectAgentAdapter,
-    PolicyEngineDelegationAdapter,
-    RuntimeCapabilitySnapshot,
-    ScopeBoundDisclosureManifest,
-    ToolExecutorProjectAdapter,
-)
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.application.conversation import (
     ConversationService,
@@ -122,17 +100,10 @@ from personal_agent.application.conversation import (
     LoopBudgetPolicy,
 )
 from personal_agent.application.conversation.models import (
-    ConversationProjectSnapshot,
-    InvestigationRequirementProgress,
-    InvestigationSubgoalProgress,
-    ProjectReference,
-    StartDurableInvestigationArguments,
-    SteerInvestigationProjectArguments,
     PersonalKnowledgeCandidate,
     PersonalKnowledgeEvidenceCitation,
     PersonalKnowledgeEvidenceSnapshot,
 )
-from personal_agent.domain.investigation_project import UserRequirement
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.capability_inventory import (
     build_runtime_capability_inventory,
@@ -324,123 +295,6 @@ class _ConversationKnowledgeReadAdapter:
         )
 
 
-class _ConversationProjectAdapter:
-    def __init__(self, project_service: InvestigationProjectService) -> None:
-        self._project_service = project_service
-
-    def start(
-        self,
-        *,
-        principal,
-        owner,
-        request: StartDurableInvestigationArguments,
-        idempotency_key: str,
-    ) -> ProjectReference:
-        view = self._project_service.create(
-            CreateInvestigationProject(
-                principal=principal,
-                title=request.title,
-                goal=request.goal,
-                requirements=tuple(
-                    UserRequirement(
-                        requirement_id=f"req-{index}",
-                        statement=requirement.statement,
-                        acceptance_contract=requirement.acceptance_contract,
-                    )
-                    for index, requirement in enumerate(request.requirements, start=1)
-                ),
-                idempotency_key=idempotency_key,
-            )
-        )
-        return ProjectReference(
-            project_id=view.definition.project_id,
-            tenant_id=view.definition.principal.tenant_id,
-            user_id=view.definition.principal.user_id,
-            state=view.state,
-            title=view.definition.title,
-            goal=view.definition.goal,
-        )
-
-    def get(self, *, principal, reference) -> ConversationProjectSnapshot:
-        view = self._project_service.get(QueryInvestigationProject(
-            principal=principal,
-            project_id=reference.project_id,
-        ))
-        return self._snapshot(view)
-
-    def steer(
-        self,
-        *,
-        principal,
-        reference,
-        request: SteerInvestigationProjectArguments,
-        idempotency_key: str,
-    ) -> ConversationProjectSnapshot:
-        current = self._project_service.get(QueryInvestigationProject(
-            principal=principal,
-            project_id=reference.project_id,
-        ))
-        if current.accepted_plan is None:
-            raise ValueError("durable investigation has no accepted plan yet")
-        updated = self._project_service.steer(SteerInvestigationProject(
-            principal=principal,
-            project_id=reference.project_id,
-            expected_plan_version=current.accepted_plan.plan_version,
-            statement=request.statement,
-            waived_requirement_ids=request.waived_requirement_ids,
-            added_requirements=tuple(
-                UserRequirement(
-                    requirement_id=(
-                        "req-conversation-"
-                        f"{idempotency_key[:10]}-{index}"
-                    ),
-                    statement=item.statement,
-                    acceptance_contract=item.acceptance_contract,
-                )
-                for index, item in enumerate(request.added_requirements, start=1)
-            ),
-            idempotency_key=idempotency_key,
-        ))
-        return self._snapshot(updated)
-
-    @staticmethod
-    def _snapshot(view) -> ConversationProjectSnapshot:
-        completed = {item.logical_subgoal_id for item in view.outcomes}
-        plan = view.accepted_plan
-        return ConversationProjectSnapshot(
-            project_id=view.definition.project_id,
-            state=view.state,
-            title=view.definition.title,
-            goal=view.definition.goal,
-            plan_version=plan.plan_version if plan is not None else None,
-            requirements=tuple(
-                InvestigationRequirementProgress(
-                    requirement_id=item.requirement_id,
-                    statement=item.statement,
-                    acceptance_contract=item.acceptance_contract,
-                    status=item.status,
-                )
-                for item in view.user_requirements.requirements
-            ),
-            subgoals=tuple(
-                InvestigationSubgoalProgress(
-                    logical_subgoal_id=item.logical_subgoal_id,
-                    objective=item.objective,
-                    status=(
-                        "completed"
-                        if item.logical_subgoal_id in completed
-                        else "pending"
-                    ),
-                )
-                for item in (plan.proposal.subgoals if plan is not None else ())
-            ),
-            waiting_reasons=tuple(
-                f"{item.logical_subgoal_id}:{item.reason}"
-                for item in view.waiting_reasons
-            ),
-        )
-
-
 def _policy_rules_from_settings(settings: Settings) -> PolicyRules:
     """Build the policy override rule set from configured allow/deny lists."""
     cfg = settings.policy
@@ -624,50 +478,6 @@ class AgentRuntime:
             build_research_verify_digest_tool(self._research_service)
         )
         self._register_tools()
-        if self._structured_client is not None:
-            investigation_planner = StructuredInvestigationPlanner(
-                self._structured_client
-            )
-            investigation_execution_proposer = StructuredExecutionProposer(
-                self._structured_client
-            )
-            investigation_verifier = StructuredProjectVerifier(self._structured_client)
-            investigation_synthesis = StructuredProjectSynthesis(
-                self._structured_client
-            )
-        else:
-            unavailable_investigation_model = UnavailableInvestigationModelPorts()
-            investigation_planner = unavailable_investigation_model
-            investigation_execution_proposer = unavailable_investigation_model
-            investigation_verifier = unavailable_investigation_model
-            investigation_synthesis = unavailable_investigation_model
-        self.investigation_project_store = PostgresInvestigationProjectStore(
-            settings.postgres_url
-        )
-        self.investigation_project_service = InvestigationProjectService(
-            store=self.investigation_project_store,
-            queue=self.worker_queue_store,
-            clock=lambda: datetime.now(UTC),
-            capabilities=RuntimeCapabilitySnapshot(self.capability_inventory),
-            planner=investigation_planner,
-            execution_proposer=investigation_execution_proposer,
-            tool_port=ToolExecutorProjectAdapter(
-                self._tool_executor,
-                self.artifact_service,
-            ),
-            agent_port=DurableProjectAgentAdapter(
-                self._agent_gateway,
-                self.artifact_service,
-            ),
-            synthesis_port=investigation_synthesis,
-            verifier=investigation_verifier,
-            artifact_writer=self.artifact_service,
-            delegation_policy=PolicyEngineDelegationAdapter(
-                self._policy_engine,
-                self._agent_gateway.profile,
-            ),
-            disclosure_manifest=ScopeBoundDisclosureManifest(),
-        )
         self._conversation_service = ConversationService(
             self._structured_client,
             tool_port=self._tool_executor,
@@ -676,9 +486,6 @@ class AgentRuntime:
             knowledge_writer=self.knowledge_service,
             knowledge_reader=_ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
-            project_port=_ConversationProjectAdapter(
-                self.investigation_project_service
-            ),
             budget_policy=LoopBudgetPolicy(
                 **self.settings.interaction_loop.model_dump()
             ),

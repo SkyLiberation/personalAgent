@@ -33,7 +33,7 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 
 ## 3. 正式入口与对话主链
 
-普通用户只需表达目标，不需先选择 Tool、Workflow 或 Project。Web、CLI 和飞书最终复用 `AgentService.converse()` 与 `ConversationService`。已知的业务操作可以直接进入对应 Application Use Case，但必须复用同一 canonical 写入口。
+普通用户只需表达目标，不需先选择 Tool 或 Workflow。Web、CLI 和飞书最终复用 `AgentService.converse()` 与 `ConversationService`。已知的业务操作可以直接进入对应 Application Use Case，但必须复用同一 canonical 写入口。
 
 `ConversationService` 的每轮运行依次完成：
 
@@ -45,23 +45,13 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 6. 已准入的 Tool/Agent/Application action 经对应执行网关产生 `Observation`。
 7. 最终回答在 Verification 和 Completion 门禁后才能发送。
 
-前台 `ConversationWorkingPlan` 只协调当前对话的可验收工作项。模型可以根据用户调整提出新版本，Application 保护已完成事实和新旧版本边界。工作项清单不保存 Project 的 ready set、queue、lease、审批、外部委托预算或 Completion obligation。
+`ConversationWorkingPlan` 只协调当前对话的可验收工作项。模型可以根据用户调整提出新版本，Application 保护已完成事实和新旧版本边界。工作项清单不拥有 queue、lease、审批或 Agent 运行事实。
 
-## 4. Durable Investigation Project
+## 4. 后台持续运行边界
 
-`InvestigationProject` 只用于需要跨请求、进程或用户轮次维持独立生命周期的调查。Conversation 可以创建 Project 并保存 `ProjectReference`；Project definition、accepted Plan、journal、budget、Outcome 和 Completion 仍由 Project Aggregate 拥有。
+当前 Conversation 只在请求内执行 Tool 或委托 Agent；GPT Researcher 是 `AgentGateway` 后的执行资源，不拥有第二套业务 Plan、Completion 或研究循环。明确要求响应结束后继续运行、稍后查询、暂停或调整的输入，会在交互意图派生后返回 typed limitation，并记录 `capability_missing`，不会静默降级为前台成功。
 
-```text
-创建 Project -> 入队 -> worker 恢复 journal
-  -> Planner Proposal -> Plan Admission -> accepted Plan
-  -> ready set -> Execution Proposal -> Tool / Agent / synthesis
-  -> Evidence Admission -> Verification -> SubGoalOutcome
-  -> Completion -> final ArtifactRef / report
-```
-
-初始 Plan 定义完整待执行图，修订 Plan 只能修改未冻结部分。普通修订和 verification repair 共享单一 `_PlanRevisionDraft`；repair 字段只在存在冻结 gap 时由动态 Schema 开放。已发生的 Proposal、ExecutionRef、Artifact 和 Outcome 不会被新 Plan 覆盖。
-
-当前调查入口和后台生命周期可达，但当前 MiMo + GPT Researcher 样本组没有交付最终报告。该路径不是已稳定交付的产品能力；完整证据边界见[调查项目当前状态](durable-investigation-project-current-state.md)。
+旧后台调查路径在正式样本中虽然能够被选择，却没有交付任何最终报告；同时缺少证明独立 Project 生命周期不可替代的需求 baseline。因此其 Application、Aggregate、持久化、API 和 worker 已破坏式删除。普通研究路径当前也存在独立的 `0/20 delivered` 缺口，删除旧路径不等于修复研究质量。
 
 ## 5. Context、Memory 与检索
 
@@ -115,7 +105,7 @@ Trace、event、receipt 和评测归档记录事实，不改变生产决策。�
 ## 10. 当前证据边界
 
 - Conversation、Memory、Tool 和多种治理机制已有各自限定范围的实际证据，不能拼成“所有智能体能力都已交付”。
-- Durable Investigation Project 当前仍为失败的产品路径；局部 Plan、调度或预算机制通过不等于最终报告交付。
+- 后台持续调查当前不是产品能力；普通 Conversation 的研究质量仍有失败 baseline，尚未进入本次修复范围。
 - 当前工作树的全量单元/集成回归通过不等于 clean-revision 发布资格。
 
 证据结论、命令和归档坐标不在本文重复维护，统一见：

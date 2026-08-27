@@ -19,7 +19,6 @@ from .models import (
     ActionObservation,
     ConversationWorkingPlan,
     InteractionTrace,
-    ProjectReference,
 )
 
 
@@ -40,22 +39,6 @@ class InMemoryInteractionJournal:
     def get(self, interaction_run_ref: str) -> InteractionTrace | None:
         with self._lock:
             return self._traces.get(interaction_run_ref)
-
-    def project_references(
-        self,
-        conversation_id: str,
-        principal: AuthenticatedPrincipal,
-    ) -> tuple[ProjectReference, ...]:
-        with self._lock:
-            traces = tuple(self._traces.values())
-        by_id = {
-            trace.project_reference.project_id: trace.project_reference
-            for trace in traces
-            if trace.conversation_id == conversation_id
-            and trace.principal == principal
-            and trace.project_reference is not None
-        }
-        return tuple(by_id[key] for key in sorted(by_id))
 
     def working_plan(
         self,
@@ -212,15 +195,6 @@ class FileInteractionJournal(InMemoryInteractionJournal):
             ) from error
         super().put(trace)
         return trace
-
-    def project_references(
-        self,
-        conversation_id: str,
-        principal: AuthenticatedPrincipal,
-    ) -> tuple[ProjectReference, ...]:
-        for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
-            self.get(run_dir.name)
-        return super().project_references(conversation_id, principal)
 
     def working_plan(
         self,

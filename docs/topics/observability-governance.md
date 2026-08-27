@@ -1,14 +1,14 @@
 # 可观测与治理边界
 
-**可观测数据解释系统发生了什么，不能反向成为业务事实、授权或 Completion 结论。** 当前工程按用途分别保存运行追踪记录、工具审计、调查项目 journal 和评测归档，不再使用一份通用事件流镜像全部状态。
+**可观测数据解释系统发生了什么，不能反向成为业务事实、授权或 Completion 结论。** 当前工程按用途分别保存运行追踪记录、工具审计、Agent/周期任务事实和评测归档，不使用一份通用事件流镜像全部状态。
 
 ## 1. 事实归属
 
 | 记录 | 责任主体 | 可以证明 | 不能证明 |
 | --- | --- | --- | --- |
-| `InteractionTrace` | Conversation | 本轮输入、上下文组成、执行顺序、用量和最终消息 | 长期知识或调查项目状态 |
+| `InteractionTrace` | Conversation | 本轮输入、上下文组成、执行顺序、用量和最终消息 | 长期知识或 Agent 运行状态 |
 | 工具审计与幂等记录 | 工具执行网关及持久化 Adapter | 调用是否获准、是否执行、是否重复和副作用引用 | 用户目标已经完成 |
-| Investigation journal | `InvestigationProject` | Project 定义、Plan、执行、证据、Verification 和 Completion 事实 | 普通 Conversation 的当前回答 |
+| Agent run 与周期任务记录 | `AgentGateway`、`ResearchService` | 委托、provider task、订阅、运行和投递事实 | 父级目标已经完成 |
 | E2E archive | 评测系统 | 冻结代码与配置下的用户结果、指标和校验和 | 其他版本或未覆盖场景的质量 |
 | LangSmith trace | 观测 Adapter | 模型和运行阶段的诊断投影 | canonical 审计、权限或发布资格 |
 

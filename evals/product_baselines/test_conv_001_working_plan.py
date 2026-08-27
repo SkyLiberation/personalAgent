@@ -78,7 +78,7 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
     )
     assert all(
         internal not in initial_request
-        for internal in ("Tool", "Planner", "Workflow", "InvestigationProject")
+        for internal in ("Tool", "Planner", "Workflow")
     )
     first_messages = [{"role": "user", "content": initial_request}]
     first = _turn(
@@ -190,7 +190,6 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
     first_plan = first.get("working_plan")
     second_plan = second.get("working_plan")
     assert first_plan is not None, "用户无法从正式响应查询当前前台计划"
-    assert first.get("project_reference") is None, "前台计划不应创建 durable Project"
     assert second_plan is not None, "用户修订后没有返回更新后的剩余义务"
     assert second_plan["revision"] > first_plan["revision"]
     assert any(
@@ -229,7 +228,6 @@ def test_conv_001_frontstage_working_plan_is_visible_and_revisable(
         for step in final_plan["steps"]
     )
     assert not any(step["status"] == "pending" for step in final_plan["steps"])
-    assert third.get("project_reference") is None
     assert result_metrics["duplicate_execution_count"] == 0
     assert any(
         item["capability_id"] == "search_personal_knowledge"

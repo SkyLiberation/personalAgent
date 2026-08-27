@@ -29,33 +29,6 @@
 }
 ```
 
-## Durable Investigation Project
-
-该资源只用于“路径会根据 Observation 动态变化，并且需要跨进程、用户轮次或审批边界维持
-交付契约”的调查任务。普通用户可直接从 Conversation 描述结果和持续性要求；明确知道业务动作的
-UI、自动化与集成方可使用下列资源 API。两种入口都调用同一 Project Application Service。
-
-### `POST /api/investigation-projects`
-
-持久化 immutable Project definition 和第一版 UserRequirement 后返回 `202`。Planner 和
-Provider 不在请求内执行。请求必须包含 `tenant_id`、`owner_id`、`user_id`、`title`、
-`goal`、非空 `requirements`、`budget` 和 `idempotency_key`。鉴权启用时 tenant/user 必须与
-API key 的 typed principal 一致。
-
-### `GET /api/investigation-projects/{project_id}`
-
-按 tenant/personal knowledge/user scope 返回只读 projection。查询不会调用模型、重新规划或推进 worker。
-
-### Project 控制入口
-
-- `POST .../{project_id}/steering`：基于 expected plan version 修改尚未冻结的工作；
-- `POST .../{project_id}/commands/{command_id}/decision`：提交绑定 AuthorizationDigest 的审批；
-- `POST .../{project_id}/pause`：记录 `user_paused`；
-- `POST .../{project_id}/resume`：只允许恢复 `user_paused`，不能绕过预算、能力、审批或修复暂停；
-- `POST .../{project_id}/cancel`：取消关联 child，并 quarantine 终态后的 late Artifact。
-
-Project worker 使用 `personal-agent worker --queue investigation` 消费 durable queue。
-
 ## `GET /api/notes`
 
 返回指定用户的知识笔记列表。
@@ -335,27 +308,23 @@ LangGraph checkpoint。
 ```
 
 响应由 `ConversationTurnView` 定义，包含 `interaction_run_ref`、`conversation_id`、
-`disposition` 和一条 assistant `message`。保存或删除需要确认时返回 `pending_confirmation`；
-durable 调查创建后返回
-`project_reference={project_id,tenant_id,owner_id,user_id,state,title,goal}`，供客户端只读查询
-原 Project projection。`disposition` 可能为
-`answer`、`clarification_required`、`confirmation_required`、`background_started`、`limitation`
-或 `failed`。
+`disposition` 和一条 assistant `message`。保存或删除需要确认时返回 `pending_confirmation`。
+`disposition` 可能为 `answer`、`clarification_required`、`confirmation_required`、`plan_ready`、
+`limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
+`limitation`，不会创建后台任务。
 
 当前 goal-entry capability：
 
 - `list_personal_knowledge`：读取当前 principal 的 active/conflicted canonical KnowledgeItem 引用；
 - `prepare_conversation_knowledge_save`：冻结 exact user span；
-- `prepare_knowledge_delete`：准备 lifecycle delete command，确认前零副作用；
-- `start_durable_investigation`：创建 Project 并返回引用，不把创建视为报告完成。
+- `prepare_knowledge_delete`：准备 lifecycle delete command，确认前零副作用。
 
 ### `GET /api/entry/stream`
 
 SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，再流式返回 answer delta，
 最终 `done` 事件包含 `disposition`、`interaction_run_ref`、`conversation_id`，以及适用时的
-`pending_confirmation` 或 `project_reference`。前端使用 ProjectReference 查询 projection 并提供
-刷新、暂停和恢复控件，不从 UI 推进模型。该入口不再创建
-Task/GoalGraph，也不提供旧计划步骤和 checkpoint snapshot。
+`pending_confirmation`。该入口不创建后台调查或 Task/GoalGraph，也不提供旧计划步骤和
+checkpoint snapshot。
 
 需要补充信息时会返回：
 

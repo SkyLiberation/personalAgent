@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "gate_id": "INTERACTION-INTENT-TARGET-PROMOTION-001",
+  "case_id": "INTERACTION-INTENT-DELEGATION-BOUNDARY-001",
+  "role": "target",
+  "stage": "formal_product_target",
+  "expected_samples": 20,
+  "constraints": [
+    {
+      "kind": "maximum_count",
+      "constraint_id": "false-background-zero",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "misclassified_as_background"]
+      },
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_sum",
+      "constraint_id": "total-token-budget",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "usage", "total_tokens"]
+      },
+      "maximum": 120000
+    },
+    {
+      "kind": "maximum_nearest_rank_percentile",
+      "constraint_id": "p95-latency-ceiling",
+      "metric": {
+        "source": "duration_seconds"
+      },
+      "percentile": 95,
+      "maximum": 45
+    }
+  ]
+}

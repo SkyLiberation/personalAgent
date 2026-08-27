@@ -32,326 +32,180 @@ Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
 Requires-Dist: huggingface_hub>=0.28.0; extra == "dev"
 Dynamic: license-file
 
-# “数字第二大脑” Agent
+# personalAgent：可信的个人知识智能体
 
-一个面向个人知识生命周期管理的主动式 AI Agent。
+personalAgent 面向个人知识管理与外部情报任务。它不只是“向量检索 + 模型回答”，而是把自然对话、知识读写、工具和子智能体执行及周期研究接入同一条可信责任链。
 
-它不是单纯的笔记应用或 RAG 问答 Demo，而是一个让个人知识持续完成“采集、连接、检索、验证、
-复习、整理、研究、发现缺口、主动触达”的长期认知系统。工程同时覆盖 Agent runtime、工作流编排、
-知识存储、图谱推理、外部情报研究、主动任务、治理审计和多端交互。
-
-顶层框架不是“让模型输出 JSON”，而是一条可信决策与事实链：
+项目最关心的不是模型能否生成一个看起来合理的 JSON，而是五个工程问题：模型可以决定什么，谁拥有业务事实，动作是否真实发生，结果是否满足目标，以及什么时候才能向用户宣布完成。
 
 ```text
-模型提出开放语义 Proposal
-  -> Admission / Policy 确定性准入
-  -> Gateway / Executor 执行并产生事实
-  -> Verifier 判断语义满足
-  -> Completion Gate 关闭用户结果契约
+用户目标 + 当前可见 Context + 已提交 Observation
+  -> 模型提出 typed Proposal
+  -> Admission / Policy 校验结构、权限、风险和预算
+  -> Application / Tool / Agent 产生执行事实
+  -> Verification 判断语义结果
+  -> Completion Gate 检查用户结果是否齐全
 ```
 
-短动态请求、固定事务和 durable 动态长任务分别进入 Conversation、明确 Application Workflow
-和 Investigation Project。实现可以更换 Provider、Tool Calling 协议或编排技术，但 Proposal
-不是权限、模型自述不是执行事实、Tool success 不是用户目标完成。
+**Proposal 不是权限，工具成功不是目标完成，检索命中不是长期事实，Trace 也不是业务状态。** 这四条分离构成整个工程的设计主线。
 
-## 项目目标
+## 项目解决什么问题
 
-这个项目的目标是构建一套可持续演进的“个人知识与外部情报闭环”，让 Agent 不只回答一次问题，
-还能够长期积累知识、维护知识质量、跟踪外部变化并主动行动。当前目标能力包括：
+普通检索增强生成主要回答“找到什么资料、生成什么文本”；一个长期运行的知识智能体还必须处理权限、事实生命周期、副作用、恢复和完成判断。
 
-1. **统一多端入口**：Web、CLI、飞书文本/文件和 SSE 请求进入同一 Conversation Use Case；模型输出 typed answer/tool/agent proposal，Application 负责预算、执行与验证。
-2. **多来源知识采集**：接收文本、网页链接、PDF/上传文件和对话结论，完成正文提取、结构化分块、来源指纹、重复检测、摘要、标签和引用定位。
-3. **长期记忆与知识连接**：以 Postgres 分别保存知识事实、Interaction journal、领域运行状态和
-   Artifact ref，以 Graphiti/Neo4j 保存可重建的实体、关系、事实和 episode 检索投影。
-4. **多源检索与证据问答**：组合图谱、本地语义/关键词、结构化文档、情景记忆、反思记忆和公网搜索，经过融合、去冗余、上下文压缩、生成与事实校验后输出可追溯回答。
-5. **知识生命周期管理**：支持会话固化、同主题知识整理、supersede、冲突标记、软删除、删除快照、人工确认、幂等执行和恢复。
-6. **复习与知识巩固**：采集时生成复习卡，按用户时区生成和投递知识简报，通过 Web/飞书接收“记得、忘了、稍后”反馈并调整复习计划。
-7. **主动知识维护**：检测知识孤岛、薄弱连接和潜在矛盾，主动提出少量问题；按主题生成综合笔记，并保留知识演进与来源关系。
-8. **一次性外部研究**：围绕指定主题规划多个查询，调用公网搜索和网页抓取，进行来源归一、事件聚类、重复消除、可信度判断和个人知识关联，生成结构化研究简报。
-9. **周期性情报订阅**：支持“每天 9 点收集 AI 新闻”等订阅；外部 cron 负责到期扫描和入队，Postgres durable worker 负责研究与独立投递任务。
-10. **个性化情报反馈**：简报条目支持展开、有用、不感兴趣、收藏和确认入库；反馈会更新订阅偏好，外部事件可带来源和可信度保存为长期知识。
-11. **分层恢复语义**：Conversation 从 committed interaction facts 恢复短 ReAct；固定长流程由领域 Workflow 恢复；动态且跨轮次的调查由 durable Investigation Project journal 恢复。
-12. **受治理的能力行动**：CapabilityResolver 统一筛选本地工具、MCP、retriever 和 Agent；ToolGateway/AgentGateway 负责权限、ReAct allowlist、超时、限流、HITL、幂等和结构化审计。
-13. **后台任务与主动触达**：具备 Postgres durable queue、lease、heartbeat、重试和 dead-letter；支持图谱异步同步、研究任务、研究投递、复习简报与知识缺口提醒，并可通过工具诊断队列与重试失败任务。
-14. **多用户安全与可观测性**：提供 API Key、管理员范围、用户数据隔离、日志、health、LangSmith 脱敏 trace、工具/策略审计、run snapshot 和调试重放。
-15. **持续质量评测**：测试和 eval 覆盖 Conversation、领域 Workflow、Investigation Project、Capability Resolution、工具治理、RAG 和 Research 质量。
-16. **Durable 架构调查**：显式创建跨进程 Investigation Project，支持动态 SubGoal、并行、steering、审批、预算、取消、Evidence Admission 和 Completion Gate。
+personalAgent 当前围绕以下用户旅程组织能力：
 
-整体闭环可以概括为：
+- 从 Web、CLI 或飞书表达自然目标，由同一 Conversation Use Case 处理；
+- 采集文本、网页和文件，保留来源、分块、引用位置及可维护的知识事实；
+- 结合个人知识、图关系、本地内容和外部网页生成带证据的回答；
+- 显式保存、删除、恢复或整理知识，不让普通问答隐式污染长期记忆；
+- 生成复习简报、知识缺口问题和周期情报，并通过后台队列独立投递；
+- 对明确要求响应结束后继续运行、稍后查询或调整的请求返回能力限制，不伪造后台成功。
 
-```text
-Capture / Conversation
-  → Notes / Chunks / Review Cards / Knowledge Graph
-  → Retrieval / Evidence Fusion / Grounded Answer / Verification
-  → Review Digest / Feedback / Consolidation / Supersede
-  → Knowledge-gap Detection / Proactive Questions
+## 核心能力与工程优势
 
-External Cron / Manual Research
-  → Web Search / Source Fetch
-  → Event Clustering / Verification / Personal Relevance
-  → Intelligence Digest / Feedback / Approved Save
-  → New or Updated Knowledge
+README 只给出面试级摘要；每项能力的完整“问题—机制—收益—证据—边界”见[面试材料](docs/interview/INDEX.md)。
+
+| 能力 | 当前机制 | 工程价值 |
+| --- | --- | --- |
+| 受治理的智能体循环 | 模型只提出回答、工作清单或动作；Application、Policy 和 Gateway 决定是否执行 | 保留模型开放语义能力，同时把权限、预算和副作用约束放在模型之外 |
+| 按需工作清单 | 复杂对话才保存可验收工作项；用户调整生成新版本，已完成事实不能被覆盖 | 支持审阅、纠偏、跨轮恢复和 Completion，避免简单请求被通用 Planner 过度设计 |
+| Context Engineering | 依次执行 Visibility、Requirement Retrieval、Semantic Selection 和 Budget Materialization | 权限过滤早于召回；大型结果保留真源，只将有界片段和引用交给模型 |
+| Memory | 区分 Agent State、LLM Context、Checkpoint、Artifact、长期记忆和 Retrieval Index | 过去的信息能够跨时间重新进入 Context，同时保留来源、作用域、纠错和删除边界 |
+| 知识与检索增强生成 | 原始内容、证据位置和长期陈述是事实；向量与图是可重建检索投影 | 支持来源追踪、冲突处理、删除恢复和个人知识与官方网页的统一回答 |
+| Tool、MCP 与子智能体 | 本轮能力投影、Proposal、Admission、执行网关、Observation、父级 Verification 分阶段处理 | 工具可见、当前获准和服务健康不再混为一谈；子智能体只完成有界子目标 |
+| Durable Execution | 对话事实、固定业务状态、周期任务和 Agent 运行按真实生命周期恢复 | 已提交事实直接复用，结果不明的外部动作先对账，避免恢复时重复副作用 |
+| Verification 与 Completion | 执行事实、语义满足和结果齐全分别判断 | 防止“工具返回成功”“子智能体结束”或“数据库新增记录”被误判为用户目标完成 |
+| 可观测与评测 | Trace 解释 Proposal、拒绝、执行、验证和完成阶段；产品 E2E、机制测试和发布门禁分开 | 能定位失败发生在哪一层，也避免把局部测试通过外推为完整产品能力 |
+
+## 能力如何协作
+
+```mermaid
+flowchart TB
+    U["用户目标"] --> C["物化本轮 Context 与能力"]
+    C --> M{"模型提出回答、Plan 或 Action"}
+    M --> A{"Admission / Policy"}
+    A -->|"拒绝或需修订"| F["DecisionFeedback"]
+    F --> C
+    A -->|"业务动作"| B["Application 唯一写入口"]
+    A -->|"外部读取"| T["Tool / MCP Gateway"]
+    A -->|"有界委托"| S["Agent Gateway"]
+    B --> O["Observation / canonical facts"]
+    T --> O
+    S --> O
+    O --> C
+    A -->|"准备结束"| V["Verification"]
+    V --> G{"Completion Gate"}
+    G -->|"结果缺失"| F
+    G -->|"结果齐全"| R["用户可见结果"]
 ```
 
-## 当前工程的 Agent 结构
+运行外壳只统一交互协议，不吞并具体业务事实。当前对话和固定事务使用不同的协调方式：
 
-| 组件 | 代码落点 | 能力总结 | 文档 |
-| --- | --- | --- | --- |
-| `入口层` | [adapters/web/api.py](src/personal_agent/adapters/web/api.py), [adapters/web/routes/](src/personal_agent/adapters/web/routes), [adapters/feishu/service.py](src/personal_agent/adapters/feishu/service.py), [adapters/cli/main.py](src/personal_agent/adapters/cli/main.py) | 具备 Web API、前端、CLI、飞书多入口，核心请求可以进入统一 Agent 流程 | [docs/topics/entry.md](docs/topics/entry.md) |
-| `Conversation ReAct` | [application/conversation/](src/personal_agent/application/conversation), [orchestration/runtime.py](src/personal_agent/orchestration/runtime.py) | 短生命周期 typed answer/tool/agent loop；恢复只消费 committed messages、Observation、Feedback、usage 和 action order | [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) |
-| `领域 Workflow` | [application/](src/personal_agent/application), [orchestration/worker.py](src/personal_agent/orchestration/worker.py) | 保存、删除恢复、订阅、研究和投递等固定事务由各自 Use Case、状态机与 durable queue 拥有 | [docs/workflow/README.md](docs/workflow/README.md) |
-| `Investigation Project` | [application/investigation_project/](src/personal_agent/application/investigation_project), [domain/investigation_project/](src/personal_agent/domain/investigation_project), [infra/storage/postgres_investigation_project.py](src/personal_agent/infra/storage/postgres_investigation_project.py) | 动态路径且跨进程/轮次/审批的调查；Plan 实际驱动 ready/join/coverage，journal 支持恢复、steering、预算和 Completion | [docs/summary/durable-investigation-project-current-state.md](docs/summary/durable-investigation-project-current-state.md) |
-| `运行时 / 编排层` | [runtime.py](src/personal_agent/orchestration/runtime.py), [service.py](src/personal_agent/orchestration/service.py), [worker.py](src/personal_agent/orchestration/worker.py) | `AgentRuntime` 集中装配 Port/Adapter；`AgentService` 暴露用例 facade；worker 消费 durable queue，不成为业务事实 owner | [当前核心架构](docs/summary/core-architecture-current-state.md) |
-| `工具层` | [tools/](src/personal_agent/tools), [application/capture/service.py](src/personal_agent/application/capture/service.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 具备统一 Tool 协议、ToolGateway、PolicyEngine、幂等与审计；覆盖 capture、graph/web search、研究/订阅管理、知识生命周期、worker 诊断、run 诊断、delete/restore、consolidate 等动作 | [docs/topics/tools.md](docs/topics/tools.md) |
-| `记忆与事实层` | [application/knowledge/](src/personal_agent/application/knowledge), [memory/](src/personal_agent/memory), [infra/storage/](src/personal_agent/infra/storage) | Interaction journal、Personal Knowledge canonical knowledge、Artifact、Research/Project journal 与可重建检索投影按生命周期分开 | [当前核心架构](docs/summary/core-architecture-current-state.md) |
-| `检索与推理层` | [orchestration/ask/](src/personal_agent/orchestration/ask), [application/verifier.py](src/personal_agent/application/verifier.py), [memory/graphiti/store.py](src/personal_agent/memory/graphiti/store.py) | 支持图谱、结构、本地、网络、情景和反思多路召回，RRF/MMR、上下文压缩、反证检索、引用生成和蕴含级校验 | [docs/topics/retrieval-reasoning.md](docs/topics/retrieval-reasoning.md) |
-| `主动知识循环` | [application/review/](src/personal_agent/application/review), [application/insight/](src/personal_agent/application/insight), [application/knowledge/](src/personal_agent/application/knowledge) | 生成并投递复习简报、接收复习反馈、检测知识孤岛/矛盾并主动追问、将同主题笔记整理为综述并建立 supersede 关系 | [docs/review-digest.md](docs/review-digest.md)、[docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) |
-| `持续研究层` | [application/research/](src/personal_agent/application/research), [infra/storage/postgres_research_store.py](src/personal_agent/infra/storage/postgres_research_store.py), [adapters/web/routes/research.py](src/personal_agent/adapters/web/routes/research.py) | 支持一次性研究、定时订阅、来源归一、事件聚类、可信度、个人关联、情报简报、反馈偏好和确认入库 | [docs/workflow/research-once-workflow.md](docs/workflow/research-once-workflow.md)、[docs/env.md](docs/env.md#research--定时情报简报) |
-| `后台任务 / 调度层` | [orchestration/worker.py](src/personal_agent/orchestration/worker.py), [application/worker_queue.py](src/personal_agent/application/worker_queue.py), [infra/storage/postgres_worker_queue_store.py](src/personal_agent/infra/storage/postgres_worker_queue_store.py) | 应用层定义 queue port，Postgres adapter 提供 lease、heartbeat、重试和 dead-letter，orchestration worker 组合 handler | [docs/deploy.md](docs/deploy.md) |
-| `执行与反馈层` | [adapters/web/routes/](src/personal_agent/adapters/web/routes), [application/conversation/](src/personal_agent/application/conversation), [orchestration/worker.py](src/personal_agent/orchestration/worker.py) | 支持同步 API、SSE、typed Observation/Feedback、受治理确认、异步 worker 与 Project projection | [docs/topics/execution-feedback.md](docs/topics/execution-feedback.md)、[docs/api.md](docs/api.md) |
-| `观测、治理与评测层` | [kernel/observability.py](src/personal_agent/kernel/observability.py), [adapters/web/auth.py](src/personal_agent/adapters/web/auth.py), [tests/](tests), [evals/](evals) | 具备日志、health、API Key、限流、用户隔离、工具/策略审计、LangSmith 脱敏 trace、执行回放和多类离线质量门禁 | [docs/topics/observability-governance.md](docs/topics/observability-governance.md) |
+| 协调方式 | 适用边界 | 事实责任主体 |
+| --- | --- | --- |
+| `ConversationWorkingPlan` | 当前复杂对话的审阅、纠偏和跨轮继续 | Conversation |
+| Application Workflow | 保存、删除、恢复、订阅和投递等固定事务 | 对应 Application / Domain |
 
-## 目标入口与执行责任
+两者可以共享执行网关、Artifact 和观测机制，但不共享可写 Plan 或业务状态。没有失败 baseline 证明必须存在的第二套调查循环已经移除；GPT Researcher 只作为 Conversation 可委托的执行资源。
 
-普通用户只向 Conversation 描述目标；模型按需选择 request-local capability、具体领域 Use Case，
-或在目标明确要求跨交互持续和后续控制时创建 Investigation Project。专用 UI/自动化仍可直接调用
-同一 Application Use Case。历史 LangGraph 图不再定义这些 canonical owner，当前事实统一见
-[核心架构](docs/summary/core-architecture-current-state.md)。
+## 当前证据说明
 
-## 当前技术栈
+项目坚持先证明用户错误，再评价机制收益。单元测试、对象存在、Tool 被调用或状态为 success 只证明局部事实；用户能力必须由正式入口、真实模型与持久化路径的产品 E2E 证明。
 
-- `Python 3.11+`
-- `FastAPI`
-- `LangGraph checkpoint packages`（遗留数据/迁移依赖，不是当前目标责任链的共同编排器）
-- `Graphiti`
-- `Neo4j`
-- `Postgres`
-- `React 19`
-- `Vite 8`
-- `TypeScript 6`
-- `Docker Compose`
-- `uv`
+代表性证据包括：
+
+- 对话工作清单的当前目标组为 `15/15 delivered`，证明指定任务分布中的审阅、纠偏和完整交付，不外推所有模型或成本收益；
+- 长期语义记忆覆盖 `15/15` 自然旅程与 1,020 条事实尾部召回；真实跨轮工作记忆 target 为 `5/5`，关闭既有事实消费后为 `0/5`；
+- Tool Discovery 的 10、30、100 工具组均为 `20/20`，因此当前没有引入 Tool Search；
+- 安全目标组从 `15/20` baseline 提升为 `20/20`，证明指定用户作用域和个人知识外发边界，不代表通用提示注入防御已经完成；
+- 显式子智能体委托只有 `10/20 delivered`，不能声称多智能体已经稳定提升效果；
+- 已撤回的后台调查正式组为 `20/20` 选择旧路径、`0/20 delivered`；当前普通 Conversation 重跑同样为 `0/20 delivered`。前者证明旧能力不应保留，后者作为独立研究质量缺口，不能被架构删除掩盖。
+
+完整口径见[证据、指标与发布资格](docs/interview/06-evidence-and-release.md)和[当前端到端用例盘点](docs/evals/02-current-case-inventory.md)。当前版本不能仅凭局部回归宣称具备完整发布资格。
+
+## 关键设计取舍
+
+1. **模型负责开放语义，确定性代码负责不变量。** Policy 不猜用户目标，模型也不能授予自己权限。
+2. **Memory 是受治理的跨时间 Context。** 它不等于单一长期记忆库，也不等于把所有历史消息塞回 Prompt。
+3. **业务能力与执行资源分开。** Application Capability 拥有用户结果；Tool、MCP、Agent 和 Provider 只提供执行机制。
+4. **知识真源与检索投影分开。** 向量索引和知识图可以重建，不能成为纠错与删除的第二写入口。
+5. **治理成本只放在真实边界。** 普通只读调用不机械创建 Command；审批、Receipt 和 durable journal 只服务真实副作用或恢复需求。
+6. **外部优秀 Agent 帮助选择机制，不替本工程创造需求。** 新抽象仍需本地失败 baseline、单变量消融和真实 target。
+
+## 当前产品与工程边界
+
+| 领域 | 当前判断 |
+| --- | --- |
+| Conversation、Plan、Memory、Tool 与知识生命周期 | 已有各自限定范围的正式证据，可以介绍机制与对应收益 |
+| 周期研究、复习和主动知识维护 | 已形成独立业务流程、持久化与后台执行路径，具体证据按用例分别陈述 |
+| 子智能体委托 | 路径可达，但稳定交付和增量价值没有得到证明 |
+| 后台持续调查 | 当前不提供；明确请求返回 limitation，不创建第二套业务 Aggregate 或循环 |
+| 发布资格 | 需要目标代码版本、完整矩阵、真实环境归档和工作树状态一致，不能由单项测试替代 |
+
+当前未解决问题和准入状态统一记录在[设计优化队列](docs/future/design-optimization-backlog.md)。
+
+## 技术栈与代码结构
+
+- 后端：Python 3.11+、FastAPI、Pydantic、PostgreSQL；
+- 智能体与模型：结构化模型 Adapter、LangGraph checkpoint 依赖、MCP、A2A；
+- 知识与检索：Graphiti、Neo4j、本地与外部检索；
+- 前端与入口：React 19、Vite 8、TypeScript 6、CLI、飞书；
+- 工程化：Docker Compose、durable worker queue、pytest、Ruff、E2E trace archive。
+
+主要代码入口：
+
+| 责任 | 路径 |
+| --- | --- |
+| 对话运行闭环 | [`src/personal_agent/application/conversation/`](src/personal_agent/application/conversation/) |
+| 组合根与后台 worker | [`src/personal_agent/orchestration/`](src/personal_agent/orchestration/) |
+| 业务能力 | [`src/personal_agent/application/`](src/personal_agent/application/) |
+| 领域事实 | [`src/personal_agent/domain/`](src/personal_agent/domain/) |
+| Tool 与治理执行 | [`src/personal_agent/tools/`](src/personal_agent/tools/)、[`src/personal_agent/governance/`](src/personal_agent/governance/) |
+| Agent 委托 | [`src/personal_agent/agents/`](src/personal_agent/agents/) |
+| Provider 与持久化 Adapter | [`src/personal_agent/infra/`](src/personal_agent/infra/) |
+| 产品 E2E 与质量评测 | [`evals/`](evals/) |
 
 ## 快速开始
 
-完整本地开发、Neo4j/Postgres、飞书长连接、前端构建和 Docker Compose 说明统一维护在 [docs/deploy.md](docs/deploy.md)。
+完整环境变量、数据库、Neo4j、前端、飞书和 Docker Compose 配置分别见[环境变量](docs/env.md)与[本地开发和部署](docs/deploy.md)。最短开发路径：
 
-README 只保留最短路径：
-
-1. 按 [docs/env.md](docs/env.md) 准备 `.env`
-2. 按 [docs/deploy.md](docs/deploy.md) 启动后端、前端和可选基础设施
-3. 打开前端工作台或 API 文档验证服务
-
-常用入口：
-
-- 前端：`http://127.0.0.1:3000`
-- API 文档：`http://127.0.0.1:8000/docs`
-
-## 当前业务能力范围
-
-### 1. Capture
-
-- 可以接收文本、链接和上传文件三类采集输入
-- 采集结果会被整理成 `KnowledgeNote`
-- 长文（>2000 字符）会自动按标题/段落拆分为 1 条 parent note + N 条 chunk notes，每个 chunk 独立拥有 title/summary/tags/citation anchor
-- 当前采集链路包含网页正文抓取、PDF 文本提取、标题/摘要/标签生成、复习卡生成等处理步骤
-- 图谱可用时，采集结果会继续尝试写入 Graphiti，parent note 与 chunk notes 均会进入图谱同步链路
-
-### 2. Knowledge Connection
-
-- 默认使用 Postgres 持久化知识数据，并提供简单匹配检索
-- 图谱开启后，会为笔记补充实体、关系和图谱 episode 映射信息
-- 当前数据模型中已经为图谱字段预留了 `graph_episode_uuid / entity_names / relation_facts / graph_node_refs / graph_edge_refs / graph_fact_refs`
-- 相似笔记检索已支持按 parent 去重，避免同一文档的多个 chunk 重复出现
-- 问答证据呈现区分语义层和证据层：Graphiti `node / edge / fact` 作为主推理材料，parent/chunk note 作为原文证据、snippet、高亮和抽取校验来源
-
-### 3. Ask
-
-- 提供本地检索问答链路
-- 图谱可用时，问答流程会优先使用 Graphiti 抽取的 `node / edge / fact` 构造图谱事实网络，再回查 note/chunk 生成可追溯引用
-- 图谱不可用或图谱证据不足时，问答会回退并合并本地链路；本地检索证据不足时，自动触发网络搜索作为第三层兜底
-- 问答支持 `session_id` 会话线索；回答事实必须来自本轮可见 Evidence，历史助手文本不能替代证据
-- Web 侧提供同步问答和 `SSE` 返回方式；`ask_stream` 已升级为模型 token 流，边生成边推送
-- 图谱问答会构造 `relation_fact + snippet` 证据锚点，前端支持点击 citation 自动定位并高亮回答中的对应证据片段
-- 前端可查看回答、引用、运行和相关执行状态；不同生命周期的恢复事实由各自 journal/store 拥有
-
-### 4. Conversation Interaction
-
-- Web、CLI、飞书文本请求统一进入 `AgentService.converse -> ConversationService.respond`
-- 模型每轮产生 `FinalMessage` 或 `ContinueTurnProposal`，Runtime 不从自然语言控制词猜分支
-- Tool/Agent Proposal 经 schema、能力、scope、预算和重复 action Admission 后才能执行
-- Tool/Agent 结果形成 `ActionObservation`，拒绝形成 `DecisionFeedback`，共同驱动下一模型轮
-- 模型不可用、能力不足或信息不足时进入 typed failure/limitation/clarification，不使用关键词
-  fallback 生成业务答案
-- 当前粗粒度 Application capability 包括 canonical personal knowledge knowledge list、确认式保存、确认式
-  删除和 durable investigation handoff；Conversation 只保存跨领域 ref，不复制 delete/Project 状态
-
-### 5. Knowledge Lifecycle
-
-- `KnowledgeLifecycleService` 是删除与恢复的唯一写入口；Conversation 和直接 API 都只能调用该
-  owner，prepare 不执行删除
-- prepare 只创建 durable operation；客户端按 command/run 标识确认，服务端内部 `command_digest` 绑定 immutable Command 与 Receipt，重启后仍可继续
-- confirm 在单事务中更新 Knowledge Item/Claim、记录 Personal Knowledge 状态事件并写 Receipt；replay 返回同一 Receipt
-- restore 引用已执行的 delete command，并按 delete receipt 中的 previous states 精确恢复
-- `solidify_conversation` 已具备草稿生成、`draft_ready` 事件和 `capture_text` 入库工具基础
-- 知识版本支持 supersede 与 conflicted 状态，为自动整理和冲突治理提供基础
-
-### 6. Review & Knowledge Digest
-
-- capture 时自动为长期知识生成 `review_card`
-- `/api/digest` 提供最近笔记、到期复习内容和知识增长概览
-- 支持 Digest 订阅、时区与发送时间配置、手动立即发送和投递历史查询
-- 后台 Job/Scheduler 可按计划通过飞书主动投递，不要求用户持续打开前端
-- `digest_deliveries` 通过 `subscription_id + digest_date` 保证同日投递幂等
-- 用户可以从 Web 或飞书提交“记得 / 模糊 / 忘记”等反馈，系统据此更新复习间隔和下次到期时间
-
-详见 [Review Digest](docs/review-digest.md)。
-
-### 7. Automatic Knowledge Consolidation
-
-- 知识整理由结构化 Goal 触发 `knowledge_consolidate` Procedure，按主题选择相关笔记并生成综合笔记
-- 新综述进入标准 capture/ingestion 链路，继续获得 chunk、review card 和 graph sync 能力
-- 原笔记会通过版本关系标记为被新综述 supersede，保留知识演进轨迹
-- Review Digest、知识整理、知识缺口检查均可由自然语言 Goal 触发；scheduler 与 CLI 复用同一应用用例
-
-详见 [主动知识循环](docs/proactive-knowledge-loop.md)。
-
-### 8. Proactive Knowledge-gap Questions
-
-- `KnowledgeGapAnalyzer` 会结合本地笔记和图谱检测知识孤岛与潜在矛盾
-- 系统会把检测结果整理为少量主动问题，而不是一次推送大量提醒
-- 复用知识简报的订阅与飞书投递目标，但使用独立调度时间
-- `knowledge_gap_deliveries` 按订阅和日期做跨重启幂等，避免同日重复打扰
-- 图谱不可用或 LLM 改写失败时具备确定性降级路径
-- 单次问题数量由 `max_gaps_per_run` 控制
-
-详见 [知识缺口主动追问](docs/proactive-knowledge-loop.md#1-知识缺口主动追问)。
-
-### 9. Research & Scheduled Intelligence
-
-- `research_run` Procedure 编排 prepare run、plan queries、collect sources、cluster events、rank events、compose digest 和最终呈现
-- 查询计划会驱动 `web_search` 和 `capture_url`，并通过 `graph_search` 对照个人已有知识
-- 搜索结果按 canonical URL、内容指纹、标题语义、实体和时间窗口归一为事件，减少转载和重复新闻
-- 事件区分 `verified / reported / uncertain / conflicted`，简报保留来源链接、可信度和个人知识关联
-- `create_research_subscription` 支持“每天 9 点收集 AI 新闻”等自然语言订阅
-- 订阅、运行、来源、事件、简报、投递和反馈均持久化到 Postgres
-- 生产环境使用外部 cron 调用一次性 scheduler 入队，独立 durable worker 执行研究任务并独立投递
-- 研究任务和投递任务解耦；投递失败可独立重试，不重复执行搜索
-- 飞书条目支持 `N1 展开 / 有用 / 不感兴趣 / 收藏 / 入库`
-- 用户反馈会更新订阅内容偏好；“入库”会保存事件摘要、可信度与来源
-
-当前一次性研究流程见 [research_once workflow](docs/workflow/research-once-workflow.md)，订阅、调度和运行配置见 [Research环境配置](docs/env.md#research--定时情报简报)。
-
-### 10. Agent Harness, Capability & Durable Execution
-
-- Conversation、明确 Application Workflow 和 Investigation Project 按路径动态性与 durable
-  边界分担复杂度，不存在覆盖所有请求的通用 Task/GoalGraph/Planner 主链
-- Conversation 模型逐轮选择 Tool 或 Agent Proposal；Admission 约束 schema、能力、scope、预算、
-  重复 action 和并发安全
-- 固定事务由对应 Use Case/Domain state machine 拥有，模型不能重排确认、执行、Receipt 和补偿
-- Investigation Project 的 accepted Plan 驱动 ready set、dispatch、join、coverage、repair 和
-  Completion；普通 Conversation 不持久化无消费者 Plan
-- `ToolGateway`/`AgentGateway` 独占受治理执行，Adapter 只做协议转换
-- AgentGateway 主链使用 durable submit/poll；PostgreSQL run repository 提供幂等 submission、lease、fencing 与 cancel race 收敛
-- 工具契约包含 Pydantic schema、风险、副作用、权限域、确认、幂等、超时、重试、限流和域名白名单
-- Postgres worker queue 提供 durable enqueue、lease、heartbeat、优先级、重试和 dead-letter
-- E2E catalog、trace archive 和 release gate 分别拥有证据分类、执行事实与发布准入
-
-### 11. Observability, Governance & Evaluation
-
-- API Key 与管理员 Key 提供用户身份和跨用户管理边界
-- 工具调用和策略决策写入独立 Postgres 审计表
-- LangSmith trace 默认脱敏，不上传用户正文和工具参数
-- Interaction/Project journal、execution event、trace archive 和 receipt replay 支持问题定位
-- `tests/` 覆盖单元、集成、Postgres、API 和完整 Agent flow
-- `evals/` 覆盖 Conversation、Gateway、Personal Knowledge/RAG、Research、Investigation 和组合用户旅程
-- Research 评测包含事件召回/精度、去重质量、一手来源率和不确定性校准
-
-### 12. Web UI
-
-- 提供基于 `FastAPI + React` 的前后端分离结构
-- 前端工作台覆盖 `Capture / Ask / Entity Graph / Relation Graph / Digest / Timeline / Memory` 等视图
-- 前端主要围绕采集、问答、历史查看和调试数据管理几个场景展开
-- 构建后的 `frontend/dist` 可以由 FastAPI 托管
-
-### 13. Feishu
-
-- 当前以 `官方 Python SDK + 长连接接收事件` 为主
-- 文本对话进入统一 Conversation 用例；文件、群聊与主动投递进入对应明确 Application 能力
-- 同时作为知识简报、复习反馈、知识缺口主动提问、Research 情报简报和情报反馈的主要推送渠道
-- 详细配置见 [docs/deploy.md](docs/deploy.md)，入口设计见 [docs/topics/entry.md](docs/topics/entry.md)
-
-## 项目结构
-
-```text
-personalAgent/                  # 项目根目录
-├─ data/                        # 上传源文件、Artifact 与 Interaction journal
-├─ frontend/                    # React + Vite 前端工程
-├─ log/                         # 运行日志目录
-└─ src/
-   └─ personal_agent/           # Python 应用主包
-      ├─ adapters/              # Web、CLI、飞书与外部协议入口
-      ├─ application/
-      │  ├─ conversation/       # 短 typed Interaction loop
-      │  ├─ investigation_project/ # durable Project 应用编排
-      │  ├─ personal knowledge/          # Artifact/Evidence/Claim/Knowledge 生命周期
-      │  ├─ knowledge_lifecycle/# 删除、恢复、Command 与 Receipt
-      │  ├─ capture/            # 文本、URL、上传采集
-      │  ├─ research/           # 一次性研究、订阅、Digest 与 Delivery
-      │  └─ review/, insight/   # 复习、反馈与知识缺口
-      ├─ domain/
-      │  └─ investigation_project/ # Project aggregate 与状态机
-      ├─ orchestration/         # Composition Root、facade、worker、Ask pipeline
-      ├─ governance/            # Tool registry、Policy、Gateway、Admission
-      ├─ agents/                # AgentGateway 与 A2A Adapter
-      ├─ capabilities/          # Model/Interaction/Procedure Port 与能力投影
-      ├─ infra/                 # Provider 与 PostgreSQL/Artifact Adapter
-      ├─ memory/                # Graphiti、检索和受限记忆能力
-      ├─ runtime/               # 受限 Procedure/runtime contracts
-      └─ tools/                 # Agent 可见 Tool schema 与业务 Adapter
-├─ deploy/                      # 外部 cron 等生产部署模板
-├─ tests/                       # Unit、Contract、Integration 与 Runtime Conformance
-└─ evals/                       # 产品 E2E、组合旅程、复杂 loop 与质量评测
+```bash
+uv sync
+docker compose up -d neo4j postgres
+uv run uvicorn personal_agent.adapters.web.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## 关键落点
+前端和 API 文档默认地址：
 
-- 业务持久化：`knowledge_notes`、`review_cards`、`digest_*`、`research_*`、
-  `intelligence_digests`、`worker_queue_tasks`、`knowledge_gap_deliveries`、
-  workflow/journal/artifact/audit 相关 Postgres 表
-- 上传源文件：`data/uploads/`
-- 运行日志：`log/run.log`
+- 前端：`http://127.0.0.1:3000`；
+- API 文档：`http://127.0.0.1:8000/docs`。
 
-## 上下文工程
-
-项目将上下文拆分为 Conversation committed inputs、检索证据、Artifact、长期知识和 durable
-Project journal：历史对话只辅助理解追问与更正，事实结论必须由当前可追溯证据支撑。
-
-- [docs/llm-prompts.md](docs/llm-prompts.md) - 完整的提示词汇编与设计模式总结
-- [docs/review-digest.md](docs/review-digest.md) - 知识简报、订阅投递和复习反馈
-- [docs/proactive-knowledge-loop.md](docs/proactive-knowledge-loop.md) - 自动整理与知识缺口主动追问
-- [docs/future/README.md](docs/future/README.md) - 仅包含尚未落地且由目标 E2E 驱动的未来设计
-- [docs/future/design-optimization-backlog.md](docs/future/design-optimization-backlog.md) - 所有待优化设计的总清单、状态与详细设计入口
-- [docs/summary/core-architecture-current-state.md](docs/summary/core-architecture-current-state.md) - 框架理念、系统分层、目标责任链、知识与运行时当前事实
-
-## 文档导航
-
-- 接口说明：[docs/api.md](docs/api.md)
-- Agent/Procedure 流程：[docs/workflow/README.md](docs/workflow/README.md)
-- 环境变量：[docs/env.md](docs/env.md)
-- 本地开发与部署：[docs/deploy.md](docs/deploy.md)
-
-## CLI 用法
-
-当前仍保留 CLI 入口：
+常用 CLI：
 
 ```bash
 uv run python -m personal_agent.main entry "记一下：服务降级是在系统压力过大时，主动关闭非核心能力"
 uv run python -m personal_agent.main entry "什么是服务降级？"
-uv run python -m personal_agent.main entry "总结一下当前会话内容"
 uv run personal-agent research-once "AI Agent" --max-items 5
-uv run personal-agent research-subscribe "AI" --schedule-time 09:00 --chat-id oc_xxx
-uv run personal-agent research-schedule
 uv run personal-agent worker --queue research
-uv run personal-agent worker --queue investigation
 ```
+
+基础检查：
+
+```bash
+uv run pytest
+uv run ruff check .
+```
+
+## 文档导航
+
+- [面试材料与能力地图](docs/interview/INDEX.md)
+- [项目故事与两分钟讲稿](docs/interview/01-project-story.md)
+- [请求路径走查](docs/interview/02-request-walkthroughs.md)
+- [运行外壳与关键能力](docs/interview/03-capability-axes.md)
+- [Memory 架构](docs/interview/04-memory-architecture.md)
+- [知识与领域流程](docs/interview/05-knowledge-and-domain-workflows.md)
+- [证据、指标与发布资格](docs/interview/06-evidence-and-release.md)
+- [当前核心架构](docs/summary/core-architecture-current-state.md)
+- [接口说明](docs/api.md)
+- [文档总索引](docs/README.md)

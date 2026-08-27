@@ -1,4 +1,4 @@
-"""Derive the current Application lifecycle and frozen review contract."""
+"""Derive unsupported delivery requirements and the frozen review contract."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from personal_agent.capabilities.contracts.model import (
 )
 
 from .models import (
-    ConversationExecutionLifecycle,
     ConversationMessage,
     DecisionFeedback,
     ReviewCriteria,
@@ -24,15 +23,12 @@ from .models import (
 _FEEDBACK_ACTION_ID = "interaction_turn"
 
 _DERIVATION_INSTRUCTION = (
-    "First classify execution_lifecycle. Use durable_investigation only when the latest "
-    "user message requires work to continue independently after this response and later "
-    "be queried, paused, resumed, or steered. Otherwise use conversation. For "
-    "durable_investigation, lifecycle_source_span must be an exact substring of the latest "
-    "user message proving that after-response lifecycle. For conversation use an empty "
-    "lifecycle_source_span. If execution_lifecycle is durable_investigation, "
-    "interaction_phase MUST be ordinary and phase_source_span MUST be empty: later querying "
-    "or receiving a background result is not review_plan or deliver_final_result. The "
-    "interaction phase rules below apply only to the conversation lifecycle. Do not choose "
+    "First decide whether the latest user message explicitly requires work to continue "
+    "after this response and later be queried, paused, resumed, or steered. Set "
+    "background_continuation_requested=true only for that requirement, and copy the exact "
+    "proving substring into background_source_span. Otherwise return false and an empty "
+    "span. A background continuation request is not review_plan or deliver_final_result, "
+    "so interaction_phase MUST be ordinary and phase_source_span MUST be empty. Do not choose "
     "tools, agents, plans, or implementation steps. "
     "Derive one mutually exclusive interaction phase from the latest user message. Use "
     "review_plan only when the latest message asks the Agent to return an intermediate plan, "
@@ -76,24 +72,24 @@ class ReviewRequirement(_StrictModel):
 
 
 class InteractionIntentProposal(_StrictModel):
-    """Model proposal for Application lifecycle, interaction phase, and review criteria."""
+    """Model proposal for delivery requirements, interaction phase, and review criteria."""
 
     requirements: tuple[ReviewRequirement, ...] = ()
     interaction_phase: Literal[
         "ordinary", "review_plan", "deliver_final_result"
     ] = "ordinary"
     phase_source_span: str = Field(default="", max_length=2_000)
-    execution_lifecycle: ConversationExecutionLifecycle = "conversation"
-    lifecycle_source_span: str = Field(default="", max_length=2_000)
+    background_continuation_requested: bool = False
+    background_source_span: str = Field(default="", max_length=2_000)
 
 
 class AdmittedInteractionIntent(_StrictModel):
-    """Grounded lifecycle decision and independently admitted review contract."""
+    """Grounded delivery requirement and independently admitted review contract."""
 
     review_criteria: ReviewCriteria = Field(default_factory=ReviewCriteria)
-    execution_lifecycle: ConversationExecutionLifecycle = "conversation"
-    lifecycle_grounded: bool = True
-    lifecycle_source_span: str = ""
+    background_continuation_requested: bool = False
+    background_requirement_grounded: bool = True
+    background_source_span: str = ""
 
 
 def admit_interaction_intent(
@@ -106,19 +102,20 @@ def admit_interaction_intent(
         message.content for message in messages if message.role == "user"
     )
     latest_user_text = user_text[-1:] if user_text else ()
-    lifecycle_span = proposal.lifecycle_source_span.strip()
-    lifecycle_grounded = (
-        proposal.execution_lifecycle == "conversation"
-        and not lifecycle_span
+    background_span = proposal.background_source_span.strip()
+    background_requirement_grounded = (
+        not proposal.background_continuation_requested
+        and not background_span
     ) or (
-        proposal.execution_lifecycle == "durable_investigation"
+        proposal.background_continuation_requested
         and proposal.interaction_phase == "ordinary"
         and not proposal.phase_source_span.strip()
-        and bool(lifecycle_span)
-        and _appears_in(lifecycle_span, latest_user_text)
+        and bool(background_span)
+        and _appears_in(background_span, latest_user_text)
     )
-    execution_lifecycle: ConversationExecutionLifecycle = (
-        proposal.execution_lifecycle if lifecycle_grounded else "conversation"
+    background_continuation_requested = bool(
+        proposal.background_continuation_requested
+        and background_requirement_grounded
     )
 
     criteria: list[str] = []
@@ -127,7 +124,7 @@ def admit_interaction_intent(
     phase_grounded = bool(
         proposal.interaction_phase == "ordinary"
         or (
-            execution_lifecycle == "conversation"
+            not background_continuation_requested
             and phase_span
             and latest_user_text
             and _appears_in(phase_span, latest_user_text)
@@ -152,9 +149,9 @@ def admit_interaction_intent(
             ungrounded_spans=tuple(ungrounded),
             interaction_phase=interaction_phase,
         ),
-        execution_lifecycle=execution_lifecycle,
-        lifecycle_grounded=lifecycle_grounded,
-        lifecycle_source_span=lifecycle_span,
+        background_continuation_requested=background_continuation_requested,
+        background_requirement_grounded=background_requirement_grounded,
+        background_source_span=background_span,
     )
 
 
@@ -167,7 +164,7 @@ def derive_interaction_intent(
     tuple[StructuredModelResponse[InteractionIntentProposal], ...],
     tuple[DecisionFeedback, ...],
 ]:
-    """Derive one intent, revising a rejected lifecycle proposal at most once."""
+    """Derive one intent, revising an ungrounded background requirement at most once."""
     prompt_messages = [
         {"role": "system", "content": _DERIVATION_INSTRUCTION},
         *(message.model_dump(mode="json") for message in messages),
@@ -185,22 +182,22 @@ def derive_interaction_intent(
         metadata={"component": "conversation_intent_admission"},
     ))
     admitted = admit_interaction_intent(response.value, messages=messages)
-    if admitted.lifecycle_grounded:
+    if admitted.background_requirement_grounded:
         return admitted, (response,), ()
 
-    feedback = lifecycle_revision_feedback()
+    feedback = background_requirement_revision_feedback()
     revision_messages = [
         {
             "role": "system",
             "content": (
                 f"{_DERIVATION_INSTRUCTION}\n\n"
-                "The previous lifecycle proposal was rejected by deterministic "
-                "Admission. Revise only execution_lifecycle, lifecycle_source_span, "
+                "The previous background requirement proposal was rejected by deterministic "
+                "Admission. Revise only background_continuation_requested, background_source_span, "
                 "interaction_phase, and phase_source_span. Requirements remain frozen "
                 "and any changed requirements will be ignored. If the latest user "
                 "message does require independent work after this response, copy the "
-                "smallest exact proving substring. Otherwise return conversation with "
-                "an empty lifecycle_source_span. Previous proposal: "
+                "smallest exact proving substring. Otherwise return false with "
+                "an empty background_source_span. Previous proposal: "
                 f"{response.value.model_dump_json()}. Typed feedback: "
                 f"{feedback.model_dump_json()}."
             ),
@@ -228,8 +225,10 @@ def derive_interaction_intent(
         return admitted, (response,), (feedback,)
 
     revised_proposal = response.value.model_copy(update={
-        "execution_lifecycle": revision.value.execution_lifecycle,
-        "lifecycle_source_span": revision.value.lifecycle_source_span,
+        "background_continuation_requested": (
+            revision.value.background_continuation_requested
+        ),
+        "background_source_span": revision.value.background_source_span,
         "interaction_phase": revision.value.interaction_phase,
         "phase_source_span": revision.value.phase_source_span,
     })
@@ -240,25 +239,25 @@ def derive_interaction_intent(
     )
 
 
-def lifecycle_revision_feedback() -> DecisionFeedback:
-    """Describe the only fields a rejected lifecycle proposal may revise."""
+def background_requirement_revision_feedback() -> DecisionFeedback:
+    """Describe the only fields an ungrounded background proposal may revise."""
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
-        reason_code="interaction_lifecycle_revision_required",
+        reason_code="background_requirement_revision_required",
         message=(
-            "The proposed execution lifecycle was not supported by an exact source "
+            "The proposed background continuation requirement was not supported by an exact source "
             "span from the latest user message."
         ),
         repairable_fields=(
-            "execution_lifecycle",
-            "lifecycle_source_span",
+            "background_continuation_requested",
+            "background_source_span",
             "interaction_phase",
             "phase_source_span",
         ),
         immutable_fields=("messages", "requirements"),
         required_repair=(
-            "Return durable_investigation with an exact proving source span, or return "
-            "conversation with an empty lifecycle_source_span."
+            "Return true with an exact proving source span, or return false with an "
+            "empty background_source_span."
         ),
     )
 
@@ -281,19 +280,19 @@ def ungrounded_criteria_feedback(criteria: ReviewCriteria) -> DecisionFeedback:
     )
 
 
-def ungrounded_lifecycle_feedback() -> DecisionFeedback:
+def ungrounded_background_requirement_feedback() -> DecisionFeedback:
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
-        reason_code="interaction_lifecycle_not_grounded",
+        reason_code="background_requirement_not_grounded",
         message=(
-            "The proposed durable lifecycle could not be traced to the latest user "
+            "The proposed background continuation requirement could not be traced to the latest user "
             "message, so no background work was started."
         ),
         repairable_fields=("message",),
         immutable_fields=("messages",),
         required_repair=(
-            "Continue in the Conversation lifecycle or ask whether the user needs work "
-            "to continue independently after this response."
+            "Continue in the current Conversation or ask whether the user needs work "
+            "to continue after this response."
         ),
     )
 
@@ -308,7 +307,7 @@ __all__ = [
     "ReviewRequirement",
     "admit_interaction_intent",
     "derive_interaction_intent",
-    "lifecycle_revision_feedback",
+    "background_requirement_revision_feedback",
     "ungrounded_criteria_feedback",
-    "ungrounded_lifecycle_feedback",
+    "ungrounded_background_requirement_feedback",
 ]

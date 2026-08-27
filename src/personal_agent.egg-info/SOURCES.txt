@@ -33,7 +33,6 @@ src/personal_agent/adapters/web/routes/entry.py
 src/personal_agent/adapters/web/routes/entry_serializers.py
 src/personal_agent/adapters/web/routes/entry_stream.py
 src/personal_agent/adapters/web/routes/graph.py
-src/personal_agent/adapters/web/routes/investigation_projects.py
 src/personal_agent/adapters/web/routes/knowledge.py
 src/personal_agent/adapters/web/routes/notes.py
 src/personal_agent/adapters/web/routes/research.py
@@ -72,13 +71,13 @@ src/personal_agent/application/capture/providers/web_search.py
 src/personal_agent/application/conversation/__init__.py
 src/personal_agent/application/conversation/context_materialization.py
 src/personal_agent/application/conversation/errors.py
+src/personal_agent/application/conversation/interaction_intent.py
 src/personal_agent/application/conversation/interaction_prompt.py
 src/personal_agent/application/conversation/journal.py
 src/personal_agent/application/conversation/knowledge_save.py
 src/personal_agent/application/conversation/models.py
 src/personal_agent/application/conversation/observation_bounds.py
 src/personal_agent/application/conversation/ports.py
-src/personal_agent/application/conversation/interaction_intent.py
 src/personal_agent/application/conversation/service.py
 src/personal_agent/application/conversation/verification_admission.py
 src/personal_agent/application/conversation/working_plan.py
@@ -92,13 +91,6 @@ src/personal_agent/application/insight/__init__.py
 src/personal_agent/application/insight/analyzer.py
 src/personal_agent/application/insight/job.py
 src/personal_agent/application/insight/service.py
-src/personal_agent/application/investigation_project/__init__.py
-src/personal_agent/application/investigation_project/admission.py
-src/personal_agent/application/investigation_project/budget.py
-src/personal_agent/application/investigation_project/capability_matching.py
-src/personal_agent/application/investigation_project/model_ports.py
-src/personal_agent/application/investigation_project/ports.py
-src/personal_agent/application/investigation_project/service.py
 src/personal_agent/application/knowledge/__init__.py
 src/personal_agent/application/knowledge/consolidation.py
 src/personal_agent/application/knowledge/models.py
@@ -141,9 +133,6 @@ src/personal_agent/capabilities/contracts/outcomes.py
 src/personal_agent/capabilities/contracts/procedure.py
 src/personal_agent/capabilities/contracts/verification.py
 src/personal_agent/domain/__init__.py
-src/personal_agent/domain/investigation_project/__init__.py
-src/personal_agent/domain/investigation_project/aggregate.py
-src/personal_agent/domain/investigation_project/models.py
 src/personal_agent/execution/__init__.py
 src/personal_agent/execution/contracts/__init__.py
 src/personal_agent/execution/contracts/invocation.py
@@ -168,7 +157,6 @@ src/personal_agent/infra/storage/postgres_agent_trace_store.py
 src/personal_agent/infra/storage/postgres_common.py
 src/personal_agent/infra/storage/postgres_debug_reset_store.py
 src/personal_agent/infra/storage/postgres_execution_replay_store.py
-src/personal_agent/infra/storage/postgres_investigation_project.py
 src/personal_agent/infra/storage/postgres_knowledge_lifecycle_store.py
 src/personal_agent/infra/storage/postgres_knowledge_store.py
 src/personal_agent/infra/storage/postgres_memory_schema.py
@@ -232,7 +220,6 @@ src/personal_agent/memory/structural_retriever/__init__.py
 src/personal_agent/memory/structural_retriever/store.py
 src/personal_agent/orchestration/__init__.py
 src/personal_agent/orchestration/capability_inventory.py
-src/personal_agent/orchestration/investigation_project_adapters.py
 src/personal_agent/orchestration/runtime.py
 src/personal_agent/orchestration/runtime_admin.py
 src/personal_agent/orchestration/runtime_helpers.py
@@ -277,6 +264,7 @@ tests/test_chunk_quality.py
 tests/test_chunking.py
 tests/test_cli.py
 tests/test_consolidate_knowledge_tool.py
+tests/test_container_resource_evidence.py
 tests/test_context_compression.py
 tests/test_conv_002_evidence.py
 tests/test_conversation_interaction.py
@@ -304,10 +292,6 @@ tests/test_graph_search_strategies.py
 tests/test_graph_search_tool.py
 tests/test_graphiti_llm_strategies.py
 tests/test_graphiti_store_helpers.py
-tests/test_investigation_project_evidence_lineage.py
-tests/test_investigation_project_lifecycle.py
-tests/test_investigation_project_model_ports.py
-tests/test_investigation_project_tool_adapter.py
 tests/test_knowledge_gap_analyzer.py
 tests/test_knowledge_gap_job.py
 tests/test_knowledge_lifecycle_migration.py
@@ -343,6 +327,7 @@ tests/test_review_feedback.py
 tests/test_runtime_helpers.py
 tests/test_runtime_llm.py
 tests/test_runtime_model_cohesion.py
+tests/test_single_research_run_diagnostic.py
 tests/test_step_projection_validator.py
 tests/test_structural_retriever_store.py
 tests/test_structured_model.py

@@ -111,4 +111,3 @@ def test_harness_001_neutral_formal_plan_waits_before_execution(
         step["status"] == "pending"
         for step in working_plan["steps"]
     )
-    assert result.get("project_reference") is None

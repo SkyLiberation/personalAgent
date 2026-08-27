@@ -99,11 +99,11 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/application/conversation/models.py",
         "Wire contract for model output plus LoopBudgetPolicy; breaks typed "
         "parse for every loop case and the budget stop condition.",
-        "E01", "E14", "E22", "E23", "L01", "L02", "L03", "L05", "L06",
+        "E01", "E14", "E22", "L01", "L02", "L03", "L05", "L06",
     ),
     _cases(
         "src/personal_agent/application/conversation/interaction_intent.py",
-        "Derives and freezes Application lifecycle and ReviewCriteria.",
+        "Derives unsupported delivery requirements and freezes ReviewCriteria.",
         "L06",
     ),
     _cases(
@@ -210,7 +210,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/research/",
         "ResearchRun lifecycle, subscriptions and delivery.",
-        "E05", "E13", "E24",
+        "E05", "E13",
     ),
     _cases(
         "src/personal_agent/application/review/",
@@ -218,19 +218,14 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "E11", "E13",
     ),
     _cases(
-        "src/personal_agent/application/investigation_project/",
-        "Durable Project plan, budget ledger and completion gate.",
-        "IP01", "E23", "E24",
-    ),
-    _cases(
         "src/personal_agent/domain/",
-        "Project aggregate state machine and budget limits.",
-        "IP01", "E23", "E24",
+        "Canonical business facts and deterministic state transitions.",
+        "E04", "E10", "E22",
     ),
     _cases(
         "src/personal_agent/application/artifacts/",
         "Artifact write/read path behind ArtifactRef and digest checks.",
-        "E09", "ASK-001A", "ASK-001B", "IP01",
+        "E09", "ASK-001A", "ASK-001B",
     ),
     _cases(
         "src/personal_agent/application/extract/",
@@ -244,8 +239,8 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     ),
     _cases(
         "src/personal_agent/application/worker_queue.py",
-        "Async worker queue behind research, delivery and project recovery.",
-        "E05", "E13", "IP01", "E23", "E24",
+        "Async worker queue behind research and delivery.",
+        "E05", "E13",
     ),
     _cases(
         "src/personal_agent/application/",
@@ -255,12 +250,12 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/planning/",
         "Query planning and memory admission ahead of retrieval.",
-        "E12", "IP01", "E23", "PLAN-001",
+        "E12",
     ),
     _cases(
         "src/personal_agent/runtime/",
         "Procedure runtime, scheduler, recovery and grants behind durable runs.",
-        "E05", "E13", "IP01", "E23", "E24",
+        "E05", "E13",
     ),
     _cases(
         "src/personal_agent/infra/a2a.py",
@@ -283,7 +278,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/orchestration/",
         "Composition root adapters connect Conversation, knowledge reads and durable projects.",
-        "E12", "ASK-001A", "ASK-001B", "PLAN-001",
+        "E12", "ASK-001A", "ASK-001B",
     ),
     # --- entry boundary: every release case enters over HTTP ---------------
     _full(
@@ -383,7 +378,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "Assertions for product and composite journeys.",
         "E01", "E04", "E05",
         "E08", "E09", "E10", "E11", "E12", "E13", "E14",
-        "E22", "E23", "E24", "IP01",
+        "E22",
     ),
     _cases(
         "evals/e2e_quality/test_release_user_outcomes.py",

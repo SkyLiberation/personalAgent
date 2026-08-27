@@ -1,8 +1,9 @@
 # ADR 0005: Investigation Command, Evidence and Completion Semantics
 
-- Status: Accepted; execution/verification separation and repair target E2E verified
+- Status: Superseded and removed on 2026-08-26
 - Date: 2026-07-27
-- Removal review: 2027-07-27
+
+> Historical record only. Execution、Verification 与 Completion 分离的通用原则仍保留在 Conversation；本文的 Investigation Command、repair 和 Project Completion 已按 [ADR 0015](0015-withdraw-investigation-project.md) 删除。
 
 ## Context and Baseline
 

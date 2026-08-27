@@ -3,9 +3,9 @@
 本目录当前由 [`evidence_catalog.py`](evidence_catalog.py) 分成两种**执行 selection**：
 
 - `release`：9 条同时具有 typed 用户结果契约与真实 HTTP/模型/PostgreSQL profile 的 Product E2E；
-- `diagnostic`：25 条 Application、Runtime、Boundary 或 Capability Profile supporting evidence。
+- `diagnostic`：21 条 Application、Runtime 或 Capability Profile supporting evidence。
 
-12 条 scripted Investigation 用例位于 `evals/runtime_conformance/investigation_project`，不再由本目录的产品矩阵收集。
+已撤回的 Investigation Project 及其 scripted conformance 已从当前矩阵删除；历史结论只由 checksum 归档保存。
 
 当前逐项证据分类、baseline 合法性和指标覆盖见
 [`docs/evals/README.md`](../../docs/evals/README.md)。
@@ -27,7 +27,7 @@ layer 是断言焦点，不是独立产品链路，也不能替代完整用户�
 
 ## 矩阵与发布门禁
 
-精确用例、证据类别、test double、覆盖不变量和机器 `release_eligible` 只由 `evidence_catalog.py` 枚举。Product E2E 必须绑定 persona、source、自然目标、可观察结果、反事实、baseline 与 assertion owner；`IP01/DUR-001/L02/E12` 等 supporting evidence 不进入产品完成率。
+精确用例、证据类别、test double、覆盖不变量和机器 `release_eligible` 只由 `evidence_catalog.py` 枚举。Product E2E 必须绑定 persona、source、自然目标、可观察结果、反事实、baseline 与 assertion owner；`DUR-001/L02/E12` 等 supporting evidence 不进入产品完成率。
 
 发布能力由 `release_gate.py` 对机器声明、catalog eligibility、clean 同 revision trace、test
 outcome 和 checksum 求交集。终态由测试中的可执行断言拥有，不再维护一个 gate 不读取的

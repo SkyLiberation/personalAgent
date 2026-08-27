@@ -32,17 +32,12 @@ from personal_agent.application.conversation import (
 from personal_agent.application.conversation.models import (
     ActionObservation,
     CommittedUsage,
-    ConversationProjectSnapshot,
     DecisionFeedback,
     EffectiveCapabilities,
-    ProjectReference,
     ReviewCriteria,
     PersonalKnowledgeCandidate,
     PersonalKnowledgeEvidenceSnapshot,
-    InvestigationRequirementProgress,
-    InvestigationSubgoalProgress,
     InteractionTrace,
-    StartDurableInvestigationArguments,
 )
 from personal_agent.application.conversation.working_plan import (
     admit_action_plan_bindings,
@@ -125,13 +120,11 @@ class _Decisions:
         *items,
         review_intent: InteractionIntentProposal | None = None,
         review_intents: tuple[InteractionIntentProposal, ...] = (),
-        durable_request: StartDurableInvestigationArguments | None = None,
     ) -> None:
         self.items = list(items)
         self.requests = []
         self.review_intent = review_intent or InteractionIntentProposal()
         self.review_intents = list(review_intents)
-        self.durable_request = durable_request
         self.decision_requests = []
 
     def generate(self, request):
@@ -143,10 +136,6 @@ class _Decisions:
                 else self.review_intent
             )
             return self._response(intent)
-        if request.operation == "durable_investigation_start_proposal":
-            if self.durable_request is None:
-                raise AssertionError("unexpected durable investigation compilation")
-            return self._response(self.durable_request)
         self.decision_requests.append(request)
         item = self.items.pop(0)
         if isinstance(item, BaseException):
@@ -520,7 +509,6 @@ def test_user_requested_working_plan_is_committed_and_visible_without_project():
     assert result.disposition == "plan_ready"
     assert result.working_plan is not None
     assert result.working_plan.revision == 1
-    assert result.project_reference is None
     assert trace is not None
     assert trace.working_plan == result.working_plan
 
@@ -3029,7 +3017,12 @@ def test_cancelled_child_artifact_remains_visible_and_rejects_duplicate_delegati
     )
 
 
-def test_delegated_agent_budget_expiry_is_observed_as_timeout_failure():
+def test_delegated_agent_budget_expiry_is_observed_as_timeout_failure(caplog):
+    caplog.set_level(
+        "INFO",
+        logger="personal_agent.application.conversation.service",
+    )
+
     class _NeverCompletesSpecialist(_AsyncSpecialist):
         def poll(
             self,
@@ -3088,6 +3081,19 @@ def test_delegated_agent_budget_expiry_is_observed_as_timeout_failure():
     stored = gateway.get_run(observation.payload["child_agent_run_ref"])
     assert stored is not None
     assert stored.projection.status == "timed_out"
+    record = next(
+        item
+        for item in caplog.records
+        if item.message.startswith("conversation.agent_delegation | ")
+    )
+    diagnostic = json.loads(record.message.split(" | ", 1)[1])
+    assert diagnostic["action_id"] == "specialist-timeout"
+    assert diagnostic["agent_id"] == "specialist"
+    assert diagnostic["authorized_time_budget_seconds"] == 1
+    assert diagnostic["provider_wait_elapsed_seconds"] >= 1
+    assert diagnostic["delegation_elapsed_seconds"] >= 1
+    assert diagnostic["provider_terminal_status"] == "timed_out"
+    assert diagnostic["application_observation_status"] == "failed"
 
 
 def test_l05_budget_exhaustion_fails_closed_after_committed_result():
@@ -3404,7 +3410,7 @@ def test_review_criteria_must_be_traceable_to_the_user_verbatim():
     assert admitted.review_criteria.requires_review is True
 
 
-def test_lifecycle_revision_cannot_replace_first_proposal_requirements():
+def test_background_requirement_revision_cannot_replace_first_requirements():
     messages = [ConversationMessage(
         role="user",
         content=(
@@ -3418,16 +3424,16 @@ def test_lifecycle_revision_cannot_replace_first_proposal_requirements():
                 criterion="Every claim must cite an official source.",
                 source_span="ensure every claim cites an official source",
             ),),
-            execution_lifecycle="durable_investigation",
-            lifecycle_source_span="continue after this response",
+            background_continuation_requested=True,
+            background_source_span="continue after this response",
         ),
         InteractionIntentProposal(
             requirements=(ReviewRequirement(
                 criterion="The report must recommend a vendor.",
                 source_span="ensure every claim cites an official source",
             ),),
-            execution_lifecycle="durable_investigation",
-            lifecycle_source_span="in the background",
+            background_continuation_requested=True,
+            background_source_span="in the background",
         ),
     ))
 
@@ -3436,29 +3442,29 @@ def test_lifecycle_revision_cannot_replace_first_proposal_requirements():
         messages=messages,
     )
 
-    assert admitted.execution_lifecycle == "durable_investigation"
+    assert admitted.background_continuation_requested is True
     assert admitted.review_criteria.criteria == (
         "Every claim must cite an official source.",
     )
     assert len(responses) == 2
     assert [item.reason_code for item in feedback] == [
-        "interaction_lifecycle_revision_required",
+        "background_requirement_revision_required",
     ]
 
 
-def test_lifecycle_admission_allows_only_one_revision_attempt():
+def test_background_requirement_admission_allows_only_one_revision_attempt():
     messages = [ConversationMessage(
         role="user",
         content="Investigate in the background and let me inspect it later.",
     )]
     model = _Decisions(review_intents=(
         InteractionIntentProposal(
-            execution_lifecycle="durable_investigation",
-            lifecycle_source_span="continue after this response",
+            background_continuation_requested=True,
+            background_source_span="continue after this response",
         ),
         InteractionIntentProposal(
-            execution_lifecycle="durable_investigation",
-            lifecycle_source_span="remain active after I leave",
+            background_continuation_requested=True,
+            background_source_span="remain active after I leave",
         ),
     ))
 
@@ -3467,8 +3473,8 @@ def test_lifecycle_admission_allows_only_one_revision_attempt():
         messages=messages,
     )
 
-    assert admitted.execution_lifecycle == "conversation"
-    assert admitted.lifecycle_grounded is False
+    assert admitted.background_continuation_requested is False
+    assert admitted.background_requirement_grounded is False
     assert len(responses) == 2
     assert len(feedback) == 1
     assert len(model.requests) == 2
@@ -4406,65 +4412,6 @@ class _KnowledgeDeleteLifecycle:
         return operation if operation and operation.command.user_id == user_id else None
 
 
-class _ProjectStarter:
-    def __init__(self):
-        self.calls = 0
-        self.reads = 0
-        self.steers = 0
-
-    def start(self, *, principal, owner, request, idempotency_key):
-        self.calls += 1
-        assert principal.user_id == "default"
-        assert owner == principal
-        assert idempotency_key
-        return ProjectReference(
-            project_id="iprj_target",
-            tenant_id=principal.tenant_id,
-            user_id=principal.user_id,
-            state="planning",
-            title=request.title,
-            goal=request.goal,
-        )
-
-    def get(self, *, principal, reference):
-        self.reads += 1
-        assert reference.project_id == "iprj_target"
-        return self._snapshot(plan_version=1)
-
-    def steer(self, *, principal, reference, request, idempotency_key):
-        self.steers += 1
-        assert reference.project_id == "iprj_target"
-        assert request.statement == "Add deployment compatibility."
-        assert idempotency_key
-        return self._snapshot(plan_version=2)
-
-    @staticmethod
-    def _snapshot(*, plan_version):
-        return ConversationProjectSnapshot(
-            project_id="iprj_target",
-            state="active",
-            title="Protocol changes",
-            goal="Investigate protocol changes and deliver a sourced report.",
-            plan_version=plan_version,
-            requirements=(
-                InvestigationRequirementProgress(
-                    requirement_id="req-1",
-                    statement="Use official sources.",
-                    acceptance_contract="Every material claim has an official source.",
-                    status="active",
-                ),
-            ),
-            subgoals=(
-                InvestigationSubgoalProgress(
-                    logical_subgoal_id="sg-1",
-                    objective="Collect official changes.",
-                    status="pending",
-                ),
-            ),
-            waiting_reasons=(),
-        )
-
-
 def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_command():
     lifecycle = _KnowledgeDeleteLifecycle()
     service = ConversationService(
@@ -4510,35 +4457,21 @@ def test_goal_entry_observes_canonical_item_then_prepares_existing_delete_comman
         prepared.pending_confirmation.operation.command.target_note_id == "kitm_target"
     )
     assert trace.knowledge_delete_command_ref == "kdel_target"
-    assert trace.project_reference is None
     assert [item.capability_id for item in trace.inputs] == ["list_personal_knowledge"]
 
 
-def test_goal_entry_starts_one_existing_project_and_replay_returns_same_reference():
-    project_port = _ProjectStarter()
-    durable_request = StartDurableInvestigationArguments(
-        title="Protocol changes",
-        goal="Investigate protocol changes and deliver a sourced report.",
-        requirements=({
-            "statement": "Use official sources.",
-            "acceptance_contract": "Every material claim has an official source.",
-        },),
-    )
+def test_background_continuation_returns_typed_limitation_without_starting_work():
     model = _Decisions(
         review_intent=InteractionIntentProposal(
-            execution_lifecycle="durable_investigation",
-            lifecycle_source_span="in the background so I can pause or steer it later",
+            background_continuation_requested=True,
+            background_source_span="in the background so I can pause or steer it later",
         ),
-        durable_request=durable_request,
     )
-    service = ConversationService(
-        model,
-        project_port=project_port,
-    )
+    service = ConversationService(model)
     kwargs = {
         **_conversation_scope(),
         "conversation_id": "conversation-1",
-        "interaction_run_ref": "irun_project_from_goal",
+        "interaction_run_ref": "irun_background_limitation",
         "messages": [
             ConversationMessage(
                 role="user",
@@ -4547,24 +4480,25 @@ def test_goal_entry_starts_one_existing_project_and_replay_returns_same_referenc
         ],
     }
 
-    started = service.respond(**kwargs)
+    limited = service.respond(**kwargs)
     replayed = service.respond(**kwargs)
-    trace = _trace(service, "irun_project_from_goal")
+    trace = _trace(service, "irun_background_limitation")
 
-    assert started.disposition == "background_started"
-    assert replayed.project_reference == started.project_reference
-    assert project_port.calls == 1
-    assert trace.project_reference == started.project_reference
+    assert limited.disposition == "limitation"
+    assert replayed == limited
     assert trace.knowledge_delete_command_ref is None
-    assert trace.execution_lifecycle == "durable_investigation"
-    assert trace.usage.model_turns == 1
+    assert trace.usage.model_turns == 0
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "capability_missing"
+        for item in trace.inputs
+    )
     assert not any(
         request.operation == "agent_interaction_turn" for request in model.requests
     )
 
 
-def test_ungrounded_durable_lifecycle_is_revised_before_conversation_fallback():
-    project_port = _ProjectStarter()
+def test_ungrounded_background_requirement_is_revised_before_limitation():
     model = _Decisions(
         FinalMessage(
             disposition="answer",
@@ -4572,24 +4506,16 @@ def test_ungrounded_durable_lifecycle_is_revised_before_conversation_fallback():
         ),
         review_intents=(
             InteractionIntentProposal(
-                execution_lifecycle="durable_investigation",
-                lifecycle_source_span="continue independently after this response",
+                background_continuation_requested=True,
+                background_source_span="continue independently after this response",
             ),
             InteractionIntentProposal(
-                execution_lifecycle="durable_investigation",
-                lifecycle_source_span="在后台持续调研",
+                background_continuation_requested=True,
+                background_source_span="在后台持续调研",
             ),
         ),
-        durable_request=StartDurableInvestigationArguments(
-            title="Protocol changes",
-            goal="Investigate protocol changes and deliver a sourced report.",
-            requirements=({
-                "statement": "Use official sources.",
-                "acceptance_contract": "Every material claim has an official source.",
-            },),
-        ),
     )
-    service = ConversationService(model, project_port=project_port)
+    service = ConversationService(model)
 
     result = service.respond(
         **_conversation_scope(),
@@ -4602,11 +4528,9 @@ def test_ungrounded_durable_lifecycle_is_revised_before_conversation_fallback():
     )
     trace = _trace(service, "irun_revised_project_lifecycle")
 
-    assert result.disposition == "background_started"
-    assert result.project_reference is not None
-    assert trace.execution_lifecycle == "durable_investigation"
-    assert trace.usage.model_calls == 3
-    assert trace.usage.model_turns == 1
+    assert result.disposition == "limitation"
+    assert trace.usage.model_calls == 2
+    assert trace.usage.model_turns == 0
     assert sum(
         request.operation == "interaction_intent" for request in model.requests
     ) == 2
@@ -4615,80 +4539,7 @@ def test_ungrounded_durable_lifecycle_is_revised_before_conversation_fallback():
     )
 
 
-def test_later_turn_reads_and_steers_only_the_project_linked_to_its_conversation():
-    project_port = _ProjectStarter()
-    service = ConversationService(
-        _Decisions(
-            _continue(ToolCallProposal(
-                action_id="steer-project",
-                tool_name="steer_investigation_project",
-                arguments={
-                    "statement": "Add deployment compatibility.",
-                    "added_requirements": [{
-                        "statement": "Cover deployment compatibility.",
-                        "acceptance_contract": "The report contains a compatibility section.",
-                    }],
-                },
-            )),
-            FinalMessage(
-                disposition="answer",
-                message="Plan version 2 is active.",
-            ),
-            review_intents=(
-                InteractionIntentProposal(
-                    execution_lifecycle="durable_investigation",
-                    lifecycle_source_span="in the background so I can steer it later",
-                ),
-                InteractionIntentProposal(),
-            ),
-            durable_request=StartDurableInvestigationArguments(
-                title="Protocol changes",
-                goal="Investigate protocol changes and deliver a sourced report.",
-                requirements=({
-                    "statement": "Use official sources.",
-                    "acceptance_contract": (
-                        "Every material claim has an official source."
-                    ),
-                },),
-            ),
-        ),
-        project_port=project_port,
-    )
-    service.respond(
-        **_conversation_scope(),
-        conversation_id="conversation-linked-project",
-        interaction_run_ref="irun_project_start",
-        messages=[ConversationMessage(
-            role="user",
-            content="Investigate this in the background so I can steer it later.",
-        )],
-    )
-
-    result = service.respond(
-        **_conversation_scope(),
-        conversation_id="conversation-linked-project",
-        interaction_run_ref="irun_project_steer",
-        messages=[ConversationMessage(
-            role="user",
-            content="Show progress, then add deployment compatibility to unfinished work.",
-        )],
-    )
-    trace = _trace(service, "irun_project_steer")
-
-    assert result.disposition == "answer"
-    assert result.project_reference.project_id == "iprj_target"
-    assert project_port.calls == 1
-    assert project_port.reads == 1
-    assert project_port.steers == 1
-    assert trace.project_reference.project_id == "iprj_target"
-    assert [item.capability_id for item in trace.inputs] == [
-        "investigation_project_context",
-        "steer_investigation_project",
-    ]
-
-
-def test_explanation_only_request_does_not_create_a_project_or_delete_command():
-    project_port = _ProjectStarter()
+def test_explanation_only_request_does_not_create_a_delete_command():
     lifecycle = _KnowledgeDeleteLifecycle()
     service = ConversationService(
         _Decisions(
@@ -4699,7 +4550,6 @@ def test_explanation_only_request_does_not_create_a_project_or_delete_command():
         ),
         knowledge_reader=_KnowledgeKnowledgeReader(),
         knowledge_lifecycle=lifecycle,
-        project_port=project_port,
     )
 
     result = service.respond(
@@ -4716,10 +4566,8 @@ def test_explanation_only_request_does_not_create_a_project_or_delete_command():
     trace = _trace(service, "irun_explain_only")
 
     assert result.disposition == "answer"
-    assert project_port.calls == 0
     assert lifecycle.operations == {}
     assert trace.knowledge_delete_command_ref is None
-    assert trace.project_reference is None
 
 
 class _AsyncSpecialist:

@@ -183,35 +183,6 @@ def _profile(
     )
 
 
-def _investigation(
-    case_id: str,
-    test_name: str,
-    *,
-    module: str,
-    fault_mechanism: FaultMechanism = FaultMechanism.NONE,
-    capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
-) -> EvidenceCase:
-    return EvidenceCase(
-        evidence_id=f"{case_id}.durable_investigation",
-        case_id=case_id,
-        module=f"../runtime_conformance/investigation_project/{module}",
-        test_name=test_name,
-        layers=frozenset(EvidenceLayer),
-        entry_boundary=EntryBoundary.IN_PROCESS_SERVICE,
-        fault_mechanism=fault_mechanism,
-        raw_user_input=False,
-        real_model_required=False,
-        test_doubles=frozenset({"scripted_model", "frozen_provider"}),
-        evidence_class=EvidenceClass.RUNTIME_CONFORMANCE,
-        capability_profile=capability_profile,
-        limitation=(
-            "Diagnostic durable-project state-machine evidence. It uses the production "
-            "application/domain/persistence path with scripted semantic decisions and "
-            "frozen providers; it is not release evidence for live model/provider behavior."
-        ),
-    )
-
-
 def _outcome(
     outcome_id: str,
     *,
@@ -281,25 +252,6 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             baseline_ref="behavior-baseline:ASK-001B",
         ),
         covered_invariants=frozenset({"ask.zero_write", "grounded_answer.web"}),
-        capability_profile=CapabilityProfile.WEB_SEARCH,
-    ),
-    EvidenceCase(
-        evidence_id="PLAN-001.product_http",
-        case_id="PLAN-001",
-        module="test_conversation_project_plan.py",
-        test_name=(
-            "test_plan_001_same_conversation_reads_steers_and_recovers_its_project"
-        ),
-        layers=frozenset({
-            EvidenceLayer.PLANNING_CONTROL,
-            EvidenceLayer.JOURNAL_RECOVERY,
-        }),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        evidence_class=EvidenceClass.PRODUCT_E2E,
-        limitation=(
-            "Regression evidence for controlling an already-created InvestigationProject; "
-            "it is not a complete product outcome or evidence of Project necessity."
-        ),
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     _product(
@@ -419,29 +371,6 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             baseline_ref="archive:20260803T142932.564456Z-23720-19ba8517",
         ),
         covered_invariants=frozenset({"knowledge_delete.confirmed"}),
-    ),
-    _product(
-        "E23",
-        "test_product_e23_durable_investigation_from_goal_entry",
-        EvidenceLayer.UNDERSTANDING,
-        EvidenceLayer.PLANNING_CONTROL,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.JOURNAL_RECOVERY,
-        capability_profile=CapabilityProfile.WEB_SEARCH,
-        evidence_class=EvidenceClass.PRODUCT_E2E,
-        limitation=(
-            "Natural handoff regression only; no final report is asserted and the "
-            "InvestigationProject demand baseline is absent."
-        ),
-    ),
-    _product(
-        "IP01",
-        "test_product_ip01_live_investigation_report",
-        EvidenceLayer.PLANNING_CONTROL,
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.JOURNAL_RECOVERY,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     _loop(
         "L01",
@@ -638,95 +567,6 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         "test_e21_http_process_answers_from_oversized_read_within_budget",
         CapabilityProfile.GITHUB_MCP,
     ),
-    EvidenceCase(
-        evidence_id="E24.research_boundary_evaluation",
-        case_id="E24",
-        module="test_product_capability_outcomes.py",
-        test_name="test_e24_research_boundary_paired_baseline",
-        layers=frozenset(
-            {
-                EvidenceLayer.PLANNING_CONTROL,
-                EvidenceLayer.VERIFICATION_COMPLETION,
-            }
-        ),
-        entry_boundary=EntryBoundary.HTTP_PROCESS,
-        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
-        capability_profile=CapabilityProfile.WEB_SEARCH,
-        limitation=(
-            "Paired product-boundary measurement; it compares ResearchRun, Conversation, "
-            "and Investigation Project but does not itself produce a release claim."
-        ),
-    ),
-    _investigation(
-        "LT01",
-        "test_lt01_complete_architecture_investigation",
-        module="test_durable_investigation_project.py",
-        capability_profile=CapabilityProfile.GITHUB_NOTION_MCP,
-    ),
-    _investigation(
-        "LT02",
-        "test_lt02_command_dispatch_recovers_without_duplicate",
-        module="test_durable_investigation_recovery.py",
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
-    _investigation(
-        "LT03",
-        "test_lt03_steering_preserves_frozen_work_and_user_requirements",
-        module="test_durable_investigation_project.py",
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
-    _investigation(
-        "LT04",
-        "test_lt04_parallel_children_join_only_after_verified_outcomes",
-        module="test_durable_investigation_project.py",
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
-    _investigation(
-        "LT05",
-        "test_lt05_external_delegation_waits_for_digest_bound_approval",
-        module="test_durable_investigation_project.py",
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
-    _investigation(
-        "LT06",
-        "test_lt06_budget_exhaustion_pauses_with_partial_coverage",
-        module="test_durable_investigation_project.py",
-    ),
-    _investigation(
-        "LT07",
-        "test_lt07_cancel_quarantines_late_result",
-        module="test_durable_investigation_project.py",
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
-    _investigation(
-        "LT08",
-        "test_lt08_security_scope_isolation_survives_recovery",
-        module="test_durable_investigation_project.py",
-    ),
-    _investigation(
-        "LT10",
-        "test_lt10_child_submit_reconciles_stable_submission_key",
-        module="test_durable_investigation_recovery.py",
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-        capability_profile=CapabilityProfile.GPT_RESEARCHER_A2A,
-    ),
-    _investigation(
-        "LT11",
-        "test_lt11_missing_capability_fails_closed_without_fallback",
-        module="test_durable_investigation_project.py",
-    ),
-    _investigation(
-        "LT12",
-        "test_lt12_observation_revises_only_unfrozen_dynamic_plan",
-        module="test_durable_investigation_project.py",
-    ),
-    _investigation(
-        "LT13",
-        "test_lt13_async_create_and_read_only_recovery",
-        module="test_durable_investigation_recovery.py",
-        fault_mechanism=FaultMechanism.PROCESS_TERMINATION,
-    ),
 )
 
 EVIDENCE_BY_NODE = {case.node_key: case for case in EVIDENCE_CASES}
@@ -745,8 +585,6 @@ def validate_catalog() -> None:
         EvidenceClass.PRODUCT_E2E: {
             "E14",
             "E22",
-            "E23",
-            "PLAN-001",
             "ASK-001A",
             "ASK-001B",
             "L01",
@@ -757,21 +595,16 @@ def validate_catalog() -> None:
         },
         EvidenceClass.APPLICATION_E2E: {
             "E01", "E04", "E05", "E08", "E09", "E10", "E11", "E12",
-            "E13", "IP01",
+            "E13",
         },
         EvidenceClass.RUNTIME_CONFORMANCE: {
             "L02", "L05",
             "CTX-001",
             "RUN-001",
             "GOV-001", "DUR-001", "OBS-001",
-            *(f"LT{index:02d}" for index in range(1, 9)),
-            "LT10",
-            "LT11",
-            "LT12",
-            "LT13",
         },
         EvidenceClass.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19", "E21"},
-        EvidenceClass.BOUNDARY_EVALUATION: {"E24"},
+        EvidenceClass.BOUNDARY_EVALUATION: set(),
     }
     for evidence_class, case_ids in expected.items():
         actual = {

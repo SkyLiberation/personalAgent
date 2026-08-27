@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "gate_id": "AGENT-DELEGATE-TARGET-PROMOTION-001",
+  "case_id": "AGENT-PERF-001-DELEGATE",
+  "role": "target",
+  "stage": "formal_product_target",
+  "expected_samples": 20,
+  "constraints": [
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-missing-result-reports",
+      "metric": {
+        "source": "result_report_missing"
+      },
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-failed-product-tests",
+      "metric": {
+        "source": "test_failed"
+      },
+      "maximum": 0
+    }
+  ]
+}

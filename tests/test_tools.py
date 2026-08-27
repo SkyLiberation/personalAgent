@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from personal_agent.capabilities.contracts.grants import GrantDependencySet, ProcedureNodeGrant
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
-from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal, interaction_execution_scope
+from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.tools import (
     ToolError,
     build_capture_text_tool,
@@ -237,31 +237,6 @@ class TestToolExecutor:
     def test_invokes_directly_for_non_graph_callers(self, executor):
         executor.register(echo)
         result = executor.invoke_direct("echo", execution_scope=_scope(), message="hello")
-        assert result["ok"] is True
-        assert result["data"] == "echo: hello"
-
-    def test_project_invocation_derives_leaf_grant_from_frozen_proposal(self, executor):
-        executor.register(echo)
-        scope = ExecutionScope(
-            principal=AuthenticatedPrincipal(
-                tenant_id="tenant-1",
-                user_id="u1",
-            ),
-            execution_id="proposal-1",
-            project_id="project-1",
-            plan_version=2,
-            logical_subgoal_id="subgoal-1",
-            subgoal_version=1,
-        )
-
-        result = executor.invoke_project(
-            "echo",
-            {"message": "hello"},
-            execution_scope=scope,
-            tool_call_id="proposal-1",
-            proposal_digest="a" * 64,
-        )
-
         assert result["ok"] is True
         assert result["data"] == "echo: hello"
 

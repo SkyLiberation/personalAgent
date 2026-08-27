@@ -1,6 +1,6 @@
 # 智能体运行外壳与关键能力
 
-> **本篇集中介绍运行外壳拥有的六项关键能力：受治理的模型调用、按需工作清单、有界模型上下文、受治理执行、恢复与 Completion。** 每项都按“解决什么错误、如何工作、能力收益、证据、边界”完整展开；Memory 的跨时间分类由[智能体 Memory](04-memory-architecture.md)主讲，知识生命周期和后台调查由[领域设计](05-knowledge-and-domain-workflows.md)主讲，本篇不复制第二套解释。
+> **本篇集中介绍运行外壳拥有的六项关键能力：受治理的模型调用、按需工作清单、有界模型上下文、受治理执行、恢复与 Completion。** 每项都按“解决什么错误、如何工作、能力收益、证据、边界”完整展开；Memory 的跨时间分类由[智能体 Memory](04-memory-architecture.md)主讲，知识生命周期和无证据后台循环的撤回由[领域设计](05-knowledge-and-domain-workflows.md)主讲，本篇不复制第二套解释。
 
 ## 1. 运行外壳把模型建议变成可靠的用户结果
 
@@ -39,105 +39,13 @@
 
 当前部署使用固定模型和服务提供方，不根据单次请求动态路由。历史 DeepSeek 同配置样本组中的 `PLAN-REPLAN-001` v51 达到 `15/15 delivered`；该结果只证明当时的模型、结构化输出方式和重试配置。当前 MiMo 配置已经通过后台生命周期选择的 20 样本正式 E2E，但后台最终报告仍未达到发布门槛，因此不能沿用 DeepSeek 归档声明 MiMo 具备相同的完整能力。模型调用的输入输出、令牌和延迟进入脱敏追踪记录，但完整性能画像仍受[证据与发布](06-evidence-and-release.md)说明的样本完整度限制。
 
-### 1.2 切换服务提供方不是替换三个环境变量
+### 1.2 Provider 兼容与架构收敛必须由用户结果约束
 
-**服务提供方会同时改变结构化传输、思考令牌、Proposal 语义、能力选择、重试次数和端到端延迟，因此会改变整个智能体闭环。** `base_url`、密钥和模型名称只解决连接问题；最小 JSON 冒烟成功，不能证明模型能够稳定承担语义路由、Plan、工具选择、Verification 和 Completion。
+MiMo 与 DeepSeek 的切换证明，HTTP 成功、JSON 可解析和 Schema 合法是三层不同事实；思考令牌、`json_object`/`json_schema` 和超时策略都必须由 typed Adapter 隔离。服务提供方差异可以解释失败阶段，但不能替代最终用户结果。
 
-本工程在 MiMo 切换中依次遇到三个不同层次的失败：
+旧后台调查路径进一步暴露了架构问题：系统让 Conversation 和独立调查循环同时规划、检索、修复与完成。正式后台组和四槽位候选均为 `0/20 delivered`；当前最简单 Conversation 重跑也为 `0/20`，且 163 次模型调用中只有 7 次 Agent 调用、0 次 Tool 调用。这说明删除第二循环是复杂度收敛，不是研究质量修复。
 
-| 配置 | 实际结果 | 暴露的边界 |
-| --- | --- | --- |
-| `json_object`，默认思考模式 | 最小 JSON 与 GPT Researcher A2A 冒烟成功；正式入口只完成 2 个项目创建，第 3 个请求超时 | HTTP 200 不代表存在可解析正文；800、1,600 和 3,000 令牌上限都可能被思考内容耗尽 |
-| `json_object`，关闭思考模式 | `InteractionIntentProposal` 聚焦探针连续 `3/3` 通过；正式入口第 3 个请求返回 503 | 正文恢复后，模型连续生成只有 1 个步骤的 `WorkingPlan`，违反权威 Schema；关闭思考只修复传输，不修复类型约束 |
-| 原生 `json_schema`，关闭思考模式，混合决策面 | `InteractionIntentProposal` 与大型 `AgentTurnDecision` 聚焦探针分别 `5/5` 类型合法；正式 20 样本全部返回 HTTP 200 | 类型合法没有带来正确语义：19 个请求停在 `plan_ready`，1 个返回 `limitation`，`project_selected=0/20`、`delivered=0/20` |
-| 原生 `json_schema`，关闭思考模式，生命周期先行 | 正式入口达到 `20/20 background_started`，全部返回 ProjectReference | 模型先选择 Application 生命周期，再编译该分支的最小参数；没有工作清单、工具或子智能体进入同一决策面 |
-
-第三组最容易误判。MiMo 已经证明支持原生 `json_schema` 的机械协议，但模型在混合决策面中把“离开当前请求后继续推进”系统性解释为等待用户审阅的前台工作清单。Admission 只能拒绝非法 Proposal 并返回 `DecisionFeedback`，不能替模型选择后台生命周期。如果确定性代码看到用户说“后台”就直接创建调查项目，它会接管开放语义路由，并让产品 E2E 失去证明模型能力的意义。
-
-后续聚焦诊断把错误进一步定位到生命周期竞争，而不是“模型完全看不到工具”。完整生产投影包含 19 个工具和 1 个子智能体；四类请求的第一轮均同时提出 `gpt_researcher` 委托与前台工作清单，后台启动为 `0/4`。把已有后台说明移动到工作清单之前后，MiMo 会改选 `start_durable_investigation`，但仍附带工作清单；再明确要求互斥表达也没有移除清单。最后尝试由 Admission 保持模型已经提出的后台动作、只反馈移除协调清单，完整 Application 样本仍在 8 轮、59,874 tokens 后返回 `limitation`，并实际执行了一次对话内子智能体委托。四个候选都按预声明门槛撤回，生产路径没有保留服务提供方专用 Prompt、关键词路由或 Proposal 改写。
-
-这个过程揭示了三个不同对象：对话内子智能体委托会阻塞当前请求并返回一个产物，`ConversationWorkingPlan` 只协调前台跨轮义务，后台调查项目才拥有请求返回后的独立生命周期。它们都能处理“复杂研究”，但时间边界和事实归属不同。当前实现没有继续加长能力描述，而是把现有交互意图派生破坏式替换为 `interaction_intent:v2`。模型先在 `conversation` 与 `durable_investigation` 之间作开放语义选择；只有选择后台生命周期后，第二次类型化调用才编译 `StartDurableInvestigationArguments`，Application 随后复用唯一 Project 写入口。确定性代码只验证来源片段、类型和当前是否已有 Project，不根据关键词选择生命周期。
-
-这个分层不是多加一个 Router。交互阶段和验收标准原本就需要一次模型调用；`InteractionIntentProposal` 只把 Application 生命周期并入同一个事实 owner。普通对话继续进入 Agent loop，后台调查不再暴露 18 个普通工具、子智能体和 `ConversationWorkingPlan`。决策面缩小后，MiMo 的语义能力没有被伪造，运行系统只是避免让不同生命周期的资源互相竞争。
-
-同一组自然输入的历史 DeepSeek 归档提供了诊断坐标，但不是严格的同代码版本 A/B：
-
-| 指标 | DeepSeek 历史混合决策面 | MiMo 混合决策面 | MiMo 生命周期先行 |
-| --- | ---: | ---: | ---: |
-| 正确进入后台生命周期 | `20/20` | `0/20` | `20/20` |
-| 最终交付 | `1/20` | `0/20` | 本组未观察最终报告 |
-| 初始入口延迟 P50 / P95 | 3.57 秒 / 4.68 秒 | 76.67 秒 / 167.10 秒 | P95 36.91 秒 |
-| 初始模型轮次 | 20 | 76 | 20 |
-| 初始总令牌数 | 189,837 | 554,507 | 26,289 |
-| 环境失败 / 重复 Proposal | 0 / 0 | 0 / 0 | 0 / 0 |
-
-DeepSeek 组虽然稳定选择了后台生命周期，最终仍只有 `1/20 delivered`；失败继续发生在外部取证、综合和修复预算。MiMo 混合决策面则在业务能力入口之前失败。生命周期先行 target 关闭了 MiMo 的入口缺口，但没有观察后台最终报告。三组不是同代码版本下的严格模型 A/B，因此不能据此宣布 MiMo 优于 DeepSeek；它们证明的是服务提供方差异会改变智能体的失败阶段，而架构可以通过缩小当前决策面降低这种差异。
-
-单变量消融提供了因果证据。同一正式输入仍派生 `execution_lifecycle=durable_investigation`；只移除 Application 的消费分支后，结果从 `background_started` 退化为 `plan_ready`，ProjectReference 消失，模型调用从 2 次增加到 5 次，令牌从 1,300 增加到 27,652。恢复消费点后重新通过。这个反事实说明收益来自生命周期分离，不来自模型波动、关键词路由或放宽 Schema。
-
-当前 canonical `max_retries=2` 的 20 样本组出现一次可恢复的结构化解析失败，但最终请求失败为 0。零重试的独立 20 样本组同样全部通过。面试时应把两条结论分开：有限重试确实提高瞬时故障恢复能力；生命周期选择的正确性并不依赖重试制造成功。
-
-更广的后台最终报告 baseline 又暴露了重复运行方差。同样四类输入各五次时，只有 `18/20` 创建 Project；两个失败样本的生命周期来源片段没有通过 grounding，分别返回 `limitation` 和 `plan_ready`。这不抹掉前两个 `20/20` target 与单变量消融，但说明当前 MiMo 路由尚不能写成稳定发布能力。面试时应说“机制在两个正式样本组通过，后续完整链路组复现 2 次入口失败”，不能只挑最好的一组。
-
-进一步核验发现，两个失败样本并不是模型选择了 Conversation：模型实际提出 `durable_investigation`，只是引用的来源片段没有逐字命中最新用户消息。旧 Admission 随后直接把生命周期改成 Conversation，这等于运行系统在拒绝 Proposal 后替模型生成新的语义决定。当前本地候选改为一次 typed revision：只允许修订生命周期、来源片段和互斥交互阶段，首轮 requirements 保持冻结；第二次仍失败就 fail closed，不进入无限反馈循环。失败优先测试、`101` 个 Conversation 测试、`825` 个全工程测试和单变量 Conformance 消融均已通过。focused target 和后续正式 20 样本预算 cohort 都保持正常后台创建，但两组的 `revision_feedback_count` 都是 0；它们只能证明正常路径无回归，不能证明修订机制改善结果。面试中仍应称其为“边界修复候选”，不能把另一个 cohort 的 `20/20` 写成该机制已经稳定恢复重复运行。
-
-候选后的一个真实 MiMo focused 样本以 1,263 tokens、37.19 秒正常创建 Project，普通 Tool/Agent 调用为 0；但该样本首轮 Proposal 已经通过 grounding，修订次数为 0。它只排除了候选破坏正常路径，不能用于声称修订机制改善了结果。这也是面试中值得说明的评测边界：target 通过不等于目标机制被消费，必须检查 trace 中消融变量是否真实出现。
-
-同一正式组还暴露了 durable worker 的调度粒度问题。10 个队尾 Project 在观察窗口结束时仍停在 `planning/project_created`，9 个连首条 event 都没有；worker 和服务提供方都正常，只是单个 Project 以默认 `max_cycles=100` 连续占用 worker，而一次 MiMo 规划就需要 44 至 80 秒。当前实现让每个调查队列租约只推进一个 Project cycle，已提交事实后重新入队，使已有 FIFO 队列能够调度其他项目。真实 Postgres queue 的组合测试确认等待中的 Project B 会先于 Project A 的 continuation 获得下一个 lease。这个改动没有增加并发或第二套任务状态，失败优先测试、消融和包含生产改动的 `826` 个工程测试已经通过。
-
-两项目真实 focused target 随后从正式 Conversation 入口创建两个 Project，再启动唯一 worker。前两个真实 MiMo 阶段为 `Plan A -> Plan B`，第三个阶段才是 Execution；两次入口均没有消费生命周期修订，两个 Project 都形成 accepted Plan，event sequence 为 10 和 8，观察错误为 0。该结果证明单-cycle 时间片确实改变了真实队列中的首次进展顺序，不只是单元测试中的参数值。
-
-同一调度层后来暴露了另一种“看起来一直在工作”的假进展：真实 Project 等待第二次 GPT Researcher 结果时，300 秒内 `event_sequence` 增长到 1,945，却仍只有 1 个 Artifact、0 个 Outcome。原因是 `pending` 已经释放当前 worker cycle，但 continuation 的 `due_at` 仍是当前时间，单 worker 会立即重新 lease、再次预留并释放预算。当前设计复用既有 Postgres queue 的 `due_at`，把外部等待 continuation 延后 5 秒；失败测试和消费点消融证明旧链立即可 lease，候选到期前不可 lease且到期后 1 秒内恢复。两次真实 MiMo target 的事件数分别降为 75 和 82，后者比 baseline 下降 95.78%，自动记录 `wait_reschedule_passed=true`；worker、命令绑定、ExecutionRef 和 Artifact 保持正常，因此运行成本机制已闭环。但 target 仍为 0 Outcome，并观察到无关或格式异常来源，且没有单独计量真实 Provider ready 到 Project commit 的延迟。面试时应把它描述为 durable execution 的等待成本和调度正确性优化，不能说事件变少就代表 Agent 任务完成。
-
-包含该时间片的当前组合版本又执行了 20 样本正式 target。结果为 `20/20 project_selected`、`20/20 event_sequence >= 1`、`0/20 delivered`，窗口结束时 15 个项目为 `active`、2 个为 `paused`、3 个仍为 `planning/project_created`；15 份 accepted Plan 只推进到 6 个 accepted execution Proposal，没有 ExecutionRef、ArtifactRef、SubGoalOutcome 或最终报告。它比 baseline 的 9 个零事件队尾更好，但没有达到预声明的 `project_created=0`，正式局部门槛失败，因此不执行产品消融。面试时只能说两项目首次进展顺序得到改善，不能宣称 20 项目公平性或最终交付已经闭环。
-
-同一 v3 评测器还提供了更接近 A/B 的服务提供方对照。DeepSeek 归档与 MiMo 归档都为 `0/20 delivered`，所以两者都没有证明后台报告能力；DeepSeek 的入口均值约 4.1 秒、worker 日志尾部模型调用均值约 2.7 秒，MiMo 分别约 23.0 秒和 32.7 秒。DeepSeek 在窗口内形成 4 项服务提供方来源覆盖，MiMo 为 0。面试时应说“DeepSeek 在该任务族中吞吐更高，失败阶段更靠后”，不能说“DeepSeek 效果更好”，因为两组都没有达到用户结果，代码版本也并非完全相同。
-
-工程随后以同一 MiMo、输入和评测器只把调查 worker 从 1 个槽位改成 4 个。候选把 accepted Plan 从 15 增至 18、accepted execution Proposal 从 6 增至 20，并形成 10 个 ExecutionRef、9 个 ArtifactRef、2 个 SubGoalOutcome 和 6 项服务提供方来源覆盖；最终仍为 `0/20 delivered`，另有 23 次 replan 和 4 个 `verification_repair` 暂停。并发候选因此全部撤回。这个失败很适合面试：并发能改善中间吞吐，但 Plan ID 合法性、Verification 收敛和 Completion 没有随之改善，不能用局部指标冒充智能体能力。
-
-归档继续揭示了两种“结构化 JSON 合法、业务对象仍不合法”的 Provider 坑。第一，结构化输出边界允许 `completion_relevance=informational`，领域模型却只接受 `required|supporting`，合法 Provider 响应在 materialize 时被误报为 `provider_unavailable`；当前设计删除重复词表，让输出 Schema 直接引用 canonical `RequirementRelevance`。第二，JSON Schema 的 `uniqueItems` 只能判断整个对象是否重复，不能保证对象数组中的 `logical_subgoal_id` 或 `requirement_id` 唯一；三个真实样本在一次 replan 后仍因重复 logical ID 暂停。当前设计由一个纯函数拥有唯一性规则，结构化 parse 用它触发既有 schema repair，`PlanAdmission` 对绕过边界的 Proposal 继续返回 typed feedback。
-
-两项机制分别完成失败优先测试、局部回归和独立消费点消融：相关性契约的相邻回归为 `63 passed`；身份唯一性为旧实现 `4 failed`、候选 `6 passed`、移除 parse 消费点后重新 `4 failed`，相邻回归 `69 passed`；组合后的全工程回归为 `841 passed`，Ruff、分层检查和 lock 检查通过。相关性机制后来在真实 MiMo Plan revision 2 中物化 3 条 canonical `supporting`，项目保持 `active/plan_accepted`；身份唯一性也在真实 MiMo replan 中两次触发 validator repair，最终三个 SubGoal ID 与七个 mapping ID 全部唯一，并继续产生 ExecutionRef 和 Artifact。两项确定性边界均已闭环，但都不能把 `0 Outcome` 写成调查报告已经交付。
-
-这里还需要区分“多个 Plan 版本”和“多套 Plan 模型”。初始 Plan 定义完整待执行图，修订 Plan 只能修改未冻结部分并保护已有执行事实，因此两者必须保持不同写权限；普通修订与 verification repair 修订却没有不同的事实责任主体，repair 只比普通修订多一个“新工作修复哪个冻结 gap”的条件字段。当前实现已把后二者收敛为单一 `_PlanRevisionDraft`，由同一 validator、materialize 和 Admission 路径处理，动态 Schema 只按当前是否存在 gap 限制 repair 字段。干净快照 `f18b26d` 中，相邻调查回归为 `66 passed`，删除审计没有 legacy consumer；正式 Conversation 入口使用真实 MiMo 为 `1 passed in 36.34s`，仍返回唯一 Project 引用，归档 checksum 错误为 0。这只证明内部重构保持用户行为，不证明最终调查交付率提升。
-
-更重要的架构教训是：Project 外层已经维护 Plan、子目标执行、Verification 和 repair，而 GPT Researcher 内部也自主执行规划、检索、迭代与综合。完整样本仍为 `0/20 delivered`，所以工程没有继续补下一个 Plan 字段，而是用一次有界诊断直接检验 GPT Researcher 能否独立承担研究闭环。
-
-诊断只创建一个 `ChildAgentRunRecord`，没有外层 Plan 或 repair；当前 MiMo 与 GPT Researcher 仍在 240 秒后超时。服务提供方约到第 172 秒才因 agent-role JSON 形状错误回退默认角色，此后才开始检索；最终只有 `Cancellation requested.`，没有官方来源、usage 或报告。工程因此撤回单次研究委托架构，没有用更长超时、更多检索或重试制造通过。这个反例说明优秀 Agent 的拓扑只能提出候选，当前服务提供方能否履行该角色仍必须由本工程诊断证明。
-
-进一步查清的坑是：主工程的 `json_schema` 根本没有进入这次 `agent-role` 调用。GPT Researcher `choose_agent()` 只调用自由文本生成，再依次尝试 `json.loads`、`json_repair` 和正则提取；其提示词的第一个 JSON 示例还缺少 `agent_role_prompt` 键后的结束引号。OpenAI Agents SDK 把 `output_type` 放在产生结果的智能体上，Google ADK 也由当前 `LlmAgent.output_schema` 拥有最终输出约束；两者都不依赖另一进程的全局输出传输方式隐式传递 Schema。生产消费者审计又发现动态 `server` 只用于日志，动态 `role` 只用于后续 Prompt，A2A 本身只暴露一个通用研究能力，因此工程没有增加第二套 Schema 适配，而是在 A2A 构造边界直接绑定确定性研究角色。相同任务从 240.14 秒超时变为 96.26 秒完成，`choose_agent=0`，约 3.2 秒开始检索，并形成 1 个 Artifact、1,711 字符报告及两个官方来源组。完整机制与迁移 grader 仍失败，usage 仍缺失，所以这证明的是二次路由应删除，不是 MiMo 或 GPT Researcher 已经稳定交付。
-
-同一次诊断还暴露了运行事实错误：预算到期原本调用普通 `cancel()`，用户看到的终态是 `cancelled`。当前实现由 `AgentGateway.timeout()` 负责停止外部任务并提交 `timed_out`；用户取消继续由 `cancel()` 拥有。旧路径为 `2 failed`，实现相关断言为 `4 passed`、相邻回归为 `119 passed`、全工程回归为 `851 passed`。干净快照 `f18b26d` 上，Conversation 故障注入和 Gateway 契约为 `2 passed`；只恢复 Conversation 的旧消费点后，同一 Application 用例以 `cancelled != failed` 重新失败，还原后再次 `2 passed`。这证明 timeout 是独立执行事实，不是普通取消的别名；usage 仍不是 typed 事实，面试时应把“研究 Agent 不兼容”“父运行系统错误分类 timeout”和“计量缺失”分成三个责任主体，不能互相替代。
-
-同一真实 Plan revision 2 还曾暴露 repair lineage 的另一半缺口：要求已经从失败的 `subgoal-1` 改映射到 `subgoal-1-repair`，下游综合却仍依赖旧 `subgoal-1`。工程做过一个自动依赖重绑定候选，局部断言与消融都成立；但没有因此宣称有效。A2A 兼容问题关闭后的正式重审真实消费了该候选：`subgoal-2` 升为版本 2 并依赖 `subgoal-1-repair`，两次委托均与 accepted SubGoal 完全绑定，形成 3 个 Artifact 和 4 个来源 URL。结果仍是 0 Outcome：Verifier 先拒绝 repair 报告，因为分析性综合不满足“官方原始内容摘要”，随后 planning token budget 用尽。候选因此连同专用测试和消融一起删除。面试时这个案例更有价值的结论是：类型、Admission 和局部消融只能证明机制正确工作；真实 target 若证明它不是最早阻塞点，就应撤回，而不是继续保留一个看起来合理的 Plan 分支。
-
-随后两项目真实 MiMo focused target 以 2,924 tokens、P95 32.56 秒形成两份 accepted Plan，worker 未退出，归档 checksum 有效；两份 Plan 都没有 derived requirement，日志也没有唯一性或相关性 schema repair。因此这只是包含候选的正常路径回归，不是目标机制被消费的 target。面试时应主动说明这个差别：真实 Provider 运行通过仍可能只有 no-regression 价值，只有 trace 命中消融变量才有机制因果价值。
-
-该完整 baseline 最终为 `0/20 delivered`、8 个暂停、10 个活动，只有 3 次真实 GPT Researcher 调用和 3 份 admitted evidence。由于 `max_search_results` 只在这 3 次调用中成为变量，预声明的 `max=5` target 要求至少新增 4 个全来源覆盖样本，当前责任主体并不匹配，所以工程在 baseline 后停止，没有用一次昂贵对照把 Planner、预算和生命周期失败误归因给检索参数。这类“知道何时不做优化”的证据，同样是智能体工程能力。
-
-Provider 还会放大缺失的确定性不变量。本轮一个 MiMo Proposal 生成了极大的 `time_budget_seconds`；旧 Schema 只有大于零的约束，`ExecutionProposalAdmission` 因而接受它，并让同一 Proposal 产生 Agent ExecutionRef。即使外层 A2A timeout 最终限制真实网络等待，这个值也已经污染 canonical Proposal、digest 和审计事实。
-
-当前候选没有新增硬编码 timeout。既有 `SubagentProfile.max_runtime_seconds` 继续拥有每个 Agent 的最大运行时间；Capability inventory 只读投影该值，动态输出 Schema 先限制模型可提范围，Admission 再拒绝绕过 Schema 构造的越界 Proposal，AgentGateway 最后拒绝绕过 Application 准入的越界 Grant。越界值不会被截断，因为截断会让用户授权、digest 与最终执行不再指向同一个 Command。相邻 focused target 为 `45 passed`；分别撤去 Admission 与 Gateway 消费点后，对应越界对象都会重新通过，恢复后测试再次通过。
-
-真实 MiMo 正式 target 随后得到 `18/20 background_started`，未达到预声明的 `20/20`，所以整体结论仍是未闭环。已到达预算边界的 8 个 Agent Proposal 全部为 120 或 240 秒，4 个 ExecutionRef 全部绑定合规 Proposal，越界 Proposal、Command、未绑定 ExecutionRef、环境失败和 Provider failure 均为 0；但 2 个样本因生命周期来源片段未 grounding 而降为 Conversation，另有 10 个 Project 在观察窗口结束时仍处于 planning。面试时应把这组结果拆开说：模型负责提出预算，Profile 拥有资源上界，Schema 降低错误率，Admission 与 Gateway 在两个信任边界 fail closed；局部机制证据成立，不等于完整用户路径已通过。Provider 切换把边界漏洞暴露出来，而严格 E2E 又证明上游生命周期和后台推进仍是独立缺口。
-
-后续归档审计发现，上一段的“越界为 0”只适用于运行时间。v1 评测器没有检查调查项目的 token/cost：同一正式组接受过 `120000` 和 `30000` tokens，而调查项目的外部委托上限为 `20000`；worker focused target 还接受了 `24000` tokens 与 `100000.0` cost，直到执行预留才以 `project cost budget exhausted` 暂停。这个错误说明，服务提供方返回类型合法值不等于授权合法，预算也不能只在真正执行时才检查。
-
-当前候选让 `ProjectBudgetLedger` 从权威上限、已记账用量和活动 reservation 唯一派生剩余额度。动态 Schema 先缩小模型可提范围，`ExecutionProposalAdmission` 再拒绝绕过 Schema 的越界 Proposal，执行预留负责处理接受后发生的并发消耗。系统不会截断值或把 0 扩成 1，因为这会让 Proposal、digest、Command 与实际 `DelegationGrant` 不再表达同一授权。失败优先测试、Application 局部修订和两份消费点消融已经通过；全工程回归为 `832 passed`。真实 MiMo v2 target 随后达到 `20/20 background_started`，6 个 Agent Proposal 的运行时间、token 与 cost 越界均为 0；只撤去剩余额度 Context、动态 Schema 和 Admission 消费点的完整消融在 8 个 Proposal 中重新接受了 2 个 cost 越界值，分别为 500 和 50，而 Project 上限为 20。该结果把预算授权边界升级为 A2 机制证据；GPT Researcher A2A 仍未返回可核验的实际 token/cost Receipt，因此面试时不能说“外部账单已经被精确计量或限制”。
-
-工程上的处理原则如下：
-
-1. 服务提供方配置必须形成明确的能力配置档案，至少记录模型、结构化传输、思考模式、超时、重试和输出预算；
-2. 先用真实类型化 Schema 做一致性测试，再从用户正式入口执行自然表达的 E2E；
-3. `json_schema` 只保证机械形状，能力选择、Plan 修订和 Completion 仍需语义证据；
-4. 服务提供方变化必须创建新的同配置样本组，禁止把历史结果拼成当前 target；
-5. target 失败后恢复原配置，不放宽领域 Schema、不增加重试，也不静默切换服务提供方制造答案。
-
-面试时可以这样概括：
-
-> 我踩过的坑是把服务提供方切换理解成改密钥、地址和模型名。MiMo 的最小 JSON 和 A2A 冒烟都成功，但正式智能体先后暴露思考令牌吃光正文、`json_object` 无法稳定满足类型化 Schema，以及 `json_schema` 合法却在混合决策面选错业务生命周期三个问题。我们没有为 MiMo 写关键词路由，而是让模型先选择 Application 生命周期，再只物化该分支的最小契约。正式入口从 `0/20` 提升到 `20/20 background_started`，同输入消融又退回 `plan_ready`。最关键的认识是：结构化输出成功只证明协议兼容；智能体还必须评测语义选择，并通过 Context 与决策面设计让模型只解决当前阶段的问题。
-
-当前结论和候选退出条件见[设计优化队列](../future/design-optimization-backlog.md) §3。当前实现坐标是 `StructuredConfig`、`OpenAIModelClient._chat_kwargs`、`derive_interaction_intent`、`ConversationService._start_durable_investigation` 与正式后台用例 `test_background_request_enters_the_project_lifecycle_before_resource_selection`。
+当前做法是保留一条 Conversation 决策循环和统一 Tool/Agent Gateway。明确要求响应后继续运行的请求返回 typed limitation；GPT Researcher 只作为有界执行资源。面试时应强调：优秀 Agent 帮助选择机制，需求仍由本工程 baseline 决定；局部机制反复修补却不改善 target 时，应撤回框架边界而不是继续加状态。
 
 ## 2. 按需工作清单提升复杂任务的跨轮完成能力
 
@@ -188,7 +96,7 @@ Provider 还会放大缺失的确定性不变量。本轮一个 MiMo Proposal �
 | 任务会跨真实预算、模型上下文、进程或用户轮次，且存在明显漏项、重复或调整风险 | 智能体可以主动创建 | 清单会在边界后继续约束决策和 Completion |
 | 简单问答、一次调用可完成的请求 | 直接回答 | 保存清单没有协调收益 |
 | 只是工具多、步骤多或流程固定 | 继续普通执行循环或进入具体业务流程 | 数量不等于动态协调需求 |
-| 需要离开当前请求后持续运行、查询、暂停或调整 | 创建后台调查项目，而不是扩大前台清单 | 这是独立长期生命周期 |
+| 需要离开当前请求后持续运行、查询、暂停或调整 | 返回 typed capability limitation，不创建后台事实 | 当前没有证明独立生命周期不可替代的需求 baseline |
 
 默认交互中新清单必须在任何非规划安全执行前展示。为了形成有依据的计划，模型可以先调用投影为 `planning_safe=true` 的低风险读取能力；写长期状态、准备副作用、创建后台项目、委托子智能体及其他能力仍不得夹带。只有调用方明确选择自动执行模式，清单才可以与已授权执行动作同轮提交。模型不能根据用户措辞自行切换交互模式。
 
@@ -208,8 +116,8 @@ Provider 还会放大缺失的确定性不变量。本轮一个 MiMo Proposal �
 | 用户能查看并修改尚未执行的方案，而不是只能接受一段散文建议 | 对话日志拥有唯一当前清单；用户调整产生新版本，后续动作只服务新要求 | `CONV-001` 的计划物化单行消融直接证明可见与可修订控制面；未证明答案正确率收益 | **已满足**：显式审阅与修订成立，结论限定为控制能力 |
 | 计划项表达待交付结果和停止条件，而不是活动列表；Completion 不能由工具成功冒充 | 工作项保存结果与完成条件；动作绑定待完成项；最新 Goal、验收条件与最终回答在 Completion 前完成单一所有权移交 | `PLAN-REPLAN-001` v4 从正式入口复现三类陈旧义务；当前 v51 目标组为 `15/15 delivered`、最终待完成项为 0、服务提供方失败为 0 | **已满足**：当前配置样本组达到预声明门槛；不能外推所有模型、任务和服务提供方 |
 | 上下文压缩、换轮次或重启后重新注入活跃项和已取得事实；Hermes `todo_tool.py` 提供 A 级机制坐标 | 对话日志恢复同一身份、对话和清单下绑定当前工作项的成功 `Observation`，并重新交给模型消费 | `HARNESS-003` v3 有干净单变量消融，重复原始读取从 `2` 降为 `0`；当前完整 Plan 目标组另行证明最终交付 | **机制因果成立**：只证明冻结服务提供方场景中的重复读取变化，不把它扩张为整体完成率或成本收益 |
-| 长任务根据依赖和新事实调整可执行集合；Gemini CLI `tools.md` 提供任务状态与依赖坐标 | 依赖、可执行集合、重新规划和要求覆盖只由后台调查项目拥有；前台清单不复制依赖图 | 后台组 baseline 为 `0/20 delivered`、`20/20` 选择调查项目；失败来自整批预算准入和产物内容身份，不是前台清单缺少依赖图 | **边界已确认，交付未闭环**：保留 Project 事实，不扩张通用计划层 |
-| 持久目标、进度和可验证停止条件支持跨轮继续；OpenAI `Follow a goal` 提供 A 级产品坐标 | 当前对话拥有短期工作项；离开当前请求后持续运行的目标由后台调查项目拥有 | 当前交互组为 `17/20 delivered` 且 0 次选择 Project；跨轮修订组为 `12/20 delivered` 且 0 次选择 Project；无新请求后台组为 `0/20 delivered` 且 `20/20` 选择 Project | **生命周期因果成立，能力仍未交付**：按生命周期拆分；真实 target 尚未形成合格归档 |
+| 长任务根据依赖和新事实调整可执行集合；Gemini CLI `tools.md` 提供任务状态与依赖坐标 | 当前没有独立依赖图；Conversation 只保存被当前请求消费的工作项 | 旧后台组虽为 `20/20` 选择第二循环，却为 `0/20 delivered`，没有证明这些事实改善用户结果 | **候选已撤回**：外部机制只说明如何实现，不能替代本工程需求 baseline |
+| 持久目标、进度和可验证停止条件支持跨轮继续；OpenAI `Follow a goal` 提供 A 级产品坐标 | 当前只保留 Conversation 工作清单；离开请求后继续运行会明确返回能力限制 | 旧后台组与当前普通 Conversation 对照均为 `0/20 delivered`，无法证明独立生命周期相对最简单路径的增量价值 | **未准入**：先修复并复测最简单研究路径，只有其稳定失败且失败可归因于生命周期时才重新设计 |
 | 独立计划文件、通用任务跟踪器或离线共享产物提供额外协作界面 | 当前响应和日志已经提供唯一清单投影，没有第二个写入口或独立产物消费者 | 当前没有用户需求来源、同输入失败或第二消费者 | **候选未准入**：不是当前缺陷，不引入第二套计划或待办事实 |
 | 规划阶段与执行阶段使用不同模型，以质量和成本分工；Gemini 计划模式（Plan Mode）提供机制候选 | 当前生产仍使用同一结构化模型和统一预算策略；第二模型只作为隔离端到端测试配置，不是生产阶段路由 | 没有同输入质量失败、多样本成本收益或延迟门槛 | **候选未准入**：不因跨模型评测引入生产模型路由 |
 
@@ -233,19 +141,11 @@ v51 的 15 份归档属于同一配置样本组，校验和错误为 0，总令�
 
 这些结果证明当前配置下的纵向路径达到已声明门槛，不证明模型或服务提供方永不失败。DeepSeek 文档声明的偶发空结构化内容仍由有限重试与失败关闭处理；模型、服务提供方、提示词、预算或用户契约变化时，必须重新建立同配置样本组，不能复用 v51 直接宣布通过。
 
-### 2.7 为什么不与后台调查规划合并
+### 2.7 为什么删除第二套调查规划
 
-**前台工作清单和后台调查规划碰巧都含“目标、工作项、版本”，但它们不是同一业务事实。** 两者的修订机制也不同名：前台是用户在下一轮直接表达，模型在同一份 `ConversationWorkingPlan` 上提出新版本；后台是用户提交 `steering`，写入新的要求版本后由工作进程异步触发一次 replan。
+**“事实不重复”不等于“产品机制不冗余”。** 旧前台工作清单和后台调查规划虽然拥有不同表、状态和写入口，却都在为同一类研究请求做目标分解、工具或智能体选择、修复与完成判断。独立 Project 增加了 API、Aggregate、队列、租约、持久化和第二套 Plan，但正式样本没有交付报告，也没有 baseline 证明普通 Conversation 因缺少后台生命周期而失败。
 
-| 对比 | 前台工作清单 | 后台调查规划 |
-| --- | --- | --- |
-| 事实归属 | 当前对话 | 后台调查项目 |
-| 内容 | 短期可验收结果 | 子目标、依赖和要求覆盖关系 |
-| 消费者 | 用户审阅、动作绑定、跨轮恢复、Completion 判断 | 工作进程、可执行集合、`steering` 修订、覆盖检查、项目 Completion |
-| 生命周期 | 当前对话协调 | 跨请求、跨进程长期运行 |
-| 不拥有 | 队列、租约和后台项目状态 | 对话审阅状态和前台最终消息 |
-
-两者没有同步、转换或双写；对话只保存后台项目引用。完整的后台调查能力见[领域设计 §8](05-knowledge-and-domain-workflows.md#8-动态后台调查由新证据决定后续路径)，通用计划逻辑与外部机制坐标统一见[§2.5](#25-从通用计划逻辑到当前工程的能力映射)。
+因此当前只保留 `ConversationWorkingPlan`，研究执行统一经过 Tool/Agent Gateway，Verification 与 Completion 仍由父 Conversation 拥有。后台持续运行不是降级到前台清单，而是明确返回尚未提供该能力。只有未来出现真实异步需求、最简单路径稳定失败、单变量消融证明生命周期机制有效时，才重新引入最小 durable Aggregate。完整决策见[领域设计 §8](05-knowledge-and-domain-workflows.md#8-为什么撤回动态后台调查)。
 
 ## 3. 有界模型上下文保留真源，只注入当前需要的信息
 
@@ -308,12 +208,12 @@ v51 的 15 份归档属于同一配置样本组，校验和错误为 0，总令�
 
 当前实现做了四类具体裁剪：
 
-- 没有关联调查项目时，菜单包含 `start_durable_investigation`；已经有关联项目时，菜单改为 `steer_investigation_project`。两者不会同时出现。
+- 菜单只包含当前 Conversation 已装配且允许模型动态选择的 Tool/Agent；已撤回的后台启动、查询和 steering 动作不会投影给模型。
 - 运行系统专用的 `verify_interaction_draft` 和 `exposure != public_agent` 的固定流程工具不进入菜单。它们仍可由自己的运行入口调用。
 - 已有知识业务读取入口时，原始笔记读取工具被排除，避免模型绕过知识证据和权限边界。
 - 每个保留动作只投影名称、说明、输入结构和 `read_only`、`planning_safe`、`safely_retryable` 等选择信息；服务健康、授权结果、执行状态和 Completion 不进入投影。
 
-例如，注册表同时存在公开网页搜索、隐藏 Verifier 和调查项目动作时，普通新对话只会向模型展示网页搜索与“创建调查项目”。模型提出调用后，Admission 和执行网关仍会重新校验名称、参数、阶段、预算和权限。即使模型猜出隐藏 Verifier 的名字，也不能通过普通对话执行它。
+例如，注册表同时存在公开网页搜索、公开子智能体和隐藏 Verifier 时，普通新对话只会向模型展示前两者。模型提出调用后，Admission 和执行网关仍会重新校验名称、参数、阶段、预算和权限。即使模型猜出隐藏 Verifier 的名字，也不能通过普通对话执行它。
 
 当前证据证明的是边界，不是普遍能力收益。`test_the_real_verifier_is_not_a_capability_the_model_can_see` 证明内部 Verifier 不进入模型菜单；`test_hidden_workflow_tool_cannot_execute_through_ordinary_conversation` 和 `TOOL-AUTH-001` 证明猜出隐藏名称仍会在副作用前被拒绝；`GOV-001` 从自然 Conversation 入口证明恶意文本没有触发隐藏工具；`E19` 证明能力缺失时返回限制而不是伪造执行。当前没有一组干净消融证明“有 Projection 比无 Projection 提高答案正确率或成本”，因此面试中应把它称为模型可见面的安全只读投影，而不是独立业务能力或通用适配层。
 
@@ -329,11 +229,11 @@ v51 的 15 份归档属于同一配置样本组，校验和错误为 0，总令�
 
 父智能体拥有原始目标、上下文投影和最终结果契约。子智能体只接收有界子目标、允许外发的上下文引用和预算，并返回产物或状态。稳定提交键避免恢复时重复提交，取消后的迟到结果必须隔离。远端显示完成只能证明子任务终止，不能直接完成父请求。
 
-本地契约测试证明父智能体能提交有界子目标、接收 `AgentArtifact` 并继续 Completion。对齐 DeepSeek 配置后的真实 `E17` 已得到成功子任务和父级答案，说明正式委托路径可达；20 个显式委托样本只有 `10/20 delivered`，另外 10 个分别因委托结果缺失和官方来源缺失失败。三类自动委托价值 pilot 中，非委托 baseline 已满足结果契约，target 也没有调用子智能体，因此按 A0 门禁停止剩余样本。面试时可以介绍委托、作用域、恢复、父级验收和真实失败分布；不能声称 GPT Researcher 已稳定上线，也不能声称多智能体提高正确率、成本或延迟。
+本地契约测试证明父智能体能提交有界子目标、接收 `AgentArtifact` 并继续 Completion。历史真实 `E17` 曾得到成功子任务和父级答案；2026-08-26 两次对照因模型只授权 30 秒、A2A Task 被取消和后续修复不收敛而返回 limitation。历史显式委托组为 `10/20 delivered`；2026-08-27 当前同配置正式组退化为 `2/20 delivered`，11 次子级超时，另有 7 次子级完成但父级未交付。三类自动委托价值 pilot 中，非委托 baseline 已满足结果契约，target 也没有调用子智能体，因此按 A0 门禁停止剩余样本。面试时可以介绍委托、作用域、恢复、父级验收和真实失败分布；不能声称 GPT Researcher 已稳定上线，也不能声称多智能体提高正确率、成本或延迟。
 
-真实后台归档还暴露了一个比 Prompt 更基础的所有权错误。accepted Plan 已完整保存“研究 A2A/MCP 官方变化”和 required output，Execution Proposer 却允许模型再次填写 `bounded_sub_goal`；MiMo 曾只返回 `sub-2` 或 `acq`，GPT Researcher 随后把它们解释为法律合同术语和 Acquisition.com。当前设计删除模型对该字段的写入口，由 Application 把 accepted SubGoal 的 objective 与 required output 确定性编译为远端任务；Admission 对绕过路径要求完全相等。失败测试、消费点消融和真实 MiMo target 都证明远端实际收到的文本与 accepted SubGoal 一致且不是 logical ID，后者还产生了 A2A 官方 Artifact，因此目标所有权机制已闭环。它证明的是命令绑定，不是最终调查完成，因为两个 focused target 都没有形成 SubGoalOutcome。
+旧后台归档曾暴露一个比 Prompt 更基础的所有权错误。accepted Plan 已完整保存“研究 A2A/MCP 官方变化”和 required output，Execution Proposer 却允许模型再次填写 `bounded_sub_goal`；MiMo 曾只返回 `sub-2` 或 `acq`，GPT Researcher 随后把它们解释为法律合同术语和 Acquisition.com。旧候选删除了模型对该字段的写入口，由 Application 从 accepted SubGoal 确定性编译远端任务，并以 Admission 防绕过。这个局部所有权机制有失败测试、消融和真实消费证据，却没有形成最终 Outcome；相关实现已随 Project 整体删除，只保留“业务 owner 不应把同一目标再交给模型改写”的历史经验。
 
-第二个坑发生在 Artifact 到下一次 Tool 的边界。首个 focused target 的 Agent Artifact 已包含官方 A2A URL，Verifier 正确要求继续读取直接证据；旧 `observed_url_locators()` 只认识 Web Search 的固定 JSON，导致 repair 的 `capture_url` 获得空参数并被真实 Tool Schema 拒绝。当前 A1 候选把 admitted Artifact 文本中的既有 URL 派生为只读候选，让模型只选择 `candidate_id`，Application 再绑定原 URL；无候选时 Admission fail closed。单元消融成立，但后续真实 target 选择了再次委托 Agent，没有消费 `capture_url`，因此不能把这项修复升级为真实效果证据。
+第二个历史坑发生在 Artifact 到下一次 Tool 的边界。首个 focused target 的 Agent Artifact 已包含官方 A2A URL，Verifier 正确要求继续读取直接证据；旧 `observed_url_locators()` 只认识 Web Search 的固定 JSON，导致 repair 的 `capture_url` 获得空参数并被真实 Tool Schema 拒绝。临时 A1 候选曾把 Artifact URL 派生为只读候选，但真实 target 没有消费该路径，因此未升级为效果证据，并已随 Project 删除。
 
 第三个坑是“要求官方来源”仍可能只停留在自然语言目标中。工程曾用一个最小候选把模型提出的来源域沿 `AgentExecutionOperation -> AgentTask -> A2A query_domains -> DuckDuckGo site:` 贯通；旧实现的 9 个失败测试在候选后全部通过，证明 typed 执行链可以机械闭合。但正式 MiMo Proposal 探针先生成了带路径的 GitHub 值和错误的 A2A 域名，hostname 校验拒绝后，一次结构化修订又把域列表清空；该次调用记账 2,748 tokens。候选因此在长链路 target 前撤回。这个案例说明原生 `json_schema` 只约束形状，不证明模型正确识别组织或产品的官方域；校验器也不能擅自截断路径、纠正域名或硬编码答案。面试时应明确区分“本地传递链缺失”和“Provider 无法安全提出语义值”：前者可由类型和契约测试修复，后者未过准入门槛就应停止，而不是用确定性代码伪造模型能力。
 
@@ -343,7 +243,7 @@ v51 的 15 份归档属于同一配置样本组，校验和错误为 0，总令�
 
 **模型轮次、工具调用和上下文令牌只有约束不同成本或失败语义时才分别存在。** 同批动作在执行前按最新用量预留预算，不能各自读取旧余额后同时超限。预算耗尽时返回能力限制、暂停或请求用户输入，不用确定性代码拼出替代答案。`RUN-001` 证明同轮三个 Proposal 在工具上限为 2 时最多执行两个。
 
-子智能体委托还必须满足“子授权不扩大父预算”。`ProjectBudgetLedger` 是调查项目剩余额度的唯一派生责任主体；Context 让模型看见当前可用额度，动态 Schema 降低越界 Proposal 的生成率，Admission 关闭绕过 Schema 的路径，执行预留再处理 Proposal 接受后的并发消耗。正式 MiMo v2 target 为 `20/20 background_started`，6 个 Agent Proposal 的运行时间与 Project token/cost 越界均为 0。只关闭 Schema 和 Admission 的第一次消融无效，因为模型仍从 Context 看到了剩余额度；完整消融同时关闭 Context、Schema 和 Admission 后，8 个 Proposal 中有 2 个把 cost 授权扩大到 500 和 50，而 Project 上限只有 20。这个坑说明，消融必须覆盖机制的全部生产消费点，否则“没有退化”可能只是另一个消费点仍在工作。当前证据证明授权范围闭环，不证明 GPT Researcher 的实际账单或 token/cost Receipt 已闭环。
+子智能体委托还必须满足“子授权不扩大父预算”。当前 Conversation 的 Agent Profile、Grant、Admission 与 Gateway 共同限制可委托能力和运行预算；父级 Completion 仍需验收返回产物。旧 Project 实验曾暴露一个通用评测坑：只关闭 Schema 和 Admission 时，Context 仍会把剩余额度告诉模型，消融因而没有退化；只有关闭目标机制的全部生产消费点，才能讨论因果。该历史结果不能继续证明已删除的 Project 有产品价值，也不能证明 GPT Researcher 的实际账单或 token/cost Receipt 已闭环。
 
 ### 4.4 工具结果必须先成为受约束的执行事实
 

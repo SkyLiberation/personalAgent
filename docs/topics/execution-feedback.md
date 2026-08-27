@@ -1,12 +1,12 @@
 # 执行反馈边界
 
-**执行反馈是 canonical 运行事实的只读界面投影，不是第二套任务状态或通用事件事实源。** Web、CLI 和飞书入口复用相同的 Conversation 结果契约；固定业务能力和 durable Project 继续由各自 Application 或 Aggregate 拥有状态与恢复语义。
+**执行反馈是 canonical 运行事实的只读界面投影，不是第二套任务状态或通用事件事实源。** Web、CLI 和飞书入口复用相同的 Conversation 结果契约；固定业务能力由各自 Application 或 Domain 拥有状态与恢复语义。
 
 ## 当前反馈链
 
 ```text
 Application / Aggregate canonical facts
-  -> typed result、Observation、DecisionFeedback 或 Project projection
+  -> typed result、Observation 或 DecisionFeedback
   -> Interface Adapter
   -> HTTP/SSE、CLI text 或 message reply
 ```
@@ -20,6 +20,6 @@ Application / Aggregate canonical facts
 - 入口、SSE、CLI 与飞书契约见 [入口层说明](entry.md)；
 - Conversation loop、durable execution 和运行事实见 [当前 Runtime](runtime.md)；
 - `Observation`、Verification 与 Completion 的边界见 [Verification 与 Completion](verification-and-completion.md)；
-- 后台调查项目的 canonical 状态见 [Durable Investigation Project 当前状态](../summary/durable-investigation-project-current-state.md)。
+- 后台持续运行的当前边界见 [当前 Runtime](runtime.md#durable-execution)。
 
 旧 step panel、GoalGraph 事件、LangGraph 总图和通用 `AgentEvent` 实施计划已经失去生产责任主体，因此不再保留在当前设计文档中。

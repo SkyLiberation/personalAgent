@@ -4,6 +4,8 @@
 - Date: 2026-07-27
 - Removal review: 2027-07-27
 
+> 2026-08-26：AgentGateway 的 durable submission 与 ArtifactRef 结论仍有效；本文引用 Investigation Project 的恢复消费者只作历史记录，该产品循环已按 [ADR 0015](0015-withdraw-investigation-project.md) 删除。
+
 ## Context and Baseline
 
 The old AgentGateway submitted a provider task before keeping the child run in process memory. A crash in

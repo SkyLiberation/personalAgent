@@ -1,9 +1,9 @@
 # Workflow 文档索引
 
-> 顶层文档总入口见 [docs/README.md](../README.md)，当前架构与三条生产主链以
+> 顶层文档总入口见 [docs/README.md](../README.md)，当前架构与生产主链以
 > [personalAgent 当前核心架构](../summary/core-architecture-current-state.md) 为准。
 
-本目录只描述请求如何进入明确 Application Use Case、领域状态机、Tool/Agent Gateway 或后台
+本目录只描述请求如何进入明确 Application Use Case、领域状态机、Tool/Agent Gateway 或周期
 worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph 总图。
 
 ## 当前运行形态
@@ -15,11 +15,11 @@ worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph �
 固定事务
   -> explicit Application Use Case / Domain state machine
 
-动态且必须跨进程、用户轮次或审批恢复
-  -> InvestigationProject aggregate + worker
+周期运行或投递
+  -> ResearchService + worker queue
 ```
 
-三条路径共享“Proposal 不是权限、执行事实不是完成证明”的框架不变量，但各自拥有独立
+这些路径共享“Proposal 不是权限、执行事实不是完成证明”的框架不变量，但各自拥有独立
 生命周期和恢复事实。
 
 ## 当前链路文档
@@ -36,9 +36,7 @@ worker。它不再维护一个覆盖所有请求的 Entry/Executive/LangGraph �
 6. [GPT Researcher A2A](gpt-researcher-a2a-workflow.md)：child lifecycle、Artifact 与父级综合边界。
 
 Conversation Interaction loop 不在本目录复制，统一见
-[Agent 能力轴](../interview/03-capability-axes.md)（轴 1 决策所有权、轴 4 Tool 治理）。Durable Investigation
-当前事实见
-[Durable Investigation Project 当前实现](../summary/durable-investigation-project-current-state.md)。
+[Agent 能力轴](../interview/03-capability-axes.md)（轴 1 决策所有权、轴 4 Tool 治理）。
 
 ## 历史迁移资料
 
@@ -58,7 +56,6 @@ Conversation Interaction loop 不在本目录复制，统一见
 - Capture/Ask/Knowledge：对应 Application Service 与 Personal Knowledge canonical store；
 - Delete/Restore：`KnowledgeLifecycleService` 与 immutable Command/Receipt；
 - Research/Subscription/Delivery：`ResearchService`、worker queue 与各自 Store；
-- Investigation：`InvestigationProject` aggregate、append-only journal 与 Completion Gate；
 - Tool/Agent execution：`ToolGateway` / `AgentGateway`；
 - 产品与发布证据：`evidence_catalog.py`、trace archive 与 `release_gate.py`。
 

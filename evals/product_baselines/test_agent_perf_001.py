@@ -189,7 +189,6 @@ def test_agent_perf_001_same_cohort_user_outcome(
             result.get("disposition") == "plan_ready"
             and isinstance(plan, dict)
             and bool(plan.get("steps"))
-            and result.get("project_reference") is None
         )
         required_capability = None
     else:

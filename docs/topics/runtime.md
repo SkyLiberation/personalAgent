@@ -1,6 +1,6 @@
 # 当前 Runtime
 
-**Runtime 负责装配和执行机械事实，不拥有用户目标、领域状态或最终完成语义。** 当前普通交互是一个基于 typed Observation 的 Conversation loop；固定事务与 durable Project 继续由各自 Application/Aggregate 拥有。
+**Runtime 负责装配和执行机械事实，不拥有用户目标、领域状态或最终完成语义。** 当前普通交互是一个基于 typed Observation 的 Conversation loop；固定事务由各自 Application/Domain 拥有。
 
 ## 依赖与 owner
 
@@ -10,7 +10,7 @@ HTTP / CLI / Message Adapter
   -> AgentRuntime (composition root)
        -> ConversationService
        -> KnowledgeService / KnowledgeLifecycleService
-       -> InvestigationProjectService / ResearchService
+       -> ResearchService
        -> ToolExecutor / AgentGateway / Model ports
        -> persistence adapters
 ```
@@ -36,19 +36,19 @@ messages + authenticated principal
 每次模型调用按以下顺序构造输入：
 
 1. visibility/scope 过滤；
-2. 已关联 Project projection，以及模型已经选择的 personal evidence；
+2. 模型已经选择的 personal evidence；
 3. capability/tool schema 投影；
 4. committed Observation/Feedback；
 5. budget materialization。
 
-Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才通过有界 `tool_result` 进入；已关联调查项目通过 `investigation_project_context` 进入。两者都不复制 canonical facts，也不成为写入口。
+Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才通过有界 `tool_result` 进入。该投影不复制 canonical facts，也不成为写入口。
 
 ## Durable execution
 
-- Conversation journal 保存 committed messages、typed inputs、usage、execution order、final message 及业务 reference；
+- Conversation journal 保存 committed messages、typed inputs、usage、execution order、final message 及工作清单；
 - Knowledge save/delete 分别由自己的 Command/operation/Receipt owner 恢复；
-- InvestigationProject journal 保存 definition、accepted plan、subgoal、evidence、verification 与 completion；Conversation 只保存 scoped `ProjectReference`；
-- replay 复用冻结 Command 和已提交副作用，不重新调用模型生成它们。
+- 周期研究、投递和 Agent 运行按各自 Store 与 provider task identity 恢复；
+- replay 复用冻结 Command 和已提交副作用，不重新调用模型生成它们。当前不提供响应结束后继续运行的动态调查能力。
 
 ## Model retry
 

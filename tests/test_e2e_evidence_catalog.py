@@ -28,7 +28,8 @@ def test_catalog_declares_one_explicit_evidence_responsibility_per_case() -> Non
         for case in EVIDENCE_CASES
         if case.evidence_class is EvidenceClass.CAPABILITY_PROFILE
     }
-    assert {"IP01", "E08", "E12"} <= application_ids
+    assert {"E08", "E12"} <= application_ids
+    assert "IP01" not in application_ids
     assert profile_ids == {"E16", "E17", "E18", "E19", "E21"}
 
 

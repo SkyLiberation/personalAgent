@@ -1,8 +1,9 @@
 # ADR 0002: Investigation Project Aggregate and Journal
 
-- Status: Accepted implementation; product-demand qualification absent
+- Status: Superseded and removed on 2026-08-26
 - Date: 2026-07-27
-- Removal review: 2027-07-27
+
+> Historical record only. Baseline-first review found no evidence that an independent Project lifecycle was required, while formal samples delivered `0/20`; the implementation was removed. Current decision: [ADR 0015](0015-withdraw-investigation-project.md).
 
 ## Context and Baseline
 

@@ -21,14 +21,7 @@ from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
 )
 
-from .models import (
-    ConversationProjectSnapshot,
-    PersonalKnowledgeCandidate,
-    PersonalKnowledgeEvidenceSnapshot,
-    ProjectReference,
-    StartDurableInvestigationArguments,
-    SteerInvestigationProjectArguments,
-)
+from .models import PersonalKnowledgeCandidate, PersonalKnowledgeEvidenceSnapshot
 
 
 class InteractionToolPort(Protocol):
@@ -159,37 +152,9 @@ class ConversationKnowledgeLifecyclePort(Protocol):
     ) -> KnowledgeDeleteOperationView | None: ...
 
 
-class ConversationProjectPort(Protocol):
-    def start(
-        self,
-        *,
-        principal: AuthenticatedPrincipal,
-        owner: AuthenticatedPrincipal,
-        request: StartDurableInvestigationArguments,
-        idempotency_key: str,
-    ) -> ProjectReference: ...
-
-    def get(
-        self,
-        *,
-        principal: AuthenticatedPrincipal,
-        reference: ProjectReference,
-    ) -> ConversationProjectSnapshot: ...
-
-    def steer(
-        self,
-        *,
-        principal: AuthenticatedPrincipal,
-        reference: ProjectReference,
-        request: SteerInvestigationProjectArguments,
-        idempotency_key: str,
-    ) -> ConversationProjectSnapshot: ...
-
-
 __all__ = [
     "ConversationKnowledgeLifecyclePort",
     "ConversationKnowledgeWriter",
-    "ConversationProjectPort",
     "ConversationKnowledgeReadPort",
     "InteractionAgentPort",
     "InteractionArtifactPort",

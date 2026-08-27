@@ -2,9 +2,8 @@
 
 本项目构建的是一套可信 Agent Runtime：模型负责开放语义 Proposal，Admission/Policy 负责
 确定性准入，Gateway/Executor 产生执行事实，Verifier 判断语义满足，Completion Gate 依据
-required result contract 关闭用户目标。普通用户只面对一套目标入口；request-local Interaction、
-确定性领域 Use Case 和 Durable Investigation Project 是内部按约束选择的执行语义，不是要求用户
-理解的三种运行模式。
+required result contract 关闭用户目标。普通用户只面对一套目标入口；request-local Interaction 和
+确定性领域 Use Case 是内部执行语义。没有需求 baseline 的第二套后台调查循环已撤回。
 
 当前系统分层、框架不变量、目标责任链、LLM/确定性边界、Capability/MCP/A2A、知识与运行时事实
 统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
@@ -51,7 +50,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | 主题 | 权威文档 |
 | --- | --- |
 | 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
-| Durable Investigation Project 当前实现与证据边界 | [summary/durable-investigation-project-current-state.md](summary/durable-investigation-project-current-state.md) |
+| 当前优化准入与后台调查撤回 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 | 当前用例、机制证据与发布限制 | [evals/02-current-case-inventory.md](evals/02-current-case-inventory.md) |
 | Phase 0 历史边界与当前证据入口 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
@@ -80,7 +79,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | 主题 | 文档 |
 | --- | --- |
 | Future 范围与退出规则 | [future/README.md](future/README.md) |
-| 全部待优化问题、状态与详细设计入口 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
+| 当前未解决问题、准入状态与架构评审入口 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 
 ## 运维与参考
 

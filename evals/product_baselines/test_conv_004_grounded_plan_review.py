@@ -77,7 +77,6 @@ def test_conv_004_reads_official_facts_before_presenting_reviewable_plan(
         "read_only_constraint_in_plan": any(
             term in plan_text for term in ("只读", "read-only", "read only")
         ),
-        "no_background_project": result.get("project_reference") is None,
     }
     settings = live_web_search_process.settings
     report = {

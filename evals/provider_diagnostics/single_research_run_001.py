@@ -63,8 +63,8 @@ TASK_TEXT = """请完成一次独立研究任务，并输出中文 Markdown 报�
 报告回答三个问题：
 - 谁拥有 Plan、Search、Read、Iterate 和最终输出循环；
 - 调用方应拥有哪些身份、权限、生命周期、取消、Verification 与 Completion 边界；
-- 当前 InvestigationProject 与 GPT Researcher 同时规划、检索和修复时，应保留什么、删除什么、
-  如何迁移，以及迁移失败时如何退出。
+- 当前 Conversation 与 GPT Researcher 的规划、检索和修复责任应如何划分，如何避免双重循环，
+  以及委托失败时如何退出。
 
 请按“机制比较、信任边界、迁移建议、限制”组织，不要引用博客、教程或搜索结果摘要。
 """.strip()

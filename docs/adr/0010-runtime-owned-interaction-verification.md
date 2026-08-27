@@ -5,6 +5,8 @@
 - 影响范围：`ConversationService` 交互回合的判据派生、验证调用与终止路径
 - 取代：[ADR 0009](0009-verified-final-message-receipt-reference.md)（其产物传输结论仍成立，见该文顶部说明）
 
+> 2026-08-26：Conversation 的 Runtime-owned verification 结论仍有效；本文涉及 `InvestigationProject` 的实现坐标只作历史记录，该产品循环已经删除。当前决策见 [ADR 0015](0015-withdraw-investigation-project.md)。
+
 ## Goal / Current Incorrect Behavior / Expected User-visible Result
 
 用户请求「审查并修订这段答复」时，发出的文本必须真的经过语义验证，且验证所用的判据必须

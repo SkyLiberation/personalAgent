@@ -21,6 +21,7 @@ from evals.product_baselines.evidence import (
     ProductEvidenceIdentity,
     ProductEvidenceRecorder,
     canonical_evidence_digest,
+    product_evidence_role,
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
@@ -71,6 +72,20 @@ _TOPICS = (
         required_terms=("Restate", "恢复"),
     ),
 )
+
+
+def delegation_request_text(repetition: int) -> str:
+    """Return the canonical natural input for one delegated-agent cohort member."""
+    if repetition < 1:
+        raise ValueError("repetition must be positive")
+    topic = _TOPICS[(repetition - 1) % len(_TOPICS)]
+    marker = f"PERF-DELEGATE-{repetition:02d}-7Q9X"
+    return (
+        "请委托一个独立的外部研究助手查阅权威来源，再由你核验并给出简洁中文结论。"
+        f"主题是“{topic.subject}”；优先依据{topic.preferred_sources}，至少附一个对应的"
+        "可直接访问来源 URL，并在结论末尾保留"
+        f"公开验收标记 {marker}。"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -156,17 +171,33 @@ def test_agent_perf_001_delegated_user_outcome(
     ).lower() == "true"
     topic = _TOPICS[(repetition - 1) % len(_TOPICS)]
     marker = f"PERF-DELEGATE-{repetition:02d}-7Q9X"
-    request_text = (
-        "请委托一个独立的外部研究助手查阅权威来源，再由你核验并给出简洁中文结论。"
-        f"主题是“{topic.subject}”；优先依据{topic.preferred_sources}，至少附一个对应的"
-        "可直接访问来源 URL，并在结论末尾保留"
-        f"公开验收标记 {marker}。"
-    )
+    request_text = delegation_request_text(repetition)
     user_id = f"agent-perf-delegate-{repetition:02d}"
     initial_state = {
         "isolated_user": True,
         "dataset_revision": _DATASET_REVISION,
     }
+    product_evidence_recorder.enroll(
+        nodeid=(
+            "evals/product_baselines/test_agent_perf_delegate_001.py::"
+            "test_agent_perf_001_delegated_user_outcome"
+        ),
+        identity=ProductEvidenceIdentity(
+            case_id=_CASE_ID,
+            role=product_evidence_role(_CASE_ID),
+            evidence_class="product_e2e",
+            formal_entrypoint="POST /api/conversation/turn",
+            interaction_mode="auto",
+            principal=AuthenticatedPrincipal(
+                tenant_id="personal-agent",
+                user_id=user_id,
+            ),
+            user_input_digest=canonical_evidence_digest(request_text),
+            initial_state_digest=canonical_evidence_digest(initial_state),
+            config_cohort=_config_cohort(live_web_process),
+            grader_version=_GRADER_VERSION,
+        ),
+    )
     started = perf_counter()
     result = _turn(
         live_web_process,
@@ -236,26 +267,5 @@ def test_agent_perf_001_delegated_user_outcome(
             "required_provider": "gpt_researcher",
         },
     }
-    product_evidence_recorder.capture(
-        nodeid=(
-            "evals/product_baselines/test_agent_perf_delegate_001.py::"
-            "test_agent_perf_001_delegated_user_outcome"
-        ),
-        identity=ProductEvidenceIdentity(
-            case_id=_CASE_ID,
-            role="baseline",
-            evidence_class="product_e2e",
-            formal_entrypoint="POST /api/conversation/turn",
-            interaction_mode="auto",
-            principal=AuthenticatedPrincipal(
-                tenant_id="personal-agent",
-                user_id=user_id,
-            ),
-            user_input_digest=canonical_evidence_digest(request_text),
-            initial_state_digest=canonical_evidence_digest(initial_state),
-            config_cohort=_config_cohort(live_web_process),
-            grader_version=_GRADER_VERSION,
-        ),
-        report=report,
-    )
+    product_evidence_recorder.capture_report(report)
     assert delivered, report["result_metrics"]

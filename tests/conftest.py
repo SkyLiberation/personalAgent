@@ -362,25 +362,6 @@ def clean_postgres_business_tables():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
-                CREATE TABLE IF NOT EXISTS personal_investigation_projects (
-                    project_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    create_idempotency_key TEXT NOT NULL,
-                    definition_digest TEXT NOT NULL,
-                    definition JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    UNIQUE (tenant_id, user_id, create_idempotency_key)
-                );
-                CREATE TABLE IF NOT EXISTS personal_investigation_project_events (
-                    event_id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL REFERENCES personal_investigation_projects(project_id),
-                    sequence INTEGER NOT NULL,
-                    event_kind TEXT NOT NULL,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL,
-                    UNIQUE (project_id, sequence)
-                );
                 CREATE TABLE IF NOT EXISTS knowledge_artifacts (
                     artifact_id TEXT PRIMARY KEY,
                     owner_id TEXT NOT NULL,
@@ -572,7 +553,6 @@ def clean_postgres_business_tables():
                 TRUNCATE procedure_eval_runs;
                 TRUNCATE procedure_eval_policies;
                 TRUNCATE worker_queue_tasks;
-                TRUNCATE personal_investigation_project_events, personal_investigation_projects;
                 TRUNCATE agent_runs;
                 TRUNCATE personal_knowledge_lifecycle_receipts, personal_knowledge_lifecycle_operations;
                 TRUNCATE knowledge_artifacts, knowledge_extraction_runs, knowledge_evidence_blocks,

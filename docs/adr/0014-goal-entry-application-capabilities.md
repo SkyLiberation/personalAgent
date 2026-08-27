@@ -4,6 +4,8 @@
 - 日期：2026-08-03
 - 影响范围：Conversation、Knowledge Lifecycle、Investigation Project、SSE/前端、E2E catalog
 
+> 2026-08-26：复用领域 Application Owner 的原则仍有效；`Investigation Project` 作为 Application Capability 的部分已撤回并删除。当前决策见 [ADR 0015](0015-withdraw-investigation-project.md)。
+
 ## Goal / Current Incorrect Behavior / Expected User-visible Result
 
 普通用户只描述“读取我的知识”“删除这条错误知识并先确认”或“在后台持续调查并允许后续暂停、

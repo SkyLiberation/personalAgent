@@ -192,7 +192,6 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
             "Tool",
             "Planner",
             "Workflow",
-            "InvestigationProject",
         )
     )
     first_messages = [{"role": "user", "content": initial_request}]

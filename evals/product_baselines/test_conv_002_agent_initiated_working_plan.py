@@ -197,7 +197,6 @@ def test_conv_002_agent_initiates_and_recovers_foreground_coordination(
             "步骤",
             "Planner",
             "Workflow",
-            "InvestigationProject",
         )
     )
     continue_request = "继续完成。"
@@ -297,7 +296,6 @@ def test_conv_002_agent_initiates_and_recovers_foreground_coordination(
         "首轮无法执行外部检索时没有保留用户可观察的剩余义务"
     )
     assert first["disposition"] == "limitation"
-    assert first.get("project_reference") is None
     assert any(step["status"] == "pending" for step in first_plan["steps"])
     assert first_trace["execution_order"] == []
 
@@ -416,4 +414,3 @@ def test_conv_002_agent_initiates_and_recovers_foreground_coordination(
     assert len(second_trace["execution_order"]) == len(
         set(second_trace["execution_order"])
     )
-    assert second.get("project_reference") is None

@@ -146,17 +146,11 @@ MiMo 当前使用原生 `json_schema`，并通过 `STRUCTURED_EXTRA_BODY` 关闭
 思考模式曾把结构化输出预算耗尽为无正文；`json_object` 在正式入口又无法稳定满足
 `WorkingPlan` Schema，因此二者都不是当前配置。
 
-生命周期选择的正式 E2E 已在当前 `max_retries=2` 配置下达到
-`20/20 background_started`、`20/20` 返回 ProjectReference、最终请求失败为 0，P95
-为 36.91 秒。零重试同输入组也达到 `20/20`，P95 为 36.04 秒；因此生命周期结果不依赖
-技术重试。该结果证明自然后台请求能够进入独立调查项目，不证明后台报告已经最终交付，
-也不证明 MiMo 的所有语义操作都达到发布门槛。详细归档和边界见
-[设计优化清单](future/design-optimization-backlog.md) §3。
-
-后续后台最终报告 baseline 在同样 20 个输入中只创建 18 个 Project，说明跨重复样本的
-生命周期选择仍有方差。该 baseline 为 `0/20 delivered`，且只有 3 次真实 GPT Researcher
-调用；因此检索候选数 1 与 5 的对照没有进入 target，当前
-`PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS` 继续保持为 1。
+旧后台调查路径在正式 20 样本中为 `0/20 delivered`，且没有证明独立生命周期不可替代的
+需求 baseline，因此相关服务、队列和配置已经撤回。当前 Conversation 同类研究请求重跑也为
+`0/20 delivered`；这是独立的执行资源选择与答案质量缺口，不能通过恢复旧后台循环处理。
+`PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS` 继续保持为 1，后续调整必须先建立新的
+单变量 baseline 与 target。
 
 `STRUCTURED_*` 也是相邻 GPT Researcher `docker-compose.deepseek.yml` 的唯一配置源；通过
 `docker compose --env-file ../personalAgent/.env` 注入，不复制令牌。OpenAI SDK transport
@@ -449,7 +443,7 @@ PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_CONCURRENT_RUNS=4
 
 当前本地深研 profile 还设置 `PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=64000`，为成功 `AgentArtifact` 之后的父级核验、降级修复和最终综合保留预算。代码默认仍为 32,000；没有同类真实深研需求时不得机械提高全局默认。
 
-GPT Researcher 的 OpenAI 兼容客户端把单次请求限制为 60 秒，并允许一次 SDK 重试。该限制只能约束单次服务提供方长尾；一次研究包含多个模型阶段，因此仍可能超过父任务的 240 秒预算。20 个真实委托样本只有 `10/20 delivered`，该配置不得表述为稳定上线。
+GPT Researcher 的 OpenAI 兼容客户端把单次请求限制为 60 秒，并允许一次 SDK 重试。该限制只能约束单次服务提供方长尾；一次研究包含多个模型阶段，因此仍可能超过父任务的授权预算。历史 20 样本为 `10/20 delivered`；2026-08-27 当前同配置组只有 `2/20 delivered`，包含 11 次子级超时和 7 次子级完成但父级未交付。该配置不得表述为稳定上线，也不得把问题简化为统一增加到 240 秒。
 
 A2A 入口在构造 GPT Researcher 时绑定一个确定性的通用研究角色，不再额外调用模型生成展示名称和角色 Prompt；普通 GPT Researcher 入口仍保留原有自动角色选择。同任务 MiMo 诊断由 240.14 秒超时改善为 96.26 秒完成并生成两个官方来源组，但完整内容 grader 与 usage 契约仍未通过，因此该配置只关闭角色输出兼容问题，不代表研究能力已经稳定上线。
 

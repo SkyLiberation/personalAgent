@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from personal_agent.application.worker_queue import WorkerTask
-from personal_agent.orchestration.worker import WorkflowWorker
 from personal_agent.orchestration.runtime import AgentRuntime
 from personal_agent.kernel.models import local_now
 from personal_agent.memory.graphiti.store import GraphCaptureResult, GraphitiStore
@@ -77,57 +73,55 @@ def test_worker_queue_heartbeat_extends_owned_lease(postgres_url, clean_postgres
     assert store.heartbeat(task.task_id, "w2", lease_seconds=60) is False
 
 
-def test_project_continuation_waits_behind_an_older_project_task(
+def test_same_user_continuation_waits_behind_an_older_users_task(
     postgres_url,
     clean_postgres_business_tables,
 ):
     store = PostgresWorkerQueueStore(postgres_url)
-    for project_id in ("project-a", "project-b"):
+    for user_id in ("user-a", "user-b"):
         store.enqueue(
-            queue="investigation-fairness",
-            task_type="investigation_project",
+            queue="analysis-fairness",
+            task_type="analysis_task",
             payload={
-                "project_id": project_id,
                 "tenant_id": "tenant-a",
-                "user_id": project_id,
+                "user_id": user_id,
             },
-            idempotency_key=f"investigation:{project_id}:0:planning",
+            idempotency_key=f"analysis:{user_id}:0",
         )
 
     first = store.lease_next(
-        queue="investigation-fairness",
+        queue="analysis-fairness",
         worker_id="fair-worker",
     )
     assert first is not None
-    assert first.payload["project_id"] == "project-a"
+    assert first.payload["user_id"] == "user-a"
 
     store.enqueue(
-        queue="investigation-fairness",
-        task_type="investigation_project",
+        queue="analysis-fairness",
+        task_type="analysis_task",
         payload={
-            "project_id": "project-a",
             "tenant_id": "tenant-a",
-            "user_id": "project-a",
+            "user_id": "user-a",
         },
-        idempotency_key="investigation:project-a:1:continue:1",
+        idempotency_key="analysis:user-a:1",
     )
     store.complete(first.task_id)
 
     second = store.lease_next(
-        queue="investigation-fairness",
+        queue="analysis-fairness",
         worker_id="fair-worker",
     )
     assert second is not None
-    assert second.payload["project_id"] == "project-b"
+    assert second.payload["user_id"] == "user-b"
     store.complete(second.task_id)
 
     continuation = store.lease_next(
-        queue="investigation-fairness",
+        queue="analysis-fairness",
         worker_id="fair-worker",
     )
     assert continuation is not None
-    assert continuation.payload["project_id"] == "project-a"
-    assert continuation.idempotency_key == "investigation:project-a:1:continue:1"
+    assert continuation.payload["user_id"] == "user-a"
+    assert continuation.idempotency_key == "analysis:user-a:1"
 
 
 def test_capture_enqueues_graph_sync_tasks(settings, temp_dir, clean_postgres_business_tables):
@@ -182,66 +176,3 @@ def test_drain_worker_queue_runs_graph_sync(settings, temp_dir, clean_postgres_b
     assert runtime.store.get_note(note.id).graph_sync.status == "synced"
     completed = runtime.worker_queue_store.list_tasks(queue="graph", statuses=["completed"])
     assert [task.task_id for task in completed] == [task_id]
-
-
-def test_investigation_worker_leases_only_one_project_cycle_at_a_time():
-    now = datetime.now(UTC)
-    task = WorkerTask(
-        task_id="task-project-a",
-        queue="investigation",
-        task_type="investigation_project",
-        status="running",
-        payload={
-            "project_id": "project-a",
-            "tenant_id": "tenant-a",
-            "user_id": "user-a",
-        },
-        idempotency_key="project-a:0",
-        due_at=now,
-        created_at=now,
-        updated_at=now,
-    )
-
-    class Queue:
-        leased = False
-
-        def lease_next(self, **_kwargs):
-            if self.leased:
-                return None
-            self.leased = True
-            return task
-
-        def heartbeat(self, *_args, **_kwargs):
-            return True
-
-        def complete(self, _task_id):
-            return None
-
-        def fail(self, *_args, **_kwargs):
-            raise AssertionError("investigation task must not fail")
-
-    class InvestigationProjects:
-        commands = []
-
-        def recover(self):
-            return 0
-
-        def process(self, command):
-            self.commands.append(command)
-
-    projects = InvestigationProjects()
-    worker = WorkflowWorker(
-        SimpleNamespace(
-            worker_queue_store=Queue(),
-            investigation_project_service=projects,
-        ),
-        queue="investigation",
-        worker_id="fair-project-worker",
-    )
-
-    stats = worker.run_once()
-
-    assert stats.completed == 1
-    assert len(projects.commands) == 1
-    assert projects.commands[0].project_id == "project-a"
-    assert projects.commands[0].max_cycles == 1

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "gate_id": "BACKGROUND-CONTINUATION-TARGET-PROMOTION-002",
+  "case_id": "BACKGROUND-CONTINUATION-LIMITATION-001",
+  "role": "target",
+  "stage": "formal_product_target",
+  "expected_samples": 20,
+  "constraints": [
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-missing-result-reports",
+      "metric": {
+        "source": "result_report_missing"
+      },
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-failed-product-tests",
+      "metric": {
+        "source": "test_failed"
+      },
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-background-execution",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "execution_started"]
+      },
+      "maximum": 0
+    }
+  ]
+}

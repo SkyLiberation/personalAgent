@@ -2,6 +2,8 @@
 
 > 本文是 Phase 0 历史文档的稳定入口，不再维护第二份用例状态表。当前产品和机制证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，发布执行契约由[评测执行与发布](../evals/04-running-and-release.md)拥有。
 
+> 2026-08-26 更新：Phase 0 的 `InvestigationProject` 结论已被 baseline-first 审计推翻，相关生产代码和当前测试已删除。下文只保留仍在生产路径上的架构结果。
+
 ## 1. 当前判断
 
 Phase 0 建立的核心架构边界仍然存在，但历史 E01–E23、L01–L06、IP01 和 Provider 样本不再共享同一代产品契约。旧 archive 只证明对应冻结代码和配置，不能建立当前发布资格。
@@ -16,7 +18,7 @@ Phase 0 完成的以下边界仍由生产代码维持：
 - 模型产生 typed Proposal，Admission 与 Policy 负责确定性准入；
 - Tool 和 Agent 经执行网关产生 `Observation`，不直接宣告父目标完成；
 - Personal Knowledge 拥有知识写入、删除、恢复和版本事实；
-- `InvestigationProject` 拥有独立持久化生命周期，不与前台工作项清单共用 Plan 事实；
+- 没有需求 baseline 的后台第二循环不会因历史 conformance test 而继续保留；
 - `StrictJsonSchemaAdapter` 与 `JsonObjectStructuredAdapter` 隔离服务提供方的结构化输出传输差异；
 - Verification 和 Completion 与执行成功分离。
 

@@ -1,6 +1,8 @@
 # 当前 E2E 用例盘点
 
-**当前 46 条用例中，12 条是明确的 in-process scripted Investigation conformance；其余 34 条从独立 HTTP 进程进入，但其中仍混有 Application E2E、Runtime/安全诊断和 Provider profile。** 下表按当前代码实际证明范围分类，不沿用 `release_eligible` 的产品含义。
+> 2026-08-26 更新：`InvestigationProject` 已因缺少需求 baseline 且正式结果为 `0/20 delivered` 被撤回。下文仍出现的 `E23`、`PLAN-001`、`IP01`、`LT*` 与 `INVESTIGATION-*` 行只用于解释历史归档，不属于当前可执行矩阵或产品能力。
+
+**当前目录有 30 条用例：9 条 Product E2E、9 条 Application E2E、7 条 Runtime Conformance 和 5 条 Capability Profile。** 其中 9 条进入 release selection，21 条进入 diagnostic selection；下表仍保留一部分已明确标注的历史撤回行，用于解释旧归档而不参与数量统计。
 
 ## 1. Conversation 与 Knowledge
 
@@ -16,7 +18,7 @@
 | `DUR-001` | Conversation 后读取 `/api/conversation/runs/{ref}`，重启 Web | owner 可读 trace、其他 principal 404 | **安全/运维 Boundary E2E**；主要结果是 trace API scope，不是普通 Conversation 用户结果 |
 | `OBS-001` | 同一 trace scope failure + server log | log 中有同 run ref 的 typed deny | **Observability conformance**；不参与产品完成率 |
 
-`MEMORY-A0-001` 是独立的重复产品回归，不进入上述 46 条发布用例目录。当前用例从 `POST /api/conversation/turn` 进入，使用生产组合根、真实结构化模型和 Postgres。未授权事实晋升、显式保存后纠错、删除后的检索一致性三类自然旅程各执行五次，结果均为 `5/5 delivered`，服务提供方失败为 0。
+`MEMORY-A0-001` 是独立的重复产品回归，不进入上述 30 条发布用例目录。当前用例从 `POST /api/conversation/turn` 进入，使用生产组合根、真实结构化模型和 Postgres。未授权事实晋升、显式保存后纠错、删除后的检索一致性三类自然旅程各执行五次，结果均为 `5/5 delivered`，服务提供方失败为 0。
 
 | 结果与反事实 | 执行结果 | 证据边界 |
 | --- | ---: | --- |
@@ -26,13 +28,17 @@
 
 按需个人知识搜索改动后的 15 份归档位于 `data/e2e_traces/product_targets_memory_search_v1/memory-a0-001/target/`，使用 `memory-a0-001-deterministic-v2` 评测器。该版本不再寻找隐式 `personal_knowledge_context`，而是断言显式只读 `search_personal_knowledge` 的 `Observation` 和最终答案。15 个样本不足 20，不报告 P95；性能画像另由 `AGENT-PERF-001-MEMORY` 的 20 个独立样本承担。
 
-`SECURITY-REAL-001` 也不进入 46 条发布目录。旧路径在四类场景中为 `15/20 delivered`，五个个人资料禁止外发样本都因个人知识无条件物化而失败；当前代码 target 为 `20/20 delivered`。20 组 baseline/target 的输入、身份、初始状态和评测器一致，代码身份不同，checksum 配对全部有效。归档根目录分别为 `data/e2e_traces/product_baselines_security_v5/security-real-001/baseline/` 与 `data/e2e_traces/product_targets_security_v2/security-real-001/target/`。
+`SECURITY-REAL-001` 也不进入 30 条发布目录。旧路径在四类场景中为 `15/20 delivered`，五个个人资料禁止外发样本都因个人知识无条件物化而失败；当前代码 target 为 `20/20 delivered`。20 组 baseline/target 的输入、身份、初始状态和评测器一致，代码身份不同，checksum 配对全部有效。归档根目录分别为 `data/e2e_traces/product_baselines_security_v5/security-real-001/baseline/` 与 `data/e2e_traces/product_targets_security_v2/security-real-001/target/`。
 
-`AGENT-PERF-001` 已完成五个任务族的独立画像。`data/e2e_traces/product_baselines_agent_perf_v1/` 中，直接回答、Plan 和 Memory 召回各有 20 个同配置样本，均为 `20/20 delivered`；延迟 P95 分别为 2.13、4.33 和 3.68 秒，总令牌 P95 分别为 7,573、7,941 和 14,620。显式委托组位于 `data/e2e_traces/product_agent_perf_delegate_v5/`，结果为 `10/20 delivered`；全体延迟 P95 为 260.81 秒，成功样本延迟 P95 为 144.66 秒，全体总令牌 P95 为 47,217。20 份委托归档的校验和错误为 0；失败分为 5 次委托结果缺失和 5 次官方来源缺失。100 工具组仍引用 `TOOL-DISCOVERY-SCALE-001` 的 20 样本结果。不同任务族不能合并为统一 P95。
+`AGENT-PERF-001` 已完成五个任务族的独立画像。`data/e2e_traces/product_baselines_agent_perf_v1/` 中，直接回答、Plan 和 Memory 召回各有 20 个同配置样本，均为 `20/20 delivered`；延迟 P95 分别为 2.13、4.33 和 3.68 秒，总令牌 P95 分别为 7,573、7,941 和 14,620。显式委托历史组位于 `data/e2e_traces/product_agent_perf_delegate_v5/`，结果为 `10/20 delivered`；当前代码同配置组位于 `data/e2e_traces/product_agent_perf_delegate_current_20260827/`，退化为 `2/20 delivered`，P95 202.786 秒、总令牌 989,369，包含 11 次子级超时和 7 次子级完成但父级未交付。两组各 20 份归档的校验和错误均为 0，不得跨代码状态合并。100 工具组仍引用 `TOOL-DISCOVERY-SCALE-001` 的 20 样本结果。不同任务族不能合并为统一 P95。
+
+`INTERACTION-INTENT-DELEGATION-BOUNDARY-001` 单独测量显式前台委托是否被错误解释为后台持续工作，不证明 Agent 交付。只读 Provider 诊断为轮转输入 `1/20`、同输入重复 `3/20` false-background；首次正式 HTTP baseline 为 `5/20`，证据位于 `data/e2e_traces/product_interaction_intent_delegation_boundary_20260827/interaction-intent-delegation-boundary-001/baseline/`。删除第一个失败候选后，原代码同输入重复 baseline 为 `0/20`、P95 `32.356s`、最大 `37.684s`，证据位于 `data/e2e_traces/iidb_repeat_20260827/interaction-intent-delegation-boundary-001/baseline/`；两批合计 `5/40`，说明语义输出存在 Provider 方差。双证据 span partial target 为 `0/8` false-background、P95 `59.111s`；对比语义示例 partial target 为 `0/18`、P95 `52.539s`。两者均因预声明 P95 `<=45s` 失败而停止，候选代码和专用断言已删除；partial target 不得冒充完整 target，也未执行正向控制或消融。随后严格交错的只读 Provider Conformance 固定除 system instruction 后缀外的请求字段并反转执行顺序，20 对中 control/contrast false-background 为 `1/20`、`0/20`，token 为 `14,745`、`16,513`，P95 为 `19.354s`、`21.812s`；40 个样本齐全、Provider error `0`、checksum 有效，证据位于 `data/e2e_traces/provider_diagnostics/interaction-intent-contrast-interleaved-001/20260827-v2/`。该直接模型诊断不是产品 target；一个不一致 pair 且 contrast 成本更高，不支持复活已撤回 Prompt。另一次重复 baseline 因 Windows 绝对路径 263 字符在 evidence 写入阶段失败，只留下 manifest，不计产品样本。
+
+`AGENT-ARTIFACT-PLAN-FINALIZATION-CONFORMANCE-001` 从当前正式委托 baseline 只读选取 7 份 succeeded `AgentArtifact` 但未交付的密封归档，复用生产 `interaction_completion_answer:v1`、`FinalMessage.resolved_plan_step_ids`、`working_plan_incomplete` feedback 和 `admit_final_plan_resolution`；不执行 Agent/Tool、不写状态、不自动填 Plan ID。结果为 Provider error `0/7`、现有 Admission 接受 `5/7`，但 raw IDs 精确匹配仅 `4/7`；6 份 pending Plan 的空 ID 负控制全部被拒绝。附加画像为 marker `6/7`、已观察 URL `5/7`，总 token `20,265`。证据位于 `data/e2e_traces/provider_diagnostics/agent-artifact-plan-finalization-conformance-001/20260827/`，checksum 有效。该 Conformance 未过 `7/7` 准入门槛且不是产品 E2E；已撤回 answer-only 候选保持删除。terminal Plan 样本的多余 ID 被当前 Admission 忽略是新诊断事实，尚无用户失败 baseline，不准入生产修复。
 
 `MULTI-AGENT-VALUE-001` 的首对 pilot 位于 `data/e2e_traces/product_multi_agent_value_pilot_v1/`。协议事实、协议边界和可恢复执行三类输入中，非委托 baseline 已分别得到 `12/13`、`12/13` 和 `13/13`；暴露委托能力的 target 得分相同，而且三次都没有子智能体调用。因为最简单路径没有失败且目标机制没有被消费，剩余 12 对样本按 A0 门禁停止。该结果不否定用户明确要求委托时的 `E17` 路径，只说明当前三类输入没有建立自动委托的增量价值。
 
-独立的变更证据不计入上述 46 条 release catalog。`CONV-001` 回归用户明示的工作清单审阅、修订与最终交付；其 v2
+独立的变更证据不计入上述 30 条 release catalog。`CONV-001` 回归用户明示的工作清单审阅、修订与最终交付；其 v2
 结果契约还直接断言最终答案包含修订后的冲突检查、不包含已撤回的缺口分析、保留随机验收标记且无重复执行。
 `HARNESS-001` 约束默认审阅边界；`CONV-003` 约束计划项必须说明可验收结果和完成条件。Plan baseline/target 重新
 审计如下：
@@ -240,6 +246,10 @@ Conversation 自然提出长调查
 
 `INVESTIGATION-CONSOLIDATION-001-BACKGROUND` 的当前单槽位组合 target 已让 20 个样本全部进入独立调查项目，但没有一个交付正确报告。归档为 `data/e2e_traces/product_baselines/investigation-consolidation-001-background/target/20260826T030327.251670Z-28312-17d18ae1`，checksum 有效。只把 worker 槽位从 1 改成 4 的归档 `20260826T033237.057275Z-27748-4316084c` 同样 checksum 有效、同样为 `0/20 delivered`，所以该候选已经撤回。`E23`、`PLAN-001`、`IP01` 和生命周期选择 target 仍只承担分段机制证据，不能与失败的完整链路拼成通过的产品证据。
 
+撤回后的 `BACKGROUND-CONTINUATION-LIMITATION-001` 复用上述四类自然后台请求，每类重复五次，从正式 Conversation HTTP 进入。机制开启 baseline 为 `0/20 limitation`、41 次模型调用、27,038 tokens；删除后 target 为 `20/20 limitation`、`20/20 capability_missing`、非边界执行为 0、20 次模型调用、14,132 tokens。两者的 case、输入、principal、入口、初始状态和 grader 一致，代码状态不同，checksum 与机械配对均通过。归档分别位于 `background-continuation-limitation-001/baseline/20260826T113052.621892Z-30036-eb7f45c0` 和 `target/20260826T111202.670374Z-2720-e3611907`。该证据只证明系统不会伪造后台成功，撤回决策已转入 [ADR 0015](../adr/0015-withdraw-investigation-project.md)。
+
+当前可执行版本为 `v2-per-sample`：同一 4×5 自然输入拆成 20 个 pytest item，每项在正式 HTTP 前 enrollment 并独立封存，配套 `background_continuation_target_002.json` 只允许 20/20 limitation、零执行和零缺失报告。2026-08-27 的首次真实运行在第 2 条出现非 limitation/执行后立即拒绝并停止剩余 18 条；该结果证明早停生效，同时证明当前产品 target 未通过。v1 聚合 archive 与 v2 样本 archive 的 grader/初始状态契约不同，禁止合并。
+
 ## 4. Complex loop 与治理
 
 | 用例 | 当前入口与边界 | 当前实际断言 | 审计分类 |
@@ -260,9 +270,9 @@ Conversation 自然提出长调查
 | `E18` | Conversation + 真实 Notion MCP | 精确读取指定测试页面 marker | **Capability Profile acceptance** |
 | `E19` | Conversation，无 GitHub/Notion capability | limitation、零 Tool call、零编造 | **Capability availability negative profile** |
 | `E21` | Conversation + 真实 GitHub MCP 大文件 | 地址和本次读取行号正确，Observation/Token overshoot 有界 | **Provider + Context integration E2E**；不只是连接器 smoke |
-| `E17` | Conversation + 真实 GPT Researcher A2A | 对齐 DeepSeek 配置后的 target 为子任务 `completed`、`AgentArtifact` 成功、父级 `answer`，归档校验和错误为 0 | **Capability Profile acceptance**；证明单次真实委托路径可达；20 样本组只有 `10/20 delivered`，不能据此声称稳定 |
+| `E17` | Conversation + 真实 GPT Researcher A2A | 历史 target 曾为子任务 `completed`、父级 `answer`；2026-08-26 两次对照因 30 秒委托预算超时，2026-08-27 单次重跑又在进入 AgentGateway 前误判为后台继续 | **当前失败的 Capability Profile**；证明路径可达，不证明委托交付；当前正式 20 样本只有 `2/20 delivered`，且失败同时包含子级超时与父级未交付 |
 
-## 6. Investigation LT Runtime Conformance
+## 6. 已撤回的 Investigation LT Runtime Conformance
 
 `LT01、LT02、LT03、LT04、LT05、LT06、LT07、LT08、LT10、LT11、LT12、LT13` 均：
 
@@ -271,7 +281,7 @@ Conversation 自然提出长调查
 - 可以直接构造 Plan、Command、approval、late result、budget failure 和 crash window；
 - 使用真实 Domain、Application、Postgres store 和部分 worker/recovery 协议。
 
-它们属于 **Investigation Runtime Conformance**，当前文件位于 `evals/runtime_conformance/investigation_project`。
+它们曾属于 **Investigation Runtime Conformance**；当前测试文件已随生产机制删除，下面只解释历史归档覆盖过什么。
 
 | 用例族 | 证明重点 |
 | --- | --- |
@@ -284,4 +294,4 @@ Conversation 自然提出长调查
 | `LT08` | scope isolation across recovery |
 | `LT11` | capability missing fail closed |
 
-这些用例已迁移到 `evals/runtime_conformance/investigation_project`。它们可以保护运行协议，但不能用于声称真实模型能规划、真实 Provider 能完成调查或用户需要 InvestigationProject。
+这些历史用例只能说明旧冻结协议曾受测试保护，不能证明真实模型能规划、真实 Provider 能完成调查或用户需要 `InvestigationProject`，更不能作为恢复已删除代码的理由。

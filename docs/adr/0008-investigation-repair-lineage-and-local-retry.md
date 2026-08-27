@@ -1,8 +1,9 @@
 # ADR 0008: Investigation Repair Lineage and Local Proposal Retry
 
-- Status: Accepted
+- Status: Superseded and removed on 2026-08-26
 - Date: 2026-07-29
-- Review date: 2027-01-29
+
+> Historical record only. The repaired Investigation Project loop was later withdrawn because its product-demand baseline was absent and its formal result remained `0/20 delivered`. Current decision: [ADR 0015](0015-withdraw-investigation-project.md).
 
 ## Goal / Current Incorrect Behavior / Expected User-visible Result
 

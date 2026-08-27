@@ -299,7 +299,6 @@ def test_plan_real_001_real_provider_recovery(
         for internal in (
             "Planner",
             "Workflow",
-            "InvestigationProject",
         )
     )
     try:

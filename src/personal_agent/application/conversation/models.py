@@ -17,7 +17,6 @@ ConversationInteractionMode = Literal["default", "auto"]
 ConversationInteractionPhase = Literal[
     "ordinary", "review_plan", "deliver_final_result"
 ]
-ConversationExecutionLifecycle = Literal["conversation", "durable_investigation"]
 
 
 class _StrictModel(BaseModel):
@@ -187,55 +186,6 @@ class PersonalKnowledgeEvidenceSnapshot(_StrictModel):
 class PrepareKnowledgeDeleteArguments(_StrictModel):
     target_knowledge_item_id: str = Field(min_length=1)
     reason: str = Field(min_length=1, max_length=1_000)
-
-
-class InvestigationRequirementInput(_StrictModel):
-    statement: str = Field(min_length=1, max_length=4_000)
-    acceptance_contract: str = Field(min_length=1, max_length=4_000)
-
-
-class StartDurableInvestigationArguments(_StrictModel):
-    title: str = Field(min_length=1, max_length=300)
-    goal: str = Field(min_length=1, max_length=8_000)
-    requirements: tuple[InvestigationRequirementInput, ...] = Field(
-        min_length=1,
-        max_length=12,
-    )
-
-
-class SteerInvestigationProjectArguments(_StrictModel):
-    statement: str = Field(min_length=1, max_length=4_000)
-    waived_requirement_ids: tuple[str, ...] = ()
-    added_requirements: tuple[InvestigationRequirementInput, ...] = Field(
-        default=(),
-        max_length=12,
-    )
-
-
-class InvestigationSubgoalProgress(_StrictModel):
-    logical_subgoal_id: str = Field(min_length=1)
-    objective: str = Field(min_length=1)
-    status: Literal["pending", "completed"]
-
-
-class InvestigationRequirementProgress(_StrictModel):
-    requirement_id: str = Field(min_length=1)
-    statement: str = Field(min_length=1)
-    acceptance_contract: str = Field(min_length=1)
-    status: str = Field(min_length=1)
-
-
-class ConversationProjectSnapshot(_StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    project_id: str = Field(min_length=1)
-    state: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    goal: str = Field(min_length=1)
-    plan_version: int | None = Field(default=None, ge=1)
-    requirements: tuple[InvestigationRequirementProgress, ...]
-    subgoals: tuple[InvestigationSubgoalProgress, ...]
-    waiting_reasons: tuple[str, ...]
 
 
 ActionProposal = ToolCallProposal | AgentDelegationProposal
@@ -489,17 +439,6 @@ class KnowledgeDeleteConfirmation(_StrictModel):
     operation: KnowledgeDeleteOperationView
 
 
-class ProjectReference(_StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    project_id: str = Field(min_length=1)
-    tenant_id: str = Field(min_length=1)
-    user_id: str = Field(min_length=1)
-    state: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    goal: str = Field(min_length=1)
-
-
 class TurnContextComposition(_StrictModel):
     """What one decision turn's model input was actually made of.
 
@@ -547,11 +486,9 @@ class InteractionTrace(_StrictModel):
     concurrent_batches: tuple[tuple[str, ...], ...] = ()
     context_composition: tuple[TurnContextComposition, ...] = ()
     review_criteria: ReviewCriteria | None = None
-    execution_lifecycle: ConversationExecutionLifecycle = "conversation"
     final_message: FinalMessage | None = None
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
     knowledge_delete_command_ref: str | None = None
-    project_reference: ProjectReference | None = None
     working_plan: ConversationWorkingPlan | None = None
 
 
@@ -562,7 +499,6 @@ class ConversationTurnView(_StrictModel):
         "answer",
         "clarification_required",
         "confirmation_required",
-        "background_started",
         "plan_ready",
         "limitation",
         "failed",
@@ -571,7 +507,6 @@ class ConversationTurnView(_StrictModel):
     pending_confirmation: (
         ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | None
     ) = None
-    project_reference: ProjectReference | None = None
     working_plan: ConversationWorkingPlan | None = None
 
 
@@ -582,7 +517,6 @@ __all__ = [
     "AgentTurnDecision",
     "CommittedUsage",
     "ContinueTurnProposal",
-    "ConversationExecutionLifecycle",
     "ConversationInteractionMode",
     "ConversationMessage",
     "ConversationWorkingPlan",
@@ -598,7 +532,6 @@ __all__ = [
     "FinalMessage",
     "InteractionTrace",
     "LoopBudgetPolicy",
-    "InvestigationRequirementInput",
     "KnowledgeDeleteConfirmation",
     "KnowledgeSaveArguments",
     "KnowledgeSaveSelection",
@@ -607,13 +540,7 @@ __all__ = [
     "PersonalKnowledgeEvidenceCitation",
     "PersonalKnowledgeEvidenceSnapshot",
     "PrepareKnowledgeDeleteArguments",
-    "ProjectReference",
-    "SteerInvestigationProjectArguments",
-    "ConversationProjectSnapshot",
-    "InvestigationSubgoalProgress",
-    "InvestigationRequirementProgress",
     "ReviewCriteria",
-    "StartDurableInvestigationArguments",
     "ToolCallProposal",
     "TurnContextComposition",
     "WorkingPlanProposal",
