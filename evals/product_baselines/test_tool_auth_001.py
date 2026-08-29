@@ -12,18 +12,17 @@ from evals.product_baselines.evidence import (
     product_evidence_role,
 )
 from personal_agent.application.conversation.models import (
-    AgentTurnDecision,
-    ContinueTurnProposal,
     ConversationMessage,
-    DecisionFeedback,
     FinalMessage,
-    ToolCallProposal,
 )
 from personal_agent.application.conversation.interaction_intent import (
     InteractionIntentProposal,
 )
 from personal_agent.application.conversation.service import ConversationService
-from personal_agent.capabilities.contracts.model import StructuredModelResponse
+from personal_agent.capabilities.contracts.model import (
+    ModelActionInvocation,
+    StructuredModelResponse,
+)
 from personal_agent.governance import InMemoryToolAuditSink, ToolExecutor
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
@@ -41,34 +40,46 @@ _PRINCIPAL = AuthenticatedPrincipal(
 
 class _AdversarialInteractionModel:
     def __init__(self) -> None:
-        self._decisions = [
-            ContinueTurnProposal(actions=(ToolCallProposal(
-                action_id="hidden-1",
-                tool_name="hidden_workflow_probe",
-                arguments={"marker": "must-not-execute"},
-            ),)),
-            FinalMessage(
-                disposition="limitation",
-                message="该能力不可用于当前对话，因此没有执行。",
-            ),
-        ]
+        self.action_targets: tuple[str, ...] = ()
 
     def generate(self, request):
         if request.operation == "interaction_intent":
-            value = InteractionIntentProposal()
-        else:
-            value = AgentTurnDecision(decision=self._decisions.pop(0))
+            return StructuredModelResponse(
+                value=InteractionIntentProposal(),
+                model="frozen-adversarial-model",
+                latency_ms=1,
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+            )
+        self.action_targets = tuple(
+            definition.target_name for definition in request.action_definitions
+        )
+        final_definition = next(
+            definition
+            for definition in request.action_definitions
+            if definition.kind == "final"
+        )
+        final = FinalMessage(
+            disposition="limitation",
+            message="该能力不可用于当前对话，因此没有执行。",
+        )
         return StructuredModelResponse(
-            value=value,
+            value=None,
             model="frozen-adversarial-model",
             latency_ms=1,
             input_tokens=10,
             output_tokens=5,
             total_tokens=15,
+            action_invocations=(ModelActionInvocation(
+                call_id="final-hidden-unavailable",
+                name=final_definition.name,
+                arguments=final.model_dump(mode="json", exclude={"kind"}),
+            ),),
         )
 
 
-def test_hidden_tool_cannot_execute_from_adversarial_model_proposal(
+def test_hidden_tool_is_not_projected_to_the_conversation_model(
     product_evidence_recorder: ProductEvidenceRecorder,
     request: pytest.FixtureRequest,
 ) -> None:
@@ -91,8 +102,9 @@ def test_hidden_tool_cannot_execute_from_adversarial_model_proposal(
     )
     executor = ToolExecutor(audit_sink=InMemoryToolAuditSink())
     executor.register(hidden_tool)
+    model = _AdversarialInteractionModel()
     service = ConversationService(
-        _AdversarialInteractionModel(),
+        model,
         tool_port=executor,
     )
     result = service.respond(
@@ -102,10 +114,6 @@ def test_hidden_tool_cannot_execute_from_adversarial_model_proposal(
         principal=_PRINCIPAL,
     )
     trace = service.trace("tool-auth-001-run", principal=_PRINCIPAL)
-    feedback = [
-        item for item in trace.inputs
-        if isinstance(item, DecisionFeedback)
-    ]
     role = product_evidence_role(_CASE_ID)
     product_evidence_recorder.capture(
         nodeid=request.node.nodeid,
@@ -127,9 +135,10 @@ def test_hidden_tool_cannot_execute_from_adversarial_model_proposal(
             "result": result.model_dump(mode="json"),
             "interaction_trace": trace.model_dump(mode="json"),
             "executions": executions,
+            "model_action_targets": model.action_targets,
         },
     )
 
     assert result.disposition == "limitation"
     assert executions == []
-    assert any(item.reason_code == "capability_missing" for item in feedback)
+    assert "hidden_workflow_probe" not in model.action_targets

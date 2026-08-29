@@ -41,11 +41,17 @@ _DURATION = MetricRef(source="duration_seconds")
 _RESULT_REPORT_MISSING = MetricRef(source="result_report_missing")
 
 
-def _spec(*constraints, expected_samples: int = 20) -> PromotionGateSpec:
+def _spec(
+    *constraints,
+    expected_samples: int = 20,
+    role: str = "target",
+    stage: str = "formal_product_target",
+) -> PromotionGateSpec:
     return PromotionGateSpec(
         gate_id="PROMOTION-TEST-001",
         case_id="CASE-001",
-        stage="formal_product_target",
+        role=role,
+        stage=stage,
         expected_samples=expected_samples,
         constraints=constraints,
     )
@@ -57,12 +63,13 @@ def _sample(
     metrics: dict[str, bool | int | float],
     duration_seconds: float = 1,
     subject_digest: str | None = None,
+    role: str = "target",
 ) -> PromotionSampleFact:
     return PromotionSampleFact(
         archive_ref=f"archive-{index}",
         archive_run_id=f"run-{index:02d}",
         case_id="CASE-001",
-        role="target",
+        role=role,
         evidence_class="product_e2e",
         formal_entrypoint="POST /api/conversation/turn",
         interaction_mode="auto",
@@ -122,6 +129,31 @@ def test_gate_never_passes_before_the_full_predeclared_sample_count():
     assert controller.observe(
         _sample(3, metrics={_DELIVERED.key(): True})
     ).status == "passed"
+
+
+def test_failure_baseline_can_stop_when_a_predeclared_limit_is_exceeded():
+    spec = _spec(
+        MaximumCountConstraint(
+            constraint_id="maximum-tolerated-failures",
+            metric=_FAILED,
+            maximum=1,
+        ),
+        expected_samples=5,
+        role="baseline",
+        stage="failure_baseline",
+    )
+    controller = PromotionGateController(spec)
+
+    assert controller.observe(
+        _sample(1, metrics={_FAILED.key(): True}, role="baseline")
+    ).status == "continue"
+    decision = controller.observe(
+        _sample(2, metrics={_FAILED.key(): True}, role="baseline")
+    )
+
+    assert decision.status == "rejected"
+    assert decision.observed_samples == 2
+    assert decision.remaining_samples == 3
 
 
 def test_count_sum_and_conditional_rate_compute_irreversible_failure():

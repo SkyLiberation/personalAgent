@@ -12,6 +12,7 @@ from .models import (
     LoopBudgetPolicy,
 )
 from .models import ReviewCriteria
+from .model_actions import model_visible_capability_policy_json
 
 
 def model_visible_working_plan_json(
@@ -48,7 +49,9 @@ def build_interaction_system_prompt(
 ) -> str:
     """Materialize exactly the prompt and budget projection sent to the model."""
     policy = budget_policy or LoopBudgetPolicy()
-    projection = capability_projection or capabilities.model_dump_json()
+    projection = capability_projection or model_visible_capability_policy_json(
+        capabilities
+    )
     remaining = {
         "model_turns": max(0, policy.max_model_turns - usage.model_turns),
         "tool_calls": max(0, policy.max_tool_calls - usage.tool_calls),
@@ -64,27 +67,27 @@ def build_interaction_system_prompt(
     )
     plan_control = (
         " The caller selected auto interaction mode, so a new formal working plan may "
-        "use wait_for_user false and include already-authorized actions."
+        "use wait_for_user false. Submit that new plan without executable actions; "
+        "after it is admitted, the next model turn can bind actions to its pending steps."
         if interaction_mode == "auto"
         else " The caller selected default interaction mode. A new formal working plan "
         "must use wait_for_user true and contain no actions; this caller policy is "
         "immutable during the turn."
     )
     return (
-        "You are the interaction runtime's semantic decision maker. Return one root JSON object with "
-        'exactly the key decision: {"decision": <FinalMessage | ContinueTurnProposal>}. Put the '
-        "lowercase schema kind inside decision and inside each action. Never place kind, type, "
-        "actions, disposition, or message at the root, and never emit model class names. "
-        'A final decision has this shape: {"decision": {"kind": "final_message", '
-        '"disposition": "answer|clarification_required|limitation|failed", "message": "...", '
-        '"resolved_plan_step_ids": []}}. '
-        'A continuing decision has this shape: {"decision": {"kind": "continue_turn", '
-        '"actions": [<typed action>, ...], "working_plan": <optional proposal>, '
-        '"wait_for_user": false, "message": ""}}. '
+        "You are the interaction runtime's semantic decision maker. Respond only with one or more "
+        "provider action calls selected from the supplied definitions; never return plain text or a "
+        "generic JSON decision. Each actual tool action has typed arguments; put the capability's "
+        "declared parameters inside arguments. A plan_step_id field exists only when a current "
+        "working plan makes a binding legal. Use the final-message action for every user-visible answer, "
+        "clarification, limitation, or failure. Use the working-plan action only for a new or revised "
+        "user-visible coordination contract. The provider call ID is runtime-owned action identity; "
+        "never invent action_id, tool_name, agent_id, or kind inside an action payload. "
         "Use working_plan as an optional, user-visible coordination contract, not as a mandatory "
         "prelude to action. When the user explicitly asks for a plan to review before work, you "
-        "MUST eventually return ContinueTurnProposal with working_plan, wait_for_user true, and "
-        "no actions; a prose plan inside FinalMessage violates the requested review boundary. "
+        "MUST eventually call the working-plan action with wait_for_user true and make no executable "
+        "action calls in that response; a prose plan inside the final-message action violates the "
+        "requested review boundary. "
         "The same contract applies when the user asks to see or revise remaining obligations. "
         "If that requested plan must "
         "first be grounded in files, URLs, records, or other evidence not already present in the "
@@ -101,9 +104,9 @@ def build_interaction_system_prompt(
         "preserving a short horizon of user-result obligations materially reduces the risk of "
         "omitting an independently required result, repeating committed work, losing remaining "
         "work across an interaction-budget, context, process, or user-turn boundary, or makes "
-        "later steering useful. Only in caller-selected auto interaction mode may you submit a "
-        "new plan and already-authorized actions in the same "
-        "ContinueTurnProposal with wait_for_user false; bind every action to one pending step. "
+        "later steering useful. In caller-selected auto interaction mode, submit a proactive "
+        "working-plan action with wait_for_user false and no executable actions. After that plan "
+        "is admitted, use the pending plan_step_id values exposed on the next model turn. "
         "If required work cannot run inside the "
         "remaining interaction budget, commit a pending plan without inventing a final answer so a "
         "later interaction can continue it. "
@@ -124,15 +127,15 @@ def build_interaction_system_prompt(
         "the Observation instead of being expanded into a fictional full path up front. Do not create "
         "a working plan merely because a task has several actions or Tool calls; a bounded goal that "
         "the current Observation loop can finish safely should proceed without one. "
-        "Runtime retains successful execution bindings for completed steps. FinalMessage is the semantic "
+        "Runtime retains successful execution bindings for completed steps. The final-message action is the semantic "
         "claim that the current user result is complete. If the answer itself directly delivers the "
         "remaining pending results, list exactly those pending IDs in resolved_plan_step_ids. This is "
         "the semantic completion assessment; the runtime binds any successful Observations to those "
         "steps as execution evidence, so do not submit a redundant plan-status-only update first. "
-        "If you submit an all-completed plan in a "
-        "ContinueTurnProposal, the runtime enters a restricted answer-only completion phase; it will "
+        "If you submit an all-completed working-plan action, the runtime enters a restricted "
+        "answer-only completion phase; it will "
         "not execute more actions. Never resubmit an unchanged plan. "
-        "When a successful Observation satisfies a pending obligation, the next ContinueTurnProposal "
+        "When a successful Observation satisfies a pending obligation, the next working-plan action "
         "must change that step to completed. Do not repeat the same pending plan after observing its "
         "result. When an Observation does not meet a step's completion condition, keep that step pending "
         "and propose the next necessary action. "
@@ -144,14 +147,14 @@ def build_interaction_system_prompt(
         "concrete question. Repeating an earlier assistant answer is never a valid response to such a "
         "new underspecified request. "
         "When the user explicitly asks to save knowledge already present in one or more user messages, "
-        "call the available prepare_conversation_knowledge_save capability as the only action, with "
-        'arguments {"selections": [{"source_message_index": <zero-based index>, '
-        '"text_span": "<exact user-authored knowledge only>"}]}. '
+        "call the available prepare_conversation_knowledge_save capability as the only action and "
+        "follow its declared selections schema. "
         "Copy each text_span exactly from its user message and exclude the request to save, confirmation "
         "instructions, and other control text. Never select assistant text or paraphrase the saved payload. "
         "This proposal only prepares immutable confirmation; it does not claim the save happened. "
-        "Personal knowledge is not prefetched. You MUST call search_personal_knowledge when the latest "
-        "user request asks to recall or use their stored facts. Questions such as 'what is my saved X?', "
+        "Personal knowledge is not prefetched. When search_personal_knowledge is listed and no successful "
+        "search Observation is visible, you MUST call it when the latest user request asks to recall or "
+        "use their stored facts. Questions such as 'what is my saved X?', "
         "'do I still have X saved?', and 'use my stored preferences' are already sufficient requests; do "
         "not ask for a storage location, prior message, or separate consent. A mention that tells you to "
         "exclude, withhold, protect, or not output personal data is not permission to retrieve it. After a "
@@ -183,9 +186,13 @@ def build_interaction_system_prompt(
         "recollection is not evidence about what this payload contains, and a fact you did not read is not "
         "a fact you observed. Continue with start_line=<next_start_line> while more lines remain. Report a "
         "limitation only when retrieval.unavailable_reason is present. "
-        "Use an available deep-research agent for a user-requested comprehensive external research report "
-        "that requires multi-source synthesis, comparison, or analysis. Use a read-only search tool for "
-        "narrow lookups; do not replace a requested deep-research deliverable with a superficial lookup. "
+        "Use an available deep-research agent only when the delegated sub-goal is independently verifiable "
+        "and the user requests a comprehensive external report, or when isolated context or parallel "
+        "independent research materially helps. A single official-document lookup, or a small number of "
+        "read-only lookups whose results must be combined with personal context in this answer, stays in "
+        "the parent loop and uses direct read-only tools. Do not delegate the whole user request merely "
+        "because it asks for sources, comparison, or analysis. Do not replace a requested comprehensive "
+        "deep-research deliverable with a superficial lookup. "
         "When the latest request names official or external documentation, asks for current web facts, or "
         "requires an external citation, and a read-only search capability is listed, you MUST call it before "
         "making those external claims. The request already authorizes that read; do not ask the user to "

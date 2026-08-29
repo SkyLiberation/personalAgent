@@ -31,6 +31,7 @@ from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
 )
 from personal_agent.kernel.observability import record_policy_decision
+from personal_agent.kernel.logging_utils import log_event
 
 from .observation_bounds import (
     bound_observation_payload,
@@ -42,7 +43,13 @@ from .context_materialization import (
     materialize_interaction_inputs,
 )
 from .interaction_prompt import _review_instruction, build_interaction_system_prompt
+from .model_actions import (
+    build_model_action_definitions,
+    decode_model_action_invocations,
+    model_visible_capability_policy_json,
+)
 from .errors import (
+    ConversationFailureStage,
     ConversationOperationConflict,
     ConversationOperationNotFound,
     ConversationUnavailable,
@@ -55,8 +62,6 @@ from .knowledge_save import ConversationKnowledgeSaveUseCase
 from .models import (
     ActionObservation,
     AgentDelegationProposal,
-    AgentTurnDecision,
-    AgentTurnDecisionWithPlan,
     CommittedUsage,
     ConversationInteractionMode,
     ConversationKnowledgeSaveOperation,
@@ -175,7 +180,11 @@ class ConversationService:
         if not messages or messages[-1].role != "user":
             raise ValueError("conversation must end with a user message")
         if self._model_client is None:
-            raise ConversationUnavailable("conversation model is not configured")
+            raise ConversationUnavailable(
+                "conversation model is not configured",
+                reason_code="model_not_configured",
+                failure_stage="application_configuration",
+            )
         owner = principal
 
         run_ref = interaction_run_ref or f"irun_{uuid4().hex[:16]}"
@@ -311,6 +320,25 @@ class ConversationService:
             )
 
         while True:
+            repeated_feedback = self._repeated_action_feedback(tuple(inputs))
+            if repeated_feedback is not None:
+                return self._fail_closed_limitation(
+                    conversation_id,
+                    run_ref,
+                    principal,
+                    messages,
+                    inputs,
+                    usage,
+                    execution_order,
+                    concurrent_batches,
+                    context_composition,
+                    review_criteria=review_criteria,
+                    working_plan=working_plan,
+                    message=(
+                        "模型连续提交了同一类无效动作，本次交互已安全停止；"
+                        "所有被拒绝的动作均未执行。"
+                    ),
+                )
             # A completed canonical plan has no executable work left.  Force the
             # runtime-owned completion phase even if the last model proposal also
             # contains speculative tool calls; otherwise those calls can consume
@@ -366,7 +394,10 @@ class ConversationService:
                     )
                 decision, model_response, composition = self._decide(
                     messages=messages,
-                    capabilities=capabilities,
+                    capabilities=self._model_visible_capabilities_for_turn(
+                        capabilities,
+                        inputs,
+                    ),
                     inputs=inputs,
                     usage=usage,
                     review_criteria=review_criteria,
@@ -662,7 +693,10 @@ class ConversationService:
                 inputs=tuple(inputs),
             )
             if action_plan_feedback is not None:
-                inputs.append(action_plan_feedback)
+                inputs.append(self._name_action_feedback(
+                    action_plan_feedback,
+                    decision.actions,
+                ))
                 self._commit(
                     run_ref,
                     principal,
@@ -719,7 +753,10 @@ class ConversationService:
                     messages=messages,
                 )
                 if feedback is not None:
-                    inputs.append(feedback)
+                    inputs.append(self._name_action_feedback(
+                        feedback,
+                        decision.actions,
+                    ))
                     self._commit(
                         run_ref,
                         principal,
@@ -775,7 +812,10 @@ class ConversationService:
                     owner=owner,
                 )
                 if feedback is not None:
-                    inputs.append(feedback)
+                    inputs.append(self._name_action_feedback(
+                        feedback,
+                        decision.actions,
+                    ))
                     self._commit(
                         run_ref,
                         principal,
@@ -800,7 +840,10 @@ class ConversationService:
                         ).hexdigest(),
                     )
                 except (KeyError, PermissionError, ValueError) as error:
-                    inputs.append(self._application_operation_feedback(action, error))
+                    inputs.append(self._name_action_feedback(
+                        self._application_operation_feedback(action, error),
+                        decision.actions,
+                    ))
                     self._commit(
                         run_ref,
                         principal,
@@ -1143,7 +1186,7 @@ class ConversationService:
         """
         if self._tool_port is None:
             return False
-        validation = self._tool_port.validate_interaction_call(
+        validation = self._tool_port.validate_workflow_call(
             _VERIFICATION_CAPABILITY,
             {},
         )
@@ -1296,22 +1339,49 @@ class ConversationService:
         loop as revision material.
         """
         action_id = f"runtime-verify-{attempt}"
-        result = self._execute_one(
-            ToolCallProposal(
-                action_id=action_id,
-                tool_name=_VERIFICATION_CAPABILITY,
-                arguments={
-                    "draft": decision.message,
-                    "success_criteria": list(review_criteria.criteria),
-                    "evidence_refs": list(
-                        self._journal.conversation_evidence_refs(
-                            conversation_id,
-                            principal,
-                        )
-                    ),
-                },
+        arguments = {
+            "draft": decision.message,
+            "success_criteria": list(review_criteria.criteria),
+            "evidence_refs": list(
+                self._journal.conversation_evidence_refs(
+                    conversation_id,
+                    principal,
+                )
             ),
-            (conversation_id, run_ref, principal, owner, source_platform),
+        }
+        execution_scope = ExecutionScope(
+            principal=principal,
+            execution_id=run_ref,
+            thread_id=conversation_id,
+            task_id=action_id,
+        )
+        tool_result = self._tool_port.invoke_workflow(
+            _VERIFICATION_CAPABILITY,
+            arguments,
+            execution_scope=execution_scope,
+            tool_call_id=action_id,
+            source_platform=source_platform,
+        )
+        result = _ActionResult(
+            action_id,
+            ActionObservation(
+                kind="tool_result",
+                action_id=action_id,
+                capability_id=_VERIFICATION_CAPABILITY,
+                status="succeeded" if tool_result.get("ok") else "failed",
+                execution_request_digest=canonical_digest({
+                    "tool_name": _VERIFICATION_CAPABILITY,
+                    "arguments": arguments,
+                }),
+                payload=self._fit_observation_payload(
+                    tool_result,
+                    action_id=action_id,
+                    capability_id=_VERIFICATION_CAPABILITY,
+                    run_ref=run_ref,
+                    owner=owner,
+                    execution_scope=execution_scope,
+                ),
+            ),
         )
         usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
         receipts = observed_receipts(
@@ -1354,7 +1424,11 @@ class ConversationService:
         separate call with no capability projection, so folding it in here would
         put a turn with a structurally different input shape into the same series.
         """
-        capability_projection = capabilities.model_dump_json()
+        capability_projection = model_visible_capability_policy_json(capabilities)
+        action_definitions = build_model_action_definitions(
+            capabilities,
+            working_plan=working_plan,
+        )
         system_content = build_interaction_system_prompt(
             capabilities,
             usage,
@@ -1379,26 +1453,44 @@ class ConversationService:
         response = self._generate_model(
             StructuredModelRequest(
                 operation="agent_interaction_turn",
-                version="v1",
+                version="v2",
                 messages=visible_messages,
-                output_type=(
-                    AgentTurnDecisionWithPlan
-                    if working_plan is not None
-                    else AgentTurnDecision
-                ),
+                output_type=FinalMessage,
                 context_projection_ref=sealed_context_projection_ref(
                     purpose="agent_interaction_turn",
                     messages=visible_messages,
                 ),
                 temperature=0,
                 max_tokens=1_600,
+                kind="tool_calling",
+                action_definitions=action_definitions,
+                action_choice="required",
                 metadata={"component": "conversation_interaction_loop"},
             )
         )
-        decision = response.value.decision
+        try:
+            decision = decode_model_action_invocations(
+                response.action_invocations,
+                action_definitions,
+            )
+        except StructuredOutputFailure as exc:
+            raise self._model_failure(
+                exc,
+                message="conversation model returned an invalid action protocol",
+                failure_stage="application_action_decode",
+                component="conversation_interaction_loop",
+            ) from exc
+        action_definition_chars = len(
+            json.dumps(
+                [item.model_dump(mode="json") for item in action_definitions],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
         composition = TurnContextComposition(
             turn_index=turn_index,
             capability_projection_chars=len(capability_projection),
+            model_action_definition_chars=action_definition_chars,
             # By subtraction, so the two segments are disjoint by construction and
             # always sum to the prompt that was sent.
             system_prompt_other_chars=len(system_content) - len(capability_projection),
@@ -1469,10 +1561,15 @@ class ConversationService:
                     default=str,
                 ),
             })
+        action_definitions = tuple(
+            definition
+            for definition in build_model_action_definitions(EffectiveCapabilities())
+            if definition.kind == "final"
+        )
         response = self._generate_model(
             StructuredModelRequest(
                 operation="interaction_completion_answer",
-                version="v1",
+                version="v2",
                 messages=visible_messages,
                 output_type=FinalMessage,
                 context_projection_ref=sealed_context_projection_ref(
@@ -1481,18 +1578,109 @@ class ConversationService:
                 ),
                 temperature=0,
                 max_tokens=3_200,
+                kind="tool_calling",
+                action_definitions=action_definitions,
+                action_choice="required",
                 metadata={"component": "conversation_completion_answer"},
             )
         )
-        return response.value, response
+        try:
+            decision = decode_model_action_invocations(
+                response.action_invocations,
+                action_definitions,
+            )
+        except StructuredOutputFailure as exc:
+            raise self._model_failure(
+                exc,
+                message="conversation model returned an invalid final action protocol",
+                failure_stage="application_action_decode",
+                component="conversation_completion_answer",
+            ) from exc
+        if not isinstance(decision, FinalMessage):
+            error = ConversationUnavailable(
+                "conversation model did not return the required final action",
+                reason_code="final_action_required",
+                failure_stage="application_action_decode",
+                operation="interaction_completion_answer",
+            )
+            self._log_model_failure(
+                error,
+                component="conversation_completion_answer",
+            )
+            raise error
+        return decision, response
 
     def _generate_model(self, request):
         try:
             return self._model_client.generate(request)
-        except (ModelInvocationUnavailable, StructuredOutputFailure) as exc:
-            raise ConversationUnavailable(
-                "conversation model is temporarily unavailable"
+        except ModelInvocationUnavailable as exc:
+            raise self._model_failure(
+                exc,
+                message="conversation model is temporarily unavailable",
+                failure_stage="provider_request",
+                component=str(request.metadata.get("component", "conversation")),
             ) from exc
+        except StructuredOutputFailure as exc:
+            raise self._model_failure(
+                exc,
+                message="conversation model is temporarily unavailable",
+                failure_stage=(
+                    "provider_action_decode"
+                    if request.kind == "tool_calling"
+                    else "provider_structured_decode"
+                ),
+                component=str(request.metadata.get("component", "conversation")),
+            ) from exc
+
+    @staticmethod
+    def _model_failure(
+        error: ModelInvocationUnavailable | StructuredOutputFailure,
+        *,
+        message: str,
+        failure_stage: ConversationFailureStage,
+        component: str,
+    ) -> ConversationUnavailable:
+        if isinstance(error, ModelInvocationUnavailable):
+            unavailable = ConversationUnavailable(
+                message,
+                reason_code=error.category,
+                failure_stage=failure_stage,
+                operation=error.operation,
+                provider_host=error.provider_host,
+                provider_status_code=error.status_code,
+                retryable=error.retryable,
+            )
+        else:
+            unavailable = ConversationUnavailable(
+                message,
+                reason_code=error.reason_code,
+                failure_stage=failure_stage,
+                operation=error.operation,
+            )
+        ConversationService._log_model_failure(
+            unavailable,
+            component=component,
+        )
+        return unavailable
+
+    @staticmethod
+    def _log_model_failure(
+        error: ConversationUnavailable,
+        *,
+        component: str,
+    ) -> None:
+        log_event(
+            _LOGGER,
+            logging.WARNING,
+            "conversation.model_failure",
+            component=component,
+            failure_stage=error.failure_stage,
+            operation=error.operation,
+            reason_code=error.reason_code,
+            provider_host=error.provider_host,
+            provider_status_code=error.provider_status_code,
+            retryable=error.retryable,
+        )
 
     def _effective_capabilities(self) -> EffectiveCapabilities:
         tools: list[EffectiveToolCapability] = []
@@ -1610,6 +1798,28 @@ class ConversationService:
         )
 
     @staticmethod
+    def _model_visible_capabilities_for_turn(
+        capabilities: EffectiveCapabilities,
+        inputs,
+    ) -> EffectiveCapabilities:
+        """Remove actions whose interaction-scoped success contract is exhausted."""
+        personal_search_succeeded = any(
+            isinstance(item, ActionObservation)
+            and item.capability_id == _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+            and item.status == "succeeded"
+            for item in inputs
+        )
+        if not personal_search_succeeded:
+            return capabilities
+        return capabilities.model_copy(update={
+            "tools": tuple(
+                tool
+                for tool in capabilities.tools
+                if tool.name != _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+            ),
+        })
+
+    @staticmethod
     def _unsafe_execution_started_before_plan(
         execution_order,
         inputs,
@@ -1644,6 +1854,54 @@ class ConversationService:
             for action in actions
         )
 
+    @staticmethod
+    def _action_name(action: ToolCallProposal | AgentDelegationProposal) -> str:
+        return (
+            action.tool_name
+            if isinstance(action, ToolCallProposal)
+            else action.agent_id
+        )
+
+    @classmethod
+    def _name_action_feedback(cls, feedback, actions):
+        if feedback.action_name:
+            return feedback
+        action = next(
+            (
+                candidate
+                for candidate in actions
+                if candidate.action_id == feedback.action_id
+            ),
+            None,
+        )
+        if action is None:
+            return feedback
+        return feedback.model_copy(update={"action_name": cls._action_name(action)})
+
+    @staticmethod
+    def _repeated_action_feedback(
+        inputs: tuple[DecisionFeedback | ActionObservation, ...],
+    ) -> DecisionFeedback | None:
+        """Stop after one bounded repair of the same rejected model action."""
+        last_progress = next(
+            (
+                index
+                for index in range(len(inputs) - 1, -1, -1)
+                if isinstance(inputs[index], ActionObservation)
+                and inputs[index].status == "succeeded"
+            ),
+            -1,
+        )
+        counts: dict[tuple[str, str], int] = {}
+        for item in inputs[last_progress + 1 :]:
+            if not isinstance(item, DecisionFeedback):
+                continue
+            key = (item.action_name or item.action_id, item.reason_code)
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] >= 2:
+                return item
+        return None
+
     def _execute_actions(
         self,
         proposal,
@@ -1672,7 +1930,10 @@ class ConversationService:
             if feedback is None
         ]
         denied = [
-            _ActionResult(action.action_id, feedback)
+            _ActionResult(
+                action.action_id,
+                self._name_action_feedback(feedback, proposal.actions),
+            )
             for action, feedback in zip(proposal.actions, admitted, strict=True)
             if feedback is not None
         ]
@@ -1691,7 +1952,10 @@ class ConversationService:
                     denied.append(
                         _ActionResult(
                             action.action_id,
-                            self._budget_feedback(action.action_id, "tool"),
+                            self._name_action_feedback(
+                                self._budget_feedback(action.action_id, "tool"),
+                                proposal.actions,
+                            ),
                         )
                     )
                     continue
@@ -1701,7 +1965,10 @@ class ConversationService:
                 denied.append(
                     _ActionResult(
                         action.action_id,
-                        self._budget_feedback(action.action_id, "agent"),
+                        self._name_action_feedback(
+                            self._budget_feedback(action.action_id, "agent"),
+                            proposal.actions,
+                        ),
                     )
                 )
             else:
@@ -2419,10 +2686,38 @@ class ConversationService:
         review_criteria=None,
         working_plan=None,
     ):
-        final = FinalMessage(
-            disposition="limitation",
+        return self._fail_closed_limitation(
+            conversation_id,
+            run_ref,
+            principal,
+            messages,
+            inputs,
+            usage,
+            execution_order,
+            concurrent_batches,
+            context_composition,
+            review_criteria=review_criteria,
+            working_plan=working_plan,
             message="本次交互已达到执行预算上限，未生成替代答案。可增加预算后基于已提交结果继续。",
         )
+
+    def _fail_closed_limitation(
+        self,
+        conversation_id,
+        run_ref,
+        principal,
+        messages,
+        inputs,
+        usage,
+        execution_order,
+        concurrent_batches,
+        context_composition,
+        *,
+        message,
+        review_criteria=None,
+        working_plan=None,
+    ):
+        final = FinalMessage(disposition="limitation", message=message)
         self._commit(
             run_ref,
             principal,

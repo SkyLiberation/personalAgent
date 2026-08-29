@@ -1,8 +1,6 @@
 from personal_agent.application.conversation.models import (
     ActionObservation,
     AgentDelegationProposal,
-    AgentTurnDecision,
-    AgentTurnDecisionWithPlan,
     ContinueTurnProposal,
     ConversationInteractionMode,
     ConversationMessage,
@@ -41,8 +39,6 @@ from personal_agent.application.conversation.service import ConversationService
 __all__ = [
     "ActionObservation",
     "AgentDelegationProposal",
-    "AgentTurnDecision",
-    "AgentTurnDecisionWithPlan",
     "ContinueTurnProposal",
     "ConversationInteractionMode",
     "ConversationKnowledgeSaveCommand",

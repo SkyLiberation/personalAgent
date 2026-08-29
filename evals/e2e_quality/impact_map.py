@@ -163,7 +163,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "src/personal_agent/agents/",
         "Child lifecycle, delegation grants, submission reservation and "
         "artifact index; only delegation journeys consume them.",
-        "L04", "E17",
+        "L04",
     ),
     # --- tools -------------------------------------------------------------
     _cases(
@@ -195,7 +195,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/application/knowledge/",
         "Canonical knowledge fact owner: claims, evidence, supersede/conflict.",
-        "E08", "E10", "E12", "ASK-001A", "ASK-001B", "L01",
+        "E10", "E12", "ASK-001A", "ASK-001B", "L01",
     ),
     _cases(
         "src/personal_agent/application/knowledge_lifecycle/",
@@ -260,7 +260,7 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
     _cases(
         "src/personal_agent/infra/a2a.py",
         "A2A protocol adapter for the real specialist.",
-        "L04", "E17",
+        "L04",
     ),
     _cases(
         "src/personal_agent/infra/mcp.py",
@@ -377,13 +377,13 @@ IMPACT_RULES: tuple[ImpactRule, ...] = (
         "evals/e2e_quality/test_product_capability_outcomes.py",
         "Assertions for product and composite journeys.",
         "E01", "E04", "E05",
-        "E08", "E09", "E10", "E11", "E12", "E13", "E14",
+        "E09", "E10", "E11", "E12", "E13", "E14",
         "E22",
     ),
     _cases(
         "evals/e2e_quality/test_release_user_outcomes.py",
         "External capability-profile assertions and shared live fixtures.",
-        "E16", "E17", "E18", "E19", "E21",
+        "E16", "E18", "E19", "E21",
     ),
     _none("docs/", "Documentation carries no production behaviour."),
     _none("tests/", "Unit and contract tests do not change production behaviour."),

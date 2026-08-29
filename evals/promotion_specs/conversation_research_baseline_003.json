@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "gate_id": "CONVERSATION-RESEARCH-BASELINE-003",
+  "case_id": "CONVERSATION-RESEARCH-DELIVERY-001",
+  "role": "baseline",
+  "stage": "failure_baseline",
+  "expected_samples": 20,
+  "constraints": [
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-missing-result-reports",
+      "metric": {"source": "result_report_missing"},
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "at-most-one-failed-product-test",
+      "metric": {"source": "test_failed"},
+      "maximum": 1
+    },
+    {
+      "kind": "minimum_count",
+      "constraint_id": "at-least-nineteen-delivered",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "delivered"]
+      },
+      "minimum": 19
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-tool-argument-rejections",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "tool_arguments_rejected"]
+      },
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-incomplete-usage-reports",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "usage_incomplete"]
+      },
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_sum",
+      "constraint_id": "total-token-budget",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "total_tokens"]
+      },
+      "maximum": 1200000
+    },
+    {
+      "kind": "maximum_nearest_rank_percentile",
+      "constraint_id": "p95-latency-ceiling",
+      "metric": {"source": "duration_seconds"},
+      "percentile": 95,
+      "maximum": 180
+    }
+  ]
+}

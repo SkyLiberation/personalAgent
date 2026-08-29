@@ -105,8 +105,9 @@ class PromotionGateSpec(_FrozenModel):
     schema_version: Literal[1] = 1
     gate_id: str = Field(min_length=1)
     case_id: str = Field(min_length=1)
-    role: Literal["target"] = "target"
+    role: Literal["baseline", "target"] = "target"
     stage: Literal[
+        "failure_baseline",
         "runtime_conformance",
         "provider_conformance",
         "focused_product_target",
@@ -141,7 +142,7 @@ class PromotionSampleFact(_FrozenModel):
     archive_ref: str = Field(min_length=1)
     archive_run_id: str = Field(min_length=1)
     case_id: str = Field(min_length=1)
-    role: Literal["target"]
+    role: Literal["baseline", "target"]
     evidence_class: str = Field(min_length=1)
     formal_entrypoint: str = Field(min_length=1)
     interaction_mode: str = Field(min_length=1)

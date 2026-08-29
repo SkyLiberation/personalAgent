@@ -148,7 +148,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
         "structured_extra_body_digest": canonical_evidence_digest(
             settings.structured.extra_body
         ),
-        "structured_contract_revision": "AgentTurnDecision:v1",
+        "structured_contract_revision": "ModelActionProtocol:v2",
         "web_search_provider": settings.web_search.provider,
         "web_search_base_url": settings.web_search.base_url,
         "interaction_policy_revision": settings.interaction_loop.policy_revision,

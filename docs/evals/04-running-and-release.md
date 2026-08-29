@@ -13,12 +13,25 @@ uv run pytest evals/e2e_quality --collect-only -q --e2e-scope=diagnostic
 
 ```text
 release selection: 9
-diagnostic selection: 21
+diagnostic selection: 19
 retired Investigation conformance: 0
-catalog total: 30
+catalog total: 28
 ```
 
 ## 执行机器 release selection
+
+日常修改先用影响路由决定最小 live selection：
+
+```powershell
+uv run python scripts/e2e_impact.py
+```
+
+当变更必须覆盖完整矩阵时，路由同时输出两个用途不同的命令：
+
+- `iteration command` 带 `-x`，仍在 collection 阶段检查完整 release catalog，但首个失败后停止；当本地存在 checksum 有效且包含全部 release case 的历史 archive 时，命令按最近一次实测 duration 从短到长列出全部 node，并打印排序证据坐标；没有完整历史时回退到目录收集顺序。排序只改变迭代反馈时间，不改变 case、预算或断言，也不能作为发布证据；
+- `release evidence command` 不带 `-x`，执行并记录全部 case outcome，保持下面的完整发布证据契约。
+
+`--quiet` 为已有调用方保持原行为：完整矩阵路由只输出不带 `-x` 的 release evidence command。
 
 ```powershell
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
@@ -37,11 +50,41 @@ uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s
 
 该 selection 同时包含三种不同成本和语义：
 
-- 真实外部 Provider profile：`E16–E21`；
+- 真实外部 Provider profile：`E16/E18/E19/E21`；
 - 真实模型 + frozen provider 的 HTTP conformance：`CTX-001/GOV-001/RUN-001`；
 - 已撤回机制的 `LT` scripted Investigation 用例已删除；需要解释旧结论时只读取 checksum 有效的历史归档，不把它们作为当前测试矩阵。
 
 `diagnostic` 不是一个同质测试层级。
+
+## 执行横切验证套件
+
+横切套件不创建第二套 E2E。`validation_catalog.py` 只引用 canonical catalog 中的既有节点，并为 Tool Calling、MCP dispatch、A2A Artifact 返回或窄范围研究路由预先声明关键检查点。同一节点可以进入多个套件；原始 pytest 结果、Product E2E 结果和发布门禁判断保持不变。
+
+先列出套件节点并完成 collect-only、impact routing 与成本估算：
+
+```powershell
+$nodes = uv run python -m evals.e2e_quality.cross_cutting_validation `
+  --suite tool_calling_protocol --list-nodeids
+uv run pytest $nodes --collect-only -q
+```
+
+需要新 live 证据时，把节点放在同一次 pytest run 中，不使用 `-x`，让整例失败仍能封存供关键检查点读取的 Trace。运行前仍须遵守单样本 `60s`、cohort `10min/200,000 tokens` 和数学早停门禁：
+
+```powershell
+$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces/tool-calling-validation"
+uv run pytest $nodes -q -s
+```
+
+pytest 可以因用户结果失败返回非零；随后对控制台打印的单一密封 run 目录生成横切报告：
+
+```powershell
+uv run python -m evals.e2e_quality.cross_cutting_validation `
+  --suite tool_calling_protocol `
+  --archive <sealed-run-dir>
+```
+
+报告中的 `pytest_outcome` 是整例事实，`capability_passed` 只表示该套件预先声明的关键 Runtime Mechanism 检查点。比如真实 MCP 返回 `401` 时，动作解码与 MCP dispatch 可以通过，而 Provider availability 和用户结果仍失败。缺失节点、重复节点、checksum 失效或 repository/evaluation identity 不一致都会使报告失败；禁止从不同 revision 或 cohort 挑选局部成功样本拼成套件通过。
 
 ## Archive 当前内容
 
@@ -136,6 +179,65 @@ enrollment 只冻结可在执行前知道的 case、role、正式入口、身份
 ```
 
 该 spec 对 `result_report_missing` 和 `test_failed` 都要求零容忍，因此任一正式样本在调用阶段失败即可停止余下 cohort。它不改变产品 target 门槛，也不把执行失败解释成用户结果失败类型。
+
+同一逐样本门禁也接受 `role=baseline`、`stage=failure_baseline`，用于昂贵 A0/baseline 在预声明结论已不可逆时停止后续样本。baseline 仍必须收齐其 spec 要求的样本才能判定 `passed`；门禁不会把提前观察到若干失败自动升级成完整 cohort，也不允许 baseline 与 target 混合。
+
+受控本地 MCP 文件边界 baseline 的可执行入口为：
+
+```powershell
+$env:PERSONAL_AGENT_LOCAL_MCP_FILESYSTEM_SANDBOX_001_EVIDENCE_ROLE = "baseline"
+.\.venv\Scripts\python.exe -m pytest -q `
+  evals/product_baselines/test_local_mcp_filesystem_sandbox_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/local_mcp_filesystem_sandbox_baseline_001.json
+```
+
+该用例只创建 pytest 临时根中的随机 `ALLOWED`/`PRIVATE-CANARY`，不枚举或读取真实用户文件。2026-08-28 的正式 cohort 在第 `9/20` 项已无法达到预声明 `18/20` 最终答案泄露门槛，同时超过 `200,000` token 总预算；门禁拒绝并停止余下 11 项。`9/9` 模型可见越界读取只作为 Runtime 风险证据，不能替代产品失败 baseline 或触发沙箱实现。
+
+长短 Conversation 历史配对 baseline 使用短控制优先、四类旅程交错的 40-item 顺序：
+
+```powershell
+$env:PERSONAL_AGENT_CONVERSATION_CONTEXT_PRESSURE_001_EVIDENCE_ROLE = "baseline"
+$env:PERSONAL_AGENT_CONTEXT_PRESSURE_SEED = "<本次冻结 seed>"
+.\.venv\Scripts\python.exe -m pytest -q `
+  evals/product_baselines/test_conversation_context_pressure_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/conversation_context_pressure_baseline_001.json `
+  --product-promotion-output data/e2e_traces/pg
+```
+
+短控制最多允许一个失败；只有至少 `19/20` 短控制交付后才有资格执行 24 回合、48 条消息的长路径。2026-08-28 的交错正式运行在第 `7/40` 项出现第二个短控制失败，停止余下 33 项，未把短路径错误归因给 Context 增长。长输出根曾使 Windows 原子临时文件越过路径上限；`TraceArchive` 现使用同目录短临时 basename 后再原子替换，最终文件名、checksum 和 archive 契约不变。同一批密封证据已在原长输出根成功重放并写出完整门禁 archive。
+
+普通 Conversation 研究 cohort 也使用逐样本归档。`19/20 delivered` 已不可达到时，门禁停止余下昂贵请求；单条通过不能提前晋级：
+
+当前生产路径与 corrected-grader v3 的 baseline 入口为：
+
+```powershell
+$env:PERSONAL_AGENT_CONVERSATION_RESEARCH_DELIVERY_001_EVIDENCE_ROLE = "baseline"
+$env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = `
+  "data/e2e_traces/product_baselines/conversation-research-v3-current"
+.\.venv\Scripts\python.exe -m pytest -q -s `
+  evals/product_baselines/test_conversation_research_delivery_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/conversation_research_baseline_003.json `
+  --product-promotion-output `
+  data/e2e_traces/promotion_gates/conversation-research-baseline-v3
+```
+
+v3 把每个必需复合概念定义为预声明原子词集合，并要求原子词出现在同一句或同一标题；跨句散落的原子词负控制必须失败。旧 v2 archive 保持原 grader 结果，不能用 v3 离线重放事后晋级。2026-08-28 的新 baseline 在 `0/2 delivered` 后拒绝并停止 18 项，说明修正 grader 后当前生产失败仍成立。
+
+只有获得已准入的生产候选后，才运行 target spec：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -s `
+  evals/product_baselines/test_conversation_research_delivery_001.py `
+  --product-promotion-spec `
+  evals/promotion_specs/conversation_research_target_002.json `
+  --product-promotion-output `
+  data/e2e_traces/promotion_gates/conversation-research-target-002
+```
+
+当前 per-sample 入口收集 20 个 pytest item，每项只执行一次正式 HTTP 请求并形成一份 checksum archive。历史 v1 聚合 archive 保持只读，不能与新 cohort 合并。
 
 后台持续能力边界已采用同样的逐样本结构，当前可执行入口只保留参数化 v2：
 

@@ -232,23 +232,6 @@ class ContinueTurnProposal(_StrictModel):
         return self
 
 
-class AgentTurnDecision(_StrictModel):
-    """Object-root output for a turn that has no admitted working plan yet."""
-
-    decision: ContinueTurnProposal | FinalMessage
-
-
-class AgentTurnDecisionWithPlan(_StrictModel):
-    """Object-root output while an admitted plan can now be closed or continued.
-
-    ``FinalMessage`` comes first only in this lifecycle projection so structured
-    output does not keep selecting an unchanged continuation after evidence is
-    sufficient. Admission and the completion gate still reject premature closure.
-    """
-
-    decision: FinalMessage | ContinueTurnProposal
-
-
 class EffectiveToolCapability(_StrictModel):
     name: str
     description: str
@@ -305,6 +288,7 @@ class ReviewCriteria(_StrictModel):
 class DecisionFeedback(_StrictModel):
     kind: Literal["decision_feedback"] = "decision_feedback"
     action_id: str
+    action_name: str = ""
     reason_code: str
     message: str
     repairable_fields: tuple[str, ...] = ()
@@ -447,10 +431,12 @@ class TurnContextComposition(_StrictModel):
     are different problems with different remedies, and neither can be measured
     against a baseline without this breakdown.
 
-    The four character counts are disjoint and sum to the assembled input, so a
+    The five character counts are disjoint and sum to the provider-neutral
+    assembled input, so a
     segment's share is a ratio rather than an estimate. Characters rather than
-    tokens: the count is derived from the exact string sent, whereas a tokenizer
-    would introduce a second, Provider-dependent measure of the same input.
+    tokens: message counts use the exact strings sent and action definitions use
+    their canonical Port serialization; a tokenizer would introduce a second,
+    Provider-dependent measure of the same input.
     ``input_tokens`` is the Provider's own report for this turn, which is what
     makes the characters-to-tokens ratio observable instead of assumed.
     """
@@ -459,6 +445,7 @@ class TurnContextComposition(_StrictModel):
 
     turn_index: int = Field(ge=0)
     capability_projection_chars: int = Field(ge=0)
+    model_action_definition_chars: int = Field(default=0, ge=0)
     system_prompt_other_chars: int = Field(ge=0)
     conversation_messages_chars: int = Field(ge=0)
     typed_inputs_chars: int = Field(ge=0)
@@ -468,6 +455,7 @@ class TurnContextComposition(_StrictModel):
     def total_chars(self) -> int:
         return (
             self.capability_projection_chars
+            + self.model_action_definition_chars
             + self.system_prompt_other_chars
             + self.conversation_messages_chars
             + self.typed_inputs_chars
@@ -514,7 +502,6 @@ __all__ = [
     "ActionObservation",
     "ActionProposal",
     "AgentDelegationProposal",
-    "AgentTurnDecision",
     "CommittedUsage",
     "ContinueTurnProposal",
     "ConversationInteractionMode",

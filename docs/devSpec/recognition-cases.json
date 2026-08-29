@@ -19,6 +19,11 @@
       "expected": "docs/AGENTS.md"
     },
     {
+      "id": "docs_agent_ref_overlay",
+      "path": "docs/agentRef/README.md",
+      "expected": "docs/AGENTS.md"
+    },
+    {
       "id": "eval_catalog_overlay",
       "path": "evals/e2e_quality/evidence_catalog.py",
       "expected": "evals/AGENTS.md"
@@ -54,6 +59,21 @@
       "id": "evd_refactor",
       "task": "纯工程重构怎样建立工程约束基线并完成复杂度准入？",
       "expected": "EVD"
+    },
+    {
+      "id": "ref_claude_context",
+      "task": "参考 Claude Code 能力参考，比较它的 Context 隔离和渐进式披露机制。",
+      "expected": "REF"
+    },
+    {
+      "id": "ref_harness_recovery",
+      "task": "调研优秀智能体与 Agent Harness 比较，重点分析 durable session 和恢复。",
+      "expected": "REF"
+    },
+    {
+      "id": "ref_memory_agents",
+      "task": "整理外部智能体的 Memory 能力，比较 Letta 能力参考和 Hermes Agent 能力参考。",
+      "expected": "REF"
     },
     {
       "id": "arc_fact_owner",

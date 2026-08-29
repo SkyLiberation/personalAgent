@@ -272,6 +272,34 @@ class TestToolExecutor:
         assert [tool.name for tool in public] == ["echo"]
         assert [tool.name for tool in workflow] == ["workflow_only"]
 
+    def test_workflow_invocation_requires_workflow_exposure(self, executor):
+        executor.register(echo)
+        executor.register(workflow_only)
+
+        assert executor.validate_workflow_call("echo", {}).status == (
+            "capability_missing"
+        )
+        assert executor.validate_workflow_call("workflow_only", {}).status == (
+            "accepted"
+        )
+        rejected = executor.invoke_workflow(
+            "echo",
+            {"message": "not allowed"},
+            execution_scope=_scope(),
+            tool_call_id="workflow-public-rejected",
+            source_platform="test",
+        )
+        accepted = executor.invoke_workflow(
+            "workflow_only",
+            {},
+            execution_scope=_scope(),
+            tool_call_id="workflow-hidden-accepted",
+            source_platform="test",
+        )
+
+        assert rejected["ok"] is False
+        assert accepted["ok"] is True
+
     def test_direct_invocation_records_gateway_audit(self):
         sink = InMemoryToolAuditSink()
         executor = ToolExecutor(audit_sink=sink)

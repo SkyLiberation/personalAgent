@@ -317,7 +317,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
         "structured_timeout_seconds": settings.structured.timeout_seconds,
         "structured_max_retries": settings.structured.max_retries,
         "structured_contract_revision": (
-            "AgentTurnDecision:v1+InteractionIntentProposal:lifecycle-v2+"
+            "ModelActionProtocol:v2+InteractionIntentProposal:lifecycle-v2+"
             "ConversationWorkingPlan:superseded"
         ),
         "review_instruction_digest": canonical_evidence_digest(

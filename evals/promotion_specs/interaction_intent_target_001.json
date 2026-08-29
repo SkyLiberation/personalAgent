@@ -25,6 +25,15 @@
       "maximum": 120000
     },
     {
+      "kind": "maximum_sum",
+      "constraint_id": "intent-and-response-call-budget",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "usage", "model_calls"]
+      },
+      "maximum": 40
+    },
+    {
       "kind": "maximum_nearest_rank_percentile",
       "constraint_id": "p95-latency-ceiling",
       "metric": {

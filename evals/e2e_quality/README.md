@@ -3,7 +3,7 @@
 本目录当前由 [`evidence_catalog.py`](evidence_catalog.py) 分成两种**执行 selection**：
 
 - `release`：9 条同时具有 typed 用户结果契约与真实 HTTP/模型/PostgreSQL profile 的 Product E2E；
-- `diagnostic`：21 条 Application、Runtime 或 Capability Profile supporting evidence。
+- `diagnostic`：19 条 Application、Runtime 或 Capability Profile supporting evidence。
 
 已撤回的 Investigation Project 及其 scripted conformance 已从当前矩阵删除；历史结论只由 checksum 归档保存。
 
@@ -34,6 +34,21 @@ outcome 和 checksum 求交集。终态由测试中的可执行断言拥有，�
 `expected_terminal` 镜像字段。
 
 文档不记录已退出用例或某次运行状态；历史证据留在对应 archive，当前矩阵始终由 catalog 计算。
+
+## 横切验证套件
+
+`validation_catalog.py` 把既有 E2E 的密封 Trace 复用于 Tool Calling、MCP dispatch、A2A Artifact 返回和窄范围研究路由等机制检查。一条 E2E 可以进入多个套件，但仍只有一个 `evidence_catalog.py` 证据分类。`cross_cutting_validation.py` 同时报告原始 `pytest_outcome` 和关键检查点结果；它不修改 archive，也不被 release gate 消费。
+
+```powershell
+uv run python -m evals.e2e_quality.cross_cutting_validation `
+  --suite tool_calling_protocol --list-nodeids
+uv run python -m evals.e2e_quality.cross_cutting_validation `
+  --suite tool_calling_protocol --archive <sealed-run-dir>
+uv run python -m evals.e2e_quality.cross_cutting_validation `
+  --suite narrow_research_routing --archive <sealed-run-dir>
+```
+
+未来执行应把套件列出的节点放在同一次 pytest run 中。多个 `--archive` 只允许代码、dirty digest、Provider、模型、Prompt、预算和 fixture 身份完全一致；缺失用例或跨身份拼接保持失败。局部机制通过不能覆盖 pytest 失败或 Product E2E 失败。
 
 ## 运行
 

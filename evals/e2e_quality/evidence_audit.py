@@ -9,6 +9,7 @@ from typing import Iterable
 
 from evals.e2e_quality.evidence_catalog import EVIDENCE_CASES, EvidenceCase
 from evals.e2e_quality.metrics_report import MeasurementArchiveError, available_cohorts
+from evals.e2e_quality.validation_catalog import VALIDATION_SUITES, ValidationSuite
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,12 @@ class EvidenceOverlap:
     shared_invariants: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ValidationSuiteOverlap:
+    evidence_id: str
+    suite_ids: tuple[str, ...]
+
+
 def build_overlap_graph(cases: Iterable[EvidenceCase]) -> tuple[EvidenceOverlap, ...]:
     """Expose shared assertions while preserving each case's unique invariants."""
 
@@ -41,6 +48,23 @@ def build_overlap_graph(cases: Iterable[EvidenceCase]) -> tuple[EvidenceOverlap,
                     shared_invariants=shared,
                 ))
     return tuple(edges)
+
+
+def build_validation_suite_overlaps(
+    suites: Iterable[ValidationSuite],
+) -> tuple[ValidationSuiteOverlap, ...]:
+    memberships: dict[str, list[str]] = {}
+    for suite in suites:
+        for case in suite.cases:
+            memberships.setdefault(case.evidence_id, []).append(suite.suite_id.value)
+    return tuple(
+        ValidationSuiteOverlap(
+            evidence_id=evidence_id,
+            suite_ids=tuple(sorted(suite_ids)),
+        )
+        for evidence_id, suite_ids in sorted(memberships.items())
+        if len(suite_ids) > 1
+    )
 
 
 def audit_catalog(cases: Iterable[EvidenceCase]) -> tuple[AuditFinding, ...]:
@@ -110,6 +134,12 @@ def main() -> int:
             f"{overlap.left_evidence_id},{overlap.right_evidence_id}\t"
             + ",".join(overlap.shared_invariants)
         )
+    for overlap in build_validation_suite_overlaps(VALIDATION_SUITES):
+        print(
+            "suite_overlap\t"
+            f"{overlap.evidence_id}\t"
+            + ",".join(overlap.suite_ids)
+        )
     return 1 if any(item.severity == "error" for item in findings) else 0
 
 
@@ -120,7 +150,9 @@ if __name__ == "__main__":
 __all__ = [
     "AuditFinding",
     "EvidenceOverlap",
+    "ValidationSuiteOverlap",
     "audit_catalog",
     "audit_measurement_cohorts",
     "build_overlap_graph",
+    "build_validation_suite_overlaps",
 ]

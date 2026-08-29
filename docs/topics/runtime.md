@@ -31,6 +31,8 @@ messages + authenticated principal
 
 模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 
+Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDefinition`，服务提供方通过原生工具调用返回动作名和 typed 参数。没有当前 working plan 时，Tool/Agent 动作 Schema 不暴露 `plan_step_id`；模型若创建新 Plan，必须先单独提交 `working_plan`，Admission 接受后下一模型回合才会暴露待完成步骤并要求动作绑定。`Adapter` 只把调用解码为现有 Proposal；Admission、权限、预算和执行网关仍在模型之外决定是否执行。语义 verifier 注册为 `workflow_activity`：它不进入模型可见能力，也不能通过普通交互入口调用；只有 Runtime 在冻结审查标准后通过独立 workflow 校验与执行入口生成 Verification Receipt。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和 `FinalMessage` 保持可用。
+
 ## Context materialization
 
 每次模型调用按以下顺序构造输入：
@@ -52,7 +54,7 @@ Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才�
 
 ## Model retry
 
-模型 Port 只有一个 typed-operation retry owner。它只重试 transport/5xx、malformed transport envelope 和 Provider 空 structured content；一般 schema/语义错误不作为 transient 重试，而由 typed repair、DecisionFeedback 或 fail closed 处理。retry 次数与错误进入模型 trace/usage。
+模型 Port 只有一个 typed-operation retry owner。它只重试 transport/5xx、malformed transport envelope 和 Provider 空 structured content；一般 schema/语义错误不作为 transient 重试，而由 typed repair、DecisionFeedback 或 fail closed 处理。retry 次数与错误进入模型 trace/usage。Provider 接受请求但没有返回 action、返回未知 action、无效 call ID、非法参数 JSON、非对象参数或不符合 Application action payload 时，边界保留稳定 `reason_code` 和失败阶段；这些事实不改变重试资格，也不触发猜测或自动修补。
 
 ## Grounded answer
 
@@ -61,6 +63,7 @@ Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才�
 ## 可观测与评测
 
 - `InteractionTrace` 记录 typed inputs、usage、context composition、执行顺序和 final message；
+- `conversation.model_failure` 记录脱敏的 component、stage、operation、reason code、Provider host/status 和 retryable；不记录 Prompt、Provider 原文或 action 参数；
 - E2E archive 记录 `MeasurementProfile` 与 `CaseMeasurement`；
 - `metrics_report` 生成同 profile 的完成率、token、调用、延迟与恢复指标；
 - `release_gate` 独立判断 archive 能否用于目标 revision 发布。

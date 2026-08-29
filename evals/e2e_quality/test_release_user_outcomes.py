@@ -428,7 +428,7 @@ def _yield_live_a2a_web_process(server_temp_dir: Path) -> Iterator[LiveWebProces
             if response.status != 200:
                 raise RuntimeError(f"agent card returned HTTP {response.status}")
     except (HTTPError, URLError, TimeoutError, OSError, RuntimeError) as exc:
-        message = f"E17 profile requires a live GPT Researcher A2A provider: {exc}"
+        message = f"A2A profile requires a live GPT Researcher provider: {exc}"
         if _live_e2e_required():
             pytest.fail(message)
         pytest.skip(message)
@@ -790,71 +790,4 @@ def test_e19_http_process_mcp_capability_unavailable_fails_closed(
     assert result["disposition"] == "limitation"
     assert trace["usage"]["tool_calls"] == 0
     assert not any(item["kind"] == "tool_result" for item in trace["inputs"])
-    assert not any(key in result for key in ("task", "plan", "command", "completion_report"))
-
-
-def test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result(
-    live_a2a_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    user_text = (
-        "请先委托一个独立的外部研究助手完成资料搜集和研究初稿，再由你核验并综合。"
-        "研究主题是 Agent2Agent（A2A）协议，优先依据 a2a-protocol.org 的官方协议文档，"
-        "并补充其他权威来源。报告需要比较说明协议目标、核心交互机制、信任边界和适用限制，"
-        "最后给出结构化中文结论及来源依据，不要只给简短概述。"
-    )
-    _assert_natural_user_text(
-        user_text,
-        "gpt_researcher",
-        "AgentArtifact",
-        "completed",
-        "父级",
-    )
-    result = _post_json(
-        f"{live_a2a_web_process.base_url}/api/conversation/turn",
-        {
-            "conversation_id": f"release-e17-a2a-{uuid4().hex}",
-            "messages": [{"role": "user", "content": user_text}],
-            "interaction_mode": "auto",
-        },
-    )
-    trace = _get_json(
-        f"{live_a2a_web_process.base_url}/api/conversation/runs/{result['interaction_run_ref']}"
-    )
-    agent_artifacts = [item for item in trace["inputs"] if item["kind"] == "agent_artifact"]
-    trace_archive.write_trace(
-        nodeid=request.node.nodeid,
-        case_id="E17.release_http_real_a2a_delegation",
-        trace={
-            "natural_user_text": user_text,
-            "result": result,
-            "interaction_trace": trace,
-            "agent_artifact": agent_artifacts[0] if agent_artifacts else None,
-        },
-    )
-    assert result["disposition"] == "answer"
-    assert len(agent_artifacts) == 1
-    assert agent_artifacts[0]["capability_id"] == "gpt_researcher"
-    assert agent_artifacts[0]["status"] == "succeeded"
-    artifact = agent_artifacts[0]["payload"]["artifacts"][0]
-    excerpt = artifact["content_excerpt"]
-    assert artifact["content_length"] > 200
-    assert "data:" not in excerpt
-    assert "[DONE]" not in excerpt
-    assert "Cancellation requested" not in excerpt
-    assert agent_artifacts[0]["payload"]["artifact_refs"]
-    assert trace["final_message"]["message"] == result["message"]["content"]
-    assert trace["usage"]["agent_calls"] == 1
-    final_message = str(result["message"]["content"])
-    assert all(
-        any(term in final_message for term in alternatives)
-        for alternatives in (
-            ("目标", "目的"),
-            ("机制", "交互"),
-            ("信任", "安全"),
-            ("限制", "边界"),
-            ("来源", "依据"),
-        )
-    )
     assert not any(key in result for key in ("task", "plan", "command", "completion_report"))

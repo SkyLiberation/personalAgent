@@ -223,7 +223,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
             settings.structured.extra_body
         ),
         "structured_contract_revision": (
-            "AgentTurnDecision:v1|InteractionIntentProposal:lifecycle-v2"
+            "ModelActionProtocol:v2|InteractionIntentProposal:lifecycle-v2"
         ),
         "review_instruction_digest": canonical_evidence_digest(
             _DERIVATION_INSTRUCTION

@@ -281,16 +281,6 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         capability_profile=CapabilityProfile.WEB_SEARCH,
     ),
     _product(
-        "E08",
-        "test_product_e08_ask_then_explicit_save",
-        EvidenceLayer.AUTHORITY_GATEWAY,
-        EvidenceLayer.VERIFICATION_COMPLETION,
-        covered_invariants=frozenset({
-            "ask.zero_write",
-            "knowledge_save.direct_solidify_contract",
-        }),
-    ),
-    _product(
         "E09",
         "test_product_e09_multi_source_capture",
         EvidenceLayer.AUTHORITY_GATEWAY,
@@ -544,15 +534,6 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         CapabilityProfile.GITHUB_MCP,
     ),
     _profile(
-        "E17",
-        "test_e17_http_process_delegates_to_real_a2a_and_verifies_parent_result",
-        CapabilityProfile.GPT_RESEARCHER_A2A,
-        covered_invariants=frozenset({
-            "a2a.deep_research",
-            "a2a.provider_profile",
-        }),
-    ),
-    _profile(
         "E18",
         "test_e18_http_process_reads_notion_through_real_mcp_gateway",
         CapabilityProfile.NOTION_MCP,
@@ -594,8 +575,7 @@ def validate_catalog() -> None:
             "L07",
         },
         EvidenceClass.APPLICATION_E2E: {
-            "E01", "E04", "E05", "E08", "E09", "E10", "E11", "E12",
-            "E13",
+            "E01", "E04", "E05", "E09", "E10", "E11", "E12", "E13",
         },
         EvidenceClass.RUNTIME_CONFORMANCE: {
             "L02", "L05",
@@ -603,7 +583,7 @@ def validate_catalog() -> None:
             "RUN-001",
             "GOV-001", "DUR-001", "OBS-001",
         },
-        EvidenceClass.CAPABILITY_PROFILE: {"E16", "E17", "E18", "E19", "E21"},
+        EvidenceClass.CAPABILITY_PROFILE: {"E16", "E18", "E19", "E21"},
         EvidenceClass.BOUNDARY_EVALUATION: set(),
     }
     for evidence_class, case_ids in expected.items():

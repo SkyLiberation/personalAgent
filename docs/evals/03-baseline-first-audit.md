@@ -26,7 +26,7 @@
 - `E05/E09/E10/E11/E12/E13`：现有 Application API 的纵向行为；
 - `DUR-001/OBS-001`：当前 trace scope 与诊断行为；
 - `L02/L03/L04/L05`：当前 loop 的并发、恢复、delegation 和 budget 行为；
-- `E16/E17/E18/E19/E21`：当前 Provider profile；
+- `E16/E18/E19/E21`：当前 Provider profile；A2A profile 不再复制 `E17`，由 `L04` 的 Product E2E 与 `a2a_artifact_return` 横切检查共同覆盖；
 - `LT01–LT08、LT10–LT13`：已删除 Investigation runtime protocol 的历史 conformance；当前测试已移除。
 
 这些测试通过只能说明当前行为受到回归保护，不能作为新增 Aggregate、Queue、Planner、Projection 或治理机制的需求来源。

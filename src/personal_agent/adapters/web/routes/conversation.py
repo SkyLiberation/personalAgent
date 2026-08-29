@@ -32,7 +32,8 @@ class ConversationTurnRequest(BaseModel):
         default="default",
         description=(
             "default requires review before a new formal plan can execute; "
-            "auto authorizes plan creation and execution in the same turn"
+            "auto admits a new plan without waiting, then exposes its pending "
+            "steps for bound execution on the next model turn"
         ),
     )
 

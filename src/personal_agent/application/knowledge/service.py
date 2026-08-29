@@ -1331,6 +1331,20 @@ class KnowledgeService:
             if start < 0:
                 continue
             end = start + len(text)
+            for source_start, source_end, source_text in _split_spans(block.full_context):
+                exact_start = block.full_context.find(
+                    source_text,
+                    source_start,
+                    source_end,
+                )
+                if exact_start < 0:
+                    continue
+                exact_end = exact_start + len(source_text)
+                if exact_start <= start and end <= exact_end:
+                    start = exact_start
+                    end = exact_end
+                    text = source_text
+                    break
             spans.append(EvidenceSpan(
                 evidence_block_id=block.evidence_block_id,
                 owner_id=owner_id,
@@ -1390,6 +1404,38 @@ class KnowledgeService:
                 )
             if not statement:
                 continue
+            # Provenance is an ingestion fact, not an open-world semantic
+            # decision. Invalid model proposals fail this enhancement run and
+            # use the existing deterministic source extractor; Admission must
+            # never receive a silently rewritten provenance proposal.
+            if created_by == "assistant":
+                expected_source_role = "assistant_inference"
+            else:
+                if source_type in {"conversation", "user_message"}:
+                    expected_source_role = "user_assertion"
+                elif source_type in {"research_event", "research_source"}:
+                    expected_source_role = "research_source"
+                else:
+                    expected_source_role = "source_document"
+            if draft.source_role != expected_source_role:
+                raise ValueError(
+                    "candidate_claim_source_role_mismatch:"
+                    f"expected={expected_source_role}:actual={draft.source_role}"
+                )
+            if (created_by == "assistant") != (
+                draft.claim_type == "assistant_inference"
+            ):
+                raise ValueError(
+                    "candidate_claim_assistant_provenance_mismatch:"
+                    f"created_by={created_by}:claim_type={draft.claim_type}"
+                )
+            if (
+                draft.claim_type == "uncertain_claim"
+                and not draft.uncertainty_reason.strip()
+            ):
+                raise ValueError(
+                    "candidate_uncertain_claim_requires_uncertainty_reason"
+                )
             canonical_statement = _canonical(statement)
             canonical_key = stable_hash(f"{draft.claim_type}:{canonical_statement}")[:20]
             if canonical_key in seen:

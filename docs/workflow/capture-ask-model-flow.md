@@ -37,9 +37,10 @@ Ask 不是独立 Workflow、Runtime facade 或 HTTP 路由。产品只有 Conver
 
 1. Conversation 只在模型选择 `search_personal_knowledge` 后调用 `ConversationKnowledgeReadPort.select_personal_evidence()`；服务端先校验当前 principal 和作用域，再按查询选择最多 8 条证据。
 2. 结果成为 `search_personal_knowledge` 的有界 `tool_result`，包含原文 citation、claim summary 和 conflict ids；它是只读上下文，不是答案。
-3. 用户明确禁止上网且正向要求使用已保存事实时，模型可以从个人证据回答，外部搜索调用必须为零。
-4. 用户要求官方/当前外部资料时，模型必须调用可见的只读搜索 Tool；Observation 与个人证据进入同一个 loop。
-5. Conversation 生成唯一 FinalMessage。没有足够证据时必须给 limitation，不能把 Tool success 当完成。
+3. 成功 `Observation` 提交后，下一模型回合仍读取该 Observation，但逐回合能力投影不再暴露已经完成的 `search_personal_knowledge`；该投影不保存新业务事实，Admission 的重复搜索拒绝只作为 fail-closed 防线。
+4. 用户明确禁止上网且正向要求使用已保存事实时，模型可以从个人证据回答，外部搜索调用必须为零。
+5. 用户要求官方或当前外部资料时，模型必须调用可见的只读搜索工具；`Observation` 与个人证据进入同一个循环。单个官方文档查询，或少量需要和个人 Context 在父级回答中合并的只读查询，不委托整个请求；只有可独立验证且确实需要广泛综合、Context 隔离或并行研究的子目标才使用外部研究智能体。
+6. Conversation 生成唯一 FinalMessage。没有足够证据时必须给 limitation，不能把 Tool success 当完成。
 
 这种形态与优秀 Agent 的共同点是“一个 manager/loop 组合多个只读资源”；采用它的原因不是框架对齐，而是 ASK-001A/B 的同入口 baseline 与目标 E2E。
 
@@ -56,7 +57,7 @@ Ask 不是独立 Workflow、Runtime facade 或 HTTP 路由。产品只有 Conver
 ## 可执行证据
 
 - `ASK-001A`：同一 Conversation 只使用 owner 个人资料，逐项引用冲突原文，不调用 web、不泄漏其他 principal、不新增 Claim。
-- `ASK-001B`：同一 Conversation 同时使用个人证据与官方 web evidence，只有一个 FinalMessage，不泄漏、不写知识。
+- `ASK-001B`：同一 Conversation 同时使用个人证据与官方 Web 证据，最终回答包含官方 URL，只有一个 `FinalMessage`，不泄漏、不写知识；`narrow_research_routing` 横切套件独立检查直接读取与零整体委托。
 - `E08`：Conversation 回答本身不写 Claim；显式 solidify 后才进入知识写路径。
 
 运行：

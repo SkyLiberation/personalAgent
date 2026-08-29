@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -68,6 +69,27 @@ def test_trace_archive_persists_outcome_summary_and_checksums(temp_dir) -> None:
         checksums[filename] = digest
     for path in archive.run_dir.glob("*.json"):
         assert checksums[path.name] == sha256(path.read_bytes()).hexdigest()
+
+
+def test_atomic_write_uses_a_short_temporary_basename(temp_dir, monkeypatch) -> None:
+    final_path = temp_dir / ("promotion-decision-" + "x" * 80 + ".trace.json")
+    observed: list[Path] = []
+    original_write_bytes = Path.write_bytes
+
+    def recording_write_bytes(path: Path, data: bytes) -> int:
+        observed.append(path)
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", recording_write_bytes)
+
+    TraceArchive._atomic_write(final_path, b"sealed")
+
+    assert final_path.read_bytes() == b"sealed"
+    temporary, = observed
+    assert temporary.parent == final_path.parent
+    assert temporary.name.startswith(".tmp-")
+    assert len(temporary.name) < len(final_path.name)
+    assert not temporary.exists()
 
 
 def test_trace_archive_automatically_extracts_typed_interaction_measurement(

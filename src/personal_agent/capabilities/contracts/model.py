@@ -8,11 +8,66 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, Iterator, Literal, Protocol, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 ModelRequestKind = Literal["structured", "tool_calling", "text"]
 ModelReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+ModelActionKind = Literal["tool", "agent", "working_plan", "final"]
+ModelInvocationFailureCategory = Literal[
+    "provider_rejected",
+    "provider_timeout",
+    "provider_transport",
+]
+StructuredOutputFailureCode = Literal[
+    "structured_output_invalid",
+    "provider_action_missing",
+    "provider_action_type_unsupported",
+    "provider_action_call_id_missing",
+    "provider_action_call_id_duplicate",
+    "provider_action_unknown",
+    "provider_action_arguments_invalid_json",
+    "provider_action_arguments_not_object",
+    "provider_action_payload_invalid",
+    "provider_action_final_not_exclusive",
+    "provider_action_multiple_working_plans",
+    "provider_action_definition_invalid",
+]
+
+
+class ModelActionDefinition(BaseModel):
+    """One provider-neutral action exposed to a model for this invocation.
+
+    ``name`` is the provider-safe wire identity. ``target_name`` remains the
+    canonical Application capability or control identity and is never accepted
+    from the model. The Adapter consumes the definition to build provider tool
+    declarations; the Application consumes the same immutable definition to
+    decode the selected wire name without maintaining a second registry.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    kind: ModelActionKind
+    target_name: str = Field(min_length=1)
+    description: str = ""
+    input_schema: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _requires_object_input(self) -> "ModelActionDefinition":
+        if self.input_schema.get("type") != "object":
+            raise ValueError("model action input_schema must have an object root")
+        return self
+
+
+class ModelActionInvocation(BaseModel):
+    """A structurally validated provider action call at the model Port boundary."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    call_id: str = Field(min_length=1)
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    arguments: dict[str, Any]
 
 
 class ModelInvocationUnavailable(RuntimeError):
@@ -27,7 +82,7 @@ class ModelInvocationUnavailable(RuntimeError):
     def __init__(
         self,
         operation: str,
-        category: str,
+        category: ModelInvocationFailureCategory,
         *,
         model: str | None = None,
         provider_host: str | None = None,
@@ -46,9 +101,16 @@ class ModelInvocationUnavailable(RuntimeError):
 class StructuredOutputFailure(ValueError):
     """The provider returned content that failed the typed output contract."""
 
-    def __init__(self, operation: str, reason: str) -> None:
+    def __init__(
+        self,
+        operation: str,
+        reason: str,
+        *,
+        reason_code: StructuredOutputFailureCode = "structured_output_invalid",
+    ) -> None:
         self.operation = operation
         self.reason = reason
+        self.reason_code = reason_code
         super().__init__(f"{operation} structured parse failed: {reason}")
 
 
@@ -64,8 +126,8 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     max_tokens: int = 500
     reasoning_effort: ModelReasoningEffort | None = None
     kind: ModelRequestKind = "structured"
-    tools: list[dict[str, object]] = field(default_factory=list)
-    tool_choice: str | dict[str, object] | None = None
+    action_definitions: tuple[ModelActionDefinition, ...] = ()
+    action_choice: Literal["none", "auto", "required"] | None = None
     response_format: dict[str, object] | None = None
     extra_body: dict[str, object] | None = None
     metadata: dict[str, object] = field(default_factory=dict)
@@ -75,6 +137,17 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
             raise ValueError("model request requires an explicit context projection reference")
         if self.context_projection_ref.startswith("inline:"):
             raise ValueError("inline model context bypass is forbidden")
+        action_names = [item.name for item in self.action_definitions]
+        if len(action_names) != len(set(action_names)):
+            raise ValueError("model action definitions require unique wire names")
+        if self.kind == "tool_calling" and not self.action_definitions:
+            raise ValueError("tool-calling request requires model action definitions")
+        if self.kind != "tool_calling" and (
+            self.action_definitions or self.action_choice is not None
+        ):
+            raise ValueError(
+                "model action definitions and choice are valid only for tool-calling requests"
+            )
 
 
 def sealed_context_projection_ref(
@@ -109,7 +182,7 @@ class StructuredModelResponse(Generic[StructuredOutputT]):
     output_tokens: int | None = None
     total_tokens: int | None = None
     raw_response: Any = None
-    tool_calls: list[dict[str, Any]] | None = None
+    action_invocations: tuple[ModelActionInvocation, ...] = ()
     retry_attempts: int = 0
     retry_errors: list[str] = field(default_factory=list)
 
@@ -179,8 +252,10 @@ class ModelInvocationDenial(BaseModel):
 
 
 __all__ = [
+    "ModelActionDefinition", "ModelActionInvocation", "ModelActionKind",
     "ModelCallIntent", "ModelInvocationDenial", "ModelInvocationGrant", "ModelReasoningEffort",
-    "ModelInvocationUnavailable", "StructuredOutputFailure",
+    "ModelInvocationFailureCategory", "ModelInvocationUnavailable",
+    "StructuredOutputFailure", "StructuredOutputFailureCode",
     "ModelRequestKind",
     "SkillActivationDecision", "SkillContextGrant", "StreamChunk", "StreamingModelClient",
     "StructuredModelClient", "StructuredModelRequest", "StructuredModelResponse", "StructuredOutputT",

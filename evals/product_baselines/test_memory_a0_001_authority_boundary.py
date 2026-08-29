@@ -756,7 +756,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
         "structured_extra_body_digest": canonical_evidence_digest(
             settings.structured.extra_body
         ),
-        "structured_contract_revision": "AgentTurnDecision:v1",
+        "structured_contract_revision": "ModelActionProtocol:v2",
         "interaction_policy_revision": settings.interaction_loop.policy_revision,
         "formal_entrypoint": "POST /api/conversation/turn",
         "persistence": "production-postgres-composition",

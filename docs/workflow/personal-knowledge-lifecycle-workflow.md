@@ -34,6 +34,17 @@ raw input
 
 `KnowledgeService.ingest_knowledge()` 是 evidence-first 摄取入口。
 
+结构化模型返回的 semantic span 只是提取 Proposal。Application 在保存 `EvidenceSpan` 前会按
+`EvidenceBlock.full_context` 校验原文位置；如果模型只返回完整原文句子中的局部片段，则确定性扩展到
+包含该片段的最小完整句子，并据此重算 offset、locator 与 quote hash。这样项目名、颜色代号等不透明值不会因
+模型只抽出局部主语而从可引用证据中丢失。该规则不改变 Ask 的 Claim-first 门禁：没有可回答 Claim 的 raw
+EvidenceSpan 仍不能单独进入答案。
+
+Claim 提取结果同样只是 Proposal。`created_by` 与 `source_type` 是摄取边界产生的 provenance 事实，模型返回的
+`source_role` 和 `assistant_inference` 必须与它们一致；`uncertain_claim` 必须携带非空、可审计的
+`uncertainty_reason`。任一不变量失败时，本次 semantic claim enhancement 标记为 `partial` 并记录具体错误，
+然后使用既有 deterministic source extractor 重建候选；Admission 不接收静默改写过的模型 Proposal。
+
 ```text
 text/source
   -> Artifact

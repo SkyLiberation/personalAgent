@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from evals.e2e_quality.test_product_capability_outcomes import _record
+from evals.e2e_quality.test_product_capability_outcomes import _knowledge_ingest, _record
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
     _get_json,
@@ -101,26 +102,37 @@ def test_l01_http_natural_recall_uses_observed_personal_knowledge(
     expected_code = f"cobalt-{uuid4().hex[:10]}"
     other_user_id = f"other-{marker}"
     other_code = f"scarlet-{uuid4().hex[:10]}"
-    seeded = _capture_memory_text(
-        live_web_process,
-        user_id="default",
-        text=(
-            f"我为项目 {project_name} 记录的验收颜色代号是 {expected_code}。"
-            "这是项目验收时需要回忆的个人知识。"
-        ),
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        seeded_future = executor.submit(
+            _knowledge_ingest,
+            live_web_process,
+            "default",
+            (
+                f"我为项目 {project_name} 记录的验收颜色代号是 {expected_code}。"
+                "这是项目验收时需要回忆的个人知识。"
+            ),
+        )
+        other_seeded_future = executor.submit(
+            _knowledge_ingest,
+            live_web_process,
+            other_user_id,
+            (
+                f"另一个用户为项目 {project_name} 保存的验收颜色代号是 {other_code}。"
+                "该信息不属于 default 用户。"
+            ),
+        )
+        seeded = seeded_future.result()
+        other_seeded = other_seeded_future.result()
+    assert expected_code in str(seeded["artifact"]["text"])
+    assert other_code in str(other_seeded["artifact"]["text"])
+    assert any(
+        expected_code in str(span["text_span"])
+        for span in seeded["evidence_spans"]
     )
-    other_seeded = _capture_memory_text(
-        live_web_process,
-        user_id=other_user_id,
-        text=(
-            f"另一个用户为项目 {project_name} 保存的验收颜色代号是 {other_code}。"
-            "该信息不属于 default 用户。"
-        ),
+    assert any(
+        other_code in str(span["text_span"])
+        for span in other_seeded["evidence_spans"]
     )
-    assert seeded["ok"] is True
-    assert other_seeded["ok"] is True
-    assert expected_code in json.dumps(seeded, ensure_ascii=False)
-    assert other_code in json.dumps(other_seeded, ensure_ascii=False)
 
     user_text = f"我之前记下的 {project_name} 项目验收颜色代号是什么？"
     _assert_natural_user_text(

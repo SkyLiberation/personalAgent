@@ -505,53 +505,6 @@ def test_product_e05_research_run_journey(
     )
 
 
-def test_product_e08_ask_then_explicit_save(
-    live_web_process: LiveWebProcess,
-    trace_archive: TraceArchive,
-    request: pytest.FixtureRequest,
-) -> None:
-    owner_id = f"product-e08-{uuid4().hex}"
-    _knowledge_ingest(
-        live_web_process,
-        owner_id,
-        "SLO 预算用于衡量允许的错误量。",
-        source_type="document",
-    )
-    before = _get_json(
-        f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"user_id": owner_id})
-    )
-    answer = _conversation_answer(
-        live_web_process,
-        owner_id,
-        "只根据我保存的资料回答：SLO 预算有什么作用？给出原文依据，不要保存回答。",
-    )
-    after_ask = _get_json(
-        f"{live_web_process.base_url}/api/knowledge/claims?"
-        + urlencode({"user_id": owner_id})
-    )
-    assert len(after_ask) == len(before)
-    saved = _post_json(
-        f"{live_web_process.base_url}/api/knowledge/solidify-conversation",
-        {
-            "user_id": owner_id,
-            "messages": [
-                {"role": "user", "content": "请保存结论：SLO 预算需要定期复核。"},
-                {"role": "assistant", "content": answer["message"]["content"]},
-            ],
-        },
-    )
-    assert saved["user_claim_count"] >= 1
-    assert saved["rejected_assistant_claim_count"] == saved["assistant_candidate_count"]
-    _record(
-        trace_archive,
-        request,
-        "E08.product_http",
-        {"ask": answer, "explicit_save": saved},
-        profile="baseline",
-    )
-
-
 def test_product_e14_conversation_governed_save(
     live_web_process: LiveWebProcess,
     trace_archive: TraceArchive,

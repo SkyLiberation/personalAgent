@@ -68,6 +68,13 @@ class ToolExecutor:
             return None
         return tool
 
+    def _workflow_tool(self, name: str) -> BaseTool | None:
+        """Resolve only tools authorized for deterministic workflow invocation."""
+        tool = self.get(name)
+        if tool is None or tool_governance(tool).exposure != "workflow_activity":
+            return None
+        return tool
+
     def list_interaction_tools(self) -> tuple[InteractionToolDefinition, ...]:
         definitions: list[InteractionToolDefinition] = []
         for tool in self.list_tools(exposures={"public_agent"}):
@@ -100,6 +107,27 @@ class ToolExecutor:
             return InteractionToolCallValidation(
                 status="capability_missing",
                 message=f"Tool {name!r} is not currently available.",
+            )
+        try:
+            if isinstance(tool.args_schema, type):
+                tool.args_schema.model_validate(arguments)
+        except Exception as exc:
+            return InteractionToolCallValidation(
+                status="invalid_arguments",
+                message=str(exc),
+            )
+        return InteractionToolCallValidation(status="accepted")
+
+    def validate_workflow_call(
+        self,
+        name: str,
+        arguments: dict[str, object],
+    ) -> InteractionToolCallValidation:
+        tool = self._workflow_tool(name)
+        if tool is None:
+            return InteractionToolCallValidation(
+                status="capability_missing",
+                message=f"Workflow tool {name!r} is not currently available.",
             )
         try:
             if isinstance(tool.args_schema, type):
@@ -154,6 +182,32 @@ class ToolExecutor:
         source_platform: str,
     ) -> dict[str, Any]:
         """Execute an admitted ordinary-interaction action through ToolGateway."""
+        return self._gateway.invoke(
+            name,
+            arguments,
+            ToolGatewayContext(
+                execution_scope=execution_scope,
+                execution_mode="direct",
+                tool_call_id=tool_call_id,
+                source_platform=source_platform,
+            ),
+        )
+
+    def invoke_workflow(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+        source_platform: str,
+    ) -> dict[str, Any]:
+        """Invoke one runtime-owned workflow tool without model exposure."""
+        if self._workflow_tool(name) is None:
+            return tool_failure(
+                f"未找到工作流工具：{name}",
+                error_kind="invalid_param",
+            ).model_dump(mode="json")
         return self._gateway.invoke(
             name,
             arguments,

@@ -59,6 +59,7 @@
 | 规范 | 识别信号 | 必读细则 |
 | --- | --- | --- |
 | `EVD` | 新增功能、能力优化、机制收益、缺陷修复、baseline、消融、target E2E、工程重构、复杂度准入、外部机制比较 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
+| `REF` | 优秀智能体、外部智能体、Agent Harness 比较、Claude Code 能力参考、GPT/Codex 能力参考、OpenHands 能力参考、DeepSeek Harness 能力参考、Gemini CLI 能力参考、Hermes Agent 能力参考、Letta 能力参考、LangGraph 能力参考 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
 | `ARC` | 架构分层、业务事实、决策归属、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Product Aggregate、生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay、durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
 | `CTX` | Context、Memory、RAG、Artifact、检索、权限过滤、预算物化、Capability Projection、服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |

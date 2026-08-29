@@ -19,3 +19,4 @@ evals/multihoprag/results/
 .claude/settings.json
 evals/research_quality/e2e_screenshots
 evals/galileo_ragbench/results/
+.pytest-tmp

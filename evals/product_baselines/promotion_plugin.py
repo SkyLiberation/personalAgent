@@ -25,7 +25,7 @@ def pytest_addoption(parser) -> None:
         "--product-promotion-spec",
         type=Path,
         help=(
-            "typed promotion-gate JSON for one dedicated product target cohort; "
+            "typed cohort-gate JSON for one dedicated product evidence cohort; "
             "the gate may reject early but never passes before expected_samples"
         ),
     )

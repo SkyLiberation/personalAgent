@@ -30,6 +30,33 @@
         "path": ["result_metrics", "execution_started"]
       },
       "maximum": 0
+    },
+    {
+      "kind": "maximum_sum",
+      "constraint_id": "single-intent-call-per-sample",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "model_calls"]
+      },
+      "maximum": 20
+    },
+    {
+      "kind": "maximum_sum",
+      "constraint_id": "total-token-budget",
+      "metric": {
+        "source": "report",
+        "path": ["result_metrics", "total_tokens"]
+      },
+      "maximum": 25000
+    },
+    {
+      "kind": "maximum_nearest_rank_percentile",
+      "constraint_id": "p95-latency-ceiling",
+      "metric": {
+        "source": "duration_seconds"
+      },
+      "percentile": 95,
+      "maximum": 20
     }
   ]
 }

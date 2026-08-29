@@ -22,6 +22,7 @@ from personal_agent.infra.structured_model import (
     build_structured_model_client,
 )
 from personal_agent.capabilities.contracts.model import (
+    ModelActionDefinition,
     ModelInvocationUnavailable,
     StructuredModelRequest,
     StructuredModelResponse,
@@ -46,6 +47,163 @@ def _request(text: str = "secret") -> StructuredModelRequest[ExampleOutput]:
             purpose="router", messages=messages,
         ),
     )
+
+
+def _action_request() -> StructuredModelRequest[ExampleOutput]:
+    messages = [{"role": "user", "content": "recall my saved code"}]
+    return StructuredModelRequest(
+        operation="agent_interaction_turn",
+        version="v2",
+        messages=messages,
+        output_type=ExampleOutput,
+        context_projection_ref=sealed_context_projection_ref(
+            purpose="agent_interaction_turn", messages=messages,
+        ),
+        kind="tool_calling",
+        action_definitions=(ModelActionDefinition(
+            name="tool_search_personal_knowledge",
+            kind="tool",
+            target_name="search_personal_knowledge",
+            description="Search personal knowledge.",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        ),),
+        action_choice="required",
+    )
+
+
+def test_openai_adapter_transports_typed_model_actions(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(
+                    content="",
+                    tool_calls=[SimpleNamespace(
+                        id="call-search-1",
+                        type="function",
+                        function=SimpleNamespace(
+                            name="tool_search_personal_knowledge",
+                            arguments='{"query":"saved color code"}',
+                        ),
+                    )],
+                ))],
+                model="action-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="action-model",
+    ))
+
+    result = client.generate(_action_request())
+
+    assert captured["tool_choice"] == "required"
+    assert captured["tools"][0]["function"]["parameters"]["required"] == ["query"]
+    assert result.action_invocations[0].call_id == "call-search-1"
+    assert result.action_invocations[0].arguments == {"query": "saved color code"}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "expected", "reason_code"),
+    [
+        (
+            "unknown_action",
+            "{}",
+            "unknown model action",
+            "provider_action_unknown",
+        ),
+        (
+            "tool_search_personal_knowledge",
+            "not-json",
+            "invalid JSON arguments",
+            "provider_action_arguments_invalid_json",
+        ),
+        (
+            "tool_search_personal_knowledge",
+            "[]",
+            "arguments require an object",
+            "provider_action_arguments_not_object",
+        ),
+    ],
+)
+def test_openai_adapter_fails_closed_on_invalid_provider_actions(
+    monkeypatch,
+    name,
+    arguments,
+    expected,
+    reason_code,
+):
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(
+                create=lambda **_kwargs: SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(
+                        content="",
+                        tool_calls=[SimpleNamespace(
+                            id="call-invalid",
+                            type="function",
+                            function=SimpleNamespace(name=name, arguments=arguments),
+                        )],
+                    ))],
+                    model="action-model",
+                    usage=None,
+                )
+            ))
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="action-model",
+    ))
+
+    with pytest.raises(StructuredOutputFailure, match=expected) as exc_info:
+        client.generate(_action_request())
+
+    assert exc_info.value.reason_code == reason_code
+
+
+def test_openai_adapter_classifies_missing_required_provider_action(monkeypatch):
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(
+                create=lambda **_kwargs: SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(
+                        content="plain text instead of an action",
+                        tool_calls=[],
+                    ))],
+                    model="action-model",
+                    usage=None,
+                )
+            ))
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="action-model",
+    ))
+
+    with pytest.raises(StructuredOutputFailure) as exc_info:
+        client.generate(_action_request())
+
+    assert exc_info.value.reason_code == "provider_action_missing"
+    assert "plain text" not in str(exc_info.value)
 
 
 def test_openai_adapter_uses_chat_completions_json_schema(monkeypatch):

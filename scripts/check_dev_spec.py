@@ -55,8 +55,8 @@ def parse_routes(text: str) -> list[Route]:
                     path=ROOT / match.group("path"),
                 )
             )
-    if len(routes) != 8:
-        fail(f"expected 8 task routes, found {len(routes)}")
+    if len(routes) != 9:
+        fail(f"expected 9 task routes, found {len(routes)}")
     if len({route.code for route in routes}) != len(routes):
         fail("task route codes are not unique")
     return routes
@@ -187,6 +187,7 @@ def main() -> int:
         *MODULE_INSTRUCTIONS,
     ]
     link_sources.extend(sorted(SPEC_DIR.glob("*.md")))
+    link_sources.extend(sorted((ROOT / "docs" / "agentRef").glob("*.md")))
     checked_links = check_links(link_sources)
 
     baseline_bytes = fixture["baseline"]["bytes_per_entry"]
@@ -198,7 +199,7 @@ def main() -> int:
         f"entry size: {len(agents_bytes)} bytes, {line_count} lines, "
         f"reduction={reduction:.2%}"
     )
-    print(f"routes: {len(routes)}/8")
+    print(f"routes: {len(routes)}/9")
     print(
         "module instruction chains: "
         + ", ".join(

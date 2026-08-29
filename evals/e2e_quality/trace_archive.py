@@ -240,9 +240,15 @@ class TraceArchive:
 
     @staticmethod
     def _atomic_write(path: Path, data: bytes) -> None:
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_bytes(data)
-        temporary.replace(path)
+        # Keep the temporary basename short.  Appending ``.tmp`` to the final
+        # evidence filename can push an otherwise valid Windows path over the
+        # legacy MAX_PATH boundary after an expensive cohort has finished.
+        temporary = path.parent / f".tmp-{uuid4().hex[:12]}"
+        try:
+            temporary.write_bytes(data)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def archive_checksums_valid(run_dir: Path) -> bool:

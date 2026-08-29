@@ -10,8 +10,6 @@ from langchain_core.tools import StructuredTool
 from personal_agent.agents import AgentGateway, InMemoryAgentRunStore
 from personal_agent.application.conversation import (
     AgentDelegationProposal,
-    AgentTurnDecision,
-    AgentTurnDecisionWithPlan,
     ContinueTurnProposal,
     ConversationMessage,
     ConversationWorkingPlan,
@@ -33,7 +31,9 @@ from personal_agent.application.conversation.models import (
     ActionObservation,
     CommittedUsage,
     DecisionFeedback,
+    EffectiveAgentCapability,
     EffectiveCapabilities,
+    EffectiveToolCapability,
     ReviewCriteria,
     PersonalKnowledgeCandidate,
     PersonalKnowledgeEvidenceSnapshot,
@@ -49,6 +49,9 @@ from personal_agent.application.conversation.working_plan import (
 from personal_agent.application.conversation.interaction_prompt import (
     build_interaction_system_prompt,
 )
+from personal_agent.application.conversation.model_actions import (
+    build_model_action_definitions,
+)
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
     KnowledgeDeleteOperationView,
@@ -63,8 +66,10 @@ from personal_agent.application.conversation.verification_admission import (
     observed_receipts,
 )
 from personal_agent.capabilities.contracts.model import (
+    ModelActionInvocation,
     ModelInvocationUnavailable,
     StructuredModelResponse,
+    StructuredOutputFailure,
     sealed_context_projection_ref,
 )
 from personal_agent.governance import ToolExecutor
@@ -88,7 +93,6 @@ from personal_agent.kernel.contracts.agent import (
     new_agent_event_id,
     new_agent_run_id,
 )
-from personal_agent.kernel.llm_schemas import strictify_schema
 from personal_agent.tools.interaction_verifier import (
     build_verify_interaction_draft_tool,
 )
@@ -140,9 +144,69 @@ class _Decisions:
         item = self.items.pop(0)
         if isinstance(item, BaseException):
             raise item
-        if request.operation == "interaction_completion_answer":
-            return self._response(item)
-        return self._response(AgentTurnDecision(decision=item))
+        return self._action_response(item, request)
+
+    @staticmethod
+    def _action_response(item, request):
+        definitions = tuple(request.action_definitions)
+
+        def select(kind, target_name=None):
+            return next(
+                definition
+                for definition in definitions
+                if definition.kind == kind
+                and (target_name is None or definition.target_name == target_name)
+            )
+
+        invocations = []
+        if isinstance(item, FinalMessage):
+            definition = select("final")
+            invocations.append(ModelActionInvocation(
+                call_id="scripted-final",
+                name=definition.name,
+                arguments=item.model_dump(mode="json", exclude={"kind"}),
+            ))
+        else:
+            assert isinstance(item, ContinueTurnProposal)
+            if item.working_plan is not None:
+                definition = select("working_plan")
+                invocations.append(ModelActionInvocation(
+                    call_id="scripted-working-plan",
+                    name=definition.name,
+                    arguments={
+                        "working_plan": item.working_plan.model_dump(mode="json"),
+                        "wait_for_user": item.wait_for_user,
+                        "message": item.message,
+                    },
+                ))
+            for action in item.actions:
+                if isinstance(action, ToolCallProposal):
+                    definition = select("tool", action.tool_name)
+                    arguments = {"arguments": action.arguments}
+                    if "plan_step_id" in definition.input_schema["properties"]:
+                        arguments["plan_step_id"] = action.plan_step_id
+                else:
+                    definition = select("agent", action.agent_id)
+                    arguments = action.model_dump(
+                        mode="json",
+                        exclude={"kind", "action_id", "agent_id"},
+                    )
+                    if "plan_step_id" not in definition.input_schema["properties"]:
+                        arguments.pop("plan_step_id", None)
+                invocations.append(ModelActionInvocation(
+                    call_id=action.action_id,
+                    name=definition.name,
+                    arguments=arguments,
+                ))
+        return StructuredModelResponse(
+            value=None,
+            model="contract-model",
+            latency_ms=1,
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            action_invocations=tuple(invocations),
+        )
 
     @staticmethod
     def _response(value):
@@ -156,34 +220,100 @@ class _Decisions:
         )
 
 
-def test_agent_turn_decision_uses_supported_object_root_schema():
-    schema = strictify_schema(AgentTurnDecision.model_json_schema())
+def test_model_actions_expose_each_tool_with_its_exact_argument_schema():
+    capabilities = EffectiveCapabilities(
+        tools=(
+            EffectiveToolCapability(
+                name="search_personal_knowledge",
+                description="Search current-user knowledge.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "minLength": 1},
+                        "schema_only_marker": {"type": "string"},
+                    },
+                    "required": ["query"],
+                },
+                read_only=True,
+                planning_safe=True,
+                safely_retryable=True,
+            ),
+        ),
+        agents=(
+            EffectiveAgentCapability(
+                agent_id="researcher",
+                description="Research one bounded question.",
+            ),
+        ),
+    )
+    definitions = build_model_action_definitions(capabilities)
 
-    assert schema["type"] == "object"
-    assert schema["required"] == ["decision"]
-    assert "anyOf" in schema["properties"]["decision"]
-    assert schema["properties"]["decision"]["anyOf"][0]["$ref"].endswith(
-        "/ContinueTurnProposal"
+    tool_definition = next(item for item in definitions if item.kind == "tool")
+    argument_schema = tool_definition.input_schema["properties"]["arguments"]
+
+    assert argument_schema["properties"]["query"]["type"] == "string"
+    assert "query" in argument_schema["required"]
+    assert "plan_step_id" not in tool_definition.input_schema["properties"]
+    agent_definition = next(item for item in definitions if item.kind == "agent")
+    assert "plan_step_id" not in agent_definition.input_schema["properties"]
+    assert [item.kind for item in definitions].count("tool") == 1
+    assert {item.kind for item in definitions} == {
+        "agent",
+        "tool",
+        "working_plan",
+        "final",
+    }
+    assert "schema_only_marker" not in build_interaction_system_prompt(
+        capabilities,
+        CommittedUsage(),
     )
 
-    plan_schema = strictify_schema(AgentTurnDecisionWithPlan.model_json_schema())
-    assert plan_schema["properties"]["decision"]["anyOf"][0]["$ref"].endswith(
-        "/FinalMessage"
+    current_plan = ConversationWorkingPlan(
+        plan_id="plan-1",
+        revision=1,
+        goal="Answer from evidence",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="inspect",
+                description="Inspect evidence",
+                status="pending",
+            ),
+            ConversationWorkingPlanStep(
+                step_id="answer",
+                description="Answer from evidence",
+                status="completed",
+            ),
+        ),
     )
+    planned_definition = next(
+        item
+        for item in build_model_action_definitions(
+            capabilities,
+            working_plan=current_plan,
+        )
+        if item.kind == "tool"
+    )
+    assert planned_definition.input_schema["properties"]["plan_step_id"]["enum"] == [
+        "inspect"
+    ]
+    planned_agent_definition = next(
+        item
+        for item in build_model_action_definitions(
+            capabilities,
+            working_plan=current_plan,
+        )
+        if item.kind == "agent"
+    )
+    assert planned_agent_definition.input_schema["properties"]["plan_step_id"][
+        "enum"
+    ] == ["inspect"]
 
-    def contains_one_of(node) -> bool:
-        if isinstance(node, dict):
-            return "oneOf" in node or any(
-                contains_one_of(value) for value in node.values()
-            )
-        if isinstance(node, list):
-            return any(contains_one_of(value) for value in node)
-        return False
 
-    assert contains_one_of(schema) is False
-
-
-def test_main_conversation_decision_maps_provider_failure_to_unavailable():
+def test_main_conversation_decision_maps_provider_failure_to_unavailable(caplog):
+    caplog.set_level(
+        "WARNING",
+        logger="personal_agent.application.conversation.service",
+    )
     model = _Decisions(
         ModelInvocationUnavailable(
             "agent_interaction_turn",
@@ -195,13 +325,98 @@ def test_main_conversation_decision_maps_provider_failure_to_unavailable():
     )
     service = ConversationService(model)
 
-    with pytest.raises(ConversationUnavailable, match="temporarily unavailable"):
+    with pytest.raises(
+        ConversationUnavailable,
+        match="temporarily unavailable",
+    ) as exc_info:
         service.respond(
             **_conversation_scope(),
             conversation_id="conversation-provider-failure",
             interaction_run_ref="irun-provider-failure",
             messages=[ConversationMessage(role="user", content="执行请求")],
         )
+
+    assert exc_info.value.reason_code == "provider_rejected"
+    assert exc_info.value.failure_stage == "provider_request"
+    assert exc_info.value.provider_host == "uuapi.net"
+    assert exc_info.value.provider_status_code == 400
+    assert "conversation.model_failure" in caplog.text
+    assert '"reason_code": "provider_rejected"' in caplog.text
+    assert "uuapi.net" in caplog.text
+
+
+def test_main_conversation_logs_missing_provider_action_without_raw_content(caplog):
+    caplog.set_level(
+        "WARNING",
+        logger="personal_agent.application.conversation.service",
+    )
+    model = _Decisions(
+        StructuredOutputFailure(
+            "agent_interaction_turn",
+            "provider returned plain text: SECRET-PROVIDER-CONTENT",
+            reason_code="provider_action_missing",
+        )
+    )
+    service = ConversationService(model)
+
+    with pytest.raises(ConversationUnavailable) as exc_info:
+        service.respond(
+            **_conversation_scope(),
+            conversation_id="conversation-missing-provider-action",
+            interaction_run_ref="irun-missing-provider-action",
+            messages=[ConversationMessage(role="user", content="执行请求")],
+        )
+
+    assert exc_info.value.reason_code == "provider_action_missing"
+    assert exc_info.value.failure_stage == "provider_action_decode"
+    assert "provider_action_missing" in caplog.text
+    assert "SECRET-PROVIDER-CONTENT" not in caplog.text
+
+
+def test_same_invalid_model_action_is_stopped_after_one_bounded_repair():
+    executions: list[str] = []
+
+    def read_fact(query: str):
+        executions.append(query)
+        return tool_response(tool_success({"fact": query}))
+
+    model = _Decisions(
+        _continue(ToolCallProposal(
+            action_id="invalid-read-1",
+            tool_name="read_fact",
+            arguments={},
+        )),
+        _continue(ToolCallProposal(
+            action_id="invalid-read-2",
+            tool_name="read_fact",
+            arguments={},
+        )),
+        FinalMessage(disposition="answer", message="must not be reached"),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-bounded-action-repair",
+        interaction_run_ref="irun-bounded-action-repair",
+        messages=[ConversationMessage(role="user", content="Read the fact.")],
+    )
+    trace = _trace(service, "irun-bounded-action-repair")
+    invalid_feedback = [
+        item
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+        and item.action_name == "read_fact"
+        and item.reason_code == "invalid_arguments"
+    ]
+
+    assert result.disposition == "limitation"
+    assert executions == []
+    assert len(invalid_feedback) == 2
+    assert len(model.decision_requests) == 2
 
 
 def test_working_plan_proposal_excludes_runtime_identity_and_revision():
@@ -241,7 +456,7 @@ def test_continue_turn_can_handoff_an_all_completed_plan_to_completion_phase():
     assert all(step.status == "completed" for step in proposal.working_plan.steps)
 
 
-def test_interaction_prompt_matches_the_object_root_wire_contract():
+def test_interaction_prompt_requires_typed_provider_actions_without_generic_json():
     prompt = build_interaction_system_prompt(
         EffectiveCapabilities(),
         CommittedUsage(),
@@ -249,12 +464,11 @@ def test_interaction_prompt_matches_the_object_root_wire_contract():
 
     assert "revision" not in EffectiveCapabilities.model_fields
     assert '"revision":' not in prompt
-    assert '{"decision": <FinalMessage | ContinueTurnProposal>}' in prompt
-    assert (
-        "Never place kind, type, actions, disposition, or message at the root" in prompt
-    )
-    assert '"disposition": "answer|clarification_required|limitation|failed"' in prompt
-    assert '"kind": "continue_turn"' in prompt
+    assert "Respond only with one or more provider action calls" in prompt
+    assert "never return plain text or a generic JSON decision" in prompt
+    assert "provider call ID is runtime-owned action identity" in prompt
+    assert "AgentTurnDecision" not in prompt
+    assert "ContinueTurnProposal" not in prompt
 
 
 def test_interaction_prompt_hides_runtime_plan_identity_and_revision():
@@ -306,10 +520,10 @@ def test_interaction_prompt_separates_default_review_from_explicit_auto_executio
     assert "Keep the initial plan short-horizon" in prompt
     assert "several actions or Tool calls" in prompt
     assert "proactively create a formal plan" in prompt
-    assert "working_plan, wait_for_user true, and no actions" in prompt
+    assert "working-plan action with wait_for_user true" in prompt
     assert "planning_safe=true" in prompt
     assert "Never claim that a source was inspected" in prompt
-    assert "a prose plan inside FinalMessage violates" in prompt
+    assert "a prose plan inside the final-message action violates" in prompt
     assert "working_plan.grounding" in prompt
     assert "caller-selected auto interaction mode" in prompt
     assert "An agent-initiated plan does not require approval" not in prompt
@@ -321,9 +535,23 @@ def test_interaction_prompt_separates_default_review_from_explicit_auto_executio
         interaction_mode="auto",
     )
     assert "caller selected auto interaction mode" in auto_prompt
+    assert "Submit that new plan without executable actions" in auto_prompt
+    assert "next model turn can bind actions" in auto_prompt
     assert "must use wait_for_user true and contain no actions" not in auto_prompt
     assert "A bare request to continue refers to the current" in prompt
     assert "Without a current plan or another committed continuation contract" in prompt
+
+
+def test_interaction_prompt_keeps_narrow_mixed_evidence_in_parent_loop():
+    prompt = build_interaction_system_prompt(
+        EffectiveCapabilities(),
+        CommittedUsage(),
+    )
+
+    assert "A single official-document lookup" in prompt
+    assert "combined with personal context" in prompt
+    assert "stays in the parent loop" in prompt
+    assert "independently verifiable" in prompt
 
 
 def test_prompt_never_asks_the_model_to_run_or_reference_verification():
@@ -472,6 +700,8 @@ def test_l01_observation_drives_next_react_decision_and_user_result():
     assert trace is not None
     assert trace.inputs[0].kind == "tool_result"
     assert trace.inputs[0].payload["data"]["fact"] == "observed:Orion"
+    assert all(request.kind == "tool_calling" for request in model.decision_requests)
+    assert all(request.action_choice == "required" for request in model.decision_requests)
     next_turn_context = "\n".join(
         message["content"] for message in model.decision_requests[1].messages
     )
@@ -1316,6 +1546,8 @@ def test_executed_action_observation_keeps_its_working_plan_step_binding():
                 ("inspect", "Inspect the Orion fact"),
                 ("answer", "Answer from the observed fact"),
             ),
+        ),
+        ContinueTurnProposal(
             actions=(
                 ToolCallProposal(
                     action_id="read-1",
@@ -2160,8 +2392,16 @@ def test_recorded_context_segments_account_for_the_input_that_was_sent():
         zip(trace.context_composition, model.decision_requests, strict=True)
     ):
         sent_chars = sum(len(message["content"]) for message in request.messages)
+        action_definition_chars = len(json.dumps(
+            [
+                item.model_dump(mode="json")
+                for item in request.action_definitions
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ))
         assert composition.turn_index == turn_index
-        assert composition.total_chars == sent_chars
+        assert composition.total_chars == sent_chars + action_definition_chars
         assert composition.capability_projection_chars > 0
         assert composition.input_tokens == 10
     # The observation only exists after the first turn, so the typed-input
@@ -2703,12 +2943,19 @@ def test_initial_action_executes_without_a_synthetic_working_plan_contract():
         conversation_id="conversation-plan-admission",
         interaction_run_ref="irun-plan-admission",
         messages=[ConversationMessage(role="user", content="Read Orion, then answer.")],
+        interaction_mode="auto",
     )
     trace = _trace(service, "irun-plan-admission")
+    initial_tool_definition = next(
+        definition
+        for definition in model.decision_requests[0].action_definitions
+        if definition.kind == "tool" and definition.target_name == "read_fact"
+    )
 
     assert calls == 1
     assert trace is not None
     assert [item.kind for item in trace.inputs] == ["tool_result"]
+    assert "plan_step_id" not in initial_tool_definition.input_schema["properties"]
 
 
 def test_l02_only_mechanically_safe_actions_run_concurrently():
@@ -3300,6 +3547,7 @@ def _verifier_tool(recorder, *, verdicts):
     return _tool(
         "verify_interaction_draft",
         verify_interaction_draft,
+        exposure="workflow_activity",
         emits_verified_artifact=True,
     )
 
@@ -3644,6 +3892,10 @@ def test_the_real_verifier_is_not_a_capability_the_model_can_see():
         "verify_interaction_draft",
         {"draft": "d", "success_criteria": ["c"]},
     ).status == "capability_missing"
+    assert executor.validate_workflow_call(
+        "verify_interaction_draft",
+        {"draft": "d", "success_criteria": ["c"]},
+    ).status == "accepted"
 
 
 def test_hidden_workflow_tool_cannot_execute_through_ordinary_conversation():
@@ -3663,11 +3915,6 @@ def test_hidden_workflow_tool_cannot_execute_through_ordinary_conversation():
         )
     )
     model = _Decisions(
-        _continue(ToolCallProposal(
-            action_id="hidden-1",
-            tool_name="hidden_workflow_probe",
-            arguments={"marker": "must-not-execute"},
-        )),
         FinalMessage(disposition="limitation", message="The action is unavailable."),
     )
     service = ConversationService(model, tool_port=executor)
@@ -3678,15 +3925,14 @@ def test_hidden_workflow_tool_cannot_execute_through_ordinary_conversation():
         interaction_run_ref="irun-hidden-tool-auth",
         messages=[ConversationMessage(role="user", content="Run the requested operation.")],
     )
-    trace = _trace(service, "irun-hidden-tool-auth")
+    action_targets = {
+        definition.target_name
+        for definition in model.decision_requests[0].action_definitions
+    }
 
     assert result.disposition == "limitation"
     assert executions == []
-    assert any(
-        isinstance(item, DecisionFeedback)
-        and item.reason_code == "capability_missing"
-        for item in trace.inputs
-    )
+    assert "hidden_workflow_probe" not in action_targets
 
 
 def test_interaction_verifier_checks_each_item_and_rejects_malformed_urls():
@@ -3846,6 +4092,8 @@ def test_failed_action_ends_a_review_turn_fail_closed_without_verifier_loop():
                 ("search", "Result: official source; Complete when: source is read"),
                 ("answer", "Result: reviewed answer; Complete when: criteria are met"),
             ),
+        ),
+        ContinueTurnProposal(
             actions=(ToolCallProposal(
                 action_id="search-1",
                 tool_name="unavailable_search",
@@ -4321,21 +4569,26 @@ class _KnowledgeKnowledgeReader:
 
 def test_personal_knowledge_crosses_model_context_only_after_explicit_search_action():
     reader = _KnowledgeKnowledgeReader()
-    service = ConversationService(
-        _Decisions(
-            _continue(
-                ToolCallProposal(
-                    action_id="search-personal-knowledge",
-                    tool_name="search_personal_knowledge",
-                    arguments={"query": "What is my saved launch window?"},
-                )
-            ),
-            FinalMessage(
-                disposition="answer",
-                message="No matching personal knowledge was found.",
-            ),
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="search-personal-knowledge",
+                tool_name="search_personal_knowledge",
+                arguments={"query": "What is my saved launch window?"},
+            )
         ),
+        FinalMessage(
+            disposition="answer",
+            message="No matching personal knowledge was found.",
+        ),
+    )
+    service = ConversationService(
+        model,
         knowledge_reader=reader,
+        tool_port=_executor(_tool(
+            "web_search",
+            lambda query: tool_response(tool_success({"query": query})),
+        )),
     )
 
     result = service.respond(
@@ -4354,6 +4607,18 @@ def test_personal_knowledge_crosses_model_context_only_after_explicit_search_act
     assert [item.capability_id for item in trace.inputs] == [
         "search_personal_knowledge"
     ]
+    assert any(
+        definition.target_name == "search_personal_knowledge"
+        for definition in model.decision_requests[0].action_definitions
+    )
+    assert all(
+        definition.target_name != "search_personal_knowledge"
+        for definition in model.decision_requests[1].action_definitions
+    )
+    assert any(
+        definition.target_name == "web_search"
+        for definition in model.decision_requests[1].action_definitions
+    )
 
 
 def test_personal_knowledge_is_not_prefetched_for_answer_without_search_action():

@@ -9,6 +9,7 @@ about which live evidence it can break.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -22,6 +23,14 @@ from evals.e2e_quality.impact_map import (
     match_rule,
     select_live_cases,
     validate_impact_map,
+)
+from scripts.e2e_impact import (
+    _FULL_COMMAND,
+    _FULL_ITERATION_COMMAND,
+    _emit,
+    _history_ordered_iteration_command,
+    _latest_complete_release_durations,
+    _release_nodeids,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -106,6 +115,94 @@ def test_full_matrix_selection_has_no_k_expression() -> None:
     selection = select_live_cases(["src/personal_agent/main.py"])
     assert selection.full_matrix_required is True
     assert selection.pytest_k_expression() == ""
+
+
+def test_full_matrix_output_separates_iteration_from_release_evidence(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    selection = select_live_cases(["src/personal_agent/main.py"])
+
+    assert _emit(selection, quiet=False) == 0
+
+    output = capsys.readouterr().out
+    assert "iteration command (fail-fast; not release evidence):" in output
+    assert "--e2e-require-complete-matrix -x" in output
+    assert "release evidence command (records every case outcome):" in output
+    assert _FULL_COMMAND in output
+    assert "--e2e-require-complete-matrix -x" in _FULL_ITERATION_COMMAND
+    assert " -x " not in _FULL_COMMAND
+
+
+def test_quiet_full_matrix_output_preserves_complete_release_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    selection = select_live_cases(["src/personal_agent/main.py"])
+
+    assert _emit(selection, quiet=True) == 0
+
+    assert capsys.readouterr().out == f"{_FULL_COMMAND}\n"
+
+
+def test_iteration_command_orders_every_release_node_by_sealed_duration() -> None:
+    nodeids = _release_nodeids()
+    durations = {
+        nodeid: float(index)
+        for index, nodeid in enumerate(reversed(nodeids), start=1)
+    }
+
+    command = _history_ordered_iteration_command(durations)
+
+    ordered = sorted(nodeids, key=lambda nodeid: (durations[nodeid], nodeid))
+    positions = [command.index(nodeid) for nodeid in ordered]
+    assert positions == sorted(positions)
+    assert all(command.count(nodeid) == 1 for nodeid in nodeids)
+    assert "--e2e-require-complete-matrix -x" in command
+
+
+def test_iteration_command_falls_back_without_complete_history() -> None:
+    assert _history_ordered_iteration_command(None) == _FULL_ITERATION_COMMAND
+
+
+def test_duration_order_uses_latest_complete_checksum_valid_release_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodeids = _release_nodeids()
+
+    def write_summary(name: str, finished_at: str, selected: tuple[str, ...]) -> None:
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "finished_at": finished_at,
+                    "tests": [
+                        {
+                            "nodeid": nodeid,
+                            "phases": {
+                                "call": {"duration_seconds": float(index + 1)}
+                            },
+                        }
+                        for index, nodeid in enumerate(selected)
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_summary("older-complete", "2026-08-27T00:00:00Z", nodeids)
+    write_summary("newer-incomplete", "2026-08-28T00:00:00Z", nodeids[:-1])
+    write_summary("invalid-complete", "2026-08-29T00:00:00Z", nodeids)
+    monkeypatch.setattr(
+        "scripts.e2e_impact.archive_checksums_valid",
+        lambda run_dir: run_dir.name != "invalid-complete",
+    )
+
+    durations, source = _latest_complete_release_durations(tmp_path)
+
+    assert durations is not None
+    assert set(durations) == set(nodeids)
+    assert source == "data/e2e_traces/older-complete/summary.json"
 
 
 @pytest.mark.parametrize("kind", [ImpactKind.FULL_MATRIX, ImpactKind.NO_IMPACT])

@@ -96,14 +96,17 @@ Fake 或 Stub 仅允许用于不可控第三方的可重复消融、危险副作
 
 按机制域检索，不按框架名检索。下表只给出检索起点，不是推荐技术栈、需求来源或采用理由。坐标随版本漂移，引用时必须在目标分支源码或规范正文重新核对。
 
+已核对的优秀智能体检索起点按能力组件维护在[优秀智能体能力组件参考](../agentRef/README.md)。比较任务先读该索引，再只加载命中的组件；索引中的核对结果不能替代目标版本复核，也不能作为本工程采用理由。
+
 | 机制域 | 优先检索对象 |
 | --- | --- |
 | Tool 或资源协议与权限边界 | Model Context Protocol 规范正文；本工程边界见 `src/personal_agent/capabilities/contracts/execution.py` |
 | 编排、checkpoint、HITL 中断与 durable execution | 本工程锁定版本对应的 LangGraph/checkpointer 源码；Temporal 或 Restate 的 determinism、replay、重试与补偿规范 |
 | 知识生命周期与时间性失效 | graphiti-core 已发布源码中的 `valid_at`、`invalid_at` 及 provenance；本工程适配见 `src/personal_agent/memory/graphiti/llm_strategies.py` |
-| Memory 纠错与污染控制 | Hermes 等已发布源码的 add、replace、remove、scope 和并发语义；必须核对目标提交，不能用 issue 或文档镜像代替实现 |
-| Agent 循环、工具调用与安全策略 | OpenAI 或 Anthropic 官方产品与 API 文档；标注日期与契约原文 |
-| Goal、Plan、Todo 修订与取消 | Gemini CLI 已发布 Plan/Todo 契约、Hermes 已发布 todo 源码及其他可复核智能体实现；核对完整替换、增量合并、取消或失效、已完成事实保护和上下文重注入语义 |
+| Context、Memory 纠错与污染控制 | [Context Engineering](../agentRef/context-engineering.md)与[记忆和会话](../agentRef/memory-and-session.md)中的已发布实现；继续核对 add、replace、remove、scope、失效和并发语义 |
+| 智能体循环、工具调用与安全策略 | [工具执行与安全](../agentRef/tool-execution-and-safety.md)中的官方产品、规范和主仓库实现；标注日期或固定提交与契约原文 |
+| Goal、Plan、Todo 修订与取消 | [计划与任务管理](../agentRef/planning-and-task-management.md)中的已发布实现；核对完整替换、增量合并、取消、已完成事实保护和 Context 重注入语义 |
+| Subagent、Handoff 与团队协调 | [多智能体与委托](../agentRef/multi-agent-and-delegation.md)中的已发布实现；核对 Context、权限、返回、取消、恢复与最终结果 owner |
 | 检索与证据组织 | 官方检索或 rerank 实现与评测协议正文；论文仅按 C 级用于提出候选 |
 
 ## 7. 强制开发与设计流程

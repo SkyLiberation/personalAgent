@@ -10,6 +10,10 @@ from evals.e2e_quality.release_gate import (
     REQUIRED_NATIVE_EVIDENCE_IDS,
 )
 from evals.e2e_quality.evidence_audit import build_overlap_graph
+from evals.e2e_quality.validation_catalog import (
+    VALIDATION_SUITE_BY_ID,
+    ValidationSuiteId,
+)
 from evals.e2e_quality.test_release_user_outcomes import (
     _child_environment,
     _release_profile_settings,
@@ -28,9 +32,10 @@ def test_catalog_declares_one_explicit_evidence_responsibility_per_case() -> Non
         for case in EVIDENCE_CASES
         if case.evidence_class is EvidenceClass.CAPABILITY_PROFILE
     }
-    assert {"E08", "E12"} <= application_ids
+    assert "E12" in application_ids
+    assert "E08" not in application_ids
     assert "IP01" not in application_ids
-    assert profile_ids == {"E16", "E17", "E18", "E19", "E21"}
+    assert profile_ids == {"E16", "E18", "E19", "E21"}
 
 
 def test_product_release_matrix_contains_only_qualified_user_outcomes() -> None:
@@ -77,9 +82,26 @@ def test_overlap_graph_exposes_shared_invariants_without_erasing_unique_ones() -
         for edge in edges
     }
     assert frozenset(("E14.product_http", "L07.complex_loop_http")) in shared_pairs
-    assert frozenset(("L04.complex_loop_http", "E17.capability_profile")) in shared_pairs
-    e08 = next(case for case in EVIDENCE_CASES if case.case_id == "E08")
-    assert "knowledge_save.direct_solidify_contract" in e08.covered_invariants
+    assert all("E08.product_http" not in pair for pair in shared_pairs)
+    assert all("E17.capability_profile" not in pair for pair in shared_pairs)
+
+
+def test_cross_cutting_suites_can_reuse_one_canonical_e2e() -> None:
+    tool_cases = {
+        case.evidence_id
+        for case in VALIDATION_SUITE_BY_ID[
+            ValidationSuiteId.TOOL_CALLING_PROTOCOL
+        ].cases
+    }
+    mcp_cases = {
+        case.evidence_id
+        for case in VALIDATION_SUITE_BY_ID[ValidationSuiteId.MCP_DISPATCH].cases
+    }
+
+    assert tool_cases & mcp_cases == {
+        "RUN-001.baseline",
+        "E16.capability_profile",
+    }
 
 
 def test_executable_assertions_and_profiles_own_outcomes_without_dead_metadata() -> None:

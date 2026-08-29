@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "gate_id": "CONVERSATION-CONTEXT-PRESSURE-BASELINE-001",
+  "case_id": "CONVERSATION-CONTEXT-PRESSURE-001",
+  "role": "baseline",
+  "stage": "failure_baseline",
+  "expected_samples": 40,
+  "constraints": [
+    {
+      "kind": "maximum_count",
+      "constraint_id": "at-most-one-short-control-failure",
+      "metric": {"source": "report", "path": ["result_metrics", "short_failure"]},
+      "maximum": 1
+    },
+    {
+      "kind": "minimum_count",
+      "constraint_id": "nineteen-short-controls-delivered",
+      "metric": {"source": "report", "path": ["result_metrics", "short_delivered"]},
+      "minimum": 19
+    },
+    {
+      "kind": "minimum_count",
+      "constraint_id": "four-attributable-long-failures",
+      "metric": {"source": "report", "path": ["result_metrics", "attributable_long_failure"]},
+      "minimum": 4
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-provider-or-entry-failures",
+      "metric": {"source": "report", "path": ["result_metrics", "provider_or_entry_failure"]},
+      "maximum": 0
+    },
+    {
+      "kind": "maximum_count",
+      "constraint_id": "zero-cross-sample-pollution",
+      "metric": {"source": "report", "path": ["result_metrics", "cross_sample_pollution"]},
+      "maximum": 0
+    }
+  ]
+}

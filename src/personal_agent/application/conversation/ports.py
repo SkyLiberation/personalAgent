@@ -33,9 +33,25 @@ class InteractionToolPort(Protocol):
         arguments: dict[str, object],
     ) -> InteractionToolCallValidation: ...
 
+    def validate_workflow_call(
+        self,
+        name: str,
+        arguments: dict[str, object],
+    ) -> InteractionToolCallValidation: ...
+
     def interaction_call_is_safe_for_concurrency(self, name: str) -> bool: ...
 
     def invoke_interaction(
+        self,
+        name: str,
+        arguments: dict[str, object],
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+        source_platform: str,
+    ) -> dict[str, object]: ...
+
+    def invoke_workflow(
         self,
         name: str,
         arguments: dict[str, object],

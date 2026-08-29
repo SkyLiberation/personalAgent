@@ -17,6 +17,7 @@
 | `05-knowledge-and-domain-workflows.md` | 领域事实与生命周期 |
 | `06-evidence-and-release.md` | 证据强度、测量与发布状态 |
 | `07-qa-and-tradeoffs.md` | 高频问题的短答和主讲链接 |
+| `08-tool-calling-pitfall.md` | Tool Calling 阻塞的开发踩坑复盘；只引用当前状态与评测事实，不建立第二份状态账本 |
 
 `INDEX.md` 只维护阅读顺序和关键能力的唯一主讲位置，不复制正文结论。
 

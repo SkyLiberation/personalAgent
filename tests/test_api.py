@@ -224,7 +224,12 @@ class TestConversationEndpoint:
         self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ):
         def fail_conversation(**_kwargs):
-            raise ConversationUnavailable("conversation model is temporarily unavailable")
+            raise ConversationUnavailable(
+                "conversation model is temporarily unavailable",
+                reason_code="provider_action_missing",
+                failure_stage="provider_action_decode",
+                operation="agent_interaction_turn",
+            )
 
         monkeypatch.setattr(api_client.app.state.service, "converse", fail_conversation)
         response = api_client.post(

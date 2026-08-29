@@ -213,7 +213,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
             settings.structured.base_url or ""
         ).hostname,
         "structured_output_transport": settings.structured.output_transport,
-        "structured_contract_revision": "AgentTurnDecision:v1",
+        "structured_contract_revision": "ModelActionProtocol:v2",
         "interaction_policy_revision": settings.interaction_loop.policy_revision,
         "formal_entrypoint": "POST /api/conversation/turn",
         "persistence": "production-postgres-composition",

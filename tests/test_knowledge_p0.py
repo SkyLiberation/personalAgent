@@ -15,6 +15,7 @@ from personal_agent.application.knowledge import (
     InMemoryKnowledgeStore,
     KnowledgeStateMachine,
     KnowledgeService,
+    SemanticEvidenceExtraction,
 )
 from personal_agent.infra.storage.postgres_knowledge_store import PostgresKnowledgeStore
 
@@ -57,6 +58,85 @@ class _RewritingUserClaimExtractor:
         )])
 
 
+class _NarrowProjectEvidenceExtractor:
+    """Reproduces the live L01 extractor returning only the project identifier."""
+
+    name = "test-narrow-project-evidence-extractor"
+    version = "v1"
+
+    def extract(self, *, artifact, blocks):
+        assert len(blocks) == 1
+        project_name = artifact.text.split("项目 ", 1)[1].split(" 记录", 1)[0]
+        return SemanticEvidenceExtraction.model_validate({
+            "spans": [{
+                "text": project_name,
+                "locator_hint": blocks[0].locator,
+                "normalized_meaning": "项目标识",
+            }],
+        })
+
+
+class _MisclassifiedUserClaimExtractor:
+    """Reproduces the live model assigning assistant provenance to user text."""
+
+    name = "test-misclassified-user-claim-extractor"
+    version = "v1"
+
+    def extract(self, *, artifact, spans, evidence_refs, created_by, limit):
+        assert created_by == "user"
+        assert evidence_refs
+        return CandidateClaimExtraction(claims=[CandidateClaimDraft(
+            statement=artifact.text,
+            subject="项目 Orchid-l01-regression",
+            predicate="验收颜色代号是",
+            object="cobalt-5485cbdeb8",
+            claim_type="assistant_inference",
+            source_role="source_document",
+            evidence_ref_ids=[evidence_refs[0].source_id],
+        )])
+
+
+class _MismatchedSourceRoleClaimExtractor:
+    """Reproduces the live model assigning user-message provenance to text."""
+
+    name = "test-mismatched-source-role-claim-extractor"
+    version = "v1"
+
+    def extract(self, *, artifact, spans, evidence_refs, created_by, limit):
+        assert created_by == "user"
+        assert evidence_refs
+        return CandidateClaimExtraction(claims=[CandidateClaimDraft(
+            statement=artifact.text,
+            subject="项目 Orchid-l01-regression",
+            predicate="验收颜色代号是",
+            object="cobalt-5485cbdeb8",
+            claim_type="external_fact",
+            source_role="user_assertion",
+            evidence_ref_ids=[evidence_refs[0].source_id],
+        )])
+
+
+class _UnreasonedUncertainClaimExtractor:
+    """Reproduces the live model marking an explicit fact uncertain without cause."""
+
+    name = "test-unreasoned-uncertain-claim-extractor"
+    version = "v1"
+
+    def extract(self, *, artifact, spans, evidence_refs, created_by, limit):
+        assert created_by == "user"
+        assert evidence_refs
+        return CandidateClaimExtraction(claims=[CandidateClaimDraft(
+            statement=artifact.text,
+            subject="项目 Orchid-l01-regression",
+            predicate="验收颜色代号是",
+            object="cobalt-5485cbdeb8",
+            claim_type="uncertain_claim",
+            source_role="source_document",
+            evidence_ref_ids=[evidence_refs[0].source_id],
+            confidence=0.9,
+        )])
+
+
 def test_ingest_text_creates_p0_chain_and_admits_supported_claims():
     store = InMemoryKnowledgeStore()
     service = KnowledgeService(store)
@@ -88,6 +168,100 @@ def test_ingest_text_creates_p0_chain_and_admits_supported_claims():
     }
     assert len(deprecated_items) == 1
     assert deprecated_items[0].claim_ids == []
+
+
+def test_narrow_semantic_span_preserves_the_complete_source_fact_for_recall():
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(
+        store,
+        semantic_evidence_extractor=_NarrowProjectEvidenceExtractor(),
+    )
+    project_name = "Orchid-l01-regression"
+    expected_code = "cobalt-5485cbdeb8"
+
+    result = service.ingest_text(
+        f"我为项目 {project_name} 记录的验收颜色代号是 {expected_code}。",
+        owner_id="default",
+        user_id="default",
+    )
+    selection = service.select_evidence(
+        f"我之前记下的 {project_name} 项目验收颜色代号是什么？",
+        owner_id="default",
+    )
+
+    assert any(expected_code in span.text_span for span in result.evidence_spans)
+    assert any(expected_code in citation.quote for citation in selection.citations)
+
+
+def test_user_source_provenance_cannot_be_reclassified_as_assistant_inference():
+    store = InMemoryKnowledgeStore()
+    service = KnowledgeService(
+        store,
+        semantic_claim_extractor=_MisclassifiedUserClaimExtractor(),
+    )
+
+    result = service.ingest_text(
+        "我为项目 Orchid-l01-regression 记录的验收颜色代号是 cobalt-5485cbdeb8。",
+        owner_id="default",
+        user_id="default",
+        source_type="text",
+        created_by="user",
+    )
+
+    assert result.claims[0].claim_type != "assistant_inference"
+    assert result.claims[0].source_role == "source_document"
+    assert result.claims[0].state == "active"
+    assert result.extraction_run.status == "partial"
+    assert any(
+        "candidate_claim_assistant_provenance_mismatch" in error
+        for error in result.extraction_run.errors
+    )
+
+
+def test_source_role_is_derived_from_the_ingestion_boundary():
+    service = KnowledgeService(
+        InMemoryKnowledgeStore(),
+        semantic_claim_extractor=_MismatchedSourceRoleClaimExtractor(),
+    )
+
+    result = service.ingest_text(
+        "项目 Orchid-l01-regression 的验收颜色代号是 cobalt-5485cbdeb8。",
+        owner_id="default",
+        user_id="default",
+        source_type="text",
+        created_by="user",
+    )
+
+    assert result.claims[0].source_role == "source_document"
+    assert result.claims[0].state == "active"
+    assert result.extraction_run.status == "partial"
+    assert any(
+        "candidate_claim_source_role_mismatch" in error
+        for error in result.extraction_run.errors
+    )
+
+
+def test_uncertain_claim_requires_an_auditable_uncertainty_reason():
+    service = KnowledgeService(
+        InMemoryKnowledgeStore(),
+        semantic_claim_extractor=_UnreasonedUncertainClaimExtractor(),
+    )
+
+    result = service.ingest_text(
+        "项目 Orchid-l01-regression 的验收颜色代号是 cobalt-5485cbdeb8。",
+        owner_id="default",
+        user_id="default",
+        source_type="text",
+        created_by="user",
+    )
+
+    assert result.claims[0].claim_type == "external_fact"
+    assert result.claims[0].state == "active"
+    assert result.extraction_run.status == "partial"
+    assert any(
+        "candidate_uncertain_claim_requires_uncertainty_reason" in error
+        for error in result.extraction_run.errors
+    )
 
 
 def test_assistant_inference_never_becomes_active_even_when_grounded():

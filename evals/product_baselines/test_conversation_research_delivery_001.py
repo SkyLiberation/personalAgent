@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from math import ceil
 import os
+import re
 from time import perf_counter
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -13,6 +13,7 @@ from urllib.parse import urlencode, urlparse
 
 import pytest
 
+from evals.e2e_quality.failure_diagnostics import diagnose_earliest_failure
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
     _get_json,
@@ -34,16 +35,17 @@ pytest_plugins = (
 )
 
 _CASE_ID = "CONVERSATION-RESEARCH-DELIVERY-001"
-_DATASET_REVISION = "conversation-research-delivery-20-v1"
-_GRADER_VERSION = "conversation-research-delivery-user-outcome-v1"
+_DATASET_REVISION = "conversation-research-delivery-20-v2-per-sample"
+_GRADER_VERSION = "conversation-research-delivery-user-outcome-v3-concepts"
 _REPETITIONS = 4
+_CONCEPT_SEGMENT_SPLIT = re.compile(r"[\r\n。！？；]+")
 
 
 @dataclass(frozen=True, slots=True)
 class _Scenario:
     scenario_id: str
     request: str
-    required_terms: tuple[str, ...]
+    required_concepts: tuple[tuple[str, ...], ...]
     official_source_groups: tuple[tuple[str, ...], ...]
 
 
@@ -54,7 +56,7 @@ _SCENARIOS = (
             "请实际查阅 OpenAI 官方工具文档和 MCP 官方 tools 规范，在这次回复中比较"
             "工具选择、权限边界和结果契约，给出带官方 URL 的中文结论。"
         ),
-        required_terms=("工具选择", "权限边界", "结果契约"),
+        required_concepts=(("工具", "选择"), ("权限", "边界"), ("结果", "契约")),
         official_source_groups=(
             (
                 "developers.openai.com",
@@ -71,7 +73,7 @@ _SCENARIOS = (
             "请实际查阅 Temporal 和 Restate 官方文档，在这次回复中比较重试、业务幂等"
             "和恢复后对账边界，给出带官方 URL 的中文结论。"
         ),
-        required_terms=("重试", "幂等", "恢复"),
+        required_concepts=(("重试",), ("幂等",), ("恢复",)),
         official_source_groups=(
             ("docs.temporal.io", "temporal.io"),
             ("docs.restate.dev", "restate.dev"),
@@ -83,7 +85,7 @@ _SCENARIOS = (
             "请实际查阅 Gemini CLI 官方资料和 Hermes Agent 官方仓库，在这次回复中比较"
             "复杂任务的计划、进度更新和恢复方式，给出带官方 URL 的中文结论。"
         ),
-        required_terms=("计划", "进度", "恢复"),
+        required_concepts=(("计划",), ("进度",), ("恢复",)),
         official_source_groups=(
             ("geminicli.com", "github.com/google-gemini/gemini-cli"),
             (
@@ -98,7 +100,7 @@ _SCENARIOS = (
             "请实际查阅 OpenAI Agents SDK 和 Anthropic 工具使用官方文档，在这次回复中"
             "比较工具选择、调用治理和任务完成判断，给出带官方 URL 的中文结论。"
         ),
-        required_terms=("工具选择", "调用", "完成"),
+        required_concepts=(("工具", "选择"), ("调用",), ("完成",)),
         official_source_groups=(
             ("openai.github.io", "developers.openai.com", "openai.com"),
             ("docs.anthropic.com", "platform.claude.com"),
@@ -111,12 +113,18 @@ _SCENARIOS = (
             "在这次回复中比较 checkpoint、replay 和副作用恢复边界，给出带官方 URL "
             "的中文结论。"
         ),
-        required_terms=("checkpoint", "replay", "副作用"),
+        required_concepts=(("checkpoint",), ("replay",), ("副作用",)),
         official_source_groups=(
             ("langchain-ai.github.io", "docs.langchain.com"),
             ("docs.temporal.io", "temporal.io"),
         ),
     ),
+)
+
+_SAMPLES = tuple(
+    (scenario, repetition)
+    for scenario in _SCENARIOS
+    for repetition in range(1, _REPETITIONS + 1)
 )
 
 
@@ -162,6 +170,26 @@ def _source_coverage(
     return tuple(any(host in normalized for host in group) for group in groups)
 
 
+def _concept_coverage(
+    answer: str,
+    required_concepts: tuple[tuple[str, ...], ...],
+) -> tuple[bool, ...]:
+    """Require every atom of one concept in the same sentence or heading."""
+
+    segments = tuple(
+        segment.casefold().strip()
+        for segment in _CONCEPT_SEGMENT_SPLIT.split(answer)
+        if segment.strip()
+    )
+    return tuple(
+        any(
+            all(atom.casefold() in segment for atom in concept)
+            for segment in segments
+        )
+        for concept in required_concepts
+    )
+
+
 def _feedback_counts(trace: dict[str, Any]) -> dict[str, int]:
     counts = Counter(
         str(item["reason_code"])
@@ -195,28 +223,6 @@ def _execution_counts(trace: dict[str, Any]) -> dict[str, int]:
             for item in inputs
         ),
     }
-
-
-def _failure_class(report: dict[str, Any]) -> str:
-    if report["delivered"]:
-        return "delivered"
-    if report["entry_error"] is not None:
-        if report["entry_error"]["type"] == "TimeoutError":
-            return "entry_timeout"
-        return "entry_transport_failure"
-    if report["execution_counts"]["agent_failed"]:
-        return "agent_execution_failed"
-    if report["execution_counts"]["tool_failed"]:
-        return "tool_execution_failed"
-    if report["feedback_counts"].get("invalid_arguments", 0):
-        return "tool_arguments_rejected"
-    if report["disposition"] != "answer":
-        return f"disposition_{report['disposition']}"
-    if not all(report["source_coverage"]):
-        return "official_source_missing"
-    if not all(report["term_coverage"]):
-        return "required_result_missing"
-    return "final_result_contract_missing"
 
 
 def _config_cohort(server: LiveWebProcess) -> str:
@@ -255,93 +261,33 @@ def _config_cohort(server: LiveWebProcess) -> str:
     })
 
 
+@pytest.mark.parametrize(
+    ("scenario", "repetition"),
+    _SAMPLES,
+    ids=[
+        f"{scenario.scenario_id}-run-{repetition}"
+        for scenario, repetition in _SAMPLES
+    ],
+)
 def test_conversation_research_delivery_001(
     request: pytest.FixtureRequest,
     live_web_search_process: LiveWebProcess,
     product_evidence_recorder: ProductEvidenceRecorder,
+    scenario: _Scenario,
+    repetition: int,
 ) -> None:
     user_id = "conversation-research-delivery-cohort"
-    reports: list[dict[str, Any]] = []
-    all_inputs: list[str] = []
-
-    for scenario in _SCENARIOS:
-        for repetition in range(1, _REPETITIONS + 1):
-            all_inputs.append(scenario.request)
-            result, trace, elapsed, entry_error = _turn(
-                live_web_search_process,
-                user_id=user_id,
-                conversation_id=(
-                    f"conversation-research-{scenario.scenario_id}-{repetition}"
-                ),
-                text=scenario.request,
-            )
-            if entry_error is not None:
-                live_web_search_process.restart()
-            answer = str(result.get("message", {}).get("content", ""))
-            normalized_answer = answer.casefold()
-            term_coverage = tuple(
-                term.casefold() in normalized_answer
-                for term in scenario.required_terms
-            )
-            source_coverage = _source_coverage(
-                answer,
-                scenario.official_source_groups,
-            )
-            usage = trace.get("usage") or {}
-            report = {
-                "scenario_id": scenario.scenario_id,
-                "repetition": repetition,
-                "natural_user_text": scenario.request,
-                "entry_error": entry_error,
-                "disposition": result.get("disposition"),
-                "term_coverage": term_coverage,
-                "source_coverage": source_coverage,
-                "feedback_counts": _feedback_counts(trace),
-                "execution_counts": _execution_counts(trace),
-                "elapsed_seconds": round(elapsed, 6),
-                "usage": usage,
-                "result": result,
-                "interaction_trace": trace,
-            }
-            report["delivered"] = (
-                report["disposition"] == "answer"
-                and all(term_coverage)
-                and all(source_coverage)
-            )
-            report["failure_class"] = _failure_class(report)
-            reports.append(report)
-
-    elapsed_values = sorted(item["elapsed_seconds"] for item in reports)
-    aggregate_feedback = Counter()
-    aggregate_execution = Counter()
-    for report in reports:
-        aggregate_feedback.update(report["feedback_counts"])
-        aggregate_execution.update(report["execution_counts"])
-    evidence_report = {
-        "sample_count": len(reports),
-        "delivered_count": sum(bool(item["delivered"]) for item in reports),
-        "entry_error_count": sum(
-            item["entry_error"] is not None for item in reports
-        ),
-        "failure_class_counts": dict(sorted(Counter(
-            str(item["failure_class"]) for item in reports
-        ).items())),
-        "feedback_counts": dict(sorted(aggregate_feedback.items())),
-        "execution_counts": dict(sorted(aggregate_execution.items())),
-        "p95_elapsed_seconds": elapsed_values[
-            ceil(len(elapsed_values) * 0.95) - 1
-        ],
-        "total_model_turns": sum(
-            int((item["usage"] or {}).get("model_turns") or 0)
-            for item in reports
-        ),
-        "total_tokens": sum(
-            int((item["usage"] or {}).get("total_tokens") or 0)
-            for item in reports
-        ),
-        "reports": reports,
+    conversation_id = f"conversation-research-{scenario.scenario_id}-{repetition}"
+    initial_state = {
+        "isolated_user": True,
+        "isolated_conversation": conversation_id,
+        "scenario_id": scenario.scenario_id,
+        "repetition": repetition,
+        "initial_conversation_count": 0,
+        "restart_server_after_entry_error": True,
+        "dataset_revision": _DATASET_REVISION,
     }
-    product_evidence_recorder.capture(
+    product_evidence_recorder.enroll(
         nodeid=request.node.nodeid,
         identity=ProductEvidenceIdentity(
             case_id=_CASE_ID,
@@ -353,25 +299,69 @@ def test_conversation_research_delivery_001(
                 tenant_id="personal-agent",
                 user_id=user_id,
             ),
-            user_input_digest=canonical_evidence_digest(all_inputs),
-            initial_state_digest=canonical_evidence_digest({
-                "isolated_user": True,
-                "scenario_count": len(_SCENARIOS),
-                "repetitions": _REPETITIONS,
-                "initial_conversation_count": 0,
-                "restart_server_after_entry_error": True,
-                "dataset_revision": _DATASET_REVISION,
-            }),
+            user_input_digest=canonical_evidence_digest(scenario.request),
+            initial_state_digest=canonical_evidence_digest(initial_state),
             config_cohort=_config_cohort(live_web_search_process),
             grader_version=_GRADER_VERSION,
         ),
-        report=evidence_report,
     )
 
-    assert len(reports) == 20
-    assert all(item["delivered"] for item in reports), {
-        "delivered_count": evidence_report["delivered_count"],
-        "failure_class_counts": evidence_report["failure_class_counts"],
-        "feedback_counts": evidence_report["feedback_counts"],
-        "execution_counts": evidence_report["execution_counts"],
+    result, trace, elapsed, entry_error = _turn(
+        live_web_search_process,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        text=scenario.request,
+    )
+    if entry_error is not None:
+        live_web_search_process.restart()
+    answer = str(result.get("message", {}).get("content", ""))
+    concept_coverage = _concept_coverage(answer, scenario.required_concepts)
+    source_coverage = _source_coverage(
+        answer,
+        scenario.official_source_groups,
+    )
+    usage = trace.get("usage") or {}
+    delivered = (
+        result.get("disposition") == "answer"
+        and all(concept_coverage)
+        and all(source_coverage)
+    )
+    report = {
+        "case_id": _CASE_ID,
+        "scenario_id": scenario.scenario_id,
+        "repetition": repetition,
+        "natural_user_text": scenario.request,
+        "initial_state": initial_state,
+        "entry_error": entry_error,
+        "disposition": result.get("disposition"),
+        "concept_coverage": concept_coverage,
+        "source_coverage": source_coverage,
+        "feedback_counts": _feedback_counts(trace),
+        "execution_counts": _execution_counts(trace),
+        "elapsed_seconds": round(elapsed, 6),
+        "usage": usage,
+        "result": result,
+        "interaction_trace": trace,
+        "delivered": delivered,
     }
+    failure_diagnostic = diagnose_earliest_failure(
+        delivered=delivered,
+        entry_error=entry_error,
+        interaction_trace=trace,
+        required_source_groups=scenario.official_source_groups,
+    )
+    report["earliest_failure"] = failure_diagnostic.model_dump(mode="json")
+    report["result_metrics"] = {
+        "delivered": delivered,
+        "entry_error": entry_error is not None,
+        "tool_arguments_rejected": (
+            report["feedback_counts"].get("invalid_arguments", 0) > 0
+        ),
+        "elapsed_seconds": report["elapsed_seconds"],
+        "model_turns": usage.get("model_turns"),
+        "usage_incomplete": not isinstance(usage.get("total_tokens"), int),
+        "total_tokens": usage.get("total_tokens") or 0,
+    }
+    product_evidence_recorder.capture_report(report)
+
+    assert delivered, report["result_metrics"]

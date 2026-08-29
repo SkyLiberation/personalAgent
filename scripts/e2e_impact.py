@@ -17,9 +17,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -29,6 +31,8 @@ from evals.e2e_quality.impact_map import (  # noqa: E402
     match_rule,
     select_live_cases,
 )
+from evals.e2e_quality.evidence_catalog import EVIDENCE_CASES  # noqa: E402
+from evals.e2e_quality.trace_archive import archive_checksums_valid  # noqa: E402
 
 
 def _git(*args: str) -> list[str]:
@@ -91,15 +95,88 @@ def main() -> int:
 _FULL_COMMAND = (
     "pytest evals/e2e_quality --e2e-scope=release --e2e-require-complete-matrix -q -s"
 )
+_FULL_ITERATION_COMMAND = (
+    "pytest evals/e2e_quality --e2e-scope=release "
+    "--e2e-require-complete-matrix -x -q -s"
+)
+_TRACE_ROOT = REPO_ROOT / "data" / "e2e_traces"
+
+
+def _release_nodeids() -> tuple[str, ...]:
+    return tuple(
+        f"evals/e2e_quality/{case.module}::{case.test_name}"
+        for case in EVIDENCE_CASES
+        if case.release_eligible
+    )
+
+
+def _history_ordered_iteration_command(
+    durations: Mapping[str, float] | None,
+) -> str:
+    if durations is None:
+        return _FULL_ITERATION_COMMAND
+    nodeids = sorted(
+        _release_nodeids(),
+        key=lambda nodeid: (durations[nodeid], nodeid),
+    )
+    return (
+        "pytest "
+        + " ".join(nodeids)
+        + " --e2e-scope=release --e2e-require-complete-matrix -x -q -s"
+    )
+
+
+def _latest_complete_release_durations(
+    trace_root: Path = _TRACE_ROOT,
+) -> tuple[dict[str, float] | None, str | None]:
+    """Read ordering only from the latest sealed run that contains every release case."""
+    required = set(_release_nodeids())
+    candidates: list[tuple[str, str, dict[str, float]]] = []
+    if not trace_root.is_dir():
+        return None, None
+    for run_dir in trace_root.iterdir():
+        summary_path = run_dir / "summary.json"
+        if not run_dir.is_dir() or not summary_path.is_file():
+            continue
+        if not archive_checksums_valid(run_dir):
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            durations = {
+                str(item["nodeid"]).split("[", 1)[0]: float(
+                    item["phases"]["call"]["duration_seconds"]
+                )
+                for item in summary["tests"]
+                if isinstance(item.get("phases", {}).get("call"), dict)
+            }
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not required.issubset(durations):
+            continue
+        candidates.append(
+            (str(summary.get("finished_at", "")), run_dir.name, durations)
+        )
+    if not candidates:
+        return None, None
+    _, run_name, durations = max(candidates, key=lambda item: (item[0], item[1]))
+    return durations, f"data/e2e_traces/{run_name}/summary.json"
 
 
 def _emit(selection, *, quiet: bool) -> int:
     if selection.full_matrix_required:
         if not quiet:
+            durations, ordering_source = _latest_complete_release_durations()
+            iteration_command = _history_ordered_iteration_command(durations)
             print("routing: FULL MATRIX required")
             for reason in selection.reasons:
                 print(f"  reason: {reason}")
             print()
+            print("iteration command (fail-fast; not release evidence):")
+            print(iteration_command)
+            if ordering_source is not None:
+                print(f"ordering evidence: {ordering_source}")
+            print()
+            print("release evidence command (records every case outcome):")
         print(_FULL_COMMAND)
         return 0
 

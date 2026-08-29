@@ -14,6 +14,12 @@
 | Offline semantic eval | 冻结数据集、runner、scorer、统计阈值 | 模型或检索器可按 profile 替换 | 指定数据分布上的语义质量 | 正式入口、持久化、恢复和副作用正确性 |
 | Unit/Contract | 单一 owner、不变量或 Port contract | Fake/Stub 普遍允许 | 局部确定性规则 | 端到端用户结果 |
 
+## 证据分类与横切验证不能混用
+
+每条 E2E 在 `evidence_catalog.py` 中只能拥有一个证据分类。Tool Calling、MCP dispatch、A2A Artifact 返回等横切套件不是新的证据类别，而是对同一份密封 Trace 的机制检查；同一用例可以进入多个套件。报告必须并列保留整例 `pytest_outcome` 和关键检查点结果，不能用机制通过覆盖 Product、Provider 或用户结果失败。
+
+只有现有用例无法承载新的用户目标、入口、初始事实、故障边界或关键反事实时才新增 E2E。共享 Observation、Receipt、Artifact、policy fact 或局部不变量时，优先在 `validation_catalog.py` 中增加 typed 检查点，不复制 live workload。
+
 ## Product E2E 判定
 
 一条 Product E2E 同时满足：
@@ -34,7 +40,7 @@
 - `CTX-001` 的 frozen MCP 可以证明 Conversation/MCP/Gateway/Context materialization 对固定大文档的行为；不能证明真实 GitHub、Notion 或 Web Provider 的可用性。
 - `GOV-001` 的恶意文档和隐藏 Tool 是安全协议测试；它不是自然产品旅程。
 - `RUN-001` 的固定 A/B/C records 用于验证 budget admission；它不是外部资料读取质量 E2E。
-- 当前 12 个 `LT` 用例（`LT01–LT08、LT10–LT13`）使用 scripted semantic decisions 和 frozen providers，属于 Runtime Conformance，不属于 E2E；伪造 Conversation 对照的 `LT09` 已删除。
+- 历史 12 个 `LT` 用例（`LT01–LT08、LT10–LT13`）曾使用 scripted semantic decisions 和 frozen providers，只能作为 Runtime Conformance；当前可执行节点均已删除，归档保持只读。
 
 ## 用户结果与内部事实
 

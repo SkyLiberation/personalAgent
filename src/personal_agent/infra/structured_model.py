@@ -8,7 +8,7 @@ mode plus the same Pydantic contract in the prompt. Application code is unaware
 of that transport distinction.
 
 The adapter is **pure**: it only performs the API call and extracts
-content / tool_calls / usage / latency. No tracing (langsmith spans,
+content / typed action invocations / usage / latency. No tracing (langsmith spans,
 ``record_llm_usage``, ``log_event``) lives inside it — that is the job of the
 ``ObservedStructuredModelClient`` decorator, applied at composition time. This
 keeps the call logic decoupled from observability concerns and lets tracing be
@@ -30,6 +30,7 @@ from urllib.parse import urlparse
 from openai import APIError, APIStatusError, OpenAI
 from pydantic import BaseModel
 from personal_agent.capabilities.contracts.model import (
+    ModelActionInvocation,
     StreamChunk,
     StreamingModelClient,
     StructuredModelClient,
@@ -332,24 +333,85 @@ def _report_usage_to_run_tree(response: StructuredModelResponse[Any]) -> None:
         pass
 
 
-def _extract_tool_calls(message: Any) -> list[dict[str, Any]]:
-    """Pull normalized tool-call dicts off a Chat Completions message."""
+def _extract_action_invocations(
+    message: Any,
+    request: StructuredModelRequest[Any],
+) -> tuple[ModelActionInvocation, ...]:
+    """Validate provider tool calls before they cross the model Port boundary."""
     tool_calls = getattr(message, "tool_calls", None) or []
-    normalized: list[dict[str, Any]] = []
+    if not tool_calls:
+        raise StructuredOutputFailure(
+            request.operation,
+            "provider returned no action call for a tool-calling request",
+            reason_code="provider_action_missing",
+        )
+    known_names = {definition.name for definition in request.action_definitions}
+    seen_call_ids: set[str] = set()
+    normalized: list[ModelActionInvocation] = []
     for call in tool_calls:
         if isinstance(call, dict):
-            normalized.append(call)
-            continue
-        function = getattr(call, "function", None)
-        normalized.append({
-            "id": getattr(call, "id", ""),
-            "type": getattr(call, "type", "function"),
-            "function": {
-                "name": getattr(function, "name", ""),
-                "arguments": getattr(function, "arguments", "{}"),
-            },
-        })
-    return normalized
+            call_id = str(call.get("id") or "")
+            call_type = str(call.get("type") or "function")
+            function = call.get("function")
+        else:
+            call_id = str(getattr(call, "id", "") or "")
+            call_type = str(getattr(call, "type", "function") or "function")
+            function = getattr(call, "function", None)
+        if call_type != "function":
+            raise StructuredOutputFailure(
+                request.operation,
+                f"unsupported provider action type {call_type!r}",
+                reason_code="provider_action_type_unsupported",
+            )
+        if not call_id or call_id in seen_call_ids:
+            reason = "missing" if not call_id else "duplicate"
+            raise StructuredOutputFailure(
+                request.operation,
+                f"provider action call_id is {reason}",
+                reason_code=(
+                    "provider_action_call_id_missing"
+                    if not call_id
+                    else "provider_action_call_id_duplicate"
+                ),
+            )
+        seen_call_ids.add(call_id)
+        if isinstance(function, dict):
+            name = str(function.get("name") or "")
+            raw_arguments = function.get("arguments", "{}")
+        else:
+            name = str(getattr(function, "name", "") or "")
+            raw_arguments = getattr(function, "arguments", "{}")
+        if name not in known_names:
+            raise StructuredOutputFailure(
+                request.operation,
+                f"provider selected unknown model action {name!r}",
+                reason_code="provider_action_unknown",
+            )
+        if isinstance(raw_arguments, str):
+            try:
+                arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError as exc:
+                raise StructuredOutputFailure(
+                    request.operation,
+                    f"model action {name!r} returned invalid JSON arguments",
+                    reason_code="provider_action_arguments_invalid_json",
+                ) from exc
+        else:
+            arguments = raw_arguments
+        if not isinstance(arguments, dict):
+            raise StructuredOutputFailure(
+                request.operation,
+                f"model action {name!r} arguments require an object",
+                reason_code="provider_action_arguments_not_object",
+            )
+        normalized.append(
+            ModelActionInvocation(
+                call_id=call_id,
+                name=name,
+                arguments=arguments,
+            )
+        )
+    return tuple(normalized)
 
 
 class OpenAIModelClient:
@@ -422,10 +484,20 @@ class OpenAIModelClient:
         if request.kind == "text" and request.response_format is not None:
             kwargs["response_format"] = request.response_format
         if request.kind == "tool_calling":
-            if request.tools:
-                kwargs["tools"] = request.tools
-            if request.tool_choice is not None:
-                kwargs["tool_choice"] = request.tool_choice
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": definition.name,
+                        "description": definition.description,
+                        "parameters": definition.input_schema,
+                        "strict": True,
+                    },
+                }
+                for definition in request.action_definitions
+            ]
+            if request.action_choice is not None:
+                kwargs["tool_choice"] = request.action_choice
         config_extra = getattr(self._config, "extra_body", None) or {}
         merged_extra = {**config_extra, **(request.extra_body or {})}
         if merged_extra:
@@ -655,7 +727,11 @@ class OpenAIModelClient:
         latency_ms = round((perf_counter() - start) * 1000, 2)
         message = _require_chat_choices(response)[0].message
         content = (message.content or "").strip()
-        tool_calls = _extract_tool_calls(message)
+        action_invocations = (
+            _extract_action_invocations(message, request)
+            if request.kind == "tool_calling"
+            else ()
+        )
         usage = _usage(response)
         return StructuredModelResponse(
             value=self._default_value(request),
@@ -666,7 +742,7 @@ class OpenAIModelClient:
             output_tokens=usage.get("output_tokens"),
             total_tokens=usage.get("total_tokens"),
             raw_response=response,
-            tool_calls=tool_calls,
+            action_invocations=action_invocations,
         )
 
     # -- unified streaming entrypoint ------------------------------------
@@ -901,10 +977,8 @@ class RedactedTracePayloadPolicy:
             "message_count": len(messages),
             "message_roles": [str(message.get("role", "")) for message in messages],
             "message_chars": sum(len(str(message.get("content", ""))) for message in messages),
-            "tool_names": [
-                str((tool.get("function") or {}).get("name"))
-                for tool in (request.tools or [])
-                if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+            "action_names": [
+                definition.name for definition in request.action_definitions
             ],
         }
 
@@ -916,7 +990,7 @@ class RedactedTracePayloadPolicy:
             "model": response.model,
             "latency_ms": response.latency_ms,
             "response_chars": len(response.content),
-            "tool_call_count": len(response.tool_calls or []),
+            "action_invocation_count": len(response.action_invocations),
             "input_tokens": response.input_tokens,
             "output_tokens": response.output_tokens,
             "total_tokens": response.total_tokens,
@@ -940,8 +1014,11 @@ class FullTracePayloadPolicy:
             "output_type": request.output_type.__name__,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
-            "tools": request.tools or None,
-            "tool_choice": request.tool_choice,
+            "action_definitions": [
+                definition.model_dump(mode="json")
+                for definition in request.action_definitions
+            ] or None,
+            "action_choice": request.action_choice,
             "response_format": request.response_format,
         }
 
@@ -961,8 +1038,11 @@ class FullTracePayloadPolicy:
         }
         if response.value is not None:
             out["value"] = response.value.model_dump(mode="json")
-        if response.tool_calls:
-            out["tool_calls"] = response.tool_calls
+        if response.action_invocations:
+            out["action_invocations"] = [
+                invocation.model_dump(mode="json")
+                for invocation in response.action_invocations
+            ]
         return out
 
 
