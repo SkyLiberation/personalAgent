@@ -37,6 +37,21 @@ def test_langsmith_config_reads_env(monkeypatch):
     assert settings.langsmith.sample_rate == 0.25
 
 
+def test_action_diagnostic_field_name_config_reads_env(monkeypatch):
+    from personal_agent.kernel import config_env as config_env_module
+
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override=True: False)
+    monkeypatch.setenv("PERSONAL_AGENT_POSTGRES_URL", "postgresql://example")
+    monkeypatch.setenv(
+        "PERSONAL_AGENT_ACTION_DIAGNOSTICS_REVEAL_FIELD_NAMES",
+        "true",
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.action_diagnostics_reveal_field_names is True
+
+
 def test_configure_langsmith_environment_sets_standard_vars(monkeypatch):
     for key in (
         "LANGSMITH_TRACING",

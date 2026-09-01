@@ -62,6 +62,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md) |
 | Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
 | Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md) |
+| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md) |
 | 单次 Observation 的上下文边界与卸载重读 | [adr/0013-bounded-observation-and-offloaded-read.md](adr/0013-bounded-observation-and-offloaded-read.md) |
 
 **当前架构只以上表的 canonical 文档和生产代码为事实源。**其他 topic、workflow、mermaid 与评测

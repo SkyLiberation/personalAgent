@@ -195,7 +195,10 @@ def _plan_counts(plan: object) -> tuple[int, int]:
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         return 0, 0
     completed = sum(step.get("status") == "completed" for step in plan["steps"])
-    pending = sum(step.get("status") == "pending" for step in plan["steps"])
+    pending = sum(
+        step.get("status") in {"pending", "in_progress"}
+        for step in plan["steps"]
+    )
     return completed, pending
 
 

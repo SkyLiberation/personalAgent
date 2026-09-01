@@ -22,16 +22,20 @@ HTTP / CLI / Message Adapter
 ```text
 messages + authenticated principal
   -> scoped context/capability materialization
-  -> Model: FinalMessage | ContinueTurnProposal(actions)
+  -> action phase: one or more compatible Provider action calls
   -> deterministic Admission / budget / concurrency checks
   -> governed Tool/Agent/Application action execution
   -> ActionObservation | DecisionFeedback
-  -> next model turn or FinalMessage
+  -> prepare_final
+  -> exclusive typed FinalMessage phase
+  -> Semantic Verification -> Completion -> send or continue
 ```
 
 模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 
-Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDefinition`，服务提供方通过原生工具调用返回动作名和 typed 参数。没有当前 working plan 时，Tool/Agent 动作 Schema 不暴露 `plan_step_id`；模型若创建新 Plan，必须先单独提交 `working_plan`，Admission 接受后下一模型回合才会暴露待完成步骤并要求动作绑定。`Adapter` 只把调用解码为现有 Proposal；Admission、权限、预算和执行网关仍在模型之外决定是否执行。语义 verifier 注册为 `workflow_activity`：它不进入模型可见能力，也不能通过普通交互入口调用；只有 Runtime 在冻结审查标准后通过独立 workflow 校验与执行入口生成 Verification Receipt。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和 `FinalMessage` 保持可用。
+Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDefinition`，服务提供方通过原生工具调用返回动作名和 typed 参数。Tool/Agent 动作 Schema 不暴露 `plan_step_id`；存在 Plan 时，模型通过独立 `control_working_plan` 选择唯一 `in_progress` 步骤，执行系统把随后动作事实关联到该 canonical 步骤。`Adapter` 只把调用解码为现有 Proposal；Admission、权限、预算和执行网关仍在模型之外决定是否执行。
+
+`FinalMessage` 不再是可以与普通 Tool Call 并列返回的 Provider action。模型在 action phase 通过无 payload 的 `prepare_final` 请求相位切换；兼容动作执行后，下一回合不暴露任何 action definitions，只生成 strict typed `FinalMessage`。`StructuredModelResponse` 也禁止同时携带 typed value 与 action invocations。普通只读工具仍可在一个 action phase 并行调用，这条互斥只约束最终交付。语义 verifier 注册为 `workflow_activity`：它不进入模型可见能力，也不能通过普通交互入口调用；只有 Runtime 在冻结审查标准后通过独立 workflow 校验与执行入口生成 Verification Receipt。Verifier 返回 `needs_revision` 时继续留在 finalization phase；只有 `insufficient_evidence` 才恢复动作能力。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和最终交付入口保持可用。
 
 ## Context materialization
 
@@ -54,7 +58,7 @@ Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才�
 
 ## Model retry
 
-模型 Port 只有一个 typed-operation retry owner。它只重试 transport/5xx、malformed transport envelope 和 Provider 空 structured content；一般 schema/语义错误不作为 transient 重试，而由 typed repair、DecisionFeedback 或 fail closed 处理。retry 次数与错误进入模型 trace/usage。Provider 接受请求但没有返回 action、返回未知 action、无效 call ID、非法参数 JSON、非对象参数或不符合 Application action payload 时，边界保留稳定 `reason_code` 和失败阶段；这些事实不改变重试资格，也不触发猜测或自动修补。
+模型 Port 只有一个 typed-operation retry owner。它重试 transport/5xx、malformed transport envelope 和 Provider 空 structured content；一般 schema/语义错误不作为 transient 重试，而由 typed repair、DecisionFeedback 或 fail closed 处理。required action phase 若收到零 action，Provider Adapter 使用完全相同的 action definitions 做一次协议修复，并明确禁止纯文本回答；第二次仍缺 action 即以 `provider_action_missing` 失败关闭。未知 action、无效 call ID、非法参数 JSON、非对象参数或不符合 Application action payload 不由 Adapter 猜测或改写。所有 retry 次数与稳定错误码进入模型 trace/usage。
 
 ## Grounded answer
 

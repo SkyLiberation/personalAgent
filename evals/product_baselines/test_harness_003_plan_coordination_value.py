@@ -1,4 +1,8 @@
-"""HARNESS-003 conformance for cross-turn consumption of plan-bound facts."""
+"""HARNESS-003 conformance for cross-turn consumption of plan-bound facts.
+
+The user explicitly requests a resumable visible work list so this case isolates
+Plan-state consumption. Agent-initiated Plan selection belongs to CONV-002.
+"""
 
 from __future__ import annotations
 
@@ -177,22 +181,11 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
     new_threshold = harness_003_values["new_threshold"]
     initial_request = (
         "ALPHA、BETA、GAMMA 是三个按次计费的档案源，每份最多访问一次。"
+        "请先创建一份可继续的工作计划，然后直接执行，"
         "如果一次返回内容太长，可以继续查看已经取得的副本，但不要再次访问原始档案。"
         "请逐字找出每份档案中 CTX-EVIDENCE 行的口令，列出资料编号与对应口令，"
         f"并在最终结果中注明当前阈值 {old_threshold}。"
         "直接开始，无需等我确认，也不要启动后台任务。"
-    )
-    assert all(
-        internal not in initial_request
-        for internal in (
-            "Plan",
-            "plan",
-            "计划",
-            "步骤",
-            "Tool",
-            "Planner",
-            "Workflow",
-        )
     )
     first_messages = [{"role": "user", "content": initial_request}]
     first = _turn(
@@ -227,14 +220,6 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
     )
     second_trace = _trace(server, second)
 
-    simple_request = "请用一句话解释什么是幂等。"
-    simple = _turn(
-        server,
-        conversation_id=f"harness-003-simple-{harness_003_values['seed'][:12]}",
-        messages=[{"role": "user", "content": simple_request}],
-    )
-    simple_trace = _trace(server, simple)
-
     first_reads = _source_reads(first_trace)
     second_reads = _source_reads(second_trace)
     all_reads = first_reads + second_reads
@@ -262,10 +247,6 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
             max(0, all_reads.count(name) - 1)
             for name in ("ALPHA", "BETA", "GAMMA")
         ),
-        "simple_plan_absent": (
-            simple.get("working_plan") is None
-            and simple_trace.get("working_plan") is None
-        ),
     }
     report = {
         "case_id": "HARNESS-003",
@@ -277,11 +258,6 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
         "first_trace": first_trace,
         "second": second,
         "second_trace": second_trace,
-        "simple_counterfactual": {
-            "request": simple_request,
-            "result": simple,
-            "trace": simple_trace,
-        },
         "source_reads": {
             "first": first_reads,
             "second": second_reads,
@@ -307,7 +283,7 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
                 user_id="default",
             ),
             user_input_digest=canonical_evidence_digest(
-                (initial_request, steering_request, simple_request)
+                (initial_request, steering_request)
             ),
             initial_state_digest=canonical_evidence_digest({
                 name: harness_003_values[name]
@@ -329,7 +305,7 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
                     "max_total_tokens": 128000,
                 },
             }),
-            grader_version="harness-003-plan-fact-consumption-v3",
+            grader_version="harness-003-explicit-plan-fact-consumption-v4",
         ),
         report=report,
     )
@@ -349,5 +325,3 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
     assert result_metrics["duplicate_source_read_count"] == 0, (
         "跨轮继续重复访问了按次计费的原始档案"
     )
-    assert simple["disposition"] == "answer"
-    assert result_metrics["simple_plan_absent"]

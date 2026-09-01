@@ -222,7 +222,10 @@ def _plan_counts(plan: object) -> tuple[int, int]:
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         return 0, 0
     completed = sum(step.get("status") == "completed" for step in plan["steps"])
-    pending = sum(step.get("status") == "pending" for step in plan["steps"])
+    pending = sum(
+        step.get("status") in {"pending", "in_progress"}
+        for step in plan["steps"]
+    )
     return completed, pending
 
 
@@ -417,8 +420,8 @@ def test_plan_stab_001_working_plan_stability(
         "pending_step_count": pending,
         "failed_tool_result_count": len(failed_tools),
         "feedback_reason_codes": feedback_codes,
-        "repeated_plan_feedback_count": feedback_codes.count(
-            "working_plan_no_change"
+        "active_step_feedback_count": feedback_codes.count(
+            "working_plan_active_step_required"
         ),
         "usage": second_trace.get("usage"),
     }

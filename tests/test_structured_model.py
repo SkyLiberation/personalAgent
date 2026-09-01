@@ -23,6 +23,7 @@ from personal_agent.infra.structured_model import (
 )
 from personal_agent.capabilities.contracts.model import (
     ModelActionDefinition,
+    ModelActionInvocation,
     ModelInvocationUnavailable,
     StructuredModelRequest,
     StructuredModelResponse,
@@ -113,9 +114,26 @@ def test_openai_adapter_transports_typed_model_actions(monkeypatch):
     result = client.generate(_action_request())
 
     assert captured["tool_choice"] == "required"
+    assert captured["tools"][0]["function"]["strict"] is True
     assert captured["tools"][0]["function"]["parameters"]["required"] == ["query"]
     assert result.action_invocations[0].call_id == "call-search-1"
     assert result.action_invocations[0].arguments == {"query": "saved color code"}
+
+
+def test_model_response_rejects_typed_output_mixed_with_actions():
+    with pytest.raises(ValueError, match="both typed output and action invocations"):
+        StructuredModelResponse(
+            value=ExampleOutput(ok=True),
+            model="invalid-model",
+            latency_ms=1,
+            action_invocations=(
+                ModelActionInvocation(
+                    call_id="call-1",
+                    name="tool_search_personal_knowledge",
+                    arguments={"query": "alpha"},
+                ),
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -179,18 +197,24 @@ def test_openai_adapter_fails_closed_on_invalid_provider_actions(
 
 
 def test_openai_adapter_classifies_missing_required_provider_action(monkeypatch):
+    calls: list[dict[str, object]] = []
+
     class FakeOpenAI:
         def __init__(self, **_kwargs):
-            self.chat = SimpleNamespace(completions=SimpleNamespace(
-                create=lambda **_kwargs: SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(
-                        content="plain text instead of an action",
-                        tool_calls=[],
-                    ))],
-                    model="action-model",
-                    usage=None,
-                )
-            ))
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(
+                    content="plain text instead of an action",
+                    tool_calls=[],
+                ))],
+                model="action-model",
+                usage=None,
+            )
 
     monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
     client = OpenAIModelClient(StructuredConfig(
@@ -204,6 +228,56 @@ def test_openai_adapter_classifies_missing_required_provider_action(monkeypatch)
 
     assert exc_info.value.reason_code == "provider_action_missing"
     assert "plain text" not in str(exc_info.value)
+    assert len(calls) == 2
+
+
+def test_openai_adapter_repairs_one_missing_required_provider_action(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            calls.append(kwargs)
+            tool_calls = []
+            content = "plain text instead of an action"
+            if len(calls) == 2:
+                content = ""
+                tool_calls = [SimpleNamespace(
+                    id="call-search-repaired",
+                    type="function",
+                    function=SimpleNamespace(
+                        name="tool_search_personal_knowledge",
+                        arguments='{"query":"saved color code"}',
+                    ),
+                )]
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=content,
+                    tool_calls=tool_calls,
+                ))],
+                model="action-model",
+                usage=None,
+            )
+
+    monkeypatch.setattr("personal_agent.infra.structured_model.OpenAI", FakeOpenAI)
+    client = OpenAIModelClient(StructuredConfig(
+        api_key="key",
+        base_url="https://llm.invalid",
+        model="action-model",
+    ))
+
+    result = client.generate(_action_request())
+
+    assert len(calls) == 2
+    assert calls[1]["messages"][0]["role"] == "system"
+    assert "Return action calls only" in calls[1]["messages"][0]["content"]
+    assert result.action_invocations[0].call_id == "call-search-repaired"
+    assert result.retry_attempts == 1
+    assert result.retry_errors == ["provider_action_missing"]
 
 
 def test_openai_adapter_uses_chat_completions_json_schema(monkeypatch):

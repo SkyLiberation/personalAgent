@@ -490,6 +490,9 @@ class AgentRuntime:
                 **self.settings.interaction_loop.model_dump()
             ),
             journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
+            action_diagnostics_reveal_field_names=(
+                self.settings.action_diagnostics_reveal_field_names
+            ),
         )
         self._sync_procedure_definitions()
         self._procedure_runtime = ProcedureRuntime(

@@ -280,7 +280,10 @@ def _plan_counts(plan: object) -> tuple[int, int, int]:
     if not isinstance(plan, dict) or not isinstance(plan.get("steps"), list):
         return 0, 0, 0
     completed = sum(step.get("status") == "completed" for step in plan["steps"])
-    pending = sum(step.get("status") == "pending" for step in plan["steps"])
+    pending = sum(
+        step.get("status") in {"pending", "in_progress"}
+        for step in plan["steps"]
+    )
     superseded = sum(step.get("status") == "superseded" for step in plan["steps"])
     return completed, pending, superseded
 
@@ -526,7 +529,9 @@ def test_plan_replan_001_obligation_revision(
         and completed + superseded == len(final_steps)
     )
     feedback_codes = _feedback_reason_codes(second_trace)
-    repeated_plan_feedback_count = feedback_codes.count("working_plan_no_change")
+    active_step_feedback_count = feedback_codes.count(
+        "working_plan_active_step_required"
+    )
     delivered = (
         second.get("disposition") == "answer"
         and same_plan_revised
@@ -544,8 +549,8 @@ def test_plan_replan_001_obligation_revision(
         failure_class = "insufficient_official_evidence"
     elif delivered:
         failure_class = "delivered"
-    elif repeated_plan_feedback_count >= 3:
-        failure_class = "repeated_plan_revision_loop"
+    elif active_step_feedback_count >= 1:
+        failure_class = "active_step_selection_failure"
     else:
         failure_class = "stale_obligation_failure"
     metrics = {
@@ -570,7 +575,7 @@ def test_plan_replan_001_obligation_revision(
         "failed_provider_tool_result_count": len(failed_provider_tools),
         "failed_verification_count": len(failed_verifications),
         "feedback_reason_codes": feedback_codes,
-        "repeated_plan_feedback_count": repeated_plan_feedback_count,
+        "active_step_feedback_count": active_step_feedback_count,
         "initial_usage": first_trace.get("usage"),
         "revision_usage": second_trace.get("usage"),
     }

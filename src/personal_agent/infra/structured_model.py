@@ -7,12 +7,10 @@ native strict ``json_schema`` while ``JsonObjectStructuredAdapter`` uses JSON
 mode plus the same Pydantic contract in the prompt. Application code is unaware
 of that transport distinction.
 
-The adapter is **pure**: it only performs the API call and extracts
-content / typed action invocations / usage / latency. No tracing (langsmith spans,
-``record_llm_usage``, ``log_event``) lives inside it — that is the job of the
-``ObservedStructuredModelClient`` decorator, applied at composition time. This
-keeps the call logic decoupled from observability concerns and lets tracing be
-added, removed or swapped without touching the adapter.
+The adapter owns only Provider calls, extraction, and one bounded repair of a
+malformed Provider protocol response. It never authorizes an action or invents
+Application semantics. Structured tracing and usage recording remain decorator
+responsibilities; the adapter emits only local diagnostics for repair boundaries.
 """
 
 from __future__ import annotations
@@ -719,22 +717,66 @@ class OpenAIModelClient:
     ) -> StructuredModelResponse[StructuredOutputT]:
         start = perf_counter()
         client = self._client()
+        responses: list[Any] = []
+        chat_request = request
         response = self._create_chat_completion(
             client,
             request.operation,
-            self._chat_kwargs(request),
+            self._chat_kwargs(chat_request),
         )
-        latency_ms = round((perf_counter() - start) * 1000, 2)
+        responses.append(response)
         message = _require_chat_choices(response)[0].message
+        repair_errors: list[str] = []
+        try:
+            action_invocations = (
+                _extract_action_invocations(message, chat_request)
+                if request.kind == "tool_calling"
+                else ()
+            )
+        except StructuredOutputFailure as exc:
+            if not (
+                request.kind == "tool_calling"
+                and request.action_choice == "required"
+                and exc.reason_code == "provider_action_missing"
+            ):
+                raise
+            repair_errors.append(exc.reason_code)
+            log_event(
+                logger,
+                logging.WARNING,
+                "llm.action_protocol_repair",
+                operation=request.operation,
+                version=request.version,
+                reason_code=exc.reason_code,
+            )
+            chat_request = replace(
+                request,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Your previous response contained no provider action call. "
+                            "This request requires one or more calls from the declared "
+                            "action definitions. Return action calls only; do not answer "
+                            "with assistant prose."
+                        ),
+                    },
+                    *request.messages,
+                ],
+            )
+            response = self._create_chat_completion(
+                client,
+                request.operation,
+                self._chat_kwargs(chat_request),
+            )
+            responses.append(response)
+            message = _require_chat_choices(response)[0].message
+            action_invocations = _extract_action_invocations(message, chat_request)
+        latency_ms = round((perf_counter() - start) * 1000, 2)
         content = (message.content or "").strip()
-        action_invocations = (
-            _extract_action_invocations(message, request)
-            if request.kind == "tool_calling"
-            else ()
-        )
-        usage = _usage(response)
+        usage = _aggregate_usage(responses)
         return StructuredModelResponse(
-            value=self._default_value(request),
+            value=(None if action_invocations else self._default_value(request)),
             model=getattr(response, "model", None) or self._resolved_model,
             latency_ms=latency_ms,
             content=content,
@@ -743,6 +785,8 @@ class OpenAIModelClient:
             total_tokens=usage.get("total_tokens"),
             raw_response=response,
             action_invocations=action_invocations,
+            retry_attempts=len(repair_errors),
+            retry_errors=repair_errors,
         )
 
     # -- unified streaming entrypoint ------------------------------------
@@ -879,8 +923,8 @@ class RetryingStructuredModelClient:
                 response = self._delegate.generate(request)
                 return replace(
                     response,
-                    retry_attempts=attempt,
-                    retry_errors=retry_errors,
+                    retry_attempts=response.retry_attempts + attempt,
+                    retry_errors=[*retry_errors, *response.retry_errors],
                 )
             except Exception as exc:
                 if attempt >= self._max_retries or not _is_retryable_model_error(exc):

@@ -11,8 +11,6 @@ from .models import (
     ConversationWorkingPlan,
     ConversationWorkingPlanStep,
     DecisionFeedback,
-    ReadActionOutputArguments,
-    ToolCallProposal,
     WorkingPlanProposal,
 )
 
@@ -31,13 +29,16 @@ def supersede_pending_working_plan(
     working_plan: ConversationWorkingPlan,
 ) -> ConversationWorkingPlan:
     """End provisional obligations without fabricating execution evidence."""
-    if not any(step.status == "pending" for step in working_plan.steps):
+    if not any(
+        step.status in {"pending", "in_progress"}
+        for step in working_plan.steps
+    ):
         return working_plan
     return working_plan.model_copy(update={
         "revision": working_plan.revision + 1,
         "steps": tuple(
             step.model_copy(update={"status": "superseded"})
-            if step.status == "pending" else step
+            if step.status in {"pending", "in_progress"} else step
             for step in working_plan.steps
         ),
     })
@@ -172,6 +173,7 @@ def admit_working_plan(
     *,
     current: ConversationWorkingPlan | None,
     inputs: tuple,
+    wait_for_user: bool = False,
 ) -> tuple[DecisionFeedback | None, ConversationWorkingPlan | None]:
     step_ids = tuple(step.step_id for step in proposal.steps)
     if len(step_ids) != len(set(step_ids)):
@@ -182,28 +184,39 @@ def admit_working_plan(
             repairable_fields=("steps",),
             required_repair="Return one unique step_id per user-visible obligation.",
         ), None
+    active_count = sum(step.status == "in_progress" for step in proposal.steps)
+    nonterminal = any(
+        step.status in {"pending", "in_progress"} for step in proposal.steps
+    )
+    if wait_for_user and active_count:
+        return DecisionFeedback(
+            action_id="working_plan",
+            reason_code="waiting_plan_has_active_step",
+            message="A working plan awaiting user review cannot have an active step.",
+            repairable_fields=("steps",),
+            immutable_fields=("wait_for_user",),
+            required_repair=(
+                "Keep every unfinished step pending until the user authorizes execution."
+            ),
+        ), None
+    if not wait_for_user and nonterminal and active_count != 1:
+        return DecisionFeedback(
+            action_id="working_plan",
+            reason_code="working_plan_active_step_required",
+            message="An executable working plan requires exactly one in_progress step.",
+            repairable_fields=("steps",),
+            immutable_fields=("goal", "grounding"),
+            required_repair=(
+                "Mark exactly one unfinished step in_progress and keep every other "
+                "unfinished step pending."
+            ),
+        ), None
     starts_new_plan = _starts_new_plan(proposal, current)
     if current is not None and not starts_new_plan and _same_plan_content(
         proposal,
         current,
     ):
-        return DecisionFeedback(
-            action_id="working_plan",
-            reason_code="working_plan_no_change",
-            message="The proposed working plan is identical to the current plan.",
-            repairable_fields=(
-                "working_plan",
-                "actions",
-                "resolved_plan_step_ids",
-            ),
-            immutable_fields=("messages", "inputs"),
-            required_repair=(
-                "Do not resubmit the plan. If the user-visible answer delivers every "
-                "pending obligation, return FinalMessage with exactly those IDs in "
-                "resolved_plan_step_ids; otherwise perform or revise only the remaining "
-                "obligation."
-            ),
-        ), None
+        return None, current
     successful_action_ids_by_step = {
         step_id: tuple(
             item.action_id
@@ -261,124 +274,103 @@ def admit_working_plan(
     return None, plan
 
 
-def admit_action_plan_bindings(
-    actions,
-    *,
+def active_working_plan_step_id(
     working_plan: ConversationWorkingPlan | None,
-    inputs: tuple = (),
-) -> DecisionFeedback | None:
+) -> str | None:
+    """Return the canonical active step without inferring one from action content."""
     if working_plan is None:
-        return next(
-            (
-                DecisionFeedback(
-                    action_id=action.action_id,
-                    reason_code="working_plan_missing",
-                    message="An action cannot bind to a plan step when no working plan exists.",
-                    repairable_fields=("plan_step_id",),
-                    immutable_fields=("action_id",),
-                    required_repair="Clear plan_step_id or create a working plan first.",
-                )
-                for action in actions
-                if action.plan_step_id is not None
-            ),
-            None,
-        )
-    pending_ids = {
-        step.step_id for step in working_plan.steps if step.status == "pending"
-    }
-    completed_ids = {
-        step.step_id for step in working_plan.steps if step.status == "completed"
-    }
-    for action in actions:
-        if action.plan_step_id is None:
-            return DecisionFeedback(
-                action_id=action.action_id,
-                reason_code="plan_step_binding_required",
-                message="Every action must bind to one pending step while a working plan exists.",
-                repairable_fields=("plan_step_id",),
-                immutable_fields=("action_id",),
-                required_repair="Set plan_step_id to one current pending step.",
-            )
-        materializes_completed_output = (
-            action.plan_step_id in completed_ids
-            and _materializes_committed_step_output(action, inputs)
-        )
-        if action.plan_step_id not in pending_ids and not materializes_completed_output:
-            return DecisionFeedback(
-                action_id=action.action_id,
-                reason_code="plan_step_not_pending",
-                message=f"Plan step {action.plan_step_id!r} is not pending.",
-                repairable_fields=("plan_step_id",),
-                immutable_fields=("action_id",),
-                required_repair="Bind the action to one current pending step.",
-            )
-    return None
-
-
-def _materializes_committed_step_output(action, inputs: tuple) -> bool:
-    """Whether an action reads the remainder of its step's committed observation."""
-
-    if not isinstance(action, ToolCallProposal) or action.tool_name != "read_action_output":
-        return False
-    try:
-        arguments = ReadActionOutputArguments.model_validate(action.arguments)
-    except ValueError:
-        return False
-    expected_ref = arguments.resource_ref.model_dump(mode="json")
-    return any(
-        isinstance(item, ActionObservation)
-        and item.status == "succeeded"
-        and item.plan_step_id == action.plan_step_id
-        and isinstance(item.payload.get("retrieval"), dict)
-        and item.payload["retrieval"].get("resource_ref") == expected_ref
-        for item in inputs
+        return None
+    active = tuple(
+        step.step_id for step in working_plan.steps if step.status == "in_progress"
     )
+    return active[0] if len(active) == 1 else None
 
 
-def incomplete_working_plan_feedback(
-    working_plan: ConversationWorkingPlan,
+def admit_continue_turn_progress(
+    decision: ContinueTurnProposal,
+    *,
+    previous_plan: ConversationWorkingPlan | None,
+    admitted_plan: ConversationWorkingPlan | None,
 ) -> DecisionFeedback | None:
-    """Keep FinalMessage from silently erasing unresolved result obligations."""
-    pending = tuple(
-        step.step_id for step in working_plan.steps if step.status == "pending"
-    )
-    if not pending:
+    """Reject only a ContinueTurn that cannot change any runtime-owned fact.
+
+    ``admit_working_plan`` returns the existing object for an identical Plan.
+    Concrete actions, a genuinely changed Plan, or an explicit user wait are
+    observable progress.  Everything else would consume another model turn
+    while presenting the next decision with the same execution state.
+    """
+    if decision.actions or decision.wait_for_user or decision.finalization_requested:
+        return None
+    if decision.working_plan is not None and admitted_plan is not previous_plan:
         return None
     return DecisionFeedback(
-        action_id="working_plan",
-        reason_code="working_plan_incomplete",
-        message="The current working plan still has unresolved result obligations.",
-        repairable_fields=("working_plan", "actions", "resolved_plan_step_ids"),
+        action_id="continue_turn",
+        reason_code="continue_turn_no_progress",
+        working_plan_revision=(
+            admitted_plan.revision if admitted_plan is not None else None
+        ),
+        message=(
+            "ContinueTurn did not change the working plan, execute an action, "
+            "or wait for the user."
+        ),
+        repairable_fields=(
+            "actions",
+            "working_plan",
+            "wait_for_user",
+            "finalization_requested",
+        ),
         immutable_fields=("messages", "inputs"),
         required_repair=(
-            "Complete, revise, or truthfully defer the pending steps before returning "
-            "an answer. If the answer itself delivers them, list exactly these IDs in "
-            "resolved_plan_step_ids: " + ", ".join(pending) + "."
+            "Keep an unchanged plan unchanged and submit the next necessary concrete "
+            "action, a genuinely revised plan, wait for the user, or return FinalMessage."
         ),
     )
 
 
-def admit_final_plan_resolution(
-    resolved_step_ids: tuple[str, ...],
+def admit_action_plan_state(
+    actions,
     *,
-    working_plan: ConversationWorkingPlan,
-    inputs: tuple,
-) -> tuple[DecisionFeedback | None, ConversationWorkingPlan | None]:
-    """Apply only result steps delivered by the answer itself.
+    working_plan: ConversationWorkingPlan | None,
+) -> DecisionFeedback | None:
+    if not actions or working_plan is None:
+        return None
+    if is_terminal_working_plan(working_plan):
+        return DecisionFeedback(
+            action_id=actions[0].action_id,
+            reason_code="working_plan_terminal",
+            message="A terminal working plan has no executable work item.",
+            repairable_fields=("actions",),
+            immutable_fields=("working_plan",),
+            required_repair="Return the final result or create a genuinely new plan.",
+        )
+    if active_working_plan_step_id(working_plan) is None:
+        return DecisionFeedback(
+            action_id=actions[0].action_id,
+            reason_code="working_plan_active_step_required",
+            message="The current working plan has no unique in_progress step.",
+            repairable_fields=("working_plan",),
+            immutable_fields=("actions",),
+            required_repair=(
+                "Use the working-plan control action to mark exactly one unfinished "
+                "step in_progress; do not add a step ID to the concrete action."
+            ),
+        )
+    return None
 
-    FinalMessage is the semantic assessment. The runtime only binds successful
-    observations as execution evidence, avoiding a second semantic write through a
-    preceding WorkingPlanProposal.
-    """
-    pending_ids = tuple(
-        step.step_id for step in working_plan.steps if step.status == "pending"
+
+def complete_working_plan(
+    working_plan: ConversationWorkingPlan,
+    *,
+    inputs: tuple,
+) -> ConversationWorkingPlan:
+    """Materialize a result already accepted by semantic and completion gates."""
+    unresolved_ids = tuple(
+        step.step_id
+        for step in working_plan.steps
+        if step.status in {"pending", "in_progress"}
     )
-    if not pending_ids:
-        return None, working_plan
-    if len(resolved_step_ids) != len(set(resolved_step_ids)) or set(
-        resolved_step_ids
-    ) != set(pending_ids):
-        return incomplete_working_plan_feedback(working_plan), None
+    if not unresolved_ids:
+        return working_plan
     successful_action_ids_by_step = {
         step_id: tuple(
             item.action_id
@@ -387,28 +379,29 @@ def admit_final_plan_resolution(
             and item.status == "succeeded"
             and item.plan_step_id == step_id
         )
-        for step_id in pending_ids
+        for step_id in unresolved_ids
     }
-    resolved = set(resolved_step_ids)
-    return None, working_plan.model_copy(update={
+    unresolved = set(unresolved_ids)
+    return working_plan.model_copy(update={
         "revision": working_plan.revision + 1,
         "steps": tuple(
             step.model_copy(update={
                 "status": "completed",
                 "completion_action_ids": successful_action_ids_by_step[step.step_id],
             })
-            if step.step_id in resolved
+            if step.step_id in unresolved
             else step
             for step in working_plan.steps
         ),
     })
 __all__ = [
-    "admit_action_plan_bindings",
-    "admit_final_plan_resolution",
+    "active_working_plan_step_id",
+    "admit_action_plan_state",
+    "admit_continue_turn_progress",
     "admit_new_plan_interaction_mode",
     "admit_plan_wait_boundary",
     "admit_working_plan",
-    "incomplete_working_plan_feedback",
+    "complete_working_plan",
     "is_terminal_working_plan",
     "required_plan_review_feedback",
     "supersede_pending_working_plan",

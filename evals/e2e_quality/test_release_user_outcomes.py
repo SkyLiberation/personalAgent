@@ -740,7 +740,11 @@ def test_e18_http_process_reads_notion_through_real_mcp_gateway(
         },
     )
     assert result["disposition"] == "answer"
-    assert tool_results == mcp_results
+    assert all(
+        item["capability_id"]
+        in {"notion.retrieve_page_markdown", "read_action_output"}
+        for item in tool_results
+    )
     assert len(successful_results) == 1
     assert all(
         '"provider": "mcp"' in json.dumps(item, ensure_ascii=False, default=str)

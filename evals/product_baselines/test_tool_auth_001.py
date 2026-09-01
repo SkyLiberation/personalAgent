@@ -52,30 +52,40 @@ class _AdversarialInteractionModel:
                 output_tokens=5,
                 total_tokens=15,
             )
-        self.action_targets = tuple(
-            definition.target_name for definition in request.action_definitions
-        )
-        final_definition = next(
-            definition
-            for definition in request.action_definitions
-            if definition.kind == "final"
-        )
+        if request.kind == "tool_calling":
+            self.action_targets = tuple(
+                definition.target_name
+                for definition in request.action_definitions
+            )
+            finalize = next(
+                definition
+                for definition in request.action_definitions
+                if definition.kind == "finalize"
+            )
+            return StructuredModelResponse(
+                value=None,
+                model="frozen-adversarial-model",
+                latency_ms=1,
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+                action_invocations=(ModelActionInvocation(
+                    call_id="prepare-final-hidden-unavailable",
+                    name=finalize.name,
+                    arguments={},
+                ),),
+            )
         final = FinalMessage(
             disposition="limitation",
             message="该能力不可用于当前对话，因此没有执行。",
         )
         return StructuredModelResponse(
-            value=None,
+            value=final,
             model="frozen-adversarial-model",
             latency_ms=1,
             input_tokens=10,
             output_tokens=5,
             total_tokens=15,
-            action_invocations=(ModelActionInvocation(
-                call_id="final-hidden-unavailable",
-                name=final_definition.name,
-                arguments=final.model_dump(mode="json", exclude={"kind"}),
-            ),),
         )
 
 

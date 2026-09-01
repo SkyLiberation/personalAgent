@@ -1,139 +1,150 @@
-# 普通对话广泛研究交付优化方案
+# 普通对话研究交付与 Plan 边界优化方案
 
-**首个单变量候选已经进入 `A2`，定向单样本已交付，但成本与扩大回归仍未完成。** 密封产品样本记录了最终交付失败，可重复的 provider action 契约基线又证明 auto/no-plan 首轮会暴露强制 `plan_step_id`，而现有普通动作测试绕过了该 Schema。首个候选只删除这条合成绑定；只有同一阻塞仍然复现，才重新评审收口机会保障。两个变量不得在首个 target 中合并。执行数字与归档坐标只由[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)维护。
+**当前候选让模型只在 Plan 边界选择 `in_progress` 步骤，由运行时关联执行事实；动作选择与最终交付也在顶层分成两个互斥阶段。** 工具成功不代表步骤完成；只有 Final 通过适用的 Verification 与 Completion 后，确定性代码才物化 Plan 状态。该候选已按 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)与 [ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)完成核心协议迁移。最新 `HARNESS-003` 已从正式 HTTP 入口交付全部口令与新阈值，恢复同一 Plan 与执行事实，第二轮没有重复访问原始档案，最终 Plan 全部完成。当前 target 已通过，但历史消融与当前 dirty candidate 不是同一代码身份，尚不能声明完整单变量因果或发布完成。准入状态由[设计优化队列](design-optimization-backlog.md)维护，执行事实与归档坐标由[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)维护。
 
-本文是[设计优化队列](design-optimization-backlog.md)中 `CONVERSATION-RESEARCH-DELIVERY-001` 的条件详细设计。准入状态和优先级只由该队列维护；当前样本、结果数字和归档坐标只由[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)维护。
+本文只对应 `CONVERSATION-RESEARCH-DELIVERY-001`。它不建立第二份状态队列，也不把未来设计写成当前生产事实。
 
-## 1. 用户结果与失败边界
+## 1. 目标是恢复研究交付，不是强迫模型维护 Plan 账务
 
-**目标结果是让普通 Conversation 在一次交互中交付多来源研究结论，而不是让内部工作项全部变成 `completed`。** `tool-protocol-boundary` 要求模型查阅 OpenAI 与 MCP 官方来源，比较工具选择、权限边界和结果契约，并返回带官方 URL 的中文答案。
+`tool-protocol-boundary` 的用户结果是：普通 Conversation 查阅 OpenAI 与 MCP 官方来源，比较工具选择、权限边界和结果契约，并返回带官方 URL 的中文结论。是否创建 Plan、是否调用某个具体工具、内部步骤何时切换都不是该 Product E2E 的用户结果。
 
-当前密封样本支持以下因果判断：
+当前证据包含两个必须分开的失败阶段：
 
-1. 首次 `working_plan_missing` 后已经出现绑定来源步骤的成功搜索，因此该反馈不是最终未交付的充分原因。
-2. 两次不适用的 `read_action_output`、重复来源搜索和两次智能体委托增加了模型决策与 Context 成本。
-3. 两个 `AgentArtifact` 返回后，运行系统在父级模型再次判断证据前结束交互；最终结果是 `limitation`，工作项仍为待完成。
-4. 子级运行的 `completed` 只证明子级已生成结果，不证明父级用户目标已经满足；运行系统不得据此自动完成父级工作项。
+1. 服务提供方曾在 HTTP `200` 的响应中返回不符合 strict Schema 的 working-plan payload，Application 以 `provider_action_payload_invalid` 失败关闭；
+2. 同输入的另一份样本通过动作解码并成功执行多次 Web Search，随后因 `plan_step_binding_required` 与 `working_plan_no_change` 未交付答案。
 
-本方案只处理普通 Conversation 的决策浪费、预算准入和语义收口。显式外部智能体委托的超时与父级交付由 `AGENT-DELEGATION-DELIVERY-001` 负责；前台委托与响应后继续工作的意图边界由各自队列项负责。方案不得通过增加总预算掩盖重复动作，也不得由确定性代码生成自然语言答案。
+第一类是 Provider 输出契约问题，第二类是本地 Plan 协议问题。二者不能互相证明，也不能用放宽 JSON 校验、增加 token 预算或扩大重试掩盖。
 
-## 2. 责任主体保持分离
+本项不处理搜索结果累积、token、延迟、外部研究智能体委托、后台继续工作或交互意图分类；这些问题仍由各自队列项负责。
 
-**优化必须让模型拥有继续、停止和语义完成判断，同时让确定性代码继续拥有资源与状态不变量。** 本方案不把“更 Agentic”解释为模型可以无限消费资源或直接改写权威状态。
+## 2. 根因是一个 Working Plan 承担了两种不同契约
 
-| 决策或事实 | 唯一责任主体 | 本方案中的边界 |
+`ConversationWorkingPlan` 原本用于让用户审阅、纠偏并跨轮继续可验收工作项；当前动作协议又要求模型在每次 Tool Call 或 Agent Delegation 中重复填写 `plan_step_id`。这让同一个 Plan 同时成为用户协作清单和逐动作外键协议。
+
+模型已经决定当前要推进哪个步骤后，重复填写步骤 ID 不会增加语义信息。相反，字段缺失、重复提交未变化 Plan 或最终答案未精确枚举全部步骤 ID 都会在用户结果判断之前被拒绝。工具 Receipt 仍不能证明步骤完成，因此这套逐动作协议增加了失败面，却没有消除真正的语义判断。
+
+优化后的责任边界如下：
+
+| 决策或事实 | 唯一责任主体 | 约束 |
 | --- | --- | --- |
-| 是否需要 `Plan`、下一步调用什么、证据是否足够 | 模型 | 模型可以直接调用工具并回答；没有独立理由时不创建 `Plan` |
-| 用户或产品允许的成本、时间和外部动作范围 | Policy | 提供不可突破的资源包络，不决定用户目标是否完成 |
-| 已提交 token、工具和智能体调用量 | 运行系统与服务提供方 | 使用真实 usage 记账，不从 Prompt 或工作项状态推断 |
-| 工具或智能体是否执行成功 | 执行网关 | 产生 `Observation` 或 `AgentArtifact`，不自动完成工作项 |
-| 最终答案是否满足语义标准 | 模型或 Verifier | 根据用户要求和证据进行开放世界判断 |
-| required result contract 是否齐全 | Completion Gate | 只检查所需结果与证据，不用预算耗尽冒充完成 |
+| 是否需要 Plan、当前推进哪个步骤、何时切换步骤 | 模型 | 只在创建或改变 Plan 时决策，不在每个工具调用中重复 |
+| 当前 Plan 与唯一活动步骤 | `ConversationWorkingPlan` | 用唯一 `in_progress` 状态保存；不得存在第二份镜像状态 |
+| Proposal 是否引用合法 Plan 状态 | Admission | 只接受或拒绝，不猜测步骤、不改写 Proposal |
+| Tool 或 Agent 的执行事实 | 执行网关与 `Trace` | 执行时读取 canonical 活动步骤并写入 Observation 或 Artifact |
+| 用户结果是否满足目标 | 模型或 Verifier | 进行开放世界语义判断；工具成功和 Plan 状态不能替代 |
+| required result contract 是否齐全 | Completion Gate | 只在语义接受后检查确定性证据，不自行补业务语义 |
 
-`WorkingPlanProposal.status` 和 `FinalMessage.resolved_plan_step_ids` 继续由模型提出。Admission 只校验引用、状态迁移和执行证据，并把合法 Proposal 写入 canonical working plan。工具成功不得自动把工作项改成已完成。
+## 3. 外部实现支持“计划更新与工具执行分离”
 
-## 3. 外部优秀智能体只提供机制约束
+Codex 的 [`update_plan`](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/plan_spec.rs) 单独更新步骤状态，普通执行工具不要求携带 Plan Step ID。Claude Code 把 [`TaskUpdate`](https://code.claude.com/docs/en/tools-reference) 与 Bash、Edit、WebSearch 等工具分开；Gemini CLI 也把 [`write_todos`](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/tools.md) 与 Shell、Web 工具分开。
 
-**外部实现共同支持“减少无意义回合、按压力治理 Context、把 Plan 限定在必要场景”，但没有任何实现证明本工程需要新的通用预算规划器。** 本方案只采纳直接映射到当前失败的语义。
+这些 A 级实现共同支持的机制是：模型在计划边界维护工作状态，执行工具只表达本次动作。它们不能直接证明本工程应采用相同 Schema，但足以否定“优秀 Agent 必须让每个工具调用重复携带步骤 ID”这一前提。
 
-| A 级实现 | 可复核机制 | 本方案采纳 | 本方案拒绝 |
+本工程仍需保留步骤与执行事实的内部关联。[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)中的 `HARNESS-003` 已证明，跨轮恢复并消费与步骤关联的成功事实，可以在冻结服务提供方场景中把重复原始读取从 `2` 降为 `0`。因此候选删除模型侧逐动作外键，同时保留运行时内部关联；不能直接删除 Observation 与 Plan 的关联能力。
+
+## 4. 已实施候选采用唯一活动步骤
+
+**本项只有三步因果决定，必须按顺序取得证据，不能把它们合并成一次补丁。** 服务提供方输出不稳定时无法判断本地 Plan 机制；逐动作绑定未移除时无法判断 FinalMessage 是否仍被 Plan 账务阻塞；用户结果尚未通过时也不能扩大回归。
+
+| 决策步骤 | 已证明依据与必要性 | 为什么能够解决当前阶段 | 证伪与撤回条件 |
 | --- | --- | --- | --- |
-| OpenAI | [GPT-5.6 Model guidance](https://developers.openai.com/api/docs/guides/latest-model)要求精简重复指令、只暴露任务相关工具，并把不需要每一步重新判断的有界工具链合并执行；最终答案质量必须与 token、延迟和调用量一起评估 | 减少重复决策与无关工具 Schema；把语义判断留给来源结果返回后的父级模型 | 不引入 Programmatic Tool Calling 运行环境，不把调用更少单独写成用户收益 |
-| Gemini CLI | [Planning tools](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/planning.md)只把 `Plan Mode` 用于复杂规划或明确进入该模式的请求；[Configuration](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md)分别提供工具输出摘要、Context 压力阈值和循环检测 | 普通有界研究不强制创建 `Plan`；资源压力与语义完成分开处理 | 不复制任务跟踪器、模式状态机或固定复杂度档位 |
-| DeepSeek Harness | [`Compaction` 固定提交](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/subsystems/compaction.md)把压缩保留为可选能力；出现压力时先裁剪工具结果并重新计量，再按需摘要 | 先收缩已测的大型输入来源；只有正式入口复现 Context 压力后才讨论压缩 | 当前不引入 Compaction 服务、持久摘要事件或第二套 token 计量框架 |
+| 先稳定 Provider Conformance | 同输入曾分别停在违规 working-plan payload 和本地 Plan 协议；扁平 `control_working_plan` Schema 的固定三样本 Conformance 已通过 | 固定服务提供方输出契约后，本地 target 的失败才具有可比较责任主体 | 后续同身份 Conformance 再次不稳定时，不把 Provider 失败归因给 Plan |
+| 再用唯一 `in_progress` 步骤替代逐动作 ID | 动作解码通过后出现 `plan_step_binding_required` 和 `working_plan_no_change`；模型侧外键现已删除 | 模型只在 Plan 边界表达语义归属，执行网关仍能机械保存内部步骤关联 | 原阻塞用例再次最早停在 Plan 绑定，或跨轮事实仍无法恢复时撤回候选 |
+| 最后把 FinalMessage 放到 Plan 账务之前验收 | 旧 `admit_final_plan_resolution` 早于 Verifier，精确步骤 ID 会先拦截答案；现已删除该模型字段和专用 answer-only 路径 | FinalMessage 直接触发用户结果判断，Plan 只在 Verification 与 Completion 通过后物化 | 被拒答案导致 Plan 完成、或合法答案仍先被 Plan 状态拦截时撤回候选 |
 
-外部坐标只证明候选机制已经存在，不能替代本工程 target。设计不得复制外部对象数量、插件拓扑、默认阈值或状态生命周期。
+每一步只解决表中对应阶段。Provider、Plan 绑定和最终交付之外的成本、搜索策略与委托失败继续留在各自队列项，不得混入同一 target。
 
-## 4. 第一候选先删除强制 `Plan` 绑定
+### 4.1 Plan 能力保持可用，是否使用由模型决定
 
-**第一个单变量候选是让没有现存 working plan 的普通动作保持无绑定，而不是先建设动态预算机制。** 当前代码在 `interaction_mode="auto"` 且没有 working plan 时，仍向每个工具 Schema 加入必填 `plan_step_id`。这个字段迫使模型同轮创建 `WorkingPlanProposal`，并使简单研究承担额外的创建、绑定和完成协议。
+系统不使用任务长度、工具数量或关键词启发式判断“是否给模型 Plan”。Plan 能力保持在正式决策边界内可用，模型只有在它能避免遗漏、支持用户审阅、跨预算或跨轮恢复时才创建 Plan。用户明确要求先审阅计划时，现有 `review_plan` 边界仍要求先返回可审阅 Plan，审批前不得执行非 planning-safe 动作。
 
-候选只改变以下行为：
+无 Plan 时，工具和智能体动作直接经过 Admission 与执行，不合成步骤 ID。存在 Plan 时，模型只在创建 Plan 或切换步骤时把一个步骤标成 `in_progress`；正常执行同一工作项期间不再更新 Plan。
 
-1. 没有现存 working plan 时，工具和智能体动作 Schema 不出现 `plan_step_id`。
-2. 模型可以直接并发取得两个独立官方来源，并在下一次语义判断中回答。
-3. 模型主动创建 working plan 后，后续动作仍必须绑定一个待完成步骤；已完成步骤继续不可变。
-4. 用户明确要求计划评审，或者跨用户轮次恢复现有 working plan 时，既有 Plan 契约保持不变。
+### 4.2 活动步骤是 Plan 事实，不是每个动作的模型参数
 
-该候选不得新增 Model、状态、配置、Planner、Workflow 或兼容分支。实现应删除 `allow_new_plan_binding` 对无现存 Plan 动作 Schema 的强制影响，并删除只为合成 Plan 绑定服务的提示词与测试预期。Admission 不新增猜测或降级逻辑。
+`WorkingPlanStepProposal.status` 与 `ConversationWorkingPlanStep.status` 增加 `in_progress`，并建立一条唯一不变量：
 
-第一候选只在同输入 target 同时满足用户结果和成本门禁时保留。如果模型仍在成功来源结果后重复搜索，或者仍在最终综合前被预算截断，则撤回第一候选，不与下一候选组合后解释收益。
+- 无 Plan、等待用户审阅或 Plan 已终止时，不存在 `in_progress` 步骤；
+- 准备执行 Plan 时必须且只能有一个 `in_progress` 步骤；
+- 其余未完成步骤保持 `pending`；
+- 只有模型提交合法 Plan 变更时才能把 `pending` 切换为 `in_progress`，运行时不得根据工具名或步骤顺序猜测。
 
-## 5. 第二候选保障一次有界收口机会
+`ToolCallProposal`、`AgentDelegationProposal` 及其服务提供方动作 Schema 删除 `plan_step_id`。Admission 接受动作后，执行网关在开始执行时读取 canonical Plan 中唯一的 `in_progress` 步骤，把其 `step_id` 写入内部 `ActionObservation` 或 `AgentArtifact`。没有 Plan 时内部关联为空；存在非终止 Plan 但没有唯一活动步骤时，非 planning-safe 动作以 typed reason 拒绝，要求模型先更新 Plan。
 
-**只有第一候选的 target 仍复现“最新有效证据返回后没有父级判断回合”，才准入收口机会保障。** 该候选不按简单、中等、复杂给任务打分，也不让模型自行扩大预算；它只防止资源门禁在动作结果和语义判断之间切断闭环。
+这意味着模型清楚“当前在推进哪一步”，但只表达一次。执行事实仍可按步骤恢复、审计和消费，工具协议不再反复要求模型复制同一个外键。
 
-### 5.1 预算分成资源包络和运行分配
+### 4.3 Plan 只在语义边界变化时更新
 
-**固定值只能表达 Policy 的最大资源包络，不能表达任务完成条件。** `LoopBudgetPolicy` 可以继续保存最大模型回合、工具调用、智能体调用和累计 token，但运行系统不得在最新 `Observation` 到达后直接用固定文本结束交互。
+模型只在以下事件提交 Plan 变更：
 
-运行系统在准入下一批工具或智能体动作前必须证明：
+1. 创建或根据用户反馈修订 Plan；
+2. 当前步骤的验收条件已经满足，需要标记完成并激活下一步骤；
+3. 新事实使步骤需要替换或终止；
+4. 用户改变目标或要求重新规划。
 
-```text
-已提交 usage
-+ 待执行动作的有界结果成本
-+ 一次 final-only 请求的输入投影
-+ final-only 输出上限
-+ 必需的 Verifier 成本
-<= Policy 资源包络
-```
+每次 Tool Call 成功后不强制更新步骤。工具 Receipt 只形成执行事实，不能自动把步骤标成 `completed`。模型提交与当前 Plan 完全一致的 Proposal 时，Admission 将其视为幂等 no-op：不创建 revision、不产生 `working_plan_no_change` 阻塞，同行的合法动作仍可执行。该规则只消除无状态变化的重复写入，不替模型完成、切换或改写步骤。
 
-输入投影必须针对将要发送的 canonical request envelope，并沿用目标服务提供方与模型的计量规则。Application 不得使用固定“每字符多少 token”或任务复杂度等级猜测。现有 Structured Model Adapter 如果不能提供同口径预检，该候选保持 `A1`；实现前只能在现有 Adapter 边界补最小请求计量能力，不得新增通用 Budget Service、数据库状态或第二份 usage 事实。
+## 5. 先判断用户结果，再物化 Plan 完成事实
 
-### 5.2 收口阶段仍由模型决策
+当前 `FinalMessage.resolved_plan_step_ids` 要求模型在答案中再次精确枚举所有待完成步骤，并且 `admit_final_plan_resolution` 早于 Verifier 运行。结果是答案可能已经满足用户目标，却先因 Plan 账务不完整被拒绝。
 
-**进入收口阶段后，运行系统只收缩动作面，不替模型判断完成。** 该阶段复用现有 final-only 生成路径，只允许模型返回 `FinalMessage`；模型根据已有证据选择：
+条件候选删除 `FinalMessage.resolved_plan_step_ids`，并采用以下顺序：
 
-- 证据充分时返回 `answer`，并按需声明 `resolved_plan_step_ids`；
-- 用户目标存在关键歧义时返回 `clarification_required`；
-- 权威来源、权限或能力确实不足时返回有事实依据的 `limitation`；
-- required result contract 无法满足时返回 `failed`。
+1. 模型提交 `FinalMessage`，表达它对当前用户目标已经全部满足的语义判断；
+2. 需要独立复核时，Verifier 判断答案是否满足目标与 review criteria；
+3. Completion Gate 检查用户要求的结果与证据是否齐全；
+4. Verifier 或 Completion Gate 拒绝时继续决策，Plan 保持未完成；
+5. 语义判断与结果契约都通过后，确定性代码把全部 `pending` 与 `in_progress` 步骤物化为 `completed`，并关联已记录的成功执行事实。
 
-收口阶段不暴露工具、智能体或新的 working plan，因此最多消费一次父级语义判断，不会形成新的动作循环。运行系统不得把累计 usage、子级 `completed` 或工具 `succeeded` 自动转换成 `answer`。
+这里的确定性代码不判断“答案是否足够好”，只落实已经通过语义判断和结果契约的完成决定。如果答案没有覆盖全部 Plan 义务，模型必须继续执行，Verifier 或 Completion Gate 也必须拒绝该答案；Plan ID 不能替代这项语义检查。工具成功仍不会触发完成；`limitation`、`failed` 或任一门禁拒绝的答案也不会完成 Plan。这样既不让固定预算替代 Agent 决策，也不让内部 Plan 账务先于用户结果阻塞交付。
 
-### 5.3 复杂任务通过继续契约扩展，不创建预算状态机
+## 6. Action 与 Final 采用两个互斥阶段
 
-**真正复杂的任务需要更多资源时，优先复用现有未决 working plan 和下一次用户交互，不新增 `BudgetRequest` Aggregate。** 模型必须说明已完成结果、未决义务和继续工作的必要性；用户或产品 Policy 决定是否提供新的交互资源包络。只有独立复杂任务 baseline 证明这种边界仍无法交付，才能重新评审自动续算机制。
+旧协议把携带完整答案的 `control_final_message` 与 Tool、Agent、Plan control 放在同一组 Provider actions。普通工具可以合理并行，但 Final 表示终止；Provider 一旦把两者同时返回，Application 只能拒绝全部意图。把 strict `FinalMessage` Schema 与工具列表放到同一个 `auto` 请求也不可行：两次真实诊断样本都在零工具时直接选择 Final，其中一次编造了并不存在的本地证据。
 
-## 6. 其他效率机制保持条件化
+当前协议采用两个阶段：
 
-**工具投影和 Context 压缩不得与前两个候选同时实现。** 当前追踪记录已经能测量动作 Schema 和 typed inputs 的字符组成，但这些指标只能确定后续检查顺序，不能自动准入新层。
+1. action phase 只暴露具体 Tool、Agent、`control_working_plan` 与无参数 `prepare_final`；可以返回多个彼此兼容的普通动作；
+2. `prepare_final` 不携带答案，只要求兼容动作执行完成后进入下一相位；
+3. finalization phase 不暴露任何 actions，只按 strict Schema 生成 typed `FinalMessage`；
+4. `StructuredModelResponse` 在 Port 边界禁止 typed value 与 action invocations 同时存在；
+5. Verifier 返回 `needs_revision` 时直接留在 finalization phase 修订文字；返回 `insufficient_evidence` 时才回到 action phase 补证据。
 
-后续条件按以下顺序判断：
+这让具体工具仍只做具体事，也避免模型为了改一版 Final 先提交没有业务意义的工具调用。相位状态只存在于当前 Application loop，不持久化、不复制 Plan、Receipt 或 Completion 事实。
 
-1. 第一候选交付用户结果但动作 Schema 仍占主要输入时，只收缩当前已确定不可用或与任务阶段无关的动作定义；不得通过用户关键词硬编码工具选择。
-2. 有界 `Observation` 或 `AgentArtifact` 被每轮完整重复注入时，优先复用现有 `ArtifactRef` 和按需读取路径；不得新增可写摘要副本。
-3. 只有目标服务提供方的真实 Context 窗口出现可重复压力、错误截断或无法发送请求时，才重新评审 Compaction。
-4. 查询重复但仍有足够收口资源时，由模型根据 typed 的重复反馈修订策略；确定性代码只拒绝机械重复，不判断来源是否语义充分。
+Provider Conformance 仍是独立边界。隔离三样本已证明扁平 `control_working_plan` strict Schema 可用；若 required action phase 偶发返回纯文本，Adapter 只允许一次使用相同 action definitions 的协议修复，明确要求 action calls 且不接收纯文本。第二次仍缺 action 继续以 `provider_action_missing` 失败关闭。未知 action、非法参数或 Application payload 违规不由 Adapter 删除字段、猜测意图或降级 strict 校验。
 
-本方案明确拒绝任务复杂度分类器、三档 token 表、通用 Budget Planner、自动无限扩展预算和完整外部 Harness 移植。
+## 7. 验收同时保护用户交付与 Plan 反事实
 
-## 7. baseline、target 与单变量门禁
+Product E2E 继续从正式 Conversation HTTP 入口使用用户自然表达，只断言多来源中文结论、官方 URL 和既有安全反事实；不得要求“必须建 Plan”“不得建 Plan”或指定工具调用次数。
 
-**每个候选必须在同一正式入口、自然输入和服务提供方身份下独立证明用户结果，不能把两个失败 target 合并成一次成功。** 首个验证继续使用 `tool-protocol-boundary-run-1`，并保留当前评测器、隔离主体与 required source group。
+运行契约必须另外证明：
 
-第一候选的 Contract 与 Runtime Conformance 必须证明：
+1. 无 Plan 时，动作 Schema 不含 `plan_step_id`，合法动作可以执行；
+2. 有 Plan 时，模型只把一个步骤标成 `in_progress`，连续多个动作都由运行时关联到该步骤；
+3. 活动步骤缺失或非法时失败关闭，Admission 不按动作内容猜测；
+4. 相同 Plan Proposal 是无 revision 的幂等 no-op，不阻塞同行合法动作；
+5. Tool 或 Agent 成功不会自动完成步骤；
+6. Verifier 或 Completion Gate 拒绝的答案不完成 Plan，两者通过后才物化全部剩余步骤的完成事实；
+7. 用户要求计划审阅时，审批前仍无非 planning-safe 执行；
+8. `HARNESS-003` 显式 Plan 场景恢复同一 Plan 及其 `pending|in_progress` Step 的成功执行事实，跨轮 steering 后不重复读取按次计费的原始档案；自发建 Plan 与简单问答反事实继续由 `CONV-002` 等各自 owner 验收。
 
-- 没有 working plan 时，工具动作 Schema 不包含 `plan_step_id`，动作可以通过 Admission；
-- 已存在 working plan 时，动作仍必须绑定待完成步骤；
-- 工具成功不会自动完成步骤；
-- 用户要求计划评审时仍保留原 Plan 边界。
+当前定向 Product E2E 已在 dirty candidate 上交付，证明该工作树不再由旧 Plan 外键协议阻塞；历史 clean target-minus-mechanism 仍失败，但它不能与不同代码身份的 dirty target 拼成当前实现的完整单变量因果证明。
 
-第二候选的 Contract 与 Runtime Conformance 必须证明：
+最新 `HARNESS-003` v4 归档为 `data/e2e_traces/product_baselines/harness-003/target/20260831T053359.624686Z-9232-a8b902dd`，checksum 有效，结果 `1/1 passed`。两轮共 11 个模型回合、14 次工具或 workflow 调用、97,363 tokens，pytest call 阶段 159.105 秒。该样本证明：
 
-- 运行系统在准入新动作前包含 final-only 与必要 Verifier 的资源投影；
-- 最新成功 `Observation` 返回后至少存在一次受限父级判断机会；
-- 收口阶段不能调用工具、智能体或创建新 Plan；
-- usage 缺失、预检不可用或资源不足时 fail closed，且不能生成未经证据支持的答案。
+- 同一 Plan、`pending|in_progress` Step 与成功执行事实可以跨进程恢复；
+- 第二轮没有重复访问三份按次计费原始档案，immutable offload 可以继续读取；
+- Plan 版本变化隔离同类反馈；
+- `needs_revision` 在 finalization phase 直接重写答案，`insufficient_evidence` 才恢复动作；
+- 最终结果只包含新阈值和三份正确口令，Plan 全部完成。
 
-每个定向 target 都必须交付覆盖三个比较维度和两组官方 URL 的 `answer`，并保持零参数拒绝、零跨主体泄漏、零知识写入、零重复副作用和完整 usage。效率只按同输入归档比较模型调用、决策回合、工具与智能体调用、总 token、延迟和 Context 组成；单样本只能判断候选是否值得继续，不能声明统计收益。
+相较最近一次失败样本的 13 个模型回合和 143,161 tokens，本次为 11 回合和 97,363 tokens；这是同一用例的观测值，不构成通用成本或延迟收益声明。该 target 绑定 dirty candidate 且只有一个样本，不外推跨 Provider 稳定性，也不替代独立代码身份的单变量证据。
 
-定向 target 通过后才运行既有正式样本组。机制收益候选必须在独立可还原代码身份执行 target-minus-mechanism 消融；消融只移除当前候选，不得同时恢复强制 Plan、扩大预算或改变 Prompt。target、消融或正式门禁失败时删除候选代码，不保留生产开关、降级路径或双轨入口。
+## 8. 复杂度预算、ADR 与退出条件
 
-## 8. 复杂度预算与退出条件
+本候选只增加一个 `in_progress` Step 状态，其生产消费者是执行网关与跨轮 Journal；同时已删除 Tool/Agent Proposal 的 `plan_step_id`、动作 Schema 投影、逐动作绑定 Admission、`FinalMessage.resolved_plan_step_ids` 以及答案前的 Plan 完成阻塞。为保持既有长结果事实可消费，还明确了两个原有不变量：读取一个窗口不消费 immutable offload，精确重跑其生产工具会被拒绝；同一 Proposal 中完全相同且可并发安全的读取只执行一次。没有新增 Planner、Workflow、Router、Repository、持久状态机、运行模式、fallback 或双轨协议。
 
-**本方案的净复杂度目标是删除一次合成 Plan 协议，并最多复用一条现有 final-only 路径。** 第一候选不得新增生产类型；第二候选最多扩展现有模型请求预检边界和 Conversation Loop 的准入判断。任何新增持久状态、Repository、Router、Workflow、Agent、通用 Planner、Compaction 层或兼容开关都超出本方案，必须重新提交 Complexity Justification；改变 Completion 语义时还必须单独创建 ADR。
+该变更修改 Plan、执行事实与 Completion 的协议顺序，ADR 已记录事实 owner、迁移范围、旧字段删除、回滚方式和退出条件。所有调用方、Provider Schema、Trace 读取者、测试与当前事实文档必须在同一变更迁移，不保留兼容字段。
 
-若第一候选已经满足用户结果和成本门禁，第二候选直接删除，不进入实现。若第一候选失败而第二候选独立通过，则只保留第二候选。若两个候选都失败，设计回到 `A1` 并重新定位最早未恢复阶段，不得把二者叠加成第三个补丁分支。
-
-候选通过定向 target、适用消融和正式门禁后，当前事实迁入 Conversation 固定流程与 Verification/Completion 专题；随后从设计优化队列移除对应问题，并删除本文。没有这些执行证据前，本文只能表述为条件设计，不能声称已经修复或可发布。
+Provider Conformance、历史 clean failure、ADR、Complexity Justification 与原子 target 已满足当前实现阶段，因此本项仍处于 `A2`，但不再把模型最终整理失败登记为当前阻塞。受影响的 `tool_calling_protocol` 套件已取得 `4/4 capability passed`；其中 `E16` 因外部 GitHub `401` 保持 Product E2E 失败，不归因给本候选。下一步只允许在独立可还原代码身份执行 target-minus-mechanism 单变量验证；不得重新修改 Prompt、预算或另一个责任主体来扩大候选。全部门禁通过后，当前事实迁入 Conversation 固定流程与 Verification/Completion 专题，随后从[设计优化队列](design-optimization-backlog.md)移除 `CONVERSATION-RESEARCH-DELIVERY-001` 并删除本文。

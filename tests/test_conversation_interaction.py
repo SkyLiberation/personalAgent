@@ -40,9 +40,10 @@ from personal_agent.application.conversation.models import (
     InteractionTrace,
 )
 from personal_agent.application.conversation.working_plan import (
-    admit_action_plan_bindings,
-    admit_final_plan_resolution,
+    admit_action_plan_state,
+    admit_continue_turn_progress,
     admit_working_plan,
+    complete_working_plan,
     is_terminal_working_plan,
     supersede_pending_working_plan,
 )
@@ -51,6 +52,7 @@ from personal_agent.application.conversation.interaction_prompt import (
 )
 from personal_agent.application.conversation.model_actions import (
     build_model_action_definitions,
+    decode_model_action_invocations,
 )
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteCommand,
@@ -100,6 +102,7 @@ from personal_agent.kernel.contracts.scope import (
     ExecutionScope,
     AuthenticatedPrincipal,
 )
+from personal_agent.kernel.contracts.derivation import canonical_digest
 from personal_agent.application.conversation.observation_bounds import (
     MAX_OBSERVATION_PAYLOAD_CHARS,
     serialized_length,
@@ -141,13 +144,22 @@ class _Decisions:
             )
             return self._response(intent)
         self.decision_requests.append(request)
-        item = self.items.pop(0)
+        item = self.items[0]
+        if not (
+            isinstance(item, FinalMessage)
+            and request.kind == "tool_calling"
+        ):
+            item = self.items.pop(0)
         if isinstance(item, BaseException):
             raise item
+        if callable(item):
+            return item(request)
         return self._action_response(item, request)
 
     @staticmethod
     def _action_response(item, request):
+        if isinstance(item, StructuredModelResponse):
+            return item
         definitions = tuple(request.action_definitions)
 
         def select(kind, target_name=None):
@@ -160,11 +172,20 @@ class _Decisions:
 
         invocations = []
         if isinstance(item, FinalMessage):
-            definition = select("final")
+            if request.kind == "structured":
+                return StructuredModelResponse(
+                    value=item,
+                    model="contract-model",
+                    latency_ms=1,
+                    input_tokens=10,
+                    output_tokens=5,
+                    total_tokens=15,
+                )
+            definition = select("finalize")
             invocations.append(ModelActionInvocation(
-                call_id="scripted-final",
+                call_id="scripted-prepare-final",
                 name=definition.name,
-                arguments=item.model_dump(mode="json", exclude={"kind"}),
+                arguments={},
             ))
         else:
             assert isinstance(item, ContinueTurnProposal)
@@ -174,7 +195,7 @@ class _Decisions:
                     call_id="scripted-working-plan",
                     name=definition.name,
                     arguments={
-                        "working_plan": item.working_plan.model_dump(mode="json"),
+                        **item.working_plan.model_dump(mode="json"),
                         "wait_for_user": item.wait_for_user,
                         "message": item.message,
                     },
@@ -183,20 +204,23 @@ class _Decisions:
                 if isinstance(action, ToolCallProposal):
                     definition = select("tool", action.tool_name)
                     arguments = {"arguments": action.arguments}
-                    if "plan_step_id" in definition.input_schema["properties"]:
-                        arguments["plan_step_id"] = action.plan_step_id
                 else:
                     definition = select("agent", action.agent_id)
                     arguments = action.model_dump(
                         mode="json",
                         exclude={"kind", "action_id", "agent_id"},
                     )
-                    if "plan_step_id" not in definition.input_schema["properties"]:
-                        arguments.pop("plan_step_id", None)
                 invocations.append(ModelActionInvocation(
                     call_id=action.action_id,
                     name=definition.name,
                     arguments=arguments,
+                ))
+            if item.finalization_requested:
+                definition = select("finalize")
+                invocations.append(ModelActionInvocation(
+                    call_id="scripted-prepare-final",
+                    name=definition.name,
+                    arguments={},
                 ))
         return StructuredModelResponse(
             value=None,
@@ -259,54 +283,256 @@ def test_model_actions_expose_each_tool_with_its_exact_argument_schema():
     assert [item.kind for item in definitions].count("tool") == 1
     assert {item.kind for item in definitions} == {
         "agent",
+        "finalize",
         "tool",
         "working_plan",
-        "final",
     }
     assert "schema_only_marker" not in build_interaction_system_prompt(
         capabilities,
         CommittedUsage(),
     )
 
-    current_plan = ConversationWorkingPlan(
-        plan_id="plan-1",
-        revision=1,
-        goal="Answer from evidence",
-        steps=(
-            ConversationWorkingPlanStep(
-                step_id="inspect",
-                description="Inspect evidence",
-                status="pending",
-            ),
-            ConversationWorkingPlanStep(
-                step_id="answer",
-                description="Answer from evidence",
-                status="completed",
+    planned_definitions = build_model_action_definitions(capabilities)
+    planned_definition = next(
+        item for item in planned_definitions if item.kind == "tool"
+    )
+    planned_agent_definition = next(
+        item for item in planned_definitions if item.kind == "agent"
+    )
+    assert "plan_step_id" not in planned_definition.input_schema["properties"]
+    assert "plan_step_id" not in planned_agent_definition.input_schema["properties"]
+    working_plan_definition = next(
+        item for item in definitions if item.kind == "working_plan"
+    )
+    assert working_plan_definition.input_schema["additionalProperties"] is False
+    assert "working_plan" not in working_plan_definition.input_schema["properties"]
+    assert {"goal", "grounding", "steps"}.issubset(
+        working_plan_definition.input_schema["properties"]
+    )
+
+
+def _diagnostic_action_definitions():
+    return build_model_action_definitions(EffectiveCapabilities(
+        tools=(
+            EffectiveToolCapability(
+                name="search_personal_knowledge",
+                description="Search current-user knowledge.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                read_only=True,
+                planning_safe=True,
+                safely_retryable=True,
             ),
         ),
+        agents=(
+            EffectiveAgentCapability(
+                agent_id="researcher",
+                description="Research one bounded question.",
+            ),
+        ),
+    ))
+
+
+def test_read_action_output_is_visible_only_when_an_exact_offload_exists():
+    artifacts = _ArtifactTexts()
+    service = ConversationService(
+        _Decisions(FinalMessage(disposition="answer", message="done")),
+        artifact_port=artifacts,
     )
-    planned_definition = next(
-        item
-        for item in build_model_action_definitions(
-            capabilities,
-            working_plan=current_plan,
+    capabilities = service._effective_capabilities()
+
+    without_offload = service._model_visible_capabilities_for_turn(
+        capabilities,
+        (),
+    )
+    assert all(
+        tool.name != "read_action_output" for tool in without_offload.tools
+    )
+
+    principal = _conversation_scope()["principal"]
+    resource_ref = ResourceRef(
+        resource_id="gen-unread",
+        resource_type="artifact",
+        owner=principal,
+        revision=1,
+    )
+    observation = ActionObservation(
+        kind="tool_result",
+        action_id="read-big",
+        capability_id="read_big",
+        status="succeeded",
+        payload={
+            "ok": True,
+            "retrieval": {
+                "resource_ref": resource_ref.model_dump(mode="json"),
+            },
+        },
+    )
+    with_offload = service._model_visible_capabilities_for_turn(
+        capabilities,
+        (observation,),
+    )
+    assert any(tool.name == "read_action_output" for tool in with_offload.tools)
+
+    read_window = ActionObservation(
+        kind="tool_result",
+        action_id="read-window",
+        capability_id="read_action_output",
+        status="succeeded",
+        payload={"resource_id": resource_ref.resource_id, "lines": []},
+    )
+    after_one_window = service._model_visible_capabilities_for_turn(
+        capabilities,
+        (observation, read_window),
+    )
+    assert any(tool.name == "read_action_output" for tool in after_one_window.tools)
+
+    forged_ref = resource_ref.model_copy(update={"resource_id": "gen-forged"})
+    feedback = service._admit(
+        ToolCallProposal(
+            action_id="read-forged",
+            tool_name="read_action_output",
+            arguments={"resource_ref": forged_ref.model_dump(mode="json")},
+        ),
+        run_ref="irun-offload-projection",
+        committed_action_ids=frozenset(),
+        committed_inputs=(observation,),
+    )
+    assert feedback.reason_code == "offloaded_output_reference_invalid"
+
+
+@pytest.mark.parametrize(
+    ("action_kind", "arguments", "reason_code", "field_path", "error_type"),
+    [
+        (
+            "working_plan",
+            {
+                "goal": "",
+                "grounding": "",
+                "steps": [
+                    {
+                        "step_id": "collect",
+                        "description": "Result: sources; Complete when: cited",
+                        "status": "pending",
+                    },
+                    {
+                        "step_id": "answer",
+                        "description": "Result: answer; Complete when: delivered",
+                        "status": "pending",
+                    },
+                ],
+                "wait_for_user": False,
+                "message": "",
+            },
+            "provider_action_working_plan_payload_invalid",
+            "$.goal",
+            "string_too_short",
+        ),
+        (
+            "tool",
+            {"arguments": "SECRET-PROVIDER-CONTENT"},
+            "provider_action_tool_payload_invalid",
+            "$.arguments",
+            "dict_type",
+        ),
+        (
+            "agent",
+            {"bounded_sub_goal": ""},
+            "provider_action_agent_payload_invalid",
+            "$.bounded_sub_goal",
+            "string_too_short",
+        ),
+    ],
+)
+def test_model_action_payload_failures_report_redacted_structural_diagnostics(
+    action_kind,
+    arguments,
+    reason_code,
+    field_path,
+    error_type,
+):
+    definitions = _diagnostic_action_definitions()
+    definition = next(item for item in definitions if item.kind == action_kind)
+    invocation = ModelActionInvocation(
+        call_id="invalid-action",
+        name=definition.name,
+        arguments=arguments,
+    )
+
+    with pytest.raises(StructuredOutputFailure) as exc_info:
+        decode_model_action_invocations((invocation,), definitions)
+
+    failure = exc_info.value
+    assert failure.reason_code == reason_code
+    assert failure.action_name == definition.name
+    assert failure.action_kind == action_kind
+    assert failure.field_paths == (field_path,)
+    assert failure.error_types == (error_type,)
+    assert "SECRET-PROVIDER-CONTENT" not in str(failure)
+
+
+def test_model_action_payload_diagnostics_hide_undeclared_field_names():
+    definitions = _diagnostic_action_definitions()
+    definition = next(item for item in definitions if item.kind == "tool")
+    invocation = ModelActionInvocation(
+        call_id="invalid-extra-field",
+        name=definition.name,
+        arguments={
+            "arguments": {},
+            "SECRET-PROVIDER-FIELD": "SECRET-PROVIDER-VALUE",
+        },
+    )
+
+    with pytest.raises(StructuredOutputFailure) as exc_info:
+        decode_model_action_invocations((invocation,), definitions)
+
+    failure = exc_info.value
+    assert failure.field_paths == ("$.<unexpected>",)
+    assert failure.error_types == ("extra_forbidden",)
+    assert "SECRET-PROVIDER" not in str(failure)
+
+
+def test_model_action_payload_diagnostics_can_reveal_identifier_field_names():
+    definitions = _diagnostic_action_definitions()
+    definition = next(item for item in definitions if item.kind == "working_plan")
+    invocation = ModelActionInvocation(
+        call_id="invalid-working-plan-field",
+        name=definition.name,
+        arguments={
+            "goal": "Answer from official sources",
+            "grounding": "",
+            "steps": [
+                {
+                    "step_id": "collect",
+                    "description": "Result: sources; Complete when: cited",
+                    "status": "pending",
+                },
+                {
+                    "step_id": "answer",
+                    "description": "Result: answer; Complete when: delivered",
+                    "status": "pending",
+                },
+            ],
+            "revision": "SECRET-PROVIDER-VALUE",
+            "wait_for_user": False,
+            "message": "",
+        },
+    )
+
+    with pytest.raises(StructuredOutputFailure) as exc_info:
+        decode_model_action_invocations(
+            (invocation,),
+            definitions,
+            reveal_invalid_action_field_names=True,
         )
-        if item.kind == "tool"
-    )
-    assert planned_definition.input_schema["properties"]["plan_step_id"]["enum"] == [
-        "inspect"
-    ]
-    planned_agent_definition = next(
-        item
-        for item in build_model_action_definitions(
-            capabilities,
-            working_plan=current_plan,
-        )
-        if item.kind == "agent"
-    )
-    assert planned_agent_definition.input_schema["properties"]["plan_step_id"][
-        "enum"
-    ] == ["inspect"]
+
+    failure = exc_info.value
+    assert failure.field_paths == ("$.revision",)
+    assert failure.error_types == ("extra_forbidden",)
+    assert "SECRET-PROVIDER-VALUE" not in str(failure)
 
 
 def test_main_conversation_decision_maps_provider_failure_to_unavailable(caplog):
@@ -373,6 +599,106 @@ def test_main_conversation_logs_missing_provider_action_without_raw_content(capl
     assert "SECRET-PROVIDER-CONTENT" not in caplog.text
 
 
+def test_main_conversation_logs_typed_action_diagnostics_without_raw_content(caplog):
+    caplog.set_level(
+        "WARNING",
+        logger="personal_agent.application.conversation.service",
+    )
+    model = _Decisions(
+        StructuredOutputFailure(
+            "agent_interaction_turn",
+            "invalid provider value: SECRET-PROVIDER-CONTENT",
+            reason_code="provider_action_tool_payload_invalid",
+            action_name="tool_search_personal_knowledge",
+            action_kind="tool",
+            field_paths=("$.arguments",),
+            error_types=("dict_type",),
+        )
+    )
+    service = ConversationService(model)
+
+    with pytest.raises(ConversationUnavailable) as exc_info:
+        service.respond(
+            **_conversation_scope(),
+            conversation_id="conversation-invalid-provider-action",
+            interaction_run_ref="irun-invalid-provider-action",
+            messages=[ConversationMessage(role="user", content="执行请求")],
+        )
+
+    failure = exc_info.value
+    assert failure.reason_code == "provider_action_tool_payload_invalid"
+    assert failure.failure_stage == "provider_action_decode"
+    assert failure.action_name == "tool_search_personal_knowledge"
+    assert failure.action_kind == "tool"
+    assert failure.field_paths == ("$.arguments",)
+    assert failure.error_types == ("dict_type",)
+    assert '"action_kind": "tool"' in caplog.text
+    assert '"action_field_paths": ["$.arguments"]' in caplog.text
+    assert '"action_error_types": ["dict_type"]' in caplog.text
+    assert "SECRET-PROVIDER-CONTENT" not in caplog.text
+
+
+def test_final_message_is_generated_only_after_prepare_final_control():
+    model = _Decisions(FinalMessage(disposition="answer", message="Final answer."))
+    service = ConversationService(model)
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-typed-final",
+        interaction_run_ref="irun-typed-final",
+        messages=[ConversationMessage(role="user", content="Return the answer.")],
+    )
+    trace = _trace(service, "irun-typed-final")
+
+    assert result.disposition == "answer"
+    assert result.message.content == "Final answer."
+    assert not any(isinstance(item, DecisionFeedback) for item in trace.inputs)
+    assert len(model.decision_requests) == 2
+    action_request, final_request = model.decision_requests
+    assert action_request.kind == "tool_calling"
+    assert action_request.action_choice == "required"
+    assert {item.kind for item in action_request.action_definitions} == {
+        "working_plan",
+        "finalize",
+    }
+    assert final_request.kind == "structured"
+    assert final_request.action_choice is None
+    assert final_request.action_definitions == ()
+
+
+def test_prepare_final_can_accompany_parallel_concrete_actions():
+    definitions = _diagnostic_action_definitions()
+    tool = next(item for item in definitions if item.kind == "tool")
+    finalize = next(item for item in definitions if item.kind == "finalize")
+
+    decision = decode_model_action_invocations(
+        (
+            ModelActionInvocation(
+                call_id="search-alpha",
+                name=tool.name,
+                arguments={"arguments": {"query": "alpha"}},
+            ),
+            ModelActionInvocation(
+                call_id="search-beta",
+                name=tool.name,
+                arguments={"arguments": {"query": "beta"}},
+            ),
+            ModelActionInvocation(
+                call_id="prepare-final",
+                name=finalize.name,
+                arguments={},
+            ),
+        ),
+        definitions,
+    )
+
+    assert decision.finalization_requested is True
+    assert [action.action_id for action in decision.actions] == [
+        "search-alpha",
+        "search-beta",
+    ]
+
+
 def test_same_invalid_model_action_is_stopped_after_one_bounded_repair():
     executions: list[str] = []
 
@@ -421,6 +747,32 @@ def test_same_invalid_model_action_is_stopped_after_one_bounded_repair():
 
 def test_working_plan_proposal_excludes_runtime_identity_and_revision():
     assert set(WorkingPlanProposal.model_fields) == {"goal", "grounding", "steps"}
+
+
+def test_single_step_working_plan_is_a_valid_continuation_contract():
+    proposal = WorkingPlanProposal(
+        goal="Preserve the remaining result across a user-turn boundary",
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="deliver",
+                description=(
+                    "Result: deliver the remaining result; Complete when: the "
+                    "user-visible contract is satisfied"
+                ),
+                status="in_progress",
+            ),
+        ),
+    )
+
+    feedback, admitted = admit_working_plan(
+        proposal,
+        current=None,
+        inputs=(),
+    )
+
+    assert feedback is None
+    assert admitted is not None
+    assert len(admitted.steps) == 1
     assert set(WorkingPlanStepProposal.model_fields) == {
         "step_id",
         "description",
@@ -430,7 +782,6 @@ def test_working_plan_proposal_excludes_runtime_identity_and_revision():
         "kind",
         "disposition",
         "message",
-        "resolved_plan_step_ids",
     }
 
 
@@ -456,7 +807,7 @@ def test_continue_turn_can_handoff_an_all_completed_plan_to_completion_phase():
     assert all(step.status == "completed" for step in proposal.working_plan.steps)
 
 
-def test_interaction_prompt_requires_typed_provider_actions_without_generic_json():
+def test_interaction_prompt_separates_action_and_finalization_phases():
     prompt = build_interaction_system_prompt(
         EffectiveCapabilities(),
         CommittedUsage(),
@@ -464,11 +815,22 @@ def test_interaction_prompt_requires_typed_provider_actions_without_generic_json
 
     assert "revision" not in EffectiveCapabilities.model_fields
     assert '"revision":' not in prompt
-    assert "Respond only with one or more provider action calls" in prompt
-    assert "never return plain text or a generic JSON decision" in prompt
+    assert "Respond only with one or more compatible provider action calls" in prompt
+    assert "call prepare-final" in prompt
+    assert "It carries no answer" in prompt
+    assert "exclusive typed FinalMessage" in prompt
     assert "provider call ID is runtime-owned action identity" in prompt
     assert "AgentTurnDecision" not in prompt
     assert "ContinueTurnProposal" not in prompt
+
+    final_prompt = build_interaction_system_prompt(
+        EffectiveCapabilities(),
+        CommittedUsage(),
+        finalization_mode=True,
+    )
+    assert "exclusive finalization phase" in final_prompt
+    assert "Return only the typed FinalMessage" in final_prompt
+    assert "No provider actions are available" in final_prompt
 
 
 def test_interaction_prompt_hides_runtime_plan_identity_and_revision():
@@ -523,7 +885,7 @@ def test_interaction_prompt_separates_default_review_from_explicit_auto_executio
     assert "working-plan action with wait_for_user true" in prompt
     assert "planning_safe=true" in prompt
     assert "Never claim that a source was inspected" in prompt
-    assert "a prose plan inside the final-message action violates" in prompt
+    assert "a prose plan inside FinalMessage violates" in prompt
     assert "working_plan.grounding" in prompt
     assert "caller-selected auto interaction mode" in prompt
     assert "An agent-initiated plan does not require approval" not in prompt
@@ -535,8 +897,10 @@ def test_interaction_prompt_separates_default_review_from_explicit_auto_executio
         interaction_mode="auto",
     )
     assert "caller selected auto interaction mode" in auto_prompt
-    assert "Submit that new plan without executable actions" in auto_prompt
-    assert "next model turn can bind actions" in auto_prompt
+    assert "create or show a working plan" in auto_prompt
+    assert "wait_for_user false in auto interaction mode" in auto_prompt
+    assert "concrete actions may accompany that plan update" in auto_prompt
+    assert "plan_step_id" not in auto_prompt
     assert "must use wait_for_user true and contain no actions" not in auto_prompt
     assert "A bare request to continue refers to the current" in prompt
     assert "Without a current plan or another committed continuation contract" in prompt
@@ -617,11 +981,17 @@ def _continue(*actions):
     return ContinueTurnProposal(actions=actions)
 
 
-def _plan(*steps, goal="Organize the saved knowledge"):
+def _plan(*steps, goal="Organize the saved knowledge", active_step_id=None):
     return WorkingPlanProposal(
         goal=goal,
         steps=tuple(
-            WorkingPlanStepProposal(step_id=step_id, description=description)
+            WorkingPlanStepProposal(
+                step_id=step_id,
+                description=description,
+                status=(
+                    "in_progress" if step_id == active_step_id else "pending"
+                ),
+            )
             for step_id, description in steps
         ),
     )
@@ -700,8 +1070,16 @@ def test_l01_observation_drives_next_react_decision_and_user_result():
     assert trace is not None
     assert trace.inputs[0].kind == "tool_result"
     assert trace.inputs[0].payload["data"]["fact"] == "observed:Orion"
-    assert all(request.kind == "tool_calling" for request in model.decision_requests)
-    assert all(request.action_choice == "required" for request in model.decision_requests)
+    assert [request.kind for request in model.decision_requests] == [
+        "tool_calling",
+        "tool_calling",
+        "structured",
+    ]
+    assert [request.action_choice for request in model.decision_requests] == [
+        "required",
+        "required",
+        None,
+    ]
     next_turn_context = "\n".join(
         message["content"] for message in model.decision_requests[1].messages
     )
@@ -874,7 +1252,6 @@ def test_planning_safe_draft_actions_execute_before_plan_admission():
         action_id="read-during-review",
         tool_name="read_fact",
         arguments={"query": "Orion"},
-        plan_step_id="inspect",
     )
     model = _Decisions(
         ContinueTurnProposal(
@@ -919,7 +1296,6 @@ def test_waiting_plan_rejects_non_planning_safe_actions_before_execution():
         action_id="write-during-review",
         tool_name="write_fact",
         arguments={"query": "Orion"},
-        plan_step_id="inspect",
     )
     model = _Decisions(
         ContinueTurnProposal(
@@ -996,6 +1372,7 @@ def test_working_plan_update_preserves_completed_steps_from_current_plan():
             WorkingPlanStepProposal(
                 step_id="summarize",
                 description="Summarize the main themes",
+                status="in_progress",
             ),
         ),
     )
@@ -1006,6 +1383,39 @@ def test_working_plan_update_preserves_completed_steps_from_current_plan():
     )
     assert admitted is None
     assert feedback.reason_code == "completed_plan_step_immutable"
+
+
+def test_working_plan_admission_enforces_the_active_step_boundary():
+    active = _plan(
+        ("inspect", "Inspect evidence"),
+        ("answer", "Answer from evidence"),
+        active_step_id="inspect",
+    )
+
+    waiting_feedback, waiting_plan = admit_working_plan(
+        active,
+        current=None,
+        inputs=(),
+        wait_for_user=True,
+    )
+
+    assert waiting_plan is None
+    assert waiting_feedback.reason_code == "waiting_plan_has_active_step"
+
+    multiple_active = active.model_copy(update={
+        "steps": tuple(
+            step.model_copy(update={"status": "in_progress"})
+            for step in active.steps
+        )
+    })
+    active_feedback, admitted = admit_working_plan(
+        multiple_active,
+        current=None,
+        inputs=(),
+    )
+
+    assert admitted is None
+    assert active_feedback.reason_code == "working_plan_active_step_required"
 
 
 def test_plan_update_preserves_prior_completed_evidence_without_replaying_observation():
@@ -1038,6 +1448,7 @@ def test_plan_update_preserves_prior_completed_evidence_without_replaying_observ
             WorkingPlanStepProposal(
                 step_id="analyze",
                 description="Identify conflicting records",
+                status="in_progress",
             ),
         ),
     )
@@ -1077,6 +1488,7 @@ def test_plan_update_leaves_goal_semantics_to_the_model():
             WorkingPlanStepProposal(
                 step_id="inspect",
                 description="Inspect recent knowledge",
+                status="in_progress",
             ),
             WorkingPlanStepProposal(
                 step_id="analyze",
@@ -1097,7 +1509,7 @@ def test_plan_update_leaves_goal_semantics_to_the_model():
     assert admitted.steps[1].description == "identify conflicting records"
 
 
-def test_identical_working_plan_is_rejected_as_no_op():
+def test_identical_working_plan_is_an_idempotent_no_op():
     current = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=3,
@@ -1142,11 +1554,72 @@ def test_identical_working_plan_is_rejected_as_no_op():
         ),
     )
 
-    assert admitted is None
-    assert feedback.reason_code == "working_plan_no_change"
+    assert feedback is None
+    assert admitted is current
+    assert admitted.revision == 3
 
 
-def test_unchanged_plan_feedback_exposes_only_valid_repair_paths():
+def test_identical_plan_cannot_silently_consume_a_continue_turn():
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
+    )
+    _, current = admit_working_plan(
+        active,
+        current=None,
+        inputs=(),
+    )
+    decision = ContinueTurnProposal(working_plan=active)
+    _, admitted = admit_working_plan(
+        active,
+        current=current,
+        inputs=(),
+    )
+
+    feedback = admit_continue_turn_progress(
+        decision,
+        previous_plan=current,
+        admitted_plan=admitted,
+    )
+
+    assert feedback is not None
+    assert feedback.reason_code == "continue_turn_no_progress"
+    assert admitted is current
+
+
+def test_identical_plan_can_accompany_a_concrete_action():
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
+    )
+    _, current = admit_working_plan(
+        active,
+        current=None,
+        inputs=(),
+    )
+    decision = ContinueTurnProposal(
+        working_plan=active,
+        actions=(
+            ToolCallProposal(
+                action_id="read-1",
+                tool_name="read_fact",
+                arguments={"query": "Orion"},
+            ),
+        ),
+    )
+
+    feedback = admit_continue_turn_progress(
+        decision,
+        previous_plan=current,
+        admitted_plan=current,
+    )
+
+    assert feedback is None
+
+
+def test_unchanged_active_plan_preserves_revision_without_feedback():
     current = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=1,
@@ -1155,7 +1628,7 @@ def test_unchanged_plan_feedback_exposes_only_valid_repair_paths():
             ConversationWorkingPlanStep(
                 step_id="diagnose",
                 description="Result: root cause; Complete when: evidence supports it",
-                status="pending",
+                status="in_progress",
             ),
             ConversationWorkingPlanStep(
                 step_id="report",
@@ -1182,18 +1655,9 @@ def test_unchanged_plan_feedback_exposes_only_valid_repair_paths():
         inputs=(),
     )
 
-    assert admitted is None
-    assert feedback is not None
-    assert feedback.reason_code == "working_plan_no_change"
-    assert feedback.repairable_fields == (
-        "working_plan",
-        "actions",
-        "resolved_plan_step_ids",
-    )
-    assert feedback.immutable_fields == ("messages", "inputs")
-    assert not set(feedback.repairable_fields).intersection(
-        feedback.immutable_fields
-    )
+    assert feedback is None
+    assert admitted is current
+    assert admitted.revision == 1
 
 
 def test_decision_feedback_rejects_conflicting_repair_paths():
@@ -1219,6 +1683,7 @@ def test_runtime_derives_completion_evidence_from_bound_observation():
             WorkingPlanStepProposal(
                 step_id="summarize",
                 description="Summarize the main themes",
+                status="in_progress",
             ),
         ),
     )
@@ -1254,6 +1719,7 @@ def test_successful_context_evidence_can_support_semantic_plan_completion():
             WorkingPlanStepProposal(
                 step_id="summarize",
                 description="Summarize the main themes",
+                status="in_progress",
             ),
         ),
     )
@@ -1276,7 +1742,7 @@ def test_successful_context_evidence_can_support_semantic_plan_completion():
     assert admitted.steps[0].completion_action_ids == ()
 
 
-def test_actions_bind_to_pending_working_plan_steps():
+def test_actions_require_one_canonical_active_working_plan_step():
     plan = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=1,
@@ -1299,17 +1765,22 @@ def test_actions_bind_to_pending_working_plan_steps():
         tool_name="read_recent",
         arguments={},
     )
-    feedback = admit_action_plan_bindings(
+    feedback = admit_action_plan_state(
         (unbound,),
         working_plan=plan,
     )
-    assert feedback.reason_code == "plan_step_binding_required"
+    assert feedback.reason_code == "working_plan_active_step_required"
 
-    bound = unbound.model_copy(update={"plan_step_id": "inspect"})
+    active_plan = plan.model_copy(update={
+        "steps": (
+            plan.steps[0].model_copy(update={"status": "in_progress"}),
+            plan.steps[1],
+        )
+    })
     assert (
-        admit_action_plan_bindings(
-            (bound,),
-            working_plan=plan,
+        admit_action_plan_state(
+            (unbound,),
+            working_plan=active_plan,
         )
         is None
     )
@@ -1324,7 +1795,7 @@ def test_bound_observation_does_not_block_a_follow_up_action_for_the_same_pendin
             ConversationWorkingPlanStep(
                 step_id="inspect",
                 description="Inspect recent saved knowledge",
-                status="pending",
+                status="in_progress",
             ),
             ConversationWorkingPlanStep(
                 step_id="summarize",
@@ -1333,13 +1804,12 @@ def test_bound_observation_does_not_block_a_follow_up_action_for_the_same_pendin
             ),
         ),
     )
-    feedback = admit_action_plan_bindings(
+    feedback = admit_action_plan_state(
         (
             ToolCallProposal(
                 action_id="read-2",
                 tool_name="read_recent",
                 arguments={},
-                plan_step_id="inspect",
             ),
         ),
         working_plan=plan,
@@ -1348,7 +1818,7 @@ def test_bound_observation_does_not_block_a_follow_up_action_for_the_same_pendin
     assert feedback is None
 
 
-def test_offloaded_result_window_can_materialize_its_completed_plan_step():
+def test_offloaded_result_window_stays_associated_with_the_active_plan_step():
     owner = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default")
     resource_ref = ResourceRef(
         resource_id="gen-completed",
@@ -1364,8 +1834,7 @@ def test_offloaded_result_window_can_materialize_its_completed_plan_step():
             ConversationWorkingPlanStep(
                 step_id="read-large",
                 description="Read the large file",
-                status="completed",
-                completion_action_ids=("read-large",),
+                status="in_progress",
             ),
             ConversationWorkingPlanStep(
                 step_id="summarize",
@@ -1392,32 +1861,16 @@ def test_offloaded_result_window_can_materialize_its_completed_plan_step():
             "resource_ref": resource_ref.model_dump(mode="json"),
             "keyword": "heading",
         },
-        plan_step_id="read-large",
     )
 
-    assert admit_action_plan_bindings(
+    assert admit_action_plan_state(
         (materialization,),
         working_plan=plan,
-        inputs=(observation,),
     ) is None
-
-    wrong_reference = materialization.model_copy(update={
-        "arguments": {
-            "resource_ref": resource_ref.model_copy(
-                update={"resource_id": "gen-other"}
-            ).model_dump(mode="json"),
-            "keyword": "heading",
-        }
-    })
-    feedback = admit_action_plan_bindings(
-        (wrong_reference,),
-        working_plan=plan,
-        inputs=(observation,),
-    )
-    assert feedback.reason_code == "plan_step_not_pending"
+    assert observation.plan_step_id == "read-large"
 
 
-def test_final_answer_resolves_only_the_remaining_delivery_step():
+def test_accepted_final_answer_completes_only_the_remaining_delivery_step():
     plan = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=2,
@@ -1437,9 +1890,8 @@ def test_final_answer_resolves_only_the_remaining_delivery_step():
         ),
     )
 
-    feedback, resolved = admit_final_plan_resolution(
-        ("answer",),
-        working_plan=plan,
+    resolved = complete_working_plan(
+        plan,
         inputs=(
             ActionObservation(
                 kind="tool_result",
@@ -1452,7 +1904,6 @@ def test_final_answer_resolves_only_the_remaining_delivery_step():
         ),
     )
 
-    assert feedback is None
     assert resolved.revision == 3
     assert all(step.status == "completed" for step in resolved.steps)
     assert resolved.steps[0].completion_action_ids == ("search-1",)
@@ -1495,7 +1946,7 @@ def test_final_result_contract_supersedes_only_pending_plan_steps():
     assert is_terminal_working_plan(plan) is False
 
 
-def test_final_answer_resolves_execution_steps_and_runtime_binds_their_evidence():
+def test_accepted_final_answer_completes_steps_and_binds_execution_evidence():
     plan = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=1,
@@ -1504,7 +1955,7 @@ def test_final_answer_resolves_execution_steps_and_runtime_binds_their_evidence(
             ConversationWorkingPlanStep(
                 step_id="inspect",
                 description="Establish the observed fact",
-                status="pending",
+                status="in_progress",
             ),
             ConversationWorkingPlanStep(
                 step_id="answer",
@@ -1514,9 +1965,8 @@ def test_final_answer_resolves_execution_steps_and_runtime_binds_their_evidence(
         ),
     )
 
-    feedback, resolved = admit_final_plan_resolution(
-        ("inspect", "answer"),
-        working_plan=plan,
+    resolved = complete_working_plan(
+        plan,
         inputs=(
             ActionObservation(
                 kind="tool_result",
@@ -1529,7 +1979,6 @@ def test_final_answer_resolves_execution_steps_and_runtime_binds_their_evidence(
         ),
     )
 
-    assert feedback is None
     assert resolved.revision == 2
     assert all(step.status == "completed" for step in resolved.steps)
     assert resolved.steps[0].completion_action_ids == ("read-1",)
@@ -1545,6 +1994,7 @@ def test_executed_action_observation_keeps_its_working_plan_step_binding():
             working_plan=_plan(
                 ("inspect", "Inspect the Orion fact"),
                 ("answer", "Answer from the observed fact"),
+                active_step_id="inspect",
             ),
         ),
         ContinueTurnProposal(
@@ -1553,7 +2003,6 @@ def test_executed_action_observation_keeps_its_working_plan_step_binding():
                     action_id="read-1",
                     tool_name="read_fact",
                     arguments={"query": "Orion"},
-                    plan_step_id="inspect",
                 ),
             ),
         ),
@@ -1594,7 +2043,7 @@ def test_executed_action_observation_keeps_its_working_plan_step_binding():
     assert result.working_plan.steps[0].status == "completed"
 
 
-def test_unchanged_plan_does_not_block_actions_bound_to_the_current_plan():
+def test_unchanged_active_plan_does_not_block_concrete_actions():
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
@@ -1602,16 +2051,21 @@ def test_unchanged_plan_does_not_block_actions_bound_to_the_current_plan():
         ("inspect", "Inspect the Orion fact"),
         ("answer", "Answer from the observed fact"),
     )
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
+    )
     model = _Decisions(
         ContinueTurnProposal(working_plan=plan, wait_for_user=True),
+        ContinueTurnProposal(working_plan=active),
         ContinueTurnProposal(
-            working_plan=plan,
+            working_plan=active,
             actions=(
                 ToolCallProposal(
                     action_id="read-1",
                     tool_name="read_fact",
                     arguments={"query": "Orion"},
-                    plan_step_id="inspect",
                 ),
             ),
         ),
@@ -1656,10 +2110,10 @@ def test_unchanged_plan_does_not_block_actions_bound_to_the_current_plan():
 
     assert result.disposition == "answer"
     assert trace.execution_order == ("read-1",)
-    assert trace.working_plan.revision == 2
+    assert trace.working_plan.revision == 3
 
 
-def test_unchanged_pending_plan_does_not_bypass_completion():
+def test_unchanged_active_plan_does_not_fabricate_completion():
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
@@ -1667,35 +2121,25 @@ def test_unchanged_pending_plan_does_not_bypass_completion():
         ("inspect", "Inspect the Orion fact"),
         ("answer", "Answer from the observed fact"),
     )
-    progressed = WorkingPlanProposal(
-        goal=plan.goal,
-        steps=(
-            WorkingPlanStepProposal(
-                step_id="inspect",
-                description="Inspect the Orion fact",
-                status="completed",
-            ),
-            WorkingPlanStepProposal(
-                step_id="answer",
-                description="Answer from the observed fact",
-            ),
-        ),
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
     )
     model = _Decisions(
         ContinueTurnProposal(working_plan=plan, wait_for_user=True),
         ContinueTurnProposal(
-            working_plan=plan,
+            working_plan=active,
             actions=(
                 ToolCallProposal(
                     action_id="read-1",
                     tool_name="read_fact",
                     arguments={"query": "Orion"},
-                    plan_step_id="inspect",
                 ),
             ),
         ),
-        ContinueTurnProposal(working_plan=progressed),
-        ContinueTurnProposal(working_plan=progressed),
+        ContinueTurnProposal(working_plan=active),
+        ContinueTurnProposal(working_plan=active),
     )
     service = ConversationService(
         model,
@@ -1724,25 +2168,97 @@ def test_unchanged_pending_plan_does_not_bypass_completion():
 
     assert result.disposition == "limitation"
     assert trace.execution_order == ("read-1",)
-    assert any(step.status == "pending" for step in result.working_plan.steps)
-    assert sum(
+    assert any(step.status == "in_progress" for step in result.working_plan.steps)
+    assert any(
         isinstance(item, DecisionFeedback)
-        and item.reason_code == "working_plan_no_change"
+        and item.reason_code == "continue_turn_no_progress"
         for item in trace.inputs
-    ) == 1
-    assert not any(
-        request.operation == "interaction_completion_answer"
-        for request in model.requests
     )
 
 
-def test_completed_plan_update_enters_runtime_owned_completion_call():
+def test_accepted_plan_revision_starts_a_new_bounded_repair_scope():
+    executions: list[str] = []
+
+    def read_fact(query: str):
+        executions.append(query)
+        return tool_response(tool_success({"fact": f"observed:{query}"}))
+
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
+    )
+    revised = WorkingPlanProposal(
+        goal=active.goal,
+        steps=(
+            WorkingPlanStepProposal(
+                step_id="inspect",
+                description="Inspect the Orion fact",
+                status="completed",
+            ),
+            WorkingPlanStepProposal(
+                step_id="answer",
+                description="Answer from the observed fact",
+                status="in_progress",
+            ),
+        ),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(
+            working_plan=active,
+            actions=(
+                ToolCallProposal(
+                    action_id="read-1",
+                    tool_name="read_fact",
+                    arguments={"query": "Orion"},
+                ),
+            ),
+        ),
+        ContinueTurnProposal(working_plan=active),
+        ContinueTurnProposal(working_plan=revised),
+        ContinueTurnProposal(working_plan=revised),
+        FinalMessage(disposition="answer", message="Observed Orion."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+        budget_policy=LoopBudgetPolicy(max_model_turns=5),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-plan-revision-repair-scope",
+        interaction_run_ref="irun-plan-revision-repair-scope",
+        interaction_mode="auto",
+        messages=[ConversationMessage(role="user", content="Inspect and answer.")],
+    )
+    trace = _trace(service, "irun-plan-revision-repair-scope")
+
+    assert result.disposition == "answer"
+    assert result.message.content == "Observed Orion."
+    assert executions == ["Orion"]
+    no_progress_feedback = [
+        item
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+        and item.reason_code == "continue_turn_no_progress"
+    ]
+    assert [item.working_plan_revision for item in no_progress_feedback] == [1, 2]
+    assert len(model.decision_requests) == 6
+
+
+def test_completed_plan_waits_for_a_normal_model_final_message():
     def read_fact(query: str):
         return tool_response(tool_success({"fact": f"observed:{query}"}))
 
     plan = _plan(
         ("inspect", "Inspect the Orion fact"),
         ("answer", "Answer from the observed fact"),
+    )
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
     )
     completed = WorkingPlanProposal(
         goal=plan.goal,
@@ -1762,12 +2278,12 @@ def test_completed_plan_update_enters_runtime_owned_completion_call():
     model = _Decisions(
         ContinueTurnProposal(working_plan=plan, wait_for_user=True),
         ContinueTurnProposal(
+            working_plan=active,
             actions=(
                 ToolCallProposal(
                     action_id="read-1",
                     tool_name="read_fact",
                     arguments={"query": "Orion"},
-                    plan_step_id="inspect",
                 ),
             ),
         ),
@@ -1777,7 +2293,7 @@ def test_completed_plan_update_enters_runtime_owned_completion_call():
     service = ConversationService(
         model,
         tool_port=_executor(_tool("read_fact", read_fact)),
-        budget_policy=LoopBudgetPolicy(max_model_turns=2),
+        budget_policy=LoopBudgetPolicy(max_model_turns=3),
     )
     first_messages = [ConversationMessage(role="user", content="Show the plan first.")]
     first = service.respond(
@@ -1800,24 +2316,16 @@ def test_completed_plan_update_enters_runtime_owned_completion_call():
     trace = _trace(service, "irun-terminal-plan-second")
 
     assert result.disposition == "answer"
-    assert result.working_plan.revision == 2
+    assert result.working_plan.revision == 3
     assert all(step.status == "completed" for step in result.working_plan.steps)
     assert trace.execution_order == ("read-1",)
-    completion_request = next(
-        request
-        for request in model.requests
-        if request.operation == "interaction_completion_answer"
+    assert all(
+        request.operation == "agent_interaction_turn"
+        for request in model.decision_requests
     )
-    completion_prompt = "\n".join(
-        message["content"] for message in completion_request.messages
-    )
-    assert '"revision"' not in completion_prompt
-    assert '"plan_id"' not in completion_prompt
-    assert "completion_action_ids" not in completion_prompt
-    assert plan.goal in completion_prompt
 
 
-def test_answer_cannot_silently_complete_a_pending_working_plan():
+def test_accepted_final_answer_materializes_pending_working_plan_completion():
     plan = _plan(
         ("inspect", "Inspect recent knowledge"),
         ("answer", "Answer from the evidence"),
@@ -1848,16 +2356,9 @@ def test_answer_cannot_silently_complete_a_pending_working_plan():
             ConversationMessage(role="user", content="Finish it."),
         ],
     )
-    trace = _trace(service, "irun-pending-final-second")
-
-    assert result.disposition == "limitation"
-    assert result.working_plan.revision == 1
-    assert any(step.status == "pending" for step in result.working_plan.steps)
-    assert any(
-        isinstance(item, DecisionFeedback)
-        and item.reason_code == "working_plan_incomplete"
-        for item in trace.inputs
-    )
+    assert result.disposition == "answer"
+    assert result.working_plan.revision == 2
+    assert all(step.status == "completed" for step in result.working_plan.steps)
 
 
 def test_denied_duplicate_action_is_not_recorded_as_execution_fact():
@@ -1896,6 +2397,106 @@ def test_denied_duplicate_action_is_not_recorded_as_execution_fact():
     assert any(
         isinstance(item, DecisionFeedback)
         and item.reason_code == "duplicate_action_id"
+        for item in trace.inputs
+    )
+
+
+def test_exact_safe_sibling_request_executes_once_and_returns_typed_feedback():
+    calls = 0
+
+    def read_fact(query: str):
+        nonlocal calls
+        calls += 1
+        return tool_response(tool_success({"fact": query}))
+
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="read-orion-1",
+                tool_name="read_fact",
+                arguments={"query": "Orion"},
+            ),
+            ToolCallProposal(
+                action_id="read-orion-2",
+                tool_name="read_fact",
+                arguments={"query": "Orion"},
+            ),
+        ),
+        FinalMessage(disposition="answer", message="Observed Orion."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_fact", read_fact)),
+    )
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-duplicate-safe-request",
+        interaction_run_ref="irun-duplicate-safe-request",
+        messages=[ConversationMessage(role="user", content="Read Orion once.")],
+    )
+    trace = _trace(service, "irun-duplicate-safe-request")
+
+    assert calls == 1
+    assert trace.execution_order == ("read-orion-1",)
+    assert trace.usage.tool_calls == 1
+    feedback = [
+        item
+        for item in trace.inputs
+        if isinstance(item, DecisionFeedback)
+        and item.reason_code == "duplicate_action_request"
+    ]
+    assert len(feedback) == 1
+    assert feedback[0].action_id == "read-orion-2"
+
+
+def test_exact_non_concurrent_sibling_requests_are_not_silently_deduplicated():
+    calls = 0
+
+    def refresh_remote(query: str):
+        nonlocal calls
+        calls += 1
+        return tool_response(tool_success({"fact": query, "call": calls}))
+
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="refresh-1",
+                tool_name="refresh_remote",
+                arguments={"query": "Orion"},
+            ),
+            ToolCallProposal(
+                action_id="refresh-2",
+                tool_name="refresh_remote",
+                arguments={"query": "Orion"},
+            ),
+        ),
+        FinalMessage(disposition="answer", message="Observed both refreshes."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(
+            _tool(
+                "refresh_remote",
+                refresh_remote,
+                side_effects=("external_network",),
+            )
+        ),
+    )
+
+    service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-repeat-non-concurrent-request",
+        interaction_run_ref="irun-repeat-non-concurrent-request",
+        messages=[ConversationMessage(role="user", content="Refresh twice.")],
+    )
+    trace = _trace(service, "irun-repeat-non-concurrent-request")
+
+    assert calls == 2
+    assert trace.execution_order == ("refresh-1", "refresh-2")
+    assert not any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "duplicate_action_request"
         for item in trace.inputs
     )
 
@@ -2007,7 +2608,6 @@ def test_new_user_turn_reuses_successful_observations_bound_to_current_plan():
     model = _Decisions(FinalMessage(
         disposition="answer",
         message="alpha-exact-value; beta-exact-value",
-        resolved_plan_step_ids=("alpha", "beta"),
     ))
     service = ConversationService(model, journal=journal)
 
@@ -2026,6 +2626,183 @@ def test_new_user_turn_reuses_successful_observations_bound_to_current_plan():
     assert "beta-exact-value" in visible_request
     assert result.disposition == "answer"
     assert all(step.status == "completed" for step in result.working_plan.steps)
+
+
+def test_new_user_turn_restores_facts_for_a_single_in_progress_plan_step():
+    principal = AuthenticatedPrincipal(
+        tenant_id="tenant-active-plan-context",
+        user_id="user-active-plan-context",
+    )
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-active-context",
+        revision=1,
+        goal="Deliver the exact result",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="collect",
+                description="Deliver the exact ALPHA result",
+                status="in_progress",
+            ),
+        ),
+    )
+    journal = InMemoryInteractionJournal()
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-active-context-first",
+        conversation_id="conversation-active-context",
+        principal=principal,
+        messages=(ConversationMessage(role="user", content="Read the result."),),
+        inputs=(
+            ActionObservation(
+                kind="tool_result",
+                action_id="read-alpha",
+                capability_id="archive.read",
+                status="succeeded",
+                payload={"value": "alpha-exact-value"},
+                plan_step_id="collect",
+            ),
+        ),
+        final_message=FinalMessage(
+            disposition="limitation",
+            message="Continue from the committed result.",
+        ),
+        working_plan=plan,
+    ))
+    model = _Decisions(FinalMessage(
+        disposition="answer",
+        message="alpha-exact-value",
+    ))
+    service = ConversationService(model, journal=journal)
+
+    result = service.respond(
+        conversation_id="conversation-active-context",
+        interaction_run_ref="irun-active-context-second",
+        messages=[ConversationMessage(role="user", content="Continue.")],
+        principal=principal,
+    )
+
+    visible_request = json.dumps(
+        model.decision_requests[0].messages,
+        ensure_ascii=False,
+    )
+    assert "alpha-exact-value" in visible_request
+    assert result.disposition == "answer"
+    assert result.working_plan.steps[0].status == "completed"
+
+
+def test_restored_active_step_reuses_offload_instead_of_rerunning_its_producer():
+    principal = AuthenticatedPrincipal(
+        tenant_id="tenant-restored-offload",
+        user_id="user-restored-offload",
+    )
+    plan = ConversationWorkingPlan(
+        plan_id="wplan-restored-offload",
+        revision=1,
+        goal="Deliver the exact archived fact",
+        steps=(
+            ConversationWorkingPlanStep(
+                step_id="collect",
+                description="Read the archived fact",
+                status="in_progress",
+            ),
+        ),
+    )
+    artifacts = _ArtifactTexts()
+    resource_ref = artifacts.write_generated(
+        owner=principal,
+        execution_scope=ExecutionScope(
+            principal=principal,
+            execution_id="irun-restored-offload-first",
+            thread_id="conversation-restored-offload",
+            task_id="read-big",
+        ),
+        producer_key="irun-restored-offload-first:read-big:observation",
+        producer_ref="read_big",
+        kind="action_output",
+        content="CTX-EVIDENCE alpha-exact-value",
+        content_digest=sha256(b"CTX-EVIDENCE alpha-exact-value").hexdigest(),
+        source_artifact_refs=(),
+        evidence_refs=(),
+    )
+    request = {"tool_name": "read_big", "arguments": {"path": "ALPHA"}}
+    journal = InMemoryInteractionJournal()
+    journal.put(InteractionTrace(
+        interaction_run_ref="irun-restored-offload-first",
+        conversation_id="conversation-restored-offload",
+        principal=principal,
+        messages=(ConversationMessage(role="user", content="Read ALPHA."),),
+        inputs=(
+            ActionObservation(
+                kind="tool_result",
+                action_id="read-big",
+                capability_id="read_big",
+                status="succeeded",
+                payload={
+                    "ok": True,
+                    "retrieval": {
+                        "resource_ref": resource_ref.model_dump(mode="json"),
+                        "omitted_chars": 20,
+                        "original_chars": 40,
+                    },
+                },
+                plan_step_id="collect",
+                execution_request_digest=canonical_digest(request),
+            ),
+        ),
+        final_message=FinalMessage(
+            disposition="limitation",
+            message="Continue from the committed result.",
+        ),
+        working_plan=plan,
+    ))
+    producer_calls = 0
+
+    def read_big(path: str):
+        nonlocal producer_calls
+        producer_calls += 1
+        return tool_response(tool_success({"content": path}))
+
+    model = _Decisions(
+        _continue(ToolCallProposal(
+            action_id="refetch-big",
+            tool_name="read_big",
+            arguments={"path": "ALPHA"},
+        )),
+        _continue(ToolCallProposal(
+            action_id="read-restored-window",
+            tool_name="read_action_output",
+            arguments={
+                "resource_ref": resource_ref.model_dump(mode="json"),
+                "keyword": "CTX-EVIDENCE",
+            },
+        )),
+        FinalMessage(disposition="answer", message="alpha-exact-value"),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=artifacts,
+        journal=journal,
+    )
+
+    result = service.respond(
+        conversation_id="conversation-restored-offload",
+        interaction_run_ref="irun-restored-offload-second",
+        messages=[ConversationMessage(role="user", content="Continue.")],
+        principal=principal,
+    )
+    trace = service.trace(
+        "irun-restored-offload-second",
+        principal=principal,
+    )
+
+    assert result.disposition == "answer"
+    assert producer_calls == 0
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "offloaded_output_refetch"
+        for item in trace.inputs
+    )
+    assert trace.execution_order == ("read-restored-window",)
 
 
 def test_working_plan_observation_projection_excludes_other_scope_and_failures():
@@ -2198,6 +2975,7 @@ def test_completed_working_plan_can_be_superseded_by_a_new_frontstage_goal():
         ("compare", "Compare the new alternatives"),
         ("recommend", "Recommend one alternative"),
         goal="Choose a new alternative",
+        active_step_id="compare",
     )
 
     feedback, admitted = admit_working_plan(
@@ -2220,15 +2998,20 @@ def test_successful_tool_observation_does_not_auto_complete_a_plan_step():
         ("inspect", "Inspect the Orion fact"),
         ("answer", "Answer from the observed fact"),
     )
+    active = _plan(
+        ("inspect", "Inspect the Orion fact"),
+        ("answer", "Answer from the observed fact"),
+        active_step_id="inspect",
+    )
     model = _Decisions(
         ContinueTurnProposal(working_plan=plan, wait_for_user=True),
         ContinueTurnProposal(
+            working_plan=active,
             actions=(
                 ToolCallProposal(
                     action_id="read-1",
                     tool_name="read_fact",
                     arguments={"query": "Orion"},
-                    plan_step_id="inspect",
                 ),
             ),
         ),
@@ -2256,9 +3039,18 @@ def test_successful_tool_observation_does_not_auto_complete_a_plan_step():
             ConversationMessage(role="user", content="Continue."),
         ],
     )
+    trace = _trace(service, "irun-no-auto-complete-second")
 
     assert result.disposition == "limitation"
-    assert result.working_plan.steps[0].status == "pending"
+    assert result.working_plan.steps[0].status == "in_progress"
+    assert trace.execution_order == ("read-1",)
+    observation = next(
+        item
+        for item in trace.inputs
+        if isinstance(item, ActionObservation) and item.action_id == "read-1"
+    )
+    assert observation.status == "succeeded"
+    assert observation.plan_step_id == "inspect"
 
 
 def test_interaction_trace_read_and_resume_require_the_committed_principal(caplog):
@@ -2349,6 +3141,61 @@ def test_context_materialization_keeps_reread_ref_without_repeating_lossy_excerp
     ] == resource_ref.model_dump(mode="json")
 
 
+def test_web_search_materialization_removes_only_duplicate_audit_evidence():
+    payload = {
+        "ok": True,
+        "data": {
+            "results": [{
+                "title": "Official tools",
+                "url": "https://example.test/tools",
+                "snippet": "Canonical result text",
+            }],
+        },
+        "evidence": [{
+            "source_id": "https://example.test/tools",
+            "url": "https://example.test/tools",
+            "title": "Official tools",
+            "snippet": "Canonical result text",
+        }],
+    }
+    observation = ActionObservation(
+        kind="tool_result",
+        action_id="search-1",
+        capability_id="web_search",
+        status="succeeded",
+        payload=payload,
+    )
+
+    materialized = materialize_interaction_inputs((observation,))
+
+    assert materialized[0].payload == {
+        "ok": True,
+        "data": payload["data"],
+    }
+    assert observation.payload == payload
+
+
+def test_web_search_materialization_keeps_nonduplicated_evidence():
+    observation = ActionObservation(
+        kind="tool_result",
+        action_id="search-1",
+        capability_id="web_search",
+        status="succeeded",
+        payload={
+            "ok": True,
+            "data": {"results": []},
+            "evidence": [{
+                "source_id": "https://example.test/evidence-only",
+                "url": "https://example.test/evidence-only",
+            }],
+        },
+    )
+
+    materialized = materialize_interaction_inputs((observation,))
+
+    assert "evidence" in materialized[0].payload
+
+
 def test_recorded_context_segments_account_for_the_input_that_was_sent():
     """The four segments must add up to the request, not to a re-derivation.
 
@@ -2387,7 +3234,7 @@ def test_recorded_context_segments_account_for_the_input_that_was_sent():
     trace = _trace(service, "irun_composition")
 
     assert trace is not None
-    assert len(trace.context_composition) == len(model.decision_requests) == 2
+    assert len(trace.context_composition) == len(model.decision_requests) == 3
     for turn_index, (composition, request) in enumerate(
         zip(trace.context_composition, model.decision_requests, strict=True)
     ):
@@ -2402,7 +3249,10 @@ def test_recorded_context_segments_account_for_the_input_that_was_sent():
         ))
         assert composition.turn_index == turn_index
         assert composition.total_chars == sent_chars + action_definition_chars
-        assert composition.capability_projection_chars > 0
+        if request.kind == "tool_calling":
+            assert composition.capability_projection_chars > 0
+        else:
+            assert composition.capability_projection_chars == 0
         assert composition.input_tokens == 10
     # The observation only exists after the first turn, so the typed-input
     # segment separates the two turns instead of being a constant offset.
@@ -2437,7 +3287,7 @@ def test_measuring_the_context_does_not_change_the_sealed_input():
     assert [message["role"] for message in request.messages] == ["system", "user"]
     trace = _trace(service, "irun_seal")
     assert trace is not None
-    assert len(trace.context_composition) == 1
+    assert len(trace.context_composition) == 2
 
 
 def test_oversized_tool_observation_is_bounded_and_offloaded_for_re_read():
@@ -2573,6 +3423,89 @@ def test_refetching_a_tool_with_unread_offloaded_output_is_rejected_without_spen
     assert trace.usage.tool_calls == 2
 
 
+def test_offloaded_output_remains_readable_and_exact_refetch_stays_rejected():
+    late_fact = "linux-xfs@vger.kernel.org"
+    producer_calls = 0
+
+    def read_big(path: str):
+        nonlocal producer_calls
+        producer_calls += 1
+        filler = "\n".join(f"line {index}" for index in range(200_000))
+        return tool_response(tool_success({"content": f"{filler}\n{late_fact}\n"}))
+
+    offloaded_ref = ResourceRef(
+        resource_id="gen_0",
+        resource_type="artifact",
+        owner=AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default"),
+        revision=1,
+    )
+    model = _Decisions(
+        _continue(
+            ToolCallProposal(
+                action_id="read-big",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="read-window",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "keyword": "xfs",
+                },
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="refetch-producer",
+                tool_name="read_big",
+                arguments={"path": "MAINTAINERS"},
+            )
+        ),
+        _continue(
+            ToolCallProposal(
+                action_id="read-another-window",
+                tool_name="read_action_output",
+                arguments={
+                    "resource_ref": offloaded_ref.model_dump(mode="json"),
+                    "start_line": 1,
+                },
+            )
+        ),
+        FinalMessage(disposition="answer", message=f"The address is {late_fact}."),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_tool("read_big", read_big)),
+        artifact_port=_ArtifactTexts(),
+    )
+
+    view = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-persistent-offload",
+        interaction_run_ref="irun-persistent-offload",
+        messages=[ConversationMessage(role="user", content="Read the XFS address.")],
+    )
+    trace = _trace(service, "irun-persistent-offload")
+
+    assert view.disposition == "answer"
+    assert producer_calls == 1
+    assert sum(
+        isinstance(item, ActionObservation)
+        and item.capability_id == "read_action_output"
+        and item.status == "succeeded"
+        for item in trace.inputs
+    ) == 2
+    assert any(
+        isinstance(item, DecisionFeedback)
+        and item.reason_code == "offloaded_output_refetch"
+        for item in trace.inputs
+    )
+    assert trace.usage.tool_calls == 3
+
+
 def test_same_tool_with_different_arguments_is_not_treated_as_offloaded_refetch():
     late_fact = "linux-xfs@vger.kernel.org"
     calls: list[str] = []
@@ -2678,12 +3611,8 @@ def test_offload_failure_is_reported_in_the_observation_not_swallowed():
     assert serialized_length(trace.inputs[0].payload) <= MAX_OBSERVATION_PAYLOAD_CHARS
 
 
-def test_re_reading_another_principals_offloaded_output_is_denied():
-    """A ref from another principal's run must not become a read of their output.
-
-    The re-read is served with the identity the loop resolved, so a stolen or
-    guessed ref fails the artifact's own principal check instead of leaking.
-    """
+def test_foreign_offload_ref_is_rejected_before_artifact_read():
+    """A ref from another run is not a current unread execution fact."""
 
     artifacts = _ArtifactTexts()
     scope = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="someone-else")
@@ -2701,38 +3630,28 @@ def test_re_reading_another_principals_offloaded_output_is_denied():
         source_artifact_refs=(),
         evidence_refs=(),
     )
-    model = _Decisions(
-        _continue(
-            ToolCallProposal(
-                action_id="steal",
-                tool_name="read_action_output",
-                arguments={
-                    "resource_ref": foreign_ref.model_dump(mode="json"),
-                    "keyword": "private",
-                },
-            )
-        ),
-        FinalMessage(
-            disposition="limitation", message="That output is not available to me."
-        ),
+    service = ConversationService(
+        _Decisions(FinalMessage(disposition="limitation", message="Unavailable.")),
+        tool_port=_executor(),
+        artifact_port=artifacts,
     )
-    service = ConversationService(model, tool_port=_executor(), artifact_port=artifacts)
-
-    service.respond(
-        **_conversation_scope(),
-        conversation_id="conversation-foreign",
-        interaction_run_ref="irun-foreign-read",
-        messages=[
-            ConversationMessage(role="user", content="Show me that earlier output.")
-        ],
+    action = ToolCallProposal(
+        action_id="steal",
+        tool_name="read_action_output",
+        arguments={
+            "resource_ref": foreign_ref.model_dump(mode="json"),
+            "keyword": "private",
+        },
     )
-    trace = _trace(service, "irun-foreign-read")
 
-    observation = trace.inputs[0]
-    assert observation.status == "failed"
-    assert observation.payload["ok"] is False
-    assert "PermissionError" in observation.payload["error"]
-    assert "private" not in json.dumps(observation.payload, ensure_ascii=False)
+    feedback = service._admit(
+        action,
+        run_ref="irun-foreign-read",
+        committed_action_ids=frozenset(),
+        committed_inputs=(),
+    )
+
+    assert feedback.reason_code == "offloaded_output_reference_invalid"
 
 
 def test_asking_the_user_about_an_output_this_run_offloaded_is_rejected():
@@ -3552,13 +4471,86 @@ def _verifier_tool(recorder, *, verdicts):
     )
 
 
-def test_completion_answer_consumes_frozen_review_criteria_and_rejection():
+def test_verifier_rejection_does_not_complete_the_active_working_plan():
+    criterion = "must cite the official source"
+    plan = _plan(
+        ("inspect", "Inspect the official source"),
+        ("answer", "Deliver the cited answer"),
+        active_step_id="inspect",
+    )
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan),
+        FinalMessage(disposition="answer", message="Draft without citation."),
+        review_intent=_review_intent((criterion, criterion)),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_verifier_tool(recorder, verdicts=("needs_revision",))),
+        budget_policy=LoopBudgetPolicy(max_model_turns=2),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-plan-verifier-rejected",
+        interaction_run_ref="irun-plan-verifier-rejected",
+        interaction_mode="auto",
+        messages=[ConversationMessage(
+            role="user",
+            content=f"Revise this answer; it {criterion}.",
+        )],
+    )
+
+    assert result.disposition == "limitation"
+    assert result.working_plan.revision == 1
+    assert result.working_plan.steps[0].status == "in_progress"
+    assert recorder == [("Draft without citation.", (criterion,))]
+
+
+def test_verified_answer_completes_the_working_plan_after_verification():
+    criterion = "must cite the official source"
+    plan = _plan(
+        ("inspect", "Inspect the official source"),
+        ("answer", "Deliver the cited answer"),
+        active_step_id="inspect",
+    )
+    recorder: list[tuple[str, tuple[str, ...]]] = []
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan),
+        FinalMessage(disposition="answer", message="Cited final answer."),
+        review_intent=_review_intent((criterion, criterion)),
+    )
+    service = ConversationService(
+        model,
+        tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
+        budget_policy=LoopBudgetPolicy(max_model_turns=2),
+    )
+
+    result = service.respond(
+        **_conversation_scope(),
+        conversation_id="conversation-plan-verifier-passed",
+        interaction_run_ref="irun-plan-verifier-passed",
+        interaction_mode="auto",
+        messages=[ConversationMessage(
+            role="user",
+            content=f"Revise this answer; it {criterion}.",
+        )],
+    )
+
+    assert result.disposition == "answer"
+    assert result.working_plan.revision == 2
+    assert all(step.status == "completed" for step in result.working_plan.steps)
+    assert recorder == [("Cited final answer.", (criterion,))]
+
+
+def test_normal_decision_consumes_frozen_review_criteria_and_latest_rejection():
     criterion = "each recommendation must use the named official source"
     model = _Decisions(FinalMessage(disposition="answer", message="revised"))
     service = ConversationService(model)
 
-    service._decide_answer_only(
+    service._decide(
         messages=(ConversationMessage(role="user", content="finish"),),
+        capabilities=EffectiveCapabilities(),
         inputs=(
             _receipt_observation(
                 "obsolete rejected draft",
@@ -3573,14 +4565,17 @@ def test_completion_answer_consumes_frozen_review_criteria_and_rejection():
                 criterion=criterion,
             ),
         ),
+        usage=CommittedUsage(),
         review_criteria=ReviewCriteria(criteria=(criterion,)),
+        turn_index=0,
         working_plan=None,
+        interaction_mode="auto",
     )
 
     request = next(
         item
         for item in model.requests
-        if item.operation == "interaction_completion_answer"
+        if item.operation == "agent_interaction_turn"
     )
     prompt = "\n".join(message["content"] for message in request.messages)
     assert criterion in prompt
@@ -3588,10 +4583,10 @@ def test_completion_answer_consumes_frozen_review_criteria_and_rejection():
     assert "latest rejected draft" in prompt
     assert "obsolete rejected draft" not in prompt
     assert "apply it and do not repeat a rejected claim verbatim" in prompt
-    assert request.max_tokens == 3_200
+    assert request.max_tokens == 1_600
 
 
-def test_completion_uses_plan_goal_only_as_scope_context_not_verification_criteria():
+def test_normal_final_decision_does_not_turn_plan_goal_into_verification_criteria():
     criterion = "最终交付必须包含结构化边界章节"
     stale_goal = "形成阶段性分析清单，等待用户确认范围"
     plan = _plan(
@@ -3606,11 +4601,16 @@ def test_completion_uses_plan_goal_only_as_scope_context_not_verification_criter
         tool_port=_executor(_verifier_tool(recorder, verdicts=("passed",))),
     )
 
-    decision, _ = service._decide_answer_only(
+    decision, _, _, protocol_feedback = service._decide(
         messages=(ConversationMessage(role="user", content="现在完成。"),),
+        capabilities=EffectiveCapabilities(),
         inputs=(),
+        usage=CommittedUsage(),
         review_criteria=ReviewCriteria(criteria=(criterion,)),
+        turn_index=0,
         working_plan=plan,
+        interaction_mode="auto",
+        finalization_mode=True,
     )
     service._verify_before_send(
         decision,
@@ -3624,15 +4624,14 @@ def test_completion_uses_plan_goal_only_as_scope_context_not_verification_criter
         attempt=0,
     )
 
+    assert protocol_feedback is None
     completion_request = next(
         item
         for item in model.requests
-        if item.operation == "interaction_completion_answer"
+        if item.operation == "agent_interaction_turn"
     )
     prompt = "\n".join(message["content"] for message in completion_request.messages)
     assert stale_goal in prompt
-    assert "only to recover named subjects or scope" in prompt
-    assert "latest user criteria override withdrawn work" in prompt
     assert recorder == [("final", (criterion,))]
 
 
@@ -4076,6 +5075,11 @@ def test_a_review_answer_is_verified_before_it_can_be_sent():
     assert result.message.content == safe
     assert trace.final_message.message == safe
     assert trace.execution_order == ("runtime-verify-0", "runtime-verify-1")
+    assert [request.kind for request in model.decision_requests] == [
+        "tool_calling",
+        "structured",
+        "structured",
+    ]
     assert [item.capability_id for item in trace.inputs] == [
         "verify_interaction_draft",
         "verify_interaction_draft",
@@ -4098,7 +5102,6 @@ def test_failed_action_ends_a_review_turn_fail_closed_without_verifier_loop():
                 action_id="search-1",
                 tool_name="unavailable_search",
                 arguments={"query": "official docs"},
-                plan_step_id="search",
             ),),
         ),
         FinalMessage(

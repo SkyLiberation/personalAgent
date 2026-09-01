@@ -17,14 +17,24 @@
 - 新增或修改 case 时，必须通过 canonical catalog 注册，并同步修改相应 typed contract、选择器与 [`docs/evals/`](../docs/evals/README.md) 的权威说明。不得靠文件名、pytest marker 或 raw dict 隐式定义证据类别。
 - 数据集输入、grader 输出、measurement、principal、scope、模型与 Provider 配置必须 typed。外部 payload 在读取边界校验失败时按事实缺失处理，不得填充默认成功。
 
-## 3. 产品 E2E 与 grader 边界
+## 3. 每条用例必须有唯一验收目的
+
+- 新增或修改用例前，必须先写清楚该用例回答的唯一问题：验证一个用户可观察结果、一个正式业务入口的事实链、一个运行不变量，或者一个外部能力配置结果。设计项编号、证据类别、目标结果或不变量、关键反事实、范围外事项和断言责任主体必须能从 canonical catalog、typed contract 或 `docs/evals/` 权威说明中反查；没有这些内容时不得先写测试。
+- 每条断言必须直接对应上述目标结果、该结果成立所必需的关键反事实，或者全局权限、隔离、幂等和副作用不变量。删除一条断言后如果用例的设计目的与必要反事实仍然完整，该断言就是冗余要求，必须删除或移入真正拥有它的 Contract、Runtime Conformance 或横切套件。
+- 优化项用例只能验收该优化项声明的变量和用户结果。优化项没有改变 Plan、工具选择、智能体委托、查询、调用次数、执行顺序、固定措辞、产物数量或内部状态时，禁止把这些实现细节追加为通过条件；不得为了让既有过度断言通过而修改生产行为。
+- 产品 E2E 只要求用户结果和关键反事实，不指定模型必须采取的最小执行路径。工具、智能体、Plan 或 Trace 事实只有本身属于公开产品契约时才能进入产品结果；否则只能作为执行后路径证据或独立机制检查。
+- 同一用例可以被多个横切大类复用，各套件只判断自己预先声明的关键能力。整例用户结果、原始 pytest outcome 和局部能力 verdict 必须保持分离；不得因为整例存在与目标能力无关的失败，就把局部能力判为失败，也不得用局部能力通过覆盖整例失败。
+- 用例失败时必须执行[按目标、阶段和单变量处理](../docs/devSpec/quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)。先审查用例目的与每条断言；确认属于附加要求时先修正 canonical contract、评测器或用例分类，禁止通过增加 Prompt、预算、状态、降级路径或生产分支迎合。用例合理时才选择用户结果必经链上最早的一个失败责任主体，完成一次有界修正后先只回跑该原子 case；它通过前不得运行相邻昂贵 E2E。
+- 阻塞分析必须在 checksum 有效的归档、report 或 `docs/evals/` 权威说明中记录 case id、唯一验收目的、必要断言、合理性结论、最早失败阶段、选中的唯一阻塞、责任主体、因果说明、排除项、下一条定向命令和停止条件。该记录不得建立第二份用例状态或发布清单。
+
+## 4. 产品 E2E 与 grader 边界
 
 - Given/When 使用目标用户自然表达，不得泄漏预期 Tool、Agent、Workflow、内部 ID、步骤或执行顺序。内部路径只在执行后通过 Trace、Event、Receipt 或 Report 断言。
 - grader 必须在实现前固定版本、输入与结果契约，直接断言用户可观察结果和关键反事实。禁止让 grader 用字符串包含、对象存在、工具调用或模型自述代替语义结果。
 - Fake 只允许隔离不可控第三方、注入危险副作用失败或验证低层 Contract/Conformance。Fake 必须实现生产 Port 并有 contract test，不得替模型、Policy、Admission 或 Verifier 决策。
 - 真实 target 使用生产 Composition Root、真实持久化，以及用户结果依赖的真实模型、Provider 与隔离沙箱。冻结 Provider 只能支持可重复消融、故障注入或 Conformance。
 
-## 4. 比较身份与归档
+## 5. 比较身份与归档
 
 - baseline、消融和 target 必须保存用户输入、principal、正式入口、交互模式、初始事实、config cohort、grader 版本、代码与配置身份、trace 或 report 和 checksum。
 - baseline 与 target 必须使用相同 seed、用户输入、principal、正式入口、初始事实和 grader。比较器必须拒绝 checksum 失效、role 错误、比较身份不一致，以及代码与配置身份完全相同的伪配对。
@@ -34,14 +44,14 @@
 - 横切检查只能读取 checksum 有效且代码、配置与评测身份一致的密封 Trace；缺少用例、重复选择同一节点或跨身份拼接必须失败。Provider 成功、用户结果和机制检查是不同 verdict，只有 catalog 预先声明为关键的事实才能忽略整例终态。
 - 性能比较只有在用户目标、输入、Provider、模型、Prompt、预算、fixture 和 repetition 一致时成立。不同 case 或 cohort 的完成率、耗时、token 或成本不得直接比较。
 
-## 5. 运行与声明
+## 6. 运行与声明
 
 - 运行前预声明指标门槛、样本量、重复次数、最大成本和停止条件。高成本或真实外部 Provider 评测只在任务需要该证据时执行，不属于普通回归套件。
 - 定向 target archive 只能证明对应变更边界，不能替代完整 release matrix。dirty revision 的结果必须记录 dirty digest；没有与目标 clean revision 绑定的完整 release gate 时，禁止声明 release-ready 能力集合。
 - 失败时保留 trace、event、receipt、report 和 archive，不得为使门禁通过而修改 grader、删除失败样本、重跑后只挑成功结果，或把不可用指标写成零。
 - 评测结果必须报告分子、分母、样本量、方差或适用置信边界，并区分完成率、正确性、错误副作用、成本、延迟和恢复。禁止只报告百分比或挑选单个成功例。
 
-## 6. E2E 执行效率是评测设计门禁
+## 7. E2E 执行效率是评测设计门禁
 
 - 高成本 E2E 在执行前必须先完成 collect-only、impact routing 和成本估算。估算优先读取最近一份 checksum 有效、比较身份相符的 archive，并预声明单样本/完整 cohort 的 wall time、token、外部调用成本与早停条件；没有历史数据时先执行最小独立 pilot，不得直接启动大样本循环。
 - 出现以下任一信号时，必须在当前原子样本安全结束后暂停新增样本并立即重审 E2E 设计：单样本超过 `60s`；cohort 预计超过 `10min` 或 `200,000` tokens；同 profile 耗时超过最近有效基线两倍；结论已数学上不可逆；或者连续等待不能再增加机制归因信息。除非 runner 有安全取消与 typed failure 归档，禁止在样本中途强杀而制造不完整证据。

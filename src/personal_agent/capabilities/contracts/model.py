@@ -11,9 +11,13 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
-ModelRequestKind = Literal["structured", "tool_calling", "text"]
+ModelRequestKind = Literal[
+    "structured",
+    "tool_calling",
+    "text",
+]
 ModelReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
-ModelActionKind = Literal["tool", "agent", "working_plan", "final"]
+ModelActionKind = Literal["tool", "agent", "working_plan", "finalize"]
 ModelInvocationFailureCategory = Literal[
     "provider_rejected",
     "provider_timeout",
@@ -28,8 +32,10 @@ StructuredOutputFailureCode = Literal[
     "provider_action_unknown",
     "provider_action_arguments_invalid_json",
     "provider_action_arguments_not_object",
-    "provider_action_payload_invalid",
-    "provider_action_final_not_exclusive",
+    "provider_action_working_plan_payload_invalid",
+    "provider_action_tool_payload_invalid",
+    "provider_action_agent_payload_invalid",
+    "provider_action_finalize_payload_invalid",
     "provider_action_multiple_working_plans",
     "provider_action_definition_invalid",
 ]
@@ -107,10 +113,20 @@ class StructuredOutputFailure(ValueError):
         reason: str,
         *,
         reason_code: StructuredOutputFailureCode = "structured_output_invalid",
+        action_name: str | None = None,
+        action_kind: ModelActionKind | None = None,
+        field_paths: tuple[str, ...] = (),
+        error_types: tuple[str, ...] = (),
     ) -> None:
+        if len(field_paths) != len(error_types):
+            raise ValueError("structured output diagnostic fields must align")
         self.operation = operation
         self.reason = reason
         self.reason_code = reason_code
+        self.action_name = action_name
+        self.action_kind = action_kind
+        self.field_paths = field_paths
+        self.error_types = error_types
         super().__init__(f"{operation} structured parse failed: {reason}")
 
 
@@ -141,7 +157,7 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
         if len(action_names) != len(set(action_names)):
             raise ValueError("model action definitions require unique wire names")
         if self.kind == "tool_calling" and not self.action_definitions:
-            raise ValueError("tool-calling request requires model action definitions")
+            raise ValueError("action-capable request requires model action definitions")
         if self.kind != "tool_calling" and (
             self.action_definitions or self.action_choice is not None
         ):
@@ -185,6 +201,12 @@ class StructuredModelResponse(Generic[StructuredOutputT]):
     action_invocations: tuple[ModelActionInvocation, ...] = ()
     retry_attempts: int = 0
     retry_errors: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.value is not None and self.action_invocations:
+            raise ValueError(
+                "model response cannot contain both typed output and action invocations"
+            )
 
 
 @dataclass(frozen=True, slots=True)

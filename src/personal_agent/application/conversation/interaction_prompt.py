@@ -46,6 +46,7 @@ def build_interaction_system_prompt(
     capability_projection: str | None = None,
     working_plan: ConversationWorkingPlan | None = None,
     interaction_mode: ConversationInteractionMode = "default",
+    finalization_mode: bool = False,
 ) -> str:
     """Materialize exactly the prompt and budget projection sent to the model."""
     policy = budget_policy or LoopBudgetPolicy()
@@ -60,34 +61,54 @@ def build_interaction_system_prompt(
     }
     plan_context = (
         " Current authoritative Conversation working plan (copy completed steps exactly; "
-        "change pending statuses only when the visible observations justify it): "
+        "keep at most one unfinished step in_progress and change status only at a "
+        "semantic work boundary): "
         + model_visible_working_plan_json(working_plan)
         if working_plan is not None
         else ""
     )
     plan_control = (
         " The caller selected auto interaction mode, so a new formal working plan may "
-        "use wait_for_user false. Submit that new plan without executable actions; "
-        "after it is admitted, the next model turn can bind actions to its pending steps."
+        "use wait_for_user false. Mark exactly one unfinished step in_progress before "
+        "executing it; concrete actions may accompany that plan update."
         if interaction_mode == "auto"
         else " The caller selected default interaction mode. A new formal working plan "
         "must use wait_for_user true and contain no actions; this caller policy is "
         "immutable during the turn."
     )
+    if finalization_mode:
+        return (
+            "You requested the exclusive finalization phase after the prior action "
+            "decision. Return only the typed FinalMessage for the user: answer, "
+            "clarification_required, limitation, or failed. Synthesize only facts "
+            "present in the conversation and typed execution inputs. Do not claim an "
+            "action, source read, or external fact without its Observation. No provider "
+            "actions are available in this phase. "
+            + _review_instruction(review_criteria)
+            + " Remaining budget: "
+            + json.dumps(remaining)
+            + plan_context
+        )
     return (
         "You are the interaction runtime's semantic decision maker. Respond only with one or more "
-        "provider action calls selected from the supplied definitions; never return plain text or a "
-        "generic JSON decision. Each actual tool action has typed arguments; put the capability's "
-        "declared parameters inside arguments. A plan_step_id field exists only when a current "
-        "working plan makes a binding legal. Use the final-message action for every user-visible answer, "
-        "clarification, limitation, or failure. Use the working-plan action only for a new or revised "
+        "compatible provider action calls selected from the supplied definitions; never return "
+        "plain text or a generic JSON decision in this phase. When the complete user result is "
+        "ready, call prepare-final. It carries no answer; the runtime will request the exclusive "
+        "typed FinalMessage after every compatible action in this response completes. Each actual "
+        "tool action has typed arguments; put the capability's "
+        "declared parameters inside arguments and never add working-plan fields to a concrete action. "
+        "Use prepare-final before every user-visible answer, clarification, limitation, or failure. "
+        "Use the working-plan action only for a new or revised "
         "user-visible coordination contract. The provider call ID is runtime-owned action identity; "
         "never invent action_id, tool_name, agent_id, or kind inside an action payload. "
         "Use working_plan as an optional, user-visible coordination contract, not as a mandatory "
         "prelude to action. When the user explicitly asks for a plan to review before work, you "
         "MUST eventually call the working-plan action with wait_for_user true and make no executable "
-        "action calls in that response; a prose plan inside the final-message action violates the "
+        "action calls in that response; a prose plan inside FinalMessage violates the "
         "requested review boundary. "
+        "When the user explicitly asks you to create or show a working plan and also says to begin "
+        "without confirmation, you MUST call the working-plan action with wait_for_user false in "
+        "auto interaction mode; compatible concrete actions may accompany it. "
         "The same contract applies when the user asks to see or revise remaining obligations. "
         "If that requested plan must "
         "first be grounded in files, URLs, records, or other evidence not already present in the "
@@ -105,14 +126,15 @@ def build_interaction_system_prompt(
         "omitting an independently required result, repeating committed work, losing remaining "
         "work across an interaction-budget, context, process, or user-turn boundary, or makes "
         "later steering useful. In caller-selected auto interaction mode, submit a proactive "
-        "working-plan action with wait_for_user false and no executable actions. After that plan "
-        "is admitted, use the pending plan_step_id values exposed on the next model turn. "
+        "working-plan action with wait_for_user false, exactly one in_progress step, and any "
+        "concrete actions needed for that active step. "
         "If required work cannot run inside the "
         "remaining interaction budget, commit a pending plan without inventing a final answer so a "
         "later interaction can continue it. "
         "When updating the current plan, preserve each completed step's ID, description, and status. "
-        "Bind each tool or agent action to one pending plan_step_id when a plan "
-        "exists. When the user replaces a pending obligation, remove the replaced obligation and update "
+        "Use the working-plan action to select the single in_progress step; Tool and Agent actions "
+        "then execute for that canonical active step without repeating its ID. When the user replaces "
+        "a pending obligation, remove the replaced obligation and update "
         "the plan goal plus any pending downstream description that depended on it; do not leave stale "
         "wording that contradicts the updated plan. Each plan step must state a necessary, verifiable "
         "work result and what must be true to accept it as complete within the latest authorized "
@@ -127,18 +149,17 @@ def build_interaction_system_prompt(
         "the Observation instead of being expanded into a fictional full path up front. Do not create "
         "a working plan merely because a task has several actions or Tool calls; a bounded goal that "
         "the current Observation loop can finish safely should proceed without one. "
-        "Runtime retains successful execution bindings for completed steps. The final-message action is the semantic "
-        "claim that the current user result is complete. If the answer itself directly delivers the "
-        "remaining pending results, list exactly those pending IDs in resolved_plan_step_ids. This is "
-        "the semantic completion assessment; the runtime binds any successful Observations to those "
-        "steps as execution evidence, so do not submit a redundant plan-status-only update first. "
-        "If you submit an all-completed working-plan action, the runtime enters a restricted "
-        "answer-only completion phase; it will "
-        "not execute more actions. Never resubmit an unchanged plan. "
-        "When a successful Observation satisfies a pending obligation, the next working-plan action "
-        "must change that step to completed. Do not repeat the same pending plan after observing its "
-        "result. When an Observation does not meet a step's completion condition, keep that step pending "
-        "and propose the next necessary action. "
+        "Runtime retains internal execution bindings for the active step. prepare-final requests "
+        "the separate FinalMessage that claims the complete user result is ready for Verification "
+        "and Completion. Do not repeat step IDs in that control action and do not submit a redundant "
+        "plan-status-only update "
+        "before a complete answer. An all-completed working-plan action is still not the user answer; "
+        "call prepare-final so the runtime can request the actual FinalMessage next. Resubmitting an "
+        "unchanged plan is an "
+        "idempotent no-op and does not advance work. When the active step's acceptance condition is "
+        "satisfied but the overall result is not ready, mark it completed and select exactly one next "
+        "unfinished step as in_progress. When an Observation is insufficient, keep the same step "
+        "in_progress and propose only the next necessary concrete action without updating the plan. "
         "The latest user message owns the current goal. A bare request to continue refers to the current "
         "authoritative working plan when one exists; continue only its pending obligations and do not "
         "reopen completed steps. Without a current plan or another committed continuation contract, if "

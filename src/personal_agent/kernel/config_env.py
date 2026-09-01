@@ -61,6 +61,12 @@ def settings_from_env(settings_cls: type):
         default_user=os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
         postgres_url=os.getenv("PERSONAL_AGENT_POSTGRES_URL"),
         max_verify_retries=int(os.getenv("AGENT_MAX_VERIFY_RETRIES", "1")),
+        action_diagnostics_reveal_field_names=_as_bool(
+            os.getenv(
+                "PERSONAL_AGENT_ACTION_DIAGNOSTICS_REVEAL_FIELD_NAMES",
+                "false",
+            )
+        ),
         url_capture_provider=(
             os.getenv("PERSONAL_AGENT_URL_CAPTURE_PROVIDER")
             or (

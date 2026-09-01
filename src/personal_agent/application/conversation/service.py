@@ -23,6 +23,7 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     sealed_context_projection_ref,
 )
+from personal_agent.capabilities.contracts.verification import VerificationVerdict
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.contracts.derivation import canonical_digest
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
@@ -42,7 +43,7 @@ from .context_materialization import (
     READ_ACTION_OUTPUT_CAPABILITY,
     materialize_interaction_inputs,
 )
-from .interaction_prompt import _review_instruction, build_interaction_system_prompt
+from .interaction_prompt import build_interaction_system_prompt
 from .model_actions import (
     build_model_action_definitions,
     decode_model_action_invocations,
@@ -100,12 +101,13 @@ from .interaction_intent import (
 from .interaction_intent import ungrounded_criteria_feedback
 from .verification_admission import observed_receipts
 from .working_plan import (
-    admit_action_plan_bindings,
-    admit_final_plan_resolution,
+    active_working_plan_step_id,
+    admit_action_plan_state,
+    admit_continue_turn_progress,
     admit_new_plan_interaction_mode,
     admit_plan_wait_boundary,
     admit_working_plan,
-    is_terminal_working_plan,
+    complete_working_plan,
     required_plan_review_feedback,
     supersede_pending_working_plan,
 )
@@ -147,6 +149,7 @@ class ConversationService:
         knowledge_lifecycle: ConversationKnowledgeLifecyclePort | None = None,
         budget_policy: LoopBudgetPolicy | None = None,
         journal: InMemoryInteractionJournal | None = None,
+        action_diagnostics_reveal_field_names: bool = False,
     ) -> None:
         self._model_client = model_client
         self._tool_port = tool_port
@@ -155,6 +158,9 @@ class ConversationService:
         self._knowledge_writer = knowledge_writer
         self._knowledge_reader = knowledge_reader
         self._knowledge_lifecycle = knowledge_lifecycle
+        self._action_diagnostics_reveal_field_names = (
+            action_diagnostics_reveal_field_names
+        )
         self._run_conversation_ids: dict[str, str] = {}
         if agent_port is not None and artifact_port is None:
             raise ValueError(
@@ -241,7 +247,8 @@ class ConversationService:
         if prior is not None:
             inputs = list(prior.inputs)
         elif working_plan is not None and any(
-            step.status == "pending" for step in working_plan.steps
+            step.status in {"pending", "in_progress"}
+            for step in working_plan.steps
         ):
             inputs = list(self._journal.working_plan_observations(
                 conversation_id,
@@ -260,11 +267,6 @@ class ConversationService:
             output_tokens=0,
         )
         review_criteria = prior.review_criteria if prior else None
-        answer_only_pending = bool(
-            prior is not None
-            and prior.final_message is None
-            and is_terminal_working_plan(working_plan)
-        )
         background_continuation_requested = False
         if review_criteria is None:
             intent, derivation_responses, derivation_feedback = (
@@ -319,6 +321,7 @@ class ConversationService:
                 working_plan=working_plan,
             )
 
+        finalization_pending = False
         while True:
             repeated_feedback = self._repeated_action_feedback(tuple(inputs))
             if repeated_feedback is not None:
@@ -339,78 +342,62 @@ class ConversationService:
                         "所有被拒绝的动作均未执行。"
                     ),
                 )
-            # A completed canonical plan has no executable work left.  Force the
-            # runtime-owned completion phase even if the last model proposal also
-            # contains speculative tool calls; otherwise those calls can consume
-            # every model turn after all required steps are already complete.
             if (
-                working_plan is not None
-                and is_terminal_working_plan(working_plan)
+                usage.model_turns >= self._budget_policy.max_model_turns
+                and not finalization_pending
             ):
-                answer_only_pending = True
-            if answer_only_pending:
-                if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                    return self._budget_exhausted(
-                        conversation_id,
-                        run_ref,
-                        principal,
-                        messages,
-                        inputs,
-                        usage,
-                        execution_order,
-                        concurrent_batches,
-                        context_composition,
-                        review_criteria,
-                        working_plan,
-                    )
-                decision, completion_response = self._decide_answer_only(
-                    messages=messages,
-                    inputs=tuple(inputs),
+                break
+            if usage.total_tokens >= self._budget_policy.max_total_tokens:
+                return self._budget_exhausted(
+                    conversation_id,
+                    run_ref,
+                    principal,
+                    messages,
+                    inputs,
+                    usage,
+                    execution_order,
+                    concurrent_batches,
+                    context_composition,
+                    review_criteria,
+                    working_plan,
+                )
+            decision, model_response, composition, protocol_feedback = self._decide(
+                messages=messages,
+                capabilities=self._model_visible_capabilities_for_turn(
+                    capabilities,
+                    inputs,
+                ),
+                inputs=inputs,
+                usage=usage,
+                review_criteria=review_criteria,
+                turn_index=usage.model_turns,
+                working_plan=working_plan,
+                interaction_mode=interaction_mode,
+                finalization_mode=finalization_pending,
+            )
+            finalization_pending = False
+            context_composition.append(composition)
+            usage = self._record_model_usage(
+                usage,
+                model_response,
+                model_turn=True,
+            )
+            if protocol_feedback is not None:
+                inputs.append(protocol_feedback)
+                self._commit(
+                    run_ref,
+                    principal,
+                    messages,
+                    inputs,
+                    usage,
+                    execution_order,
+                    concurrent_batches,
+                    context_composition,
                     review_criteria=review_criteria,
                     working_plan=working_plan,
                 )
-                usage = self._record_model_usage(
-                    usage,
-                    completion_response,
-                    model_turn=False,
-                )
-                answer_only_pending = False
-            else:
-                if usage.model_turns >= self._budget_policy.max_model_turns:
-                    break
-                if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                    return self._budget_exhausted(
-                        conversation_id,
-                        run_ref,
-                        principal,
-                        messages,
-                        inputs,
-                        usage,
-                        execution_order,
-                        concurrent_batches,
-                        context_composition,
-                        review_criteria,
-                        working_plan,
-                    )
-                decision, model_response, composition = self._decide(
-                    messages=messages,
-                    capabilities=self._model_visible_capabilities_for_turn(
-                        capabilities,
-                        inputs,
-                    ),
-                    inputs=inputs,
-                    usage=usage,
-                    review_criteria=review_criteria,
-                    turn_index=usage.model_turns,
-                    working_plan=working_plan,
-                    interaction_mode=interaction_mode,
-                )
-                context_composition.append(composition)
-                usage = self._record_model_usage(
-                    usage,
-                    model_response,
-                    model_turn=True,
-                )
+                continue
+            assert decision is not None
             if isinstance(decision, FinalMessage):
                 if (
                     review_criteria.plan_review_required
@@ -430,14 +417,13 @@ class ConversationService:
                         working_plan=working_plan,
                     )
                     continue
-                if decision.disposition == "answer" and working_plan is not None:
-                    incomplete_feedback, resolved_plan = admit_final_plan_resolution(
-                        decision.resolved_plan_step_ids,
-                        working_plan=working_plan,
-                        inputs=tuple(inputs),
-                    )
-                    if incomplete_feedback is not None:
-                        inputs.append(incomplete_feedback)
+                if (
+                    decision.disposition != "answer"
+                    and self._has_failed_action_observation(inputs)
+                ):
+                    unread = self._unread_offloaded_resource(inputs)
+                    if unread is not None:
+                        inputs.append(self._unread_output_feedback(decision, unread))
                         self._commit(
                             run_ref,
                             principal,
@@ -451,27 +437,6 @@ class ConversationService:
                             working_plan=working_plan,
                         )
                         continue
-                    working_plan = resolved_plan
-                unread = self._unread_offloaded_resource(inputs)
-                if unread is not None:
-                    inputs.append(self._unread_output_feedback(decision, unread))
-                    self._commit(
-                        run_ref,
-                        principal,
-                        messages,
-                        inputs,
-                        usage,
-                        execution_order,
-                        concurrent_batches,
-                        context_composition,
-                        review_criteria=review_criteria,
-                        working_plan=working_plan,
-                    )
-                    continue
-                if (
-                    decision.disposition != "answer"
-                    and self._has_failed_action_observation(inputs)
-                ):
                     self._commit(
                         run_ref,
                         principal,
@@ -510,20 +475,29 @@ class ConversationService:
                     )
                     continue
                 if review_criteria.requires_review:
-                    verified, result, usage = self._verify_before_send(
-                        decision,
-                        review_criteria=review_criteria,
-                        conversation_id=conversation_id,
-                        run_ref=run_ref,
-                        principal=principal,
-                        owner=owner,
-                        source_platform=source_platform,
-                        usage=usage,
-                        attempt=len(execution_order),
+                    verified, result, usage, verification_verdict = (
+                        self._verify_before_send(
+                            decision,
+                            review_criteria=review_criteria,
+                            conversation_id=conversation_id,
+                            run_ref=run_ref,
+                            principal=principal,
+                            owner=owner,
+                            source_platform=source_platform,
+                            usage=usage,
+                            attempt=len(execution_order),
+                        )
                     )
                     inputs.append(result.interaction_input)
                     execution_order.append(result.action_id)
                     if verified is None:
+                        # A semantic draft correction needs another exclusive Final,
+                        # not a return to the action protocol. Missing evidence is
+                        # different: the model must regain access to concrete actions.
+                        finalization_pending = (
+                            verification_verdict == "needs_revision"
+                            and usage.model_turns < self._budget_policy.max_model_turns
+                        )
                         self._commit(
                             run_ref,
                             principal,
@@ -538,6 +512,27 @@ class ConversationService:
                         )
                         continue
                     decision = verified
+                unread = self._unread_offloaded_resource(inputs)
+                if unread is not None:
+                    inputs.append(self._unread_output_feedback(decision, unread))
+                    self._commit(
+                        run_ref,
+                        principal,
+                        messages,
+                        inputs,
+                        usage,
+                        execution_order,
+                        concurrent_batches,
+                        context_composition,
+                        review_criteria=review_criteria,
+                        working_plan=working_plan,
+                    )
+                    continue
+                if decision.disposition == "answer" and working_plan is not None:
+                    working_plan = complete_working_plan(
+                        working_plan,
+                        inputs=tuple(inputs),
+                    )
                 self._commit(
                     run_ref,
                     principal,
@@ -580,6 +575,7 @@ class ConversationService:
                     usage=usage,
                     committed_action_ids=frozenset(execution_order),
                     committed_inputs=tuple(inputs),
+                    plan_step_id=None,
                 )
                 inputs.extend(item.interaction_input for item in results)
                 executed_results = [
@@ -623,6 +619,7 @@ class ConversationService:
                 )
                 continue
 
+            previous_plan = working_plan
             if decision.working_plan is not None:
                 mode_feedback = admit_new_plan_interaction_mode(
                     decision,
@@ -638,10 +635,6 @@ class ConversationService:
                 )
                 if mode_feedback is not None:
                     inputs.append(mode_feedback)
-                    answer_only_pending = bool(
-                        execution_order
-                        and not decision.actions
-                    )
                     self._commit(
                         run_ref,
                         principal,
@@ -659,38 +652,47 @@ class ConversationService:
                     decision.working_plan,
                     current=working_plan,
                     inputs=tuple(inputs),
+                    wait_for_user=decision.wait_for_user,
                 )
                 if feedback is not None:
-                    if (
-                        feedback.reason_code == "working_plan_no_change"
-                        and decision.actions
-                    ):
-                        admitted_plan = working_plan
-                    else:
-                        inputs.append(feedback)
-                        self._commit(
-                            run_ref,
-                            principal,
-                            messages,
-                            inputs,
-                            usage,
-                            execution_order,
-                            concurrent_batches,
-                            context_composition,
-                            review_criteria=review_criteria,
-                            working_plan=working_plan,
-                        )
-                        continue
+                    inputs.append(feedback)
+                    self._commit(
+                        run_ref,
+                        principal,
+                        messages,
+                        inputs,
+                        usage,
+                        execution_order,
+                        concurrent_batches,
+                        context_composition,
+                        review_criteria=review_criteria,
+                        working_plan=working_plan,
+                    )
+                    continue
                 working_plan = admitted_plan
-                answer_only_pending = bool(
-                    is_terminal_working_plan(working_plan)
-                    and not decision.actions
-                    and not decision.wait_for_user
+            progress_feedback = admit_continue_turn_progress(
+                decision,
+                previous_plan=previous_plan,
+                admitted_plan=working_plan,
+            )
+            if progress_feedback is not None:
+                inputs.append(progress_feedback)
+                self._commit(
+                    run_ref,
+                    principal,
+                    messages,
+                    inputs,
+                    usage,
+                    execution_order,
+                    concurrent_batches,
+                    context_composition,
+                    review_criteria=review_criteria,
+                    working_plan=working_plan,
                 )
-            action_plan_feedback = admit_action_plan_bindings(
+                continue
+            action_plan_feedback = admit_action_plan_state(
                 decision.actions,
                 working_plan=working_plan,
-                inputs=tuple(inputs),
             )
             if action_plan_feedback is not None:
                 inputs.append(self._name_action_feedback(
@@ -706,9 +708,9 @@ class ConversationService:
                     execution_order,
                     concurrent_batches,
                     context_composition,
-                        review_criteria=review_criteria,
-                        working_plan=working_plan,
-                    )
+                    review_criteria=review_criteria,
+                    working_plan=working_plan,
+                )
                 continue
             if decision.wait_for_user:
                 self._commit(
@@ -886,6 +888,7 @@ class ConversationService:
                 usage=usage,
                 committed_action_ids=frozenset(execution_order),
                 committed_inputs=tuple(inputs),
+                plan_step_id=active_working_plan_step_id(working_plan),
             )
             inputs.extend(item.interaction_input for item in results)
             executed_results = [
@@ -898,6 +901,7 @@ class ConversationService:
                 concurrent_batches.append(
                     tuple(item.action_id for item in executed_results)
                 )
+            finalization_pending = decision.finalization_requested
             self._commit(
                 run_ref,
                 principal,
@@ -1215,10 +1219,7 @@ class ConversationService:
         return any(
             isinstance(item, ActionObservation)
             and item.kind == "tool_result"
-            and (
-                item.status == "failed"
-                or item.payload.get("ok") is False
-            )
+            and (item.status == "failed" or item.payload.get("ok") is False)
             for item in inputs
         )
 
@@ -1290,26 +1291,55 @@ class ConversationService:
         return next(iter(offloaded), None)
 
     @staticmethod
-    def _unread_offloaded_resources(inputs) -> dict[str, tuple[str, str | None]]:
-        """Map unread artifact ids to the exact request that produced them."""
+    def _unread_offloaded_resources(
+        inputs,
+    ) -> dict[str, tuple[str, str | None, dict[str, Any]]]:
+        """Map artifact ids that have not yet yielded any readable window."""
 
-        offloaded: dict[str, tuple[str, str | None]] = {}
+        offloaded = ConversationService._offloaded_resources(inputs)
+        for item in inputs:
+            if (
+                isinstance(item, ActionObservation)
+                and item.capability_id == READ_ACTION_OUTPUT_CAPABILITY
+                and item.status == "succeeded"
+            ):
+                offloaded.pop(str(item.payload.get("resource_id", "")), None)
+        return offloaded
+
+    @staticmethod
+    def _offloaded_resources(
+        inputs,
+    ) -> dict[str, tuple[str, str | None, dict[str, Any]]]:
+        """Map every readable artifact id to the exact request that produced it.
+
+        Reading one bounded window satisfies the minimum-look completion gate; it
+        does not consume the artifact. Later windows, later model turns, and a
+        resumed interaction must keep using the same immutable resource instead
+        of re-running the producing tool.
+        """
+
+        offloaded: dict[
+            str,
+            tuple[str, str | None, dict[str, Any]],
+        ] = {}
         for item in inputs:
             if not isinstance(item, ActionObservation):
                 continue
             if item.capability_id == READ_ACTION_OUTPUT_CAPABILITY:
-                if item.status == "succeeded":
-                    offloaded.pop(str(item.payload.get("resource_id", "")), None)
                 continue
             if item.status != "succeeded":
                 continue
             reference = item.payload.get("retrieval", {})
             if isinstance(reference, dict) and "resource_ref" in reference:
-                resource_id = str(reference["resource_ref"].get("resource_id", ""))
+                resource_ref = reference["resource_ref"]
+                if not isinstance(resource_ref, dict):
+                    continue
+                resource_id = str(resource_ref.get("resource_id", ""))
                 if resource_id:
                     offloaded[resource_id] = (
                         item.capability_id,
                         item.execution_request_digest,
+                        resource_ref,
                     )
         return offloaded
 
@@ -1334,9 +1364,10 @@ class ConversationService:
         emitted bytes identical to the judged bytes without asking a model to
         copy them.
 
-        Returns ``(final_message | None, action_result, usage)``: ``None`` means
-        the verdict was not ``passed``, and the observation goes back into the
-        loop as revision material.
+        Returns ``(final_message | None, action_result, usage, verdict)``. The
+        verdict is carried separately so the loop can keep prose-only revisions
+        in the exclusive finalization phase while sending insufficient evidence
+        back to the action phase.
         """
         action_id = f"runtime-verify-{attempt}"
         arguments = {
@@ -1388,16 +1419,18 @@ class ConversationService:
             (result.interaction_input,),
             capability_names=frozenset({_VERIFICATION_CAPABILITY}),
         )
-        passed = next(
-            (receipt for receipt in receipts if receipt.verdict == "passed"),
-            None,
+        receipt = receipts[-1] if receipts else None
+        verdict: VerificationVerdict | None = (
+            receipt.verdict if receipt is not None else None
         )
+        passed = receipt if verdict == "passed" else None
         if passed is None:
-            return None, result, usage
+            return None, result, usage, verdict
         return (
             FinalMessage(disposition="answer", message=passed.verified_draft),
             result,
             usage,
+            verdict,
         )
 
     def _decide(
@@ -1411,6 +1444,7 @@ class ConversationService:
         turn_index,
         working_plan,
         interaction_mode,
+        finalization_mode=False,
     ):
         """Run one decision turn, and record what its input was made of.
 
@@ -1424,10 +1458,13 @@ class ConversationService:
         separate call with no capability projection, so folding it in here would
         put a turn with a structurally different input shape into the same series.
         """
-        capability_projection = model_visible_capability_policy_json(capabilities)
-        action_definitions = build_model_action_definitions(
-            capabilities,
-            working_plan=working_plan,
+        capability_projection = (
+            ""
+            if finalization_mode
+            else model_visible_capability_policy_json(capabilities)
+        )
+        action_definitions = (
+            () if finalization_mode else build_model_action_definitions(capabilities)
         )
         system_content = build_interaction_system_prompt(
             capabilities,
@@ -1437,13 +1474,32 @@ class ConversationService:
             capability_projection=capability_projection,
             working_plan=working_plan,
             interaction_mode=interaction_mode,
+            finalization_mode=finalization_mode,
         )
         visible_messages = [{"role": "system", "content": system_content}]
         conversation_content = [item.model_dump(mode="json") for item in messages]
         visible_messages.extend(conversation_content)
         typed_inputs_content = ""
         if inputs:
-            visible_inputs = materialize_interaction_inputs(inputs)
+            latest_verification_index = next(
+                (
+                    index
+                    for index in range(len(inputs) - 1, -1, -1)
+                    if isinstance(inputs[index], ActionObservation)
+                    and inputs[index].capability_id == _VERIFICATION_CAPABILITY
+                ),
+                None,
+            )
+            decision_inputs = tuple(
+                item
+                for index, item in enumerate(inputs)
+                if not (
+                    isinstance(item, ActionObservation)
+                    and item.capability_id == _VERIFICATION_CAPABILITY
+                    and index != latest_verification_index
+                )
+            )
+            visible_inputs = materialize_interaction_inputs(decision_inputs)
             typed_inputs_content = "Typed execution inputs:\n" + json.dumps(
                 [item.model_dump(mode="json") for item in visible_inputs],
                 ensure_ascii=False,
@@ -1453,7 +1509,7 @@ class ConversationService:
         response = self._generate_model(
             StructuredModelRequest(
                 operation="agent_interaction_turn",
-                version="v2",
+                version=("v3-final" if finalization_mode else "v3-actions"),
                 messages=visible_messages,
                 output_type=FinalMessage,
                 context_projection_ref=sealed_context_projection_ref(
@@ -1462,24 +1518,12 @@ class ConversationService:
                 ),
                 temperature=0,
                 max_tokens=1_600,
-                kind="tool_calling",
+                kind=("structured" if finalization_mode else "tool_calling"),
                 action_definitions=action_definitions,
-                action_choice="required",
+                action_choice=(None if finalization_mode else "required"),
                 metadata={"component": "conversation_interaction_loop"},
             )
         )
-        try:
-            decision = decode_model_action_invocations(
-                response.action_invocations,
-                action_definitions,
-            )
-        except StructuredOutputFailure as exc:
-            raise self._model_failure(
-                exc,
-                message="conversation model returned an invalid action protocol",
-                failure_stage="application_action_decode",
-                component="conversation_interaction_loop",
-            ) from exc
         action_definition_chars = len(
             json.dumps(
                 [item.model_dump(mode="json") for item in action_definitions],
@@ -1500,115 +1544,59 @@ class ConversationService:
             typed_inputs_chars=len(typed_inputs_content),
             input_tokens=response.input_tokens,
         )
-        return decision, response, composition
-
-    def _decide_answer_only(
-        self,
-        *,
-        messages,
-        inputs,
-        review_criteria,
-        working_plan,
-    ):
-        plan_goal_instruction = (
-            " Use this admitted working plan goal only to recover named subjects or "
-            "scope that the latest criteria refer to indirectly. The latest user "
-            "criteria override withdrawn work and transient instructions such as "
-            f"waiting for confirmation. Plan goal: {working_plan.goal}"
-            if working_plan is not None
-            else ""
-        )
-        visible_messages = [{
-            "role": "system",
-            "content": (
-                "Return only the next user-visible outcome as a FinalMessage. Use disposition "
-                "answer when the provided typed observations are sufficient for the latest "
-                "request; otherwise return a truthful clarification or limitation. Do not "
-                "propose tools, agents, another plan, or additional work. A pending checklist "
-                "status is not by itself proof that evidence is missing. Do not claim budget "
-                "exhaustion unless the typed inputs contain a budget-exhaustion fact. Preserve opaque "
-                "identifiers, dates, quantities, version strings, and other exact requested "
-                "values byte-for-byte."
-            ) + plan_goal_instruction + _review_instruction(review_criteria),
-        }]
-        visible_messages.extend(item.model_dump(mode="json") for item in messages)
-        if inputs:
-            latest_verification_index = next(
-                (
-                    index
-                    for index in range(len(inputs) - 1, -1, -1)
-                    if isinstance(inputs[index], ActionObservation)
-                    and inputs[index].capability_id == _VERIFICATION_CAPABILITY
-                ),
-                None,
-            )
-            completion_inputs = tuple(
-                item
-                for index, item in enumerate(inputs)
-                if not (
-                    isinstance(item, ActionObservation)
-                    and item.capability_id == _VERIFICATION_CAPABILITY
-                    and index != latest_verification_index
-                )
-            )
-            visible_inputs = materialize_interaction_inputs(completion_inputs)
-            visible_messages.append({
-                "role": "system",
-                "content": "Typed execution inputs:\n"
-                + json.dumps(
-                    [item.model_dump(mode="json") for item in visible_inputs],
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            })
-        action_definitions = tuple(
-            definition
-            for definition in build_model_action_definitions(EffectiveCapabilities())
-            if definition.kind == "final"
-        )
-        response = self._generate_model(
-            StructuredModelRequest(
-                operation="interaction_completion_answer",
-                version="v2",
-                messages=visible_messages,
-                output_type=FinalMessage,
-                context_projection_ref=sealed_context_projection_ref(
-                    purpose="interaction_completion_answer",
-                    messages=visible_messages,
-                ),
-                temperature=0,
-                max_tokens=3_200,
-                kind="tool_calling",
-                action_definitions=action_definitions,
-                action_choice="required",
-                metadata={"component": "conversation_completion_answer"},
-            )
-        )
         try:
-            decision = decode_model_action_invocations(
-                response.action_invocations,
-                action_definitions,
-            )
+            if finalization_mode and isinstance(response.value, FinalMessage):
+                decision = response.value
+            elif not finalization_mode:
+                decision = decode_model_action_invocations(
+                    response.action_invocations,
+                    action_definitions,
+                    reveal_invalid_action_field_names=(
+                        self._action_diagnostics_reveal_field_names
+                    ),
+                )
+            else:
+                raise StructuredOutputFailure(
+                    "agent_interaction_turn",
+                    "model returned no typed FinalMessage in finalization mode",
+                    reason_code="provider_action_missing",
+                )
         except StructuredOutputFailure as exc:
-            raise self._model_failure(
-                exc,
-                message="conversation model returned an invalid final action protocol",
+            log_event(
+                _LOGGER,
+                logging.WARNING,
+                "conversation.model_action_repair",
+                component="conversation_interaction_loop",
                 failure_stage="application_action_decode",
-                component="conversation_completion_answer",
-            ) from exc
-        if not isinstance(decision, FinalMessage):
-            error = ConversationUnavailable(
-                "conversation model did not return the required final action",
-                reason_code="final_action_required",
-                failure_stage="application_action_decode",
-                operation="interaction_completion_answer",
+                operation=exc.operation,
+                reason_code=exc.reason_code,
+                action_name=exc.action_name,
+                action_kind=exc.action_kind,
+                action_field_paths=exc.field_paths or None,
+                action_error_types=exc.error_types or None,
             )
-            self._log_model_failure(
-                error,
-                component="conversation_completion_answer",
-            )
-            raise error
-        return decision, response
+            return None, response, composition, self._provider_action_feedback(exc)
+        return decision, response, composition, None
+
+    @staticmethod
+    def _provider_action_feedback(error: StructuredOutputFailure) -> DecisionFeedback:
+        return DecisionFeedback(
+            action_id="provider_action_protocol",
+            action_name=error.action_name or "provider_action_protocol",
+            reason_code=error.reason_code,
+            message=(
+                "The provider action set did not satisfy the declared interaction "
+                "protocol. No action from that set was admitted or executed."
+            ),
+            repairable_fields=("action_calls",),
+            immutable_fields=("messages", "inputs"),
+            required_repair=(
+                "Return a new action set that satisfies the declared schemas. "
+                "Submit only compatible control and concrete actions. Call "
+                "prepare-final when the runtime should enter the exclusive typed "
+                "FinalMessage phase."
+            ),
+        )
 
     def _generate_model(self, request):
         try:
@@ -1656,6 +1644,10 @@ class ConversationService:
                 reason_code=error.reason_code,
                 failure_stage=failure_stage,
                 operation=error.operation,
+                action_name=error.action_name,
+                action_kind=error.action_kind,
+                field_paths=error.field_paths,
+                error_types=error.error_types,
             )
         ConversationService._log_model_failure(
             unavailable,
@@ -1680,6 +1672,10 @@ class ConversationService:
             provider_host=error.provider_host,
             provider_status_code=error.provider_status_code,
             retryable=error.retryable,
+            action_name=error.action_name,
+            action_kind=error.action_kind,
+            action_field_paths=error.field_paths or None,
+            action_error_types=error.error_types or None,
         )
 
     def _effective_capabilities(self) -> EffectiveCapabilities:
@@ -1809,13 +1805,21 @@ class ConversationService:
             and item.status == "succeeded"
             for item in inputs
         )
-        if not personal_search_succeeded:
-            return capabilities
+        has_readable_offloaded_output = bool(
+            ConversationService._offloaded_resources(inputs)
+        )
         return capabilities.model_copy(update={
             "tools": tuple(
                 tool
                 for tool in capabilities.tools
-                if tool.name != _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+                if not (
+                    personal_search_succeeded
+                    and tool.name == _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
+                )
+                and not (
+                    not has_readable_offloaded_output
+                    and tool.name == READ_ACTION_OUTPUT_CAPABILITY
+                )
             ),
         })
 
@@ -1892,11 +1896,15 @@ class ConversationService:
             ),
             -1,
         )
-        counts: dict[tuple[str, str], int] = {}
+        counts: dict[tuple[str, str, int | None], int] = {}
         for item in inputs[last_progress + 1 :]:
             if not isinstance(item, DecisionFeedback):
                 continue
-            key = (item.action_name or item.action_id, item.reason_code)
+            key = (
+                item.action_name or item.action_id,
+                item.reason_code,
+                item.working_plan_revision,
+            )
             counts[key] = counts.get(key, 0) + 1
             if counts[key] >= 2:
                 return item
@@ -1914,6 +1922,7 @@ class ConversationService:
         usage,
         committed_action_ids,
         committed_inputs,
+        plan_step_id,
     ):
         admitted = [
             self._admit(
@@ -1924,6 +1933,45 @@ class ConversationService:
             )
             for action in proposal.actions
         ]
+        first_safe_request: dict[str, str] = {}
+        for index, (action, feedback) in enumerate(
+            zip(proposal.actions, admitted, strict=True)
+        ):
+            if (
+                feedback is not None
+                or not isinstance(action, ToolCallProposal)
+                or not (
+                    action.tool_name == READ_ACTION_OUTPUT_CAPABILITY
+                    or self._safe_for_concurrency(action)
+                )
+            ):
+                continue
+            request_digest = canonical_digest({
+                "tool_name": action.tool_name,
+                "arguments": action.arguments,
+            })
+            first_action_id = first_safe_request.setdefault(
+                request_digest,
+                action.action_id,
+            )
+            if first_action_id == action.action_id:
+                continue
+            admitted[index] = DecisionFeedback(
+                action_id=action.action_id,
+                action_name=f"{action.tool_name}:{request_digest[:12]}",
+                reason_code="duplicate_action_request",
+                message=(
+                    f"Action {first_action_id!r} already contains this exact safe "
+                    "request in the same proposal. Both calls would run without an "
+                    "intermediate observation."
+                ),
+                repairable_fields=("tool_name", "arguments"),
+                immutable_fields=("action_id",),
+                required_repair=(
+                    "Keep one exact request, observe its result, and only propose a "
+                    "different follow-up if that observation makes it necessary."
+                ),
+            )
         accepted = [
             action
             for action, feedback in zip(proposal.actions, admitted, strict=True)
@@ -2003,15 +2051,12 @@ class ConversationService:
             }
         )
         by_id = {item.action_id: item for item in (*executed, *denied)}
-        plan_step_ids = {
-            action.action_id: action.plan_step_id for action in proposal.actions
-        }
         for action_id, item in tuple(by_id.items()):
             if isinstance(item.interaction_input, ActionObservation):
                 by_id[action_id] = _ActionResult(
                     action_id,
                     item.interaction_input.model_copy(
-                        update={"plan_step_id": plan_step_ids[action_id]}
+                        update={"plan_step_id": plan_step_id}
                     ),
                 )
         return (
@@ -2046,7 +2091,7 @@ class ConversationService:
                     required_repair="Choose an available tool or explain the capability limitation.",
                 )
             try:
-                ReadActionOutputArguments.model_validate(action.arguments)
+                arguments = ReadActionOutputArguments.model_validate(action.arguments)
             except ValidationError as error:
                 return DecisionFeedback(
                     action_id=action.action_id,
@@ -2056,9 +2101,29 @@ class ConversationService:
                     immutable_fields=("action_id", "tool_name"),
                     required_repair="Revise only the arguments to satisfy the declared tool schema.",
                 )
+            offloaded = self._offloaded_resources(committed_inputs)
+            binding = offloaded.get(arguments.resource_ref.resource_id)
+            if (
+                binding is None
+                or binding[2] != arguments.resource_ref.model_dump(mode="json")
+            ):
+                return DecisionFeedback(
+                    action_id=action.action_id,
+                    reason_code="offloaded_output_reference_invalid",
+                    message=(
+                        "read_action_output can read only an exact resource_ref from "
+                        "an offloaded observation visible in this interaction."
+                    ),
+                    repairable_fields=("arguments",),
+                    immutable_fields=("action_id", "tool_name"),
+                    required_repair=(
+                        "Use a retrieval.resource_ref exposed by an offloaded "
+                        "observation; otherwise choose a capability relevant to the goal."
+                    ),
+                )
             return None
         if isinstance(action, ToolCallProposal):
-            unread = self._unread_offloaded_resources(committed_inputs)
+            offloaded = self._offloaded_resources(committed_inputs)
             request_digest = canonical_digest({
                 "tool_name": action.tool_name,
                 "arguments": action.arguments,
@@ -2066,7 +2131,11 @@ class ConversationService:
             unread_resource = next(
                 (
                     resource_id
-                    for resource_id, (capability_id, prior_digest) in unread.items()
+                    for resource_id, (
+                        capability_id,
+                        prior_digest,
+                        _resource_ref,
+                    ) in offloaded.items()
                     if capability_id == action.tool_name
                     and prior_digest == request_digest
                 ),
@@ -2078,7 +2147,7 @@ class ConversationService:
                     reason_code="offloaded_output_refetch",
                     message=(
                         f"Tool {action.tool_name!r} already produced an offloaded output "
-                        "that has not been read. Calling it again cannot expose the omitted middle."
+                        "for this exact request. Calling it again cannot expose the omitted middle."
                     ),
                     repairable_fields=("tool_name", "arguments"),
                     immutable_fields=("action_id",),

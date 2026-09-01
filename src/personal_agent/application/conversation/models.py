@@ -41,7 +41,7 @@ class WorkingPlanStepProposal(_StrictModel):
             "state only a search, read, tool call, or other activity."
         ),
     )
-    status: Literal["pending", "completed"] = "pending"
+    status: Literal["pending", "in_progress", "completed"] = "pending"
 
 
 class WorkingPlanProposal(_StrictModel):
@@ -63,7 +63,7 @@ class WorkingPlanProposal(_StrictModel):
             "into a future activity step. Leave empty when no grounding was needed."
         ),
     )
-    steps: tuple[WorkingPlanStepProposal, ...] = Field(min_length=2, max_length=12)
+    steps: tuple[WorkingPlanStepProposal, ...] = Field(min_length=1, max_length=12)
 
 
 class ConversationWorkingPlanStep(_StrictModel):
@@ -77,7 +77,7 @@ class ConversationWorkingPlanStep(_StrictModel):
             "The admitted verifiable work result and its explicit completion condition."
         ),
     )
-    status: Literal["pending", "completed", "superseded"]
+    status: Literal["pending", "in_progress", "completed", "superseded"]
     completion_action_ids: tuple[str, ...] = ()
 
 
@@ -88,7 +88,13 @@ class ConversationWorkingPlan(_StrictModel):
     revision: int = Field(ge=1)
     goal: str = Field(min_length=1, max_length=4_000)
     grounding: str = Field(default="", max_length=4_000)
-    steps: tuple[ConversationWorkingPlanStep, ...] = Field(min_length=2, max_length=12)
+    steps: tuple[ConversationWorkingPlanStep, ...] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def _has_at_most_one_active_step(self) -> "ConversationWorkingPlan":
+        if sum(step.status == "in_progress" for step in self.steps) > 1:
+            raise ValueError("working plan can have at most one in_progress step")
+        return self
 
 
 class ToolCallProposal(_StrictModel):
@@ -98,7 +104,6 @@ class ToolCallProposal(_StrictModel):
     )
     tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
-    plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class AgentDelegationProposal(_StrictModel):
@@ -113,7 +118,6 @@ class AgentDelegationProposal(_StrictModel):
     token_budget: int = Field(default=4_000, ge=1)
     cost_budget: float = Field(default=1.0, ge=0)
     time_budget_seconds: int = Field(default=240, ge=1, le=240)
-    plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class KnowledgeSaveSelection(_StrictModel):
@@ -195,20 +199,12 @@ class FinalMessage(_StrictModel):
     """Close the interaction only after required user-visible results are resolved.
 
     If available capabilities can continue an unresolved obligation now or in a
-    later interaction, use ContinueTurnProposal with a working plan instead.
+    later interaction, return the necessary provider action calls instead.
     """
 
     kind: Literal["final_message"] = "final_message"
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
     message: str = Field(min_length=1)
-    resolved_plan_step_ids: tuple[str, ...] = Field(
-        default=(),
-        description=(
-            "Pending plan steps whose user-visible result is delivered directly by "
-            "this answer. The runtime binds successful execution observations as "
-            "evidence; this field makes the semantic completion claim."
-        ),
-    )
 
 
 class ContinueTurnProposal(_StrictModel):
@@ -223,6 +219,7 @@ class ContinueTurnProposal(_StrictModel):
     working_plan: WorkingPlanProposal | None = None
     wait_for_user: bool = False
     message: str = Field(default="", max_length=4_000)
+    finalization_requested: bool = False
 
     @model_validator(mode="after")
     def _action_ids_are_unique(self) -> "ContinueTurnProposal":
@@ -290,6 +287,7 @@ class DecisionFeedback(_StrictModel):
     action_id: str
     action_name: str = ""
     reason_code: str
+    working_plan_revision: int | None = Field(default=None, ge=1)
     message: str
     repairable_fields: tuple[str, ...] = ()
     immutable_fields: tuple[str, ...] = ()

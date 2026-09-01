@@ -3,6 +3,7 @@
 from typing import Literal, TypeAlias
 
 from personal_agent.capabilities.contracts.model import (
+    ModelActionKind,
     ModelInvocationFailureCategory,
     StructuredOutputFailureCode,
 )
@@ -40,13 +41,23 @@ class ConversationUnavailable(RuntimeError):
         provider_host: str | None = None,
         provider_status_code: int | None = None,
         retryable: bool = False,
+        action_name: str | None = None,
+        action_kind: ModelActionKind | None = None,
+        field_paths: tuple[str, ...] = (),
+        error_types: tuple[str, ...] = (),
     ) -> None:
+        if len(field_paths) != len(error_types):
+            raise ValueError("conversation diagnostic fields must align")
         self.reason_code = reason_code
         self.failure_stage = failure_stage
         self.operation = operation
         self.provider_host = provider_host
         self.provider_status_code = provider_status_code
         self.retryable = retryable
+        self.action_name = action_name
+        self.action_kind = action_kind
+        self.field_paths = field_paths
+        self.error_types = error_types
         super().__init__(message)
 
 

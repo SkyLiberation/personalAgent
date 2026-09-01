@@ -23,6 +23,8 @@
 - 新增或改变 Application Capability，或声称 Runtime Mechanism 改善用户结果、风险、恢复、成本或延迟时，必须依次取得当前最简单生产路径的失败 baseline、目标机制的单变量消融、真实 target E2E 和预先定义的对照指标。
 - 其他产品行为变更必须有同输入失败 baseline 与真实 target E2E。纯内部重构不得编造产品失败，必须有已执行的工程约束基线和重构前后行为保持 E2E。纯文档修正不制造产品测试，但必须核对权威事实并执行文档检查。
 - 产品 E2E 从正式入口以目标用户的自然表达进入生产主路径，自动断言用户可观察结果和关键反事实。Unit、对象存在、状态 success、数据库记录、工具调用或 Trace 不能替代用户结果。
+- 每个设计步骤必须写明它依据的失败事实、为什么需要、责任主体、最小改动、通向用户结果的因果链、验证反事实和撤回条件。无法说明该步骤怎样解决已证明问题时，不得把它写入实施计划或生产代码。
+- E2E 阻塞时必须先审查用例目的和每条断言是否合理；用例合理后才沿正式路径定位最早关键失败，选择一个责任主体做一次有界修正，并先回跑原阻塞用例。该用例通过前不得扩大修改或运行其余昂贵 E2E。
 - 未实际执行测试时，禁止声称“已验证”“已修复”“可上线”或“完成”。
 
 ### 2.2 一个事实只有一个 owner
@@ -42,6 +44,7 @@
 
 - Proposal 不是权限、Command、执行事实或完成证明。Admission 只能接受或拒绝 Proposal，不得补业务语义、改写 payload、替换 Goal、生成 Plan 或静默降级。
 - Execution Fact、Semantic Verification 与 Completion 必须分离。Receipt 不能直接代表 Goal 完成，Verifier 不能推翻确定性执行事实。
+- 新增或修改 Plan 与 ToolCall 协议时，Plan 控制只表达工作状态及其变化，具体工具只表达业务动作；执行系统依据 canonical Plan 关联执行事实。模型提交 FinalMessage 才触发 Semantic Verification，Plan 步骤全部完成不得自动触发交付或替代 Completion Gate。
 - 只读、低风险且可安全重试的工具调用在 Admission 后直接执行。需要审批、具有外部副作用、不可安全重试、需要 durable execution 或跨授权或恢复边界的调用才形成 immutable Command。
 - Context 必须先按 identity 与 scope 做 Visibility，再进行 Requirement Retrieval、Semantic Selection 和 Budget Materialization。禁止先召回全部内容再让 Prompt 过滤权限。
 

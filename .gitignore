@@ -20,3 +20,4 @@ evals/multihoprag/results/
 evals/research_quality/e2e_screenshots
 evals/galileo_ragbench/results/
 .pytest-tmp
+.tmp

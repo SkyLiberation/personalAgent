@@ -364,7 +364,10 @@ def test_conv_002_agent_initiates_and_recovers_foreground_coordination(
         else 0
     )
     pending_step_count = (
-        sum(step["status"] == "pending" for step in final_plan["steps"])
+        sum(
+            step["status"] in {"pending", "in_progress"}
+            for step in final_plan["steps"]
+        )
         if isinstance(final_plan, dict)
         else 0
     )

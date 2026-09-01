@@ -18,6 +18,7 @@
 | `06-evidence-and-release.md` | 证据强度、测量与发布状态 |
 | `07-qa-and-tradeoffs.md` | 高频问题的短答和主讲链接 |
 | `08-tool-calling-pitfall.md` | Tool Calling 阻塞的开发踩坑复盘；只引用当前状态与评测事实，不建立第二份状态账本 |
+| `09-e2e-case-design-review.md` | 当前 28 条 canonical E2E 的设计目的与关键验收点；不保存运行状态 |
 
 `INDEX.md` 只维护阅读顺序和关键能力的唯一主讲位置，不复制正文结论。
 

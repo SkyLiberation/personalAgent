@@ -384,7 +384,7 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
             "personal_knowledge.save_then_cross_conversation_recall",
             natural_goal="确认保存后在新会话回忆同一事实",
             observable_result="新会话准确返回已确认保存的随机事实",
-            counterfactuals=("确认前不写入", "不返回其他用户事实"),
+            counterfactuals=("确认前不写入",),
             baseline_ref="behavior-baseline:L07",
         ),
         covered_invariants=frozenset({

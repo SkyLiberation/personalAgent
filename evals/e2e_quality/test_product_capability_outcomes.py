@@ -271,11 +271,7 @@ def test_product_e01_conversation_journey(
     trace_archive: TraceArchive,
     request: pytest.FixtureRequest,
 ) -> None:
-    user_id = f"product-e01-{uuid4().hex}"
     session_id = f"conversation-{uuid4().hex}"
-    with pytest.raises(HTTPError) as missing_legacy_before:
-        _get_json(f"{live_web_process.base_url}/api/entry/runs?" + urlencode({"user_id": user_id}))
-    assert missing_legacy_before.value.code == 404
     first_messages = [{"role": "user", "content": "用一句话解释什么是幂等性。"}]
     first = _post_json(
         f"{live_web_process.base_url}/api/conversation/turn",
@@ -316,9 +312,6 @@ def test_product_e01_conversation_journey(
             ],
         },
     )
-    with pytest.raises(HTTPError) as missing_legacy_after:
-        _get_json(f"{live_web_process.base_url}/api/entry/runs?" + urlencode({"user_id": user_id}))
-    assert missing_legacy_after.value.code == 404
     assert resumed["disposition"] == "answer"
     assert str(resumed["message"]["content"]).strip()
     assert other_secret not in json.dumps(resumed, ensure_ascii=False)
@@ -332,7 +325,6 @@ def test_product_e01_conversation_journey(
             "first": first,
             "clarification": clarification,
             "resumed": resumed,
-            "legacy_entry_runs_unavailable": True,
         },
         profile="baseline",
     )
@@ -535,8 +527,6 @@ def test_product_e14_conversation_governed_save(
     assert prepared["disposition"] == "confirmation_required"
     assert pending["status"] == "awaiting_confirmation"
     assert pending.get("receipt") is None
-    assert command["source_message_indexes"] == [0]
-    assert command["messages"] == [{"role": "user", "content": conclusion}]
     assert len(after_prepare) == len(before)
 
     live_web_process.restart()

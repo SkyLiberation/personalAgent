@@ -38,6 +38,7 @@ class Settings(_StrictBase):
     postgres_url: str | None = None
     max_verify_retries: int = 1
     url_capture_provider: Literal["firecrawl", "builtin"] = "builtin"
+    action_diagnostics_reveal_field_names: bool = False
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)

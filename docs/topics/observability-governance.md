@@ -22,13 +22,19 @@
 
 配置字段和启用方式见 [环境变量说明](../env.md#langsmith-可观测性)。代码存在或配置加载成功只证明观测机制可构造；只有实际 trace 才能证明某条生产路径已经被观测。
 
-## 3. 治理与执行
+## 3. 动作协议诊断只允许显示字段名
+
+**动作解码日志可以按配置显示未知字段名，但不能记录字段值或完整服务提供方响应。** `PERSONAL_AGENT_ACTION_DIAGNOSTICS_REVEAL_FIELD_NAMES=false` 是默认值，此时未知字段统一显示为 `<unexpected>`。显式设置为 `true` 后，解码器只显示符合标识符格式的未知字段名；参数值、完整 `arguments`、用户文本和服务提供方原始响应仍保持脱敏。
+
+该开关只改变诊断投影，不改变 Proposal Schema、Admission、重试或 Completion。生产环境应保持关闭；本地有界诊断结束后应恢复默认值。配置方法见[环境变量说明](../env.md#基础配置)。
+
+## 4. 治理与执行
 
 模型只能提出动作 `Proposal`。策略与 Admission 判断权限、风险、预算和确认要求，执行网关产生执行事实，Verifier 与 Completion Gate 分别判断语义满足和结果契约。观测组件只记录这些阶段的输入、输出和错误，不修改决策。
 
 工具的曝光、授权、结果结构、审计和幂等边界见 [工具设计](tools.md)。运行装配与 `InteractionTrace` 见 [当前 Runtime](runtime.md)。全局权力边界见 [当前核心架构](../summary/core-architecture-current-state.md)。
 
-## 4. 评测与发布
+## 5. 评测与发布
 
 评测归档必须绑定代码身份、配置、样本、评测器和 checksum。中间事件、工具调用、Artifact 或状态为 success 只能用于定位失败阶段，不能替代用户可观察结果。
 
