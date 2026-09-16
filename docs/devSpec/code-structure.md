@@ -1,81 +1,84 @@
 # 代码组织与实现约束细则（COD）
 
-> 本细则在任务涉及类或模块拆分、内部类型、payload、依赖注入、LangGraph、Router、Planner、Workflow、错误分类、命名，或编码智能体的实现行为时生效。
+> 本细则适用于模块拆分、内部类型、payload、依赖注入、生产 Prompt、编排、错误分类、命名和编码智能体行为。事实与分层由[ARC](architecture-ownership.md)拥有；证据和复杂度准入由[EVD](change-evidence.md)拥有。
 
 ## 1. 不变量必须有唯一归属
 
-结构存在的意义是让不变量可定位。**每条结构性不变量只能有一个命名 owner，破坏它必须由类型检查或某条确定性断言机械失败。** 靠字符串键、散落条件分支或注释维持的不变量视为未实现；重命名字段或更换服务提供方后，它会静默消失而不产生失败信号。
+每条结构性不变量须有命名责任主体和确定性失败判据。提交前必须指出承载类型或模块、破坏不变量的最小改动，以及因此失败的类型检查或断言；仅依赖模型方差偶发触发不算覆盖。
 
-提交前必须能说明三件事：承载不变量的类型或模块名、破坏它的最小改动，以及因此变红的类型错误或断言。只有依赖模型运行方差才偶发触发的门禁不算被覆盖。
+靠字符串键、散落条件或注释维持的内部不变量视为未实现；重命名字段或更换服务方后不得静默失效。概念映射到代码不等于为每个名词创建对象。
 
-概念也不得只以类型存在。理念映射到代码指的是不变量有归属，不是每个名词各得一个对象。
-
-设计模式只用于隔离已经发生或由近期业务 E2E 明确要求的变化，并受复杂度准入和外部参考分级约束。Ports and Adapters、State Machine、Command、Repository、Saga、Decorator、ACL 和 Registry 均按需使用，不是默认目录模板。
-
-禁止：
-
-- 为每个类创建 Interface、Factory 或 Manager，或用模式掩盖职责不清；
-- 让 Strategy 或 Router 承担开放语义，或让 Adapter 或 Converter 维护镜像事实；
-- 为未来可能性创建通用 Task、Event、Workflow、Planner、Projection 或兼容层；
-- 新增 Model、契约或分层在生产路径零构造点或零读取点。该结构是空转，必须删除或降为可选投影。
+设计模式只隔离已经发生或近期业务 E2E 明确要求的变化，并受[EVD 复杂度准入](change-evidence.md#5-复杂度说明complexity-justification)约束。禁止为每个类创建 Interface、Factory 或 Manager，使用模式掩盖职责不清，或让 Strategy/Router 承担开放语义、Adapter/Converter 同步镜像事实。
 
 ## 2. 类型边界与 payload 所有权
 
-无 schema 的 `dict[str, Any]`、raw JSON 和裸字符串只允许承载**边界另一侧拥有的内容**，例如外部工具、服务提供方、MCP endpoint 或用户输入。判据是写入者与读取者，不是字段看起来是否规整。
+判定类型边界要看谁写入、谁读取，不能只看字段是否规整。内部自写自读字段及跨层 identity、scope、digest、资源引用遵守根规范的 typed 门禁。
 
-- 由本层写入又由本层读取的字段必须是 typed 字段。它承载内部不变量而非外部契约，禁止穿 dict 传递。
-- 外部拥有的 payload 在读取处必须经 typed 校验。校验失败按“该事实不存在”处理；禁止兜底填充、默认成功、字符串包含或相似度判断。
-- identity、scope、digest 和资源引用跨层一律 typed。
+无 schema 的 `dict[str, Any]`、raw JSON 和裸字符串只允许承载边界另一侧拥有的内容，例如外部工具、服务提供方、MCP endpoint 或用户输入。读取处 typed 校验失败时按事实缺失处理；禁止兜底填充、默认成功，或用字符串包含与相似度代替校验。
 
-自写自读却经由 dict 的字段是典型缺陷：键名漂移不产生类型错误，被它守护的门禁会静默失效，类型检查与测试都不会变红。
+内部 typed contract 不要求将整个对象原样注入模型。面向模型的语义说明与面向程序的结构化消费，按 [CTX 表达分工](context-memory-retrieval.md#11-模型输入优先表达语义机器消费保持结构化)处理；可读文本只投影已有事实，不承担内部状态或控制协议。
 
 ## 3. 模块职责、规模与生产可达性
 
-一个模块的职责必须能用一句不含“以及”的话说清。说不清时，先检查它是否同时拥有多个 Application Capability 的准入、结果契约或展示投影；这是 God Service 的判据。文件行数、类长度、圈复杂度和类数量只作为评审触发器，禁止按行数机械拆成更多 Manager 或 Helper。拆分必须形成更清晰的 owner 与依赖方向，并使净理解成本下降。
+一个模块的职责必须能用一句不含“以及”的话说清。说不清时，检查它是否同时拥有多个 Application Capability 的准入、结果契约或展示投影；这是 God Service 的判据。
 
-- 一个 Service 只拥有一个 Application Capability 的 Admission、结果契约与展示投影。多个 capability 共用入口时，入口只做语义路由、Context 组装、预算与终止判据；各 capability 的准入与投影归各自 owner。
-- 抽出的准入模块必须可被独立 contract test 覆盖，且不反向依赖编排。
-- 新增或显著增长的文件或类必须报告职责、生产调用方和拆分或不拆分理由。类数量增长必须与同步删除量及新边界对应，禁止以“小类更多就是解耦”为理由。
-- 每个 production class、字段、Repository 方法、Projection 和 Adapter 必须从正式入口可达，并有生产构造点及调用者或消费者。持久化事实和 Projection 还必须有写入者与读取者；注入式 Adapter 或 Service 必须在 Composition Root 装配。仅被测试、迁移脚本或文档引用的结构不是已落地能力，除非它本身就是明确保留期的测试或迁移设施。
+- 一个 Service 只拥有一个 Application Capability 的上述职责。多个能力共用入口时，入口只做语义路由、Context 组装、预算与终止判断；各能力的准入与投影归各自责任主体。
+- 抽出的准入模块必须可由独立 Contract 覆盖，且不得反向依赖编排。
+- 文件行数、类长度、圈复杂度和类数量只触发评审，不能据此机械增加 Manager 或 Helper。拆分必须使责任与依赖更清楚，降低净理解成本。
+- 新增或显著增长的文件、类须报告职责、生产调用方和拆分或不拆分理由。类数量增长须对应删除量与新边界，不得以“小类更多就是解耦”为由。
+- 类、字段、Repository 方法、投影、Adapter 及注入式协作者均须通过[生产可达性检查](architecture-ownership.md#7-生产可达性)。仅测试、迁移脚本或文档引用的结构不算能力落地；明确保留期的测试或迁移设施按其真实用途声明。
 
 ## 4. LangGraph、Router、Planner 与 Workflow
 
-- Graph 表达编排和迁移，不拥有领域事实；
-- Node 只提取输入、调用 Use Case、写回结果，不复制业务规则；
-- GraphState 仅存 typed 运行必需状态，大对象使用 `ArtifactRef`；
-- checkpoint 恢复不得重复模型调用或副作用；
-- Router 或 Agent 输出 Goal、Intent 或 Application Capability Proposal，不选择 Repository、Provider、内部 Workflow 或 Project 模式，也不输出执行完成事实；
-- Workflow 不是框架层、用户入口或 capability 类型，只是具体 Application Capability 内对固定业务不变量的编排；
-- 新增 Workflow 必须同时具有固定业务不变量、多阶段执行事实、真实审批、恢复、审计、重试或补偿消费者，以及已失败 baseline；否则使用 Service 或 Application Pipeline；
-- 固定依赖由契约或具体 Workflow 定义；只有 Observation 会改变未知依赖时才使用 Planner；
-- Planner 不负责授权、执行或完成判定；
-- Plan 只有被生产代码消费依据、依赖、进度、预算或完成义务时才能成为强制契约。审阅前仅可执行 Policy 投影为 planning-safe 的低风险读取；planning-safe 不等于严格 read-only，任何其他执行都会关闭新 Plan 的审阅迁移；
-- Project 是拥有动态 durable business facts 的 Product Aggregate，不得作为通用 Workflow、路由分支标签或所有长任务的容器；
-- Workflow 内固定低风险步骤优先 Service 化；模型动态选择或需要统一执行网关治理的执行资源才 Tool 化。
+编排只组织工作，不接管业务事实或开放语义决策。具体边界如下：
+
+- Graph 表达编排与迁移，不拥有领域事实；Node 只提取输入、调用 Use Case、写回结果，不复制业务规则。
+- GraphState 只保存 typed 运行必需状态，大对象使用 `ArtifactRef`；checkpoint 恢复不得重复模型调用或副作用。
+- Router 或智能体输出 Goal、Intent 或 Application Capability Proposal，不选择 Repository、Provider、内部 Workflow 或 Project 模式，也不输出执行完成事实。
+- Workflow 只编排具体能力内的固定业务不变量，不是框架层、用户入口或能力类型。新增 Workflow 必须具备固定不变量、多阶段执行事实、真实审批、恢复、审计、重试或补偿消费者，以及已失败 baseline；否则使用 Service 或 Application Pipeline。
+- 固定依赖由契约或具体 Workflow 定义；只有 Observation 会改变未知依赖时才使用 Planner，Planner 不负责授权、执行或完成判定。
+- Plan 只有其依据、依赖、进度、预算或完成义务被生产代码消费时，才能成为强制契约。审阅前只可执行 Policy 投影为 planning-safe 的低风险读取；planning-safe 不等于严格 read-only，其他执行会关闭新 Plan 的审阅迁移。
+- Project 是拥有动态、需持久保存的业务事实的 Product Aggregate，不得作为通用 Workflow、路由分支标签或所有长任务的容器。
+- Workflow 内固定低风险步骤优先由 Service 执行；模型动态选择或需要统一执行网关治理的执行资源才封装为工具。
 
 ## 5. 错误、注入与命名
 
 错误至少区分 Validation、Semantic Rejection、Authorization Denied、Capability Missing、Execution Failure、Transient Failure、Verification Failure、Completion Failure 和 Invariant Violation。禁止捕获异常后返回空结果、默认成功或模糊 fallback。
 
-模型、时钟、ID、Repository、工具、Policy 和外部服务提供方必须通过 Port 注入。测试不得 monkey patch 生产规则来构造通过结果。
+模型、时钟、ID、Repository、工具、Policy 和外部服务提供方必须通过 Port 注入；测试不得 monkey patch 生产规则来构造通过结果。
 
-命名必须表达业务角色和生命周期。除非边界明确，禁止使用 `data`、`info`、`manager`、`processor`、`handler` 等泛化名称。
+命名须表达业务角色和生命周期。除非边界明确，禁止使用 `data`、`info`、`manager`、`processor`、`handler` 等泛化名称。
 
-## 6. 编码智能体行为
+## 6. 生产 Prompt 是版本化代码契约
 
-开始实现前必须输出变更类型、目标、所有权、影响边界、产品 baseline、消融、真实 target 与指标方案，或重构工程基线；同时说明生产可达性、文档影响和计划删除内容。
+本文拥有生产 Prompt 的通用语义契约。新增、迁移或实质修改的 Prompt 必须经[Prompt 模块规范](../../src/personal_agent/kernel/prompt_templates/AGENTS.md)统一注册、版本化和生产消费；只迁移位置时必须保持实际发送字节不变，不能声称修复语义缺陷。
 
-禁止：
+新增或实质修改的 Prompt 采用结果优先、最小充分表达，以清楚且不重叠的分区说明：
 
-- 因不确定新增 fallback，或为兼容保留新旧双轨；
-- 未搜索调用方就修改公共模型；
-- 用 raw dict 绕过类型边界；
-- 新增抽象却不说明变化来源和生产消费者，或新增结构没有正式入口可达链、生产构造或装配点与调用者；
-- 让自写自读的内部字段穿 dict 传递，使结构性不变量失去机械判据；
-- 把 Model、DTO、Interface、Fake、测试或未装配 Adapter 的横向半成品描述为能力落地，或未接真实环境就宣称可上线；
-- 引用外部实践却不给等级和可复核坐标，或未核对源码或规范正文就断言业界做法；
-- 未运行测试就声称完成。
+| 分区 | 必须表达的内容 |
+| --- | --- |
+| 任务目标 | 本轮语义决定或最终产物；先说明用户或下游消费者需要什么 |
+| 必要 Context | 每类输入的权威来源、作用域、可信边界与清楚分隔；外部内容是数据而非指令 |
+| 成功标准 | 动态投影当前用户要求、领域 `required result contract` 或工作清单中的用户可见结果，逐项可判断 |
+| 硬约束 | 禁止编造、越权、扩大范围或覆盖确定性事实 |
+| 输出形式 | typed schema、字段语义、字段间一致性及只允许返回的内容 |
 
-当同一阻塞经一次定位和一次有界修正后仍复现，或出现 Plan 或补丁分支增长、同一事实多个 owner、跨层 fallback、指标无改善时，必须停止继续追加局部修补。先保存失败证据、当前代码身份和未验证假设，再按外部参考规则核对至少两个独立 A 级实现，重新判断根因、owner、架构边界、最小纵向切片和验证顺序。随后在权威设计文档中只保留一个活动方案，合并或撤回失效分支并删除过期描述。
+Structured Outputs、`json_schema`、字段和枚举只约束形状。结果 Prompt 必须指出下游实际消费的完整产物字段；标题、提纲、占位符、写作意图、状态自述或主题复述不能替代该产物，除非用户请求的就是这些形式。判别 Prompt 同样须说明被评对象、逐项判据与相邻边界，不能把词面提及当成语义满足。
 
-外部参考只能帮助调整实现方式，不能替代本工程 baseline 或证明必须新增机制。无法确认事实 owner、授权边界或外部契约时，应明确阻塞原因并停止相关实现，不得猜测。
+中文必须承担任务逻辑、Context 边界、成功标准、决策规则、约束、示例、失败处理和停止条件。英文仅保留翻译会失真的技术术语、Provider 或协议字面量、代码标识、typed 字段或枚举及 URL；不得用整段英文规避中文语义问题。明确的英文或多语言产品契约须独立版本化、独立评测，保留中文主 Prompt 的独立 target。
+
+复杂智能体 Prompt 还须明确可见工具与权限、失败处理、重试上限和停止条件。只暴露当前可用的最小工具面，不能假装代码中不存在的能力。权限、执行事实、唯一推导、状态迁移和预算强制终止由确定性责任主体拥有；Prompt 不能替代。工具、查询、推理顺序或实现路径只有本身属于产品契约、安全协议或事务不变量时才能固定。
+
+分类、路由和准入 Prompt 先给出互斥且有优先级的决策规则；出现实测歧义时，必须给出来自该失败类别的相邻正反例，并在返回前检查分类、理由和下一阶段一致。示例须贴近真实输入分布、覆盖相邻边界、保持输入输出结构一致；只能泛化失败类别，不能复制某条 E2E 的专有名词、答案、URL、标题或措辞，也不能每个反例追加一条例外。
+
+每条指令只陈述一次。出现歧义先重组既有规则，不在扁平长段落末尾追加补丁。没有证据表明示例优于清楚规则时，优先使用短目标、动态成功标准与返回前自检；Prompt 增长须报告输入成本，并以代表性评测证明必要。
+
+Prompt 变更按行为影响执行 Contract、真实模型 Golden Set 或 Offline Eval，以及真实 target E2E。比较固定 Prompt、Provider、模型、输入、schema、预算和重复次数，声明的候选变量除外；不得改写评测期望、只挑成功重跑或解析反馈文本制造稳定性。
+
+确定性测试验证注册、输入分隔、typed 输出和代码侧不变量；真实模型评测验证语义边界；Product E2E 只验收用户结果，不固定措辞、工具路径或中间分类。模块内版本字段与具体检查遵守 Prompt 模块规范。
+
+## 7. 编码智能体行为
+
+实现前的变更说明、用户改动保护和完成声明遵守根规范；设计步骤与遇阻复核执行[EVD 流程](change-evidence.md#7-强制开发与设计流程)，E2E 失败执行[QLT 阻塞处理](quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)。
+
+无法确认事实责任主体、授权边界或外部契约时，明确阻塞原因并停止相关实现，不得猜测或用新增降级路径掩盖缺口。

@@ -75,7 +75,8 @@ Application Service: 业务规则、持久化、领域状态和协作对象
 | `capture_url` | 外部读 | 提取链接正文 | `risk_level=low`, `side_effects=external_network`, `permission_scope=network:read`, `timeout=30s`, `max_retries=1`, `rate_limit=20/min` |
 | `capture_upload` | 写 | 提取上传文件正文 | `risk_level=low`, `side_effects=write_longterm`, `permission_scope=memory:write`, `timeout=45s`, `rate_limit=20/min` |
 | `graph_search` | 本地读 | 查询图谱知识 | `risk_level=low`, `side_effects=read_local`, `permission_scope=memory:read`, `timeout=15s`, `rate_limit=60/min` |
-| `web_search` | 外部读 | 查询公网资料 | `risk_level=low`, `side_effects=external_network`, `permission_scope=network:read`, `timeout=20s`, `max_retries=1`, `rate_limit=30/min`, `allowed_domains` |
+| `web_search` | 外部读 | 发现公网来源，不自动抓取正文 | `risk_level=low`, `side_effects=external_network`, `permission_scope=network:read`, `timeout=60s`, `max_retries=1`, `rate_limit=30/min`, `allowed_domains` |
+| `web_read` | 外部读 | 读取模型指定 URL 的提取正文；长正文复用 Artifact 重读 | `public_agent`, `risk_level=low`, `permission_scope=network:read`, `timeout=30s`, `max_retries=1`, `rate_limit=20/min`, `allowed_domains` |
 
 新增工具面不再只围绕“采集 / 检索 / 删除”，而是覆盖跨 workflow 的业务动作和状态观察：
 
@@ -181,7 +182,7 @@ Agent 决策层会使用 workflow step projection 或进入 ReAct，选择工具
 - `StepProjectionValidator` 用 `args_schema.model_validate()` 做执行前校验。
 - 未来接入模型原生 tool calling 时，可以直接作为更稳定的 tool schema。
 
-典型例子是 `WebSearchArgs`：`query` 必填且非空，`limit` 被限制在 1-10，`scrape` 明确说明只有摘要不足时才使用。
+`WebSearchArgs` 要求 `query` 非空、`limit` 为 1-10，不接受旧 `scrape` 参数；`WebReadArgs` 只接受一个指定 URL。正文与重读边界由 [Context 工程](context-engineering.md#网页来源正文保留与重读)拥有。
 
 ### ToolGovernance 治理契约
 
@@ -200,7 +201,7 @@ Agent 决策层会使用 workflow step projection 或进入 ReAct，选择工具
 | 超时策略 | `timeout_seconds` | `ToolGateway` 按工具配置执行超时控制，避免网络、图谱或存储异常拖住整条编排链路 |
 | 重试策略 | `max_retries`、`retry_backoff_seconds` | `ToolGateway` 只对瞬时异常执行重试，并把尝试次数写入审计；业务失败 artifact 不再默认重试，避免重复副作用 |
 | 限流策略 | `rate_limit_per_minute` | `ToolGateway` 按工具和用户维度限流，防止 ReAct 循环、外部网络搜索或调试 API 造成调用风暴 |
-| 外部来源限制 | `allowed_domains` | 外部网络工具可声明允许访问的域名后缀；Gateway 校验入参 URL，`web_search(scrape=True)` 的结果正文抓取也复用同一判断，避免二次抓取绕过白名单 |
+| 外部来源限制 | `allowed_domains` | 外部网络工具声明允许访问的域名后缀；Gateway 校验直接 URL 入参，`web_read` 同样使用该规则，搜索不再隐式抓取结果正文 |
 
 这些字段的消费路径是：
 
@@ -240,7 +241,7 @@ ToolInvocationEvent：结构化审计，记录风险、副作用、权限、耗�
 - `timeout_seconds`：防止工具调用无限挂起。
 - `max_retries` 与 `retry_backoff_seconds`：只处理瞬时异常，避免业务失败被误重放。
 - `rate_limit_per_minute`：按工具和用户维度限流。
-- `allowed_domains`：限制外部网络工具可访问的域名；既约束直接 URL 入参，也约束 `web_search(scrape=True)` 对搜索结果 URL 的二次抓取。
+- `allowed_domains`：限制外部网络工具可访问的域名，包括 `web_read` 的直接 URL 入参；不代表完整的重定向或网络地址安全保证。
 - 高风险确认执行时的 `idempotency_key` 校验与 Postgres 持久账本抢占。
 
 策略命中结果会进入审计事件，例如 `error_kind`、`attempts`、`timed_out`、`rate_limited`，并随完整 `ToolInvocationEvent` 写入 `tool_audit_events`。
@@ -427,7 +428,7 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 
 ### P3：补充熔断和外部来源治理
 
-当前 `allowed_domains` 已经限制 Gateway 直接 URL 入参，也限制 `web_search(scrape=True)` 对搜索结果 URL 的二次抓取。下一步可以继续强化外部网络工具：
+当前 `allowed_domains` 限制 Gateway 及 `web_read` 的直接 URL 入参，搜索不再自动抓取正文。以下网络安全能力仍需各自准入证据：
 
 - 按域名、provider、用户维度做 circuit breaker。
 - 区分搜索、抓取、下载等不同外部访问类型。
@@ -512,6 +513,10 @@ Gateway 和图执行节点以 `ToolInvocationEvent` 为类型源头，在写入�
 - 外部网络工具失败率和超时率统计。
 
 这一步能证明工具层不是只靠代码约束，而是有持续评估和迭代机制。
+
+## 正文搜索与读取的试接入边界
+
+Conversation 的卸载正文通过 `search_action_output` 定位、`read_artifact` 按同一行号读取。后端固定调用 rg，只传授权正文；模型没有 Shell 或宿主路径参数。旧 `read_action_output` 按用户要求保留但不投影，准入拒绝，失败不回退。原文、位置、超长行恢复和随文引用的权威契约及未完成门禁见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
 
 ## 面试讲解口径
 

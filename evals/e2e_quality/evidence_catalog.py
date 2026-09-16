@@ -27,7 +27,7 @@ class FaultMechanism(str, Enum):
 
 class EvidenceClass(str, Enum):
     PRODUCT_E2E = "product_e2e"
-    APPLICATION_E2E = "application_e2e"
+    APPLICATION_INTEGRATION = "application_integration"
     RUNTIME_CONFORMANCE = "runtime_conformance"
     CAPABILITY_PROFILE = "capability_profile"
     BOUNDARY_EVALUATION = "boundary_evaluation"
@@ -108,7 +108,7 @@ def _product(
     *layers: EvidenceLayer,
     capability_profile: CapabilityProfile = CapabilityProfile.BASELINE,
     fault_mechanism: FaultMechanism = FaultMechanism.NONE,
-    evidence_class: EvidenceClass = EvidenceClass.APPLICATION_E2E,
+    evidence_class: EvidenceClass = EvidenceClass.APPLICATION_INTEGRATION,
     user_outcome_contract: UserOutcomeContract | None = None,
     limitation: str = "",
     covered_invariants: frozenset[str] = frozenset(),
@@ -205,7 +205,54 @@ def _outcome(
     )
 
 
+# 独立变更 target 的结果契约仍在此唯一登记。运行与代码身份由既有
+# ProductEvidenceRecorder 拥有；本契约不向默认 release matrix 增加重复旅程。
+RESEARCH_TOOL_PROTOCOL_OUTCOME = UserOutcomeContract(
+    outcome_id="conversation_research.tool_protocol_official_support",
+    persona="需要基于官方资料比较工具协议的中文知识工作者",
+    source_ref="docs/topics/context-engineering.md",
+    natural_goal=("实际查阅 OpenAI 官方工具文档和 MCP tools 规范，比较工具选择、权限边界和结果契约。"),
+    observable_result="交付有实质比较、官方引用支持且未扩大保证范围的中文结论。",
+    counterfactuals=("标题或仅贴 URL 不算比较", "错误保证不得被其他正确段落抵消", "不限定措辞、工具或读取顺序"),
+    baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+    baseline_ref="docs/evals/02-current-case-inventory.md",
+    assertion_owner="evals/e2e_quality/research_answer_outcome.py",
+)
+
+
+# 同一比较结果的显式验收请求，独立 comparison identity；不加入默认发布矩阵。
+RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME = UserOutcomeContract(
+    outcome_id="conversation_research.reviewed_tool_protocol_official_support",
+    persona=RESEARCH_TOOL_PROTOCOL_OUTCOME.persona,
+    source_ref="docs/evals/02-current-case-inventory.md",
+    natural_goal="实际查阅官方资料，按明确验收要求核对后交付工具协议比较。",
+    observable_result=RESEARCH_TOOL_PROTOCOL_OUTCOME.observable_result,
+    counterfactuals=RESEARCH_TOOL_PROTOCOL_OUTCOME.counterfactuals,
+    baseline_kind=BaselineKind.REGRESSION_CONTRACT,
+    baseline_ref="docs/evals/02-current-case-inventory.md",
+    assertion_owner=RESEARCH_TOOL_PROTOCOL_OUTCOME.assertion_owner,
+)
+
+
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
+    EvidenceCase(
+        evidence_id="RESEARCH-ANSWER-OUTCOME-001.offline",
+        case_id="RESEARCH-ANSWER-OUTCOME-001",
+        module="test_research_answer_outcome.py",
+        test_name="test_research_answer_outcome_calibration",
+        layers=frozenset({EvidenceLayer.VERIFICATION_COMPLETION}),
+        entry_boundary=EntryBoundary.IN_PROCESS_SERVICE,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
+        raw_user_input=False,
+        real_postgres_required=False,
+        limitation=(
+            "WEB-RESEARCH-EVIDENCE-CONTEXT-001 前置 Offline Eval："
+            "只验证独立评测器能否拒绝密封历史错误与相邻负例、接受同义正确表达；"
+            "参考摘要未列出不等于事实错误，未知关键论断仍不得默认通过；"
+            "不经过目标 Agent，不证明产品结果或正文交付修复。"
+        ),
+        covered_invariants=frozenset({"research_answer.grader_calibration"}),
+    ),
     EvidenceCase(
         evidence_id="ASK-001A.product_http",
         case_id="ASK-001A",
@@ -223,7 +270,7 @@ EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
         user_outcome_contract=_outcome(
             "grounded_answer.personal_only",
             natural_goal="只根据我保存的资料回答并给出原文依据",
-            observable_result="回答引用当前用户的保存资料并正确呈现冲突",
+            observable_result="回答逐项呈现当前用户保存的两条冲突原文",
             counterfactuals=("不调用 Web", "不泄漏其他用户资料", "Ask 不写入知识"),
             baseline_ref="behavior-baseline:ASK-001A",
         ),
@@ -574,7 +621,7 @@ def validate_catalog() -> None:
             "L06",
             "L07",
         },
-        EvidenceClass.APPLICATION_E2E: {
+        EvidenceClass.APPLICATION_INTEGRATION: {
             "E01", "E04", "E05", "E09", "E10", "E11", "E12", "E13",
         },
         EvidenceClass.RUNTIME_CONFORMANCE: {
@@ -584,7 +631,7 @@ def validate_catalog() -> None:
             "GOV-001", "DUR-001", "OBS-001",
         },
         EvidenceClass.CAPABILITY_PROFILE: {"E16", "E18", "E19", "E21"},
-        EvidenceClass.BOUNDARY_EVALUATION: set(),
+        EvidenceClass.BOUNDARY_EVALUATION: {"RESEARCH-ANSWER-OUTCOME-001"},
     }
     for evidence_class, case_ids in expected.items():
         actual = {

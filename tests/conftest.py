@@ -14,8 +14,8 @@ from personal_agent.kernel.models import Citation, KnowledgeNote
 from personal_agent.infra.storage.postgres_research_store import PostgresResearchStore
 from tests.note_factory import make_note
 
-POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/personal_agent_test?sslmode=disable"
-ADMIN_POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:15432/personal_agent_test?sslmode=disable"
+ADMIN_POSTGRES_URL = "postgresql://postgres:postgres@127.0.0.1:15432/postgres?sslmode=disable"
 
 
 # External-provider env vars that, if populated from a developer's .env, cause

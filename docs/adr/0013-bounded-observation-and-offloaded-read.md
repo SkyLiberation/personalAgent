@@ -1,6 +1,6 @@
 # ADR 0013: 单次 Observation 的上下文边界与卸载重读
 
-- 状态：Accepted
+- 状态：Observation 上限与卸载机制 Accepted；读取接口由 [ADR 0024](0024-plain-source-tools-and-inline-citations.md)试接入替换，以下旧 E2E 数值仅为历史证据。
 - 日期：2026-07-31
 - 影响范围：`ConversationService` 的 Observation 装配、请求级 Context 物化、`read_action_output` 能力、回合终止判据
 - 相关：[ADR 0010](0010-runtime-owned-interaction-verification.md)（同一形状：结构性不变量不交给 prompt 措辞）
@@ -44,15 +44,15 @@ E21 从正式 HTTP 入口 `/api/conversation/turn` 以用户自然表达执行�
 | --- | --- | --- |
 | 一次 Observation 能进入 Context 的体积 | `observation_bounds` | `bound_observation_payload` |
 | 被卸载文本的形态（原始串 vs 序列化） | `observation_bounds` | `select_offload_text` |
-| 某个窗口的内容 | `observation_bounds` | `excerpt_payload_text` |
+| 某个窗口的内容 | `artifact_reading` | `read_artifact_text`；旧 `excerpt_payload_text` 随隐藏读取实现保留 |
 | 卸载物的身份与归属 | `ArtifactPort` | `write_generated`（`producer_key` 幂等） |
 | 重读时的 principal 与 scope | `ConversationService` | 回合已解析的请求身份 |
-| 「读哪一段」 | 模型 | `read_action_output` 的 `keyword` / `start_line` |
+| 「读哪一段」 | 模型 | `search_action_output` 定位，`read_artifact` 按正文行读取 |
 | 「未读完能否收尾」 | `ConversationService` | `_unread_offloaded_resource`，不区分 disposition |
 | 「已有未读结果时能否重调同一资源」 | `ConversationService` Admission | `_unread_offloaded_resources`；拒绝 refetch，不替模型选择窗口 |
 | 后续模型调用看到的 Observation 投影 | Conversation Application | `materialize_interaction_inputs`；journal 原值不变 |
 
-`read_action_output` 投影为能力但在 Service 内执行，因为卸载物属于本次交互：写它的
+当前 `search_action_output` 和 `read_artifact` 投影为工具但在 Service 内执行，因为卸载物属于本次交互：写它的
 principal 和 scope 是回合解析出的请求身份，模型既不知道也不得断言。先例是
 `_KNOWLEDGE_SAVE_CAPABILITY`。
 
@@ -61,7 +61,7 @@ principal 和 scope 是回合解析出的请求身份，模型既不知道也不
 - **分页而非摘要**（A 级）：Claude Code / OpenAI Codex 的文件读取工具都返回带行号的窗口
   加总行数，让模型自己翻页，而不是替它压缩。摘要会把「第 29502 行」这类事实先丢掉。
 - **命中行带上下文**（A 级）：ripgrep `--context`，`BurntSushi/ripgrep`
-  `crates/core/flags/defs.rs` 中 `-A/-B/-C` 的定义。本工程取 before=2 / after=4，
+  `crates/core/flags/defs.rs` 中 `-A/-B/-C` 的定义。历史实现取 before=2 / after=4，
   因为 `MAINTAINERS` 的条目形状是节标题后紧跟数行 `L:` / `M:` / `F:`。
 - **未采纳**：外部实现常见的「按 token 数截断 + 提示已截断」。它不给可寻址的重读入口，
   被截掉的事实在任何 offset 都取不回来，正是 baseline 第二轮的失败形态。
@@ -75,12 +75,14 @@ principal 和 scope 是回合解析出的请求身份，模型既不知道也不
 
 ## Canonical Models
 
-一个卸载物一个 `ResourceRef`，`resource_id` 是它的身份。窗口 payload 回带
-`resource_id`，使「这个远端输出读过没有」成为对 inputs 的纯函数判定，不需要在回合里另
+一个卸载物一个 `ResourceRef`，`resource_id` 是它的身份。窗口 payload 回带完整带版本的
+`resource_ref`，使「这个远端输出读过没有」成为对 inputs 的纯函数判定，不需要在回合里另
 存一份已读集合。
 
 `retrieval` 只在 Observation 被界定时出现，字段是 `omitted_chars`、`original_chars`，加上
-`resource_ref` + `read_more`，或卸载失败时的 `unavailable_reason`。卸载失败可见而不静默。
+`resource_ref`、`total_lines` 和 `read_more`，或卸载失败时的 `unavailable_reason`。卸载失败可见而不静默。
+
+读取返回契约现由 [ADR 0024](0024-plain-source-tools-and-inline-citations.md)拥有：搜索返回命中自然行，读取返回 `next_read`；超长行显式带列范围，累计覆盖仍由实际 Observation 派生。旧 `ReadWindowState` 只随保留但不可向模型调用的 `read_action_output` 使用。零搜索结果、后缀结束和全文已读保持不同含义。原歧义修正及历史验证见[第 68 节](../optimization/evidence-acquisition.md#68-读取返回歧义的最小工程修正)，新试接入的实际结果见[第 103 节](../optimization/evidence-acquisition.md#103-正文行坐标统一与预编号引用联动)。
 
 ## Affected Modules and Dependency Direction
 
@@ -103,7 +105,7 @@ principal 和 scope 是回合解析出的请求身份，模型既不知道也不
 - **摘要压缩**：把行号这类事实在进入 Context 前就丢掉，与用户目标直接冲突。
 - **提高 `max_total_tokens`**：把上限改成能容纳 776,720，等于取消上限。
 - **在 prompt 里要求模型读完再收尾**：ADR 0010 已证明结构性不变量不能靠措辞执行。
-- **为已读资源另建持久化投影**：窗口 payload 回带 `resource_id` 后可由 inputs 推导，
+- **为已读资源另建持久化投影**：窗口 payload 回带 `resource_ref` 后可由 inputs 推导，
   持久化派生值违反 §2.3。
 
 终止判据只否决出口，不否决结论：未读完时所有 disposition（包括 `answer`）都被 typed
@@ -119,6 +121,8 @@ status、omission metadata 与 exact re-read ref。它不修改 committed Observ
 排除不能暴露 omitted middle 的重复执行，不判断关键词、窗口或用户目标是否已满足。
 
 ## Verification and Remaining Risk
+
+2026-09-04 的网页来源缺陷修复沿用本 ADR 的 Artifact 和行号读取入口：工具边界先形成有界、可追溯、可重组的来源记录，Conversation 明确选择这份载荷，读取窗口按实际序列化预算整块交付。该取舍恢复既有保留与重读契约，不增加另一套分页状态或把取证决策交给 Runtime。当前实现边界见[Context 工程](../topics/context-engineering.md#网页来源正文保留与重读)，本次证据见[当前评测用例盘点](../evals/02-current-case-inventory.md)；下表仍是本 ADR 原始运行记录。
 
 | 命令 | 结果 |
 | --- | --- |
@@ -136,7 +140,7 @@ status、omission metadata 与 exact re-read ref。它不修改 committed Observ
 CTX-001 最终执行中三份原始输出各约 469k 字符；模型输入中的 typed inputs 为 0 / 2,025 / 6,332
 字符，3 个模型回合、6 次 Tool call、累计 18,512 tokens，三个精确重读窗口均包含对应随机事实。
 
-剩余风险：before=2 / after=4 是按 `MAINTAINERS` 的条目形状取的，对上下文更长的格式可能
-不够；`MAX_EXCERPT_LINES` 之内命中窗口整块给或整块不给，命中极密集时靠 `next_start_line`
-续读。当前没有普通 Conversation message 历史超限的失败 E2E，因此没有 message segment 或摘要机制；
+历史窗口的限制：before=2 / after=4 是按 `MAINTAINERS` 的条目形状取的，对上下文更长的格式可能
+不够；`MAX_EXCERPT_LINES` 之内命中窗口整块给或整块不给，当时命中极密集时靠 `read_state.continuation`
+续读；现行接口见 ADR 0024。当前没有普通 Conversation message 历史超限的失败 E2E，因此没有 message segment 或摘要机制；
 `max_total_tokens` 仍是历史用量保险，不是 Provider context-window 的精确 admission。

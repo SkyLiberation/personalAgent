@@ -13,5 +13,6 @@ class UploadCaptureRequest:
 
 @dataclass(slots=True)
 class UrlCaptureResult:
+    url: str
     text: str
     provider: str

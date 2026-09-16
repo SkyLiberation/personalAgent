@@ -6,6 +6,8 @@
 uv sync
 ```
 
+正文搜索需要 `ripgrep`，部署前确认 `rg --version` 可执行；Python 依赖安装不会提供该二进制。Dockerfile 已声明安装 `ripgrep`，本轮未构建镜像。后端只以固定参数调用搜索进程，不向 Agent 暴露 Shell；工具契约见 [ADR 0024](adr/0024-plain-source-tools-and-inline-citations.md)。
+
 ## 2. 安装前端依赖
 
 ```bash
@@ -54,7 +56,7 @@ docker compose up -d postgres
 
 默认地址：
 
-- Postgres: `127.0.0.1:5432`
+- PostgreSQL：`127.0.0.1:15432`。主机使用 `15432`，容器网络内仍为 `postgres:5432`；本地 `.env` 与测试连接使用主机端口。
 
 默认账号密码：
 

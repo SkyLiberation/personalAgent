@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
@@ -112,23 +113,23 @@ def extract_html_text(html: str) -> str:
     parser = ReadableHtmlParser()
     parser.feed(html)
     parser.close()
-    lines = [line.strip() for line in parser.text_parts if line.strip()]
-    deduped: list[str] = []
-    for line in lines:
-        if line not in deduped:
-            deduped.append(line)
-    return "\n".join(deduped)
+    return "\n".join(parser.text_parts)
 
 
 class ReadableHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.text_parts: list[str] = []
+        self._pending_text: list[str] = []
+        self._preformatted_depth = 0
         self._ignored_stack: list[str] = []
         self._block_tags = {
             "article",
             "br",
+            "dd",
             "div",
+            "dl",
+            "dt",
             "h1",
             "h2",
             "h3",
@@ -141,26 +142,61 @@ class ReadableHtmlParser(HTMLParser):
             "main",
             "p",
             "section",
+            "table",
+            "td",
+            "th",
             "title",
+            "tr",
         }
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in {"script", "style", "noscript"}:
             self._ignored_stack.append(tag)
             return
+        if self._ignored_stack:
+            return
+        if tag == "pre":
+            if not self._preformatted_depth:
+                self._flush_text()
+            self._preformatted_depth += 1
+            return
+        if self._preformatted_depth:
+            if tag == "br":
+                self._pending_text.append("\n")
+            return
         if tag in self._block_tags:
-            self.text_parts.append("\n")
+            self._flush_text()
 
     def handle_endtag(self, tag: str) -> None:
         if self._ignored_stack and self._ignored_stack[-1] == tag:
             self._ignored_stack.pop()
             return
+        if self._ignored_stack:
+            return
+        if tag == "pre" and self._preformatted_depth:
+            if self._preformatted_depth == 1:
+                self._flush_text()
+            self._preformatted_depth -= 1
+            return
+        if self._preformatted_depth:
+            return
         if tag in self._block_tags:
-            self.text_parts.append("\n")
+            self._flush_text()
 
     def handle_data(self, data: str) -> None:
         if self._ignored_stack:
             return
-        compact = " ".join(data.split())
-        if compact:
-            self.text_parts.append(compact)
+        self._pending_text.append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._flush_text()
+
+    def _flush_text(self) -> None:
+        # 文本节点不是段落：先按源顺序连接内联内容，不能去重词语或标点。
+        text = "".join(self._pending_text)
+        self._pending_text.clear()
+        if not self._preformatted_depth:
+            text = re.sub(r"[ \t\r\n\f]+", " ", text).strip(" ")
+        if text:
+            self.text_parts.append(text)

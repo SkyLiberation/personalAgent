@@ -13,6 +13,7 @@ import sys
 import time
 from typing import IO, Iterator
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
@@ -37,11 +38,13 @@ def _live_e2e_required() -> bool:
 
 
 def _require_live_dependencies() -> Settings:
+    database = urlsplit(POSTGRES_URL)
+    assert database.hostname is not None and database.port is not None
     try:
-        with socket.create_connection(("127.0.0.1", 5432), timeout=0.5):
+        with socket.create_connection((database.hostname, database.port), timeout=0.5):
             pass
     except OSError:
-        message = "release E2E requires Postgres on 127.0.0.1:5432"
+        message = f"release E2E 需要 PostgreSQL：{database.hostname}:{database.port}"
         if _live_e2e_required():
             pytest.fail(message)
         pytest.skip(message)
@@ -91,7 +94,7 @@ def _release_profile_settings(settings: Settings) -> Settings:
             output_transport=(
                 source.output_transport
                 if isinstance(source, StructuredConfig)
-                else "json_schema"
+                else StructuredConfig().output_transport
             ),
             extra_body=(source.extra_body if isinstance(source, StructuredConfig) else {}),
         ),

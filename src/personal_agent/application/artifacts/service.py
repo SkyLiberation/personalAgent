@@ -153,7 +153,7 @@ class ArtifactService:
             record.content_type or ""
         ).startswith("text/"):
             raise ValueError("artifact is not a directly readable text artifact")
-        return record.storage_path.read_text(encoding="utf-8")
+        return record.storage_path.read_bytes().decode("utf-8")
 
     def inspect_upload(
         self,
@@ -254,7 +254,7 @@ class ArtifactService:
         )
         content_path = root / f"{artifact_id}.txt"
         content_tmp = root / f".{artifact_id}.txt.tmp"
-        content_tmp.write_text(content, encoding="utf-8")
+        content_tmp.write_bytes(content.encode("utf-8"))
         os.replace(content_tmp, content_path)
         record = {
             "resource_ref": resource_ref.model_dump(mode="json"),
@@ -311,7 +311,7 @@ class ArtifactService:
             self._sidecar(resource_ref.resource_id).read_text(encoding="utf-8")
         )
         return GeneratedArtifactContent(
-            content=record.storage_path.read_text(encoding="utf-8"),
+            content=record.storage_path.read_bytes().decode("utf-8"),
             content_digest=str(payload["content_digest"]),
             evidence_refs=tuple(payload.get("evidence_refs") or ()),
             limitations=tuple(payload.get("limitations") or ()),

@@ -8,6 +8,7 @@ from psycopg import connect
 from unittest.mock import MagicMock
 
 from personal_agent.application.review.delivery import DeliveryRouter
+from personal_agent.application.capture.models import UrlCaptureResult
 from personal_agent.kernel.contracts.research import ResearchRunDefinition, ResearchRunRecord
 from personal_agent.kernel.contracts.review import DeliveryResult
 from personal_agent.application.conversation import (
@@ -325,8 +326,8 @@ class TestKnowledgeCaptureEndpoints:
     ) -> None:
         monkeypatch.setattr(
             api_client.app.state.context.capture_service,
-            "capture_text_from_url",
-            lambda url: f"Captured from {url}: canonical body",
+            "capture_url",
+            lambda url: UrlCaptureResult(url=url, text="canonical body", provider="fixture"),
         )
         response = api_client.post(
             "/api/knowledge/ingest-url",

@@ -1,15 +1,15 @@
-# 28 条 E2E 分别验证什么
+# 28 条评测用例分别验证什么
 
-> **本文件用于在面试中解释当前 28 条 canonical E2E 的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)维护。
+> **本文件用于在面试中解释当前 28 条 canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 1. 四类用例回答不同问题
 
-**Product E2E、Application E2E、Runtime Conformance 和 Capability Profile 分别验收用户结果、业务入口、运行不变量和外部能力组合。** 当前目录包含 9 条 Product E2E、8 条 Application E2E、7 条 Runtime Conformance 和 4 条 Capability Profile。
+**Product E2E、Application Integration、Runtime Conformance 和 Capability Profile 分别验收用户结果、业务入口、运行不变量和外部能力组合。** 当前目录包含 9 条 Product E2E、8 条 Application Integration、7 条 Runtime Conformance 和 4 条 Capability Profile。
 
 | 类型 | 验证的问题 | 关键判据 |
 | --- | --- | --- |
 | Product E2E | 用户通过正式入口能否得到目标结果 | 用户可观察结果与关键反事实同时成立 |
-| Application E2E | 一个正式业务入口能否完成自己的事实链 | 状态迁移、持久事实和结果契约成立 |
+| Application Integration | 一个正式业务入口能否完成自己的事实链 | 状态迁移、持久事实和结果契约成立；不能证明 Agent 自主完成用户目标 |
 | Runtime Conformance | 运行系统是否遵守指定机械不变量 | 工具、预算、并发、恢复、权限或诊断事实成立 |
 | Capability Profile | 指定外部连接器与配置能否完成目标读取 | 外部资源到达、来源绑定和失败语义成立 |
 
@@ -19,7 +19,7 @@
 
 | 用例 | 设计目的 | 关键验收点 |
 | --- | --- | --- |
-| `ASK-001A` | 验证只使用个人资料的冲突回答 | 回答包含当前用户保存的两个随机日期并明确冲突；追踪记录含来源片段；Web 零调用；其他用户随机值零泄漏；Ask 前后 `Claim` 数不变 |
+| `ASK-001A` | 验证只使用个人资料的冲突回答 | 回答逐项呈现当前用户保存的两条随机原文并明确冲突；追踪记录含来源片段；Web 零调用；其他用户随机值零泄漏；Ask 前后 `Claim` 数不变 |
 | `ASK-001B` | 验证个人事实与官方 Web 证据可以进入同一个回答 | 回答包含随机项目代号与 OpenAI 官方 URL；其他用户随机值零泄漏；Ask 前后 `Claim` 数不变 |
 | `E14` | 验证确认后保存精确用户结论 | 确认前零写入；重启后待确认操作仍存在；跨作用域确认被拒绝；确认后只保存精确结论；重放不新增 `Claim` |
 | `E22` | 验证自然语言删除复用受治理写入口 | 确认前目标仍存在；待确认操作绑定正确目标；其他用户资料不泄漏；确认后目标消失；重放返回同一 `Receipt` |
@@ -29,9 +29,9 @@
 | `L06` | 验证用户请求的答复审查只发送安全版本 | 最终文本删除虚假写入声明；最后一个 Verifier `Receipt` 为 `passed`；`verified_draft` 与最终文本及 `digest` 一致 |
 | `L07` | 验证确认保存的事实可以跨 Conversation 召回 | 第一段 Conversation 返回待确认；确认后写入执行；第二段 Conversation 准确返回随机事实 |
 
-## 3. Application E2E 验收业务入口
+## 3. Application Integration 验收业务入口
 
-**八条 Application E2E 直接验证正式业务 API 与 canonical 事实链。**
+**八条 Application Integration 直接验证正式业务 API 与 canonical 事实链。**
 
 | 用例 | 设计目的 | 关键验收点 |
 | --- | --- | --- |

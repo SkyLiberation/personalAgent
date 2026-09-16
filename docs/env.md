@@ -16,7 +16,7 @@ PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX=personal-agent
 PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY=hybrid_rrf
 PERSONAL_AGENT_GRAPH_SEARCH_LIMIT=10
 PERSONAL_AGENT_GRAPH_SEARCH_CITATION_LIMIT=20
-PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
+PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:15432/personal_agent?sslmode=disable
 PERSONAL_AGENT_FEISHU_ENABLED=false
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
@@ -32,6 +32,22 @@ FEISHU_BASE_URL=https://open.feishu.cn
 - `uploads/` 仍用于保存原始上传文件；数据库保存其引用及提取后的知识内容。
 
 `PERSONAL_AGENT_ACTION_DIAGNOSTICS_REVEAL_FIELD_NAMES` 控制动作协议失败日志是否显示未知字段名。默认值 `false` 把未知字段写为 `<unexpected>`；显式设置为 `true` 后，只显示符合标识符格式的字段名。字段值、完整 `arguments`、用户文本和服务提供方原始响应始终不写入该日志。该开关只应用于有界的本地诊断，修改后需要重启进程；生产环境应保持 `false`。
+
+## 对话运行预算
+
+当前本地 `.env` 与 `.env.example` 保留以下运行 profile，供后续启动与验证使用：
+
+```env
+PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS=16
+PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS=24
+PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=192000
+```
+
+这三项分别限制单次对话运行的模型决策轮数、工具调用次数和累计 token 用量；不是单次模型输入窗口或输出长度。
+token 边界按已提交用量检查，最后一次模型请求可能使实际累计量超过上限。
+本次仅持久化用户选定的配置，不修改预算终止机制，也不恢复预算触发的工具隐藏。
+已有应用进程需要重启以重新加载配置；未配置上述环境变量时，代码默认仍为 8 轮、12 次工具和 32,000 tokens。
+历史评测继续保留原配置身份，新 profile 不等同于答案质量已验收。
 
 ## 飞书配置
 
@@ -119,12 +135,12 @@ PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
 ## LLM 配置
 
 ```env
-STRUCTURED_BASE_URL=https://api.xiaomimimo.com/v1
+STRUCTURED_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
 STRUCTURED_API_KEY=your_mimo_key
 STRUCTURED_MODEL=mimo-v2.5
-STRUCTURED_OUTPUT_TRANSPORT=json_schema
-STRUCTURED_EXTRA_BODY={"thinking":{"type":"disabled"}}
-PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS=60
+STRUCTURED_OUTPUT_TRANSPORT=json_object
+STRUCTURED_EXTRA_BODY={"thinking":{"type":"enabled"}}
+PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS=480
 PERSONAL_AGENT_STRUCTURED_MAX_RETRIES=2
 
 OPENAI_BASE_URL=${STRUCTURED_BASE_URL}
@@ -145,9 +161,17 @@ LangExtract 在没有显式 Adapter override 时均从这里解析；当前部�
 `mimo-v2.5`。embedding 和 transcription 不属于生成式模型切换，继续使用
 `EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
 
-MiMo 当前使用原生 `json_schema`，并通过 `STRUCTURED_EXTRA_BODY` 关闭思考模式。默认
-思考模式曾把结构化输出预算耗尽为无正文；`json_object` 在正式入口又无法稳定满足
-`WorkingPlan` Schema，因此二者都不是当前配置。
+主 `StructuredModelClient` 链路中的 MiMo 使用[官方 API 契约](https://mimo.mi.com/docs/en-US/api/chat/openai-api)支持的 `json_object`，并通过 `STRUCTURED_EXTRA_BODY`
+开启思考模式。`JsonObjectStructuredAdapter` 将 Pydantic Schema 作为版本化中文 system
+instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首次校验失败时只允许一次完整重写，
+不会自动降级到 `json_schema` 或 plain text。`json_schema` 仍作为其他明确支持原生 strict Schema
+的 Provider capability profile 保留，必须由部署显式选择。
+
+当前本地配置按用户要求使用 MiMo Token Plan 接口并开启 thinking，模型保持 `mimo-v2.5`，单请求等待时间为 480 秒。密钥只配置于本地环境，不进入文档或验证归档；历史
+[DeepSeek 对照](evals/02-current-case-inventory.md#thinking-与输出额度的隔离诊断)保留原配置身份。
+诊断输出额度独立声明，不通过 `extra_body` 覆盖调用方的 typed 输出预算。已有应用进程需
+重新加载配置才能使用切换后的模型；配置不代表所有生成式 Adapter 已通过真实集成验收。
+正式 Conversation 意图识别及其既有修订请求共用 32,768 输出上限，Action/Final 调用方也指定 32,768，额度均包含思考与正文；语义验证仍指定 1,200。这些额度修正用于避免已复现的思考截断，不代表完整链路预算或答案质量已验收。正式入口的预算诊断和独立组件请求分别记录于[连续链路证据](evals/02-current-case-inventory.md#mimo-thinking-连续链路与意图输出预算)与[MiMo thinking 组件诊断](evals/02-current-case-inventory.md#mimo-thinking-成文与对话反问诊断)，不能混算。
 
 旧后台调查路径在正式 20 样本中为 `0/20 delivered`，且没有证明独立生命周期不可替代的
 需求 baseline，因此相关服务、队列和配置已经撤回。当前 Conversation 同类研究请求重跑也为
@@ -444,7 +468,7 @@ PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_CONCURRENT_RUNS=4
 
 启用后，GPT Researcher 作为 Agent capability 注册。用户明确点名时，Task Analyzer 形成 required provider binding，Executive 产生 delegate，CapabilityResolver 选择 `gpt_researcher` 并通过 AgentGateway 调用。普通研究任务可由 Executive 选择本地研究动作或 `research_once` Protocol。
 
-当前本地深研 profile 还设置 `PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=64000`，为成功 `AgentArtifact` 之后的父级核验、降级修复和最终综合保留预算。代码默认仍为 32,000；没有同类真实深研需求时不得机械提高全局默认。
+父级对话使用[对话运行预算](#对话运行预算)，与外部研究服务的单次请求 timeout 分开配置；提高父级预算不保证子级成功或最终答案正确。
 
 GPT Researcher 的 OpenAI 兼容客户端把单次请求限制为 60 秒，并允许一次 SDK 重试。该限制只能约束单次服务提供方长尾；一次研究包含多个模型阶段，因此仍可能超过父任务的授权预算。历史 20 样本为 `10/20 delivered`；2026-08-27 当前同配置组只有 `2/20 delivered`，包含 11 次子级超时和 7 次子级完成但父级未交付。该配置不得表述为稳定上线，也不得把问题简化为统一增加到 240 秒。
 
@@ -547,7 +571,7 @@ Investigation Application 组件不读取该开关。该策略不能保证覆盖
 ## PostgreSQL 与遗留 Checkpoint 配置
 
 ```env
-PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/personal_agent?sslmode=disable
+PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:15432/personal_agent?sslmode=disable
 ```
 
 说明：

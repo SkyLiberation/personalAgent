@@ -1,19 +1,22 @@
 # 设计优化队列
 
-**当前活动实现候选为 1，条件详细设计为 3。** 本文件只登记尚未解决的问题、准入级别和详细设计入口；模型、E2E、消融、复杂度预算、实施步骤与退出条件只能写入对应的独立设计文档。详细设计不得建立第二份状态队列，准入状态以本文件为准。
+**当前有 2 个 `A2` 实现项、1 个 `A1` 条件详细设计和 4 个没有活动设计的 `A1` 诊断项。** 本文件只登记尚未解决的问题、准入级别和详细设计入口；模型、E2E、消融、复杂度预算、实施步骤与退出条件只能写入对应的独立设计文档。详细设计不得建立第二份状态队列，准入状态以本文件为准。
 
-当前生产事实由[当前核心架构](../summary/core-architecture-current-state.md)和对应专题文档拥有；当前样本、结果与证据边界由[当前 E2E 用例盘点](../evals/02-current-case-inventory.md)拥有；评测入口与发布门禁由[评测执行与发布](../evals/04-running-and-release.md)拥有。本文只引用这些事实，不建立第二份结果台账。
+当前生产事实由[当前核心架构](../summary/core-architecture-current-state.md)和对应专题文档拥有；当前样本、结果与证据边界由[当前评测用例盘点](../evals/02-current-case-inventory.md)拥有；评测入口与发布门禁由[评测执行与发布](../evals/04-running-and-release.md)拥有。本文只引用这些事实，不建立第二份结果台账。
+
+表中的编号表示优化项；引用评测用例时必须写出具体场景，例如 `E2E-USER-OUTCOME-CONTRACT-001/ASK-001B`，避免把优化项闭环与单个 E2E case 混称。
 
 ## 1. 当前队列
 
-| 编号 | 尚未解决的问题 | 当前准入 | 详细设计 |
+| 编号 | 尚未解决的问题 | 当前准入 | 设计与推进记录 |
 | --- | --- | --- | --- |
-| `CONVERSATION-RESEARCH-DELIVERY-001` | 普通 Conversation 研究不能稳定交付满足来源与结论要求的用户结果 | `A2`：原子 `HARNESS-003` target 已交付，Tool Calling 影响验证为 `4/4 capability passed`；当前只剩独立代码身份的单变量验证，尚未达到发布或移除条件 | [普通对话研究交付与 Plan 边界优化方案](conversation-research-delivery.md) |
-| `CONVERSATION-RESEARCH-EFFICIENCY-001` | 已交付的广泛研究样本仍累积较多搜索结果和动作定义，尚未建立可公平比较的成功路径成本 baseline | `A1`：单样本确认 Context 增长；机制责任主体与重复样本门槛尚未准入 | [普通对话研究效率优化方案](conversation-research-efficiency.md) |
+| `CONVERSATION-RESEARCH-STOP-001` | 原预算下取证与交付未收敛；宽预算已自主交付，但 Final 仍存在证据覆盖缺口、旧稿复用、无据结论与不完整产物 | `A2`：网页工具分离尚未闭环；已证实的 Loop 反馈与验证执行预算修复已接入，完整交付未通过；独立来源支持检查已接入，完整语义与修订仍待验证，独立评测后置 | [网页工具分离](conversation-web-research-tools.md)、[来源支持修正与后置评测边界](conversation-source-support.md)、[验证推进记录](../optimization/conversation-source-support.md) |
+| `CONVERSATION-RESEARCH-SOURCE-AUTHORITY-001` | 官方正文抓取失败后，Final 把社区讨论引用为官方工具文档依据 | `A1`：取证后的来源判断与答案合成待归因，没有活动候选 | — |
 | `AGENT-DELEGATION-DELIVERY-001` | 用户明确要求委托外部研究智能体时，子级运行与父级最终交付都不稳定 | `A1`：子级超时与父级未交付是独立失败阶段；当前没有活动候选 | — |
-| `INTERACTION-INTENT-DELEGATION-BOUNDARY-001` | 当前响应内的前台委托可能被误判为响应后的后台持续工作 | `A1`：正反方向错误均已复现；当前候选已撤回 | — |
-| `BACKGROUND-CONTINUATION-LIMITATION-001` | 用户明确要求响应后继续、稍后领取结果时，系统不能稳定保持类型化 `limitation` 与零后台执行 | `A1`：最早失败属于 `InteractionIntent` Semantic Decision；当前候选已撤回 | — |
-| `E2E-USER-OUTCOME-CONTRACT-001` | 部分用例声明的用户结果强于可执行断言，支持性流水线事实也可能被误述为内容质量证据 | `A1`：两条 Product E2E 的结果契约缺口已确认；两条 supporting evidence 的结论边界需固化 | [E2E 用户结果契约对齐方案](e2e-user-outcome-contract-alignment.md) |
+| `INTERACTION-INTENT-DELEGATION-BOUNDARY-001` | 当前响应内的前台委托仍可能被误判为响应后的后台持续工作 | `A1`：Provider 语义方差仍存在；当前没有活动设计 | — |
+| `BACKGROUND-CONTINUATION-LIMITATION-001` | 明确要求响应后继续时，系统仍不能稳定保持类型化 `limitation` 与零后台执行 | `A1`：最早失败仍属于 `InteractionIntent` Semantic Decision；当前没有活动设计 | — |
+| `E2E-USER-OUTCOME-CONTRACT-001` | `ASK-001B` 尚未验收回答是否基于官方来源解释工具使用机制 | `A1`：概率性语义 grader 按约定后置；当前没有活动候选 | [E2E 用户结果契约对齐方案](e2e-user-outcome-contract-alignment.md) |
+| `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` | Verifier 会错误放行缺少官方依据或扩大保证范围的答案；标题与 Evidence 串扰仍是独立离线反例 | `A2`：已有来源必检、缺项与覆盖门禁保留；旧逐字复制引用候选已撤回。正文坐标与随文引用已接入；第 104 节简化分类交接已通过局部控制并在正式轨迹触发覆盖拒绝，正式任务因连续无进展动作停止，完整用户结果与修订收敛尚未通过 | [Conversation Draft 语义验证隔离设计](conversation-verification-false-positive.md)；当前局部接入见 ADR 0024，原用户结果未完成 |
 
 `A0` 项只能执行对应的需求或失败 baseline；不得创建接口、模型、状态、表、队列、配置或测试旁路。`A1` 项只允许继续做当前失败归因、详细设计和候选准入。`A2` 项只允许实现已获准的最小纵向切片并执行预声明门禁；门禁失败时停止扩大修改和 E2E。表中没有活动实现候选时，不得把诊断脚本、提示词草案或局部补丁投入生产。独立设计文档存在不等于实现已获准。
 
@@ -24,14 +27,14 @@
 1. 从正式入口执行当前最简单路径，冻结自然输入、身份、初始事实、服务提供方、预算、评测器和关键反事实。
 2. 用 `Trace`、`AgentRun`、`Artifact`、Admission feedback 和服务提供方事实定位一个最早失败阶段，明确事实 owner、决策 owner 与唯一写入口。
 3. 按机制域核对至少两个独立 A 级实现；外部实现只说明机制可行性，不能替代本工程 baseline。
-4. 提交 Complexity Justification，声明唯一变量、生产消费者、计划删除内容、target 门槛和退出条件；声称 Application Capability 或 Runtime Mechanism 改善用户结果、成本、延迟或恢复时还必须声明消融方法。未通过评审不得编码。
-5. 缺陷修复在 target 达标后执行必要回归；机制收益候选还必须执行同输入单变量消融。对应 target、回归或消融失败时删除候选，不保留 flag、fallback、alias 或双轨入口。
+4. 提交 Complexity Justification，声明唯一变量、生产消费者、计划删除内容、target 门槛和退出条件；新设计还必须声明消融方法，缺陷修复必须声明最早确定性责任边界的反事实。未通过评审不得编码。
+5. 缺陷修复在责任边界反事实与 target 检查点成立后执行必要回归；新设计还必须执行同输入单变量消融。属于候选责任边界的反事实、target 检查点、回归或适用消融失败时删除候选；检查点之后的独立产品失败改为单独阻塞闭环与发布，不得迫使已成立机制继续停留。任何情况都不保留 flag、fallback、alias 或双轨入口。
 
 ## 3. 队列维护
 
-- 本文件的每个队列项只能保存编号、问题、当前准入和独立设计链接。禁止在表格或正文展开 Schema、对象、文件、实施步骤、测试命令、指标门槛、消融方法、外部机制比较或退出条件。
+- 本文件的每个队列项只能保存编号、问题、当前准入、独立设计与对应推进记录链接。禁止在表格或正文展开 Schema、对象、文件、实施步骤、测试命令、指标门槛、消融方法、外部机制比较或退出条件。
 - 进入详细设计的队列项必须使用 `docs/future/` 下的独立文档；该文档必须反向链接本清单，并把状态 owner 明确留在本文件。没有活动设计时链接列写“—”，不得在清单中用下一步说明代替设计文档。
 - 一个设计覆盖多个队列项时，链接文字必须标明覆盖边界；设计文档不得把局部前置条件冒充为其他队列项已经解决，也不得维护第二份优先级或状态表。
-- 问题被当前 baseline 否定、没有达到准入门槛或根因归属不成立时，直接从本文件删除；诊断结论只保留在 `docs/evals/` 或密封证据归档。
-- 机制被接受并落地后，把当前事实写入摘要、专题、固定流程或运维文档，再删除对应详细设计项并从本文件移除；跨模块取舍按需写入 ADR。
-- 结果数字、归档坐标、测试命令和发布状态只在各自权威文档维护。本文件只保留判断该问题能否继续推进所需的最小事实。
+- 问题被当前 baseline 否定、没有达到准入门槛或根因归属不成立时，直接从本文件删除；诊断结论和经验按 [optimization 记录规则](../optimization/README.md)集中保留，原始证据独立封存。
+- 机制被接受并落地后，把当前事实写入摘要、专题、固定流程或运维文档，再删除对应活动设计并从本文件移除；过程经验继续保留，跨模块取舍按需写入 ADR。
+- 本文件只保留判断问题能否继续推进所需的最小事实。过程、命令与结果在 optimization 对应专题集中记录，活动设计与过程记录双向链接；正式评测和发布状态由评测权威文档维护。

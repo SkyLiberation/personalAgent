@@ -830,12 +830,13 @@ def test_json_object_adapter_repairs_incomplete_json_and_aggregates_usage(monkey
     assert len(calls) == 2
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert calls[1]["response_format"] == {"type": "json_object"}
-    assert "Output schema" in calls[0]["messages"][0]["content"]
-    assert "previous structured response was rejected" in calls[1]["messages"][0]["content"]
-    assert "Never repeat a value identified as invalid" in (
+    assert "# 任务目标" in calls[0]["messages"][0]["content"]
+    assert "Output Schema" in calls[0]["messages"][0]["content"]
+    assert "上一次结构化响应未通过 typed output contract" in (
         calls[1]["messages"][0]["content"]
     )
-    assert "omit that item" in calls[1]["messages"][0]["content"]
+    assert "不得重复反馈已明确为无效的值" in calls[1]["messages"][0]["content"]
+    assert "应删除该项" in calls[1]["messages"][0]["content"]
 
 
 def test_json_object_adapter_fails_closed_after_one_empty_repair(monkeypatch):
@@ -907,7 +908,9 @@ def test_openai_adapter_asks_model_to_reauthor_cross_field_invalid_json(monkeypa
     assert result.value == ExampleOutput(ok=True)
     assert len(calls) == 2
     assert calls[1]["response_format"]["type"] == "json_schema"
-    assert "previous structured response was rejected" in calls[1]["messages"][0]["content"]
+    assert "上一次结构化响应未通过 typed output contract" in (
+        calls[1]["messages"][0]["content"]
+    )
 
 
 def test_redacted_policy_removes_message_and_response_bodies():
@@ -1009,15 +1012,17 @@ def test_composition_omits_observer_when_tracing_is_disabled():
     assert isinstance(client.transport, UsageRecordingStructuredModelClient)
     assert isinstance(client.transport._delegate, RetryingStructuredModelClient)
     assert client.transport._delegate._backoff_seconds == 2.0
-    assert isinstance(client.transport._delegate._delegate, OpenAIModelClient)
+    assert isinstance(
+        client.transport._delegate._delegate,
+        JsonObjectStructuredAdapter,
+    )
 
 
-def test_composition_selects_json_object_adapter_from_provider_profile():
+def test_composition_defaults_to_json_object_adapter():
     client = build_structured_model_client(
         StructuredConfig(
             api_key="key",
             base_url="https://llm.invalid",
-            output_transport="json_object",
         ),
         LangSmithConfig(enabled=False),
     )
@@ -1029,6 +1034,22 @@ def test_composition_selects_json_object_adapter_from_provider_profile():
         client.transport._delegate._delegate,
         JsonObjectStructuredAdapter,
     )
+
+
+def test_composition_selects_strict_adapter_from_explicit_provider_profile():
+    client = build_structured_model_client(
+        StructuredConfig(
+            api_key="key",
+            base_url="https://llm.invalid",
+            output_transport="json_schema",
+        ),
+        LangSmithConfig(enabled=False),
+    )
+
+    assert isinstance(client, GovernedModelClient)
+    assert isinstance(client.transport, UsageRecordingStructuredModelClient)
+    assert isinstance(client.transport._delegate, RetryingStructuredModelClient)
+    assert type(client.transport._delegate._delegate) is OpenAIModelClient
 
 
 def test_composition_returns_none_when_model_is_unconfigured():

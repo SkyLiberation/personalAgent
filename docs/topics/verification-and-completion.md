@@ -40,7 +40,22 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 拥有。模型不可用时只能返回 `insufficient_evidence`、暂停或请求缺失能力，不能用 fixture、
 关键词或回答组装器生成替代“通过”。
 
+当前候选由 Conversation 原生正文段提交引用；运行系统恢复每段全部指定的可见原文，局部 Verifier 先检查本段与依据。未引正文保留空证据，引用错误或支持拒绝返回既有循环。普通审查只取得提交引用的并集，不复制 Journal 或重新暴露未读全文。候选状态及验证边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。模型逐条产生 criterion status 与 feedback，Verifier
+adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或 `insufficient_evidence` 都聚合为 `failed`。逐判据三态与 feedback 仅供智能体诊断与恢复，运行系统不再根据失败类别重新开放或隐藏工具。汇总反馈缺失时，adapter 只从未满足 criterion 已有的 feedback 派生；逐判据反馈同样缺失时仍 fail closed。该派生不增加语义事实，也不能替代 Completion。
+
+Conversation Verifier 当前使用 Registry 中的中文 `interaction_verification.system:v4-cited-evidence`，并固定加入 `interaction_verification.source_support:v1` 标准。模型必须逐条核对声明与实际证据的主体、条件、范围及强度；仅主题相关、URL 正确或没有发现矛盾不能替代支持。两份模板由同一工具消费，版本进入请求；JSON 输入由已有 typed 参数模型序列化，外部内容明确作为数据。
+
+工具对用户标准与系统支持标准合并去重，要求报告恰好覆盖全部项。缺失或重复来源支持项不能形成有效回执，来源支持不通过就参与现有聚合并拒稿。用户原标准由 `InteractionIntent` 冻结，回执 `success_criteria` 与 `criteria_digest` 仍绑定这组原标准；系统判断在 `criterion_results` 中独立保留，不改写用户要求。失败通过现有 Conversation 循环返回模型，修订稿重新验证。既有触发范围与预算保持；原生引用候选改变输入物化和成文 Schema，不增加服务或循环。接入决定及剩余风险见 [ADR 0020](../adr/0020-require-conversation-source-support-verification.md)。
+
+对于保存并卸载的来源，当前目标代码在普通审查前使用 `interaction_verification.document_absence:v3-source-flags`，返回与 `source_reading_state` 等长同序的严格布尔数组 `absence_by_source`，识别稿件是否对每个来源作出文档级缺项声明。Conversation 从可见成功执行记录物化来源读取状态；代码校验数量与来源唯一性，按位置绑定真实来源，对命中且未完整读取的项返回独立覆盖拒绝。模型不再复制原句或来源身份，反馈中的 `unread_sources` 由代码恢复。拒绝经现有工具网关回到修订循环，不生成语义回执；普通 `satisfied` 无权覆盖。完整读取只解除覆盖门禁，原稿仍须接受上述来源支持审查。事实范围、复杂度与未完成产品门禁见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)。
+
+当前验证调用的输出上限为 32,768 tokens，工具执行时限为 480 秒；工具自身不重试。两项上限分别允许 thinking 与完整报告输出、给模型请求及解析留出执行时间，仍可能因模型自身超时或协议错误失败。扩大交互总预算不会自动改变这些局部上限。旧 1,200-token / 60 秒限制已移除，同一真实首稿的预算对照取得完整绑定报告，但仍漏放无据权限归属结论；不能把报告返回与语义正确混为一谈。记录及产品验收限制见[推进记录第 54 节](../optimization/verifier-output-truncation.md#54-验证报告被局部预算截断的单边界资格检查)。
+
+当前已知限制是 Verifier 可能把标题对主题的提及误判为正文已经满足详细比较要求，Draft 与 Evidence 同次输入还会放大该错误。固定反例在当前生产 Verifier 中受控重放三次，模型每次都把只存在于 Evidence 的三项比较正文与两个 URL 当成 Draft 已有内容，五项全部返回 `satisfied`。后续来源隔离与 typed segment 绑定候选虽然阻止了 Evidence 直接进入 Draft 判断，但最终仍有一次把唯一标题 segment 绑定给三项比较正文并错误通过。二态 aggregate 的路由职责不受影响；剩余问题属于 Draft 语义判别能力，不再允许通过增加来源字段、状态或同义 Prompt 修补。
+
 ## 当前生产实例
+
+覆盖拒绝的模型可见说明现由版本化模板从真实读取状态生成，明确各来源尚未完整读取、计数单位和剩余范围，沿 `ToolArtifact.error` 进入原循环。它不替代 typed 覆盖事实，也不自动证明 Conversation 会正确修订。契约与验证边界见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)和[第 105 节记录](../optimization/document-absence.md#105-用自然语言解释未完整读取与修订边界)。
 
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |

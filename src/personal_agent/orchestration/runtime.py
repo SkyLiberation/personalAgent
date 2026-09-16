@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from personal_agent.infra.artifact_ripgrep import RipgrepArtifactSearch
+
 import logging
 from typing import TYPE_CHECKING
 
@@ -81,6 +83,7 @@ from personal_agent.tools import (
     build_submit_research_feedback_tool,
     build_save_research_event_tool,
     build_web_search_tool,
+    build_web_read_tool,
 )
 from personal_agent.agents import AgentGateway, GPTResearcherA2AAdapter
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
@@ -483,6 +486,7 @@ class AgentRuntime:
             tool_port=self._tool_executor,
             agent_port=self._agent_gateway,
             artifact_port=self.artifact_service,
+            artifact_search=RipgrepArtifactSearch(),
             knowledge_writer=self.knowledge_service,
             knowledge_reader=_ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
@@ -580,6 +584,7 @@ class AgentRuntime:
     def _register_tools(self) -> None:
         if self.capture_service is not None:
             self._tool_executor.register(build_capture_url_tool(self.capture_service))
+            self._tool_executor.register(build_web_read_tool(self.settings, self.capture_service))
             self._tool_executor.register(
                 build_capture_upload_tool(self.capture_service, self.artifact_service)
             )
@@ -654,7 +659,7 @@ class AgentRuntime:
 
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(
-                build_web_search_tool(self.settings, web_provider, self.capture_service)
+                build_web_search_tool(self.settings, web_provider)
             )
         for mcp_tool in build_mcp_tools(self.settings.mcp):
             self._tool_executor.register(mcp_tool)

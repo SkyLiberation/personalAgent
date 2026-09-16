@@ -21,6 +21,8 @@ from .models import (
 )
 
 _FEEDBACK_ACTION_ID = "interaction_turn"
+# Thinking and the typed intent share the provider's completion budget.
+_INTENT_OUTPUT_TOKEN_LIMIT = 32_768
 
 _DERIVATION_INSTRUCTION = (
     "First decide whether the latest user message explicitly requires work to continue "
@@ -178,7 +180,7 @@ def derive_interaction_intent(
             purpose="interaction_intent", messages=prompt_messages,
         ),
         temperature=0,
-        max_tokens=800,
+        max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
         metadata={"component": "conversation_intent_admission"},
     ))
     admitted = admit_interaction_intent(response.value, messages=messages)
@@ -215,7 +217,7 @@ def derive_interaction_intent(
                 messages=revision_messages,
             ),
             temperature=0,
-            max_tokens=800,
+            max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
             metadata={
                 "component": "conversation_intent_admission",
                 "revision_attempt": 1,

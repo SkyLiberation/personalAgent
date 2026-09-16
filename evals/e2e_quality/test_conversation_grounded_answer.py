@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from evals.e2e_quality.ask_001a_outcome import grade_ask_001a_answer
 from evals.e2e_quality.test_product_capability_outcomes import (
     _knowledge_ingest,
     _record,
@@ -68,6 +69,8 @@ def test_ask_001a_personal_only_answer_observes_quotes_and_conflict_without_web(
     subject = f"Northstar-{uuid4().hex[:8]}"
     first_date = "2026-09-10"
     second_date = "2026-10-15"
+    first_source = f"{subject} 的生产迁移日期是 {first_date}。"
+    second_source = f"{subject} 的生产迁移日期不是 {first_date}，而是 {second_date}。"
     other_secret = f"other-secret-{uuid4().hex}"
     with ThreadPoolExecutor(max_workers=2) as executor:
         other_seeded_future = executor.submit(
@@ -80,13 +83,13 @@ def test_ask_001a_personal_only_answer_observes_quotes_and_conflict_without_web(
         first_seeded = _knowledge_ingest(
             live_web_search_process,
             owner_id,
-            f"{subject} 的生产迁移日期是 {first_date}。",
+            first_source,
             source_type="document",
         )
         second_seeded = _knowledge_ingest(
             live_web_search_process,
             owner_id,
-            f"{subject} 的生产迁移日期不是 {first_date}，而是 {second_date}。",
+            second_source,
             source_type="document",
         )
         other_seeded = other_seeded_future.result()
@@ -130,6 +133,10 @@ def test_ask_001a_personal_only_answer_observes_quotes_and_conflict_without_web(
         + urlencode({"user_id": owner_id})
     )
     serialized = json.dumps({"result": result, "trace": trace}, ensure_ascii=False)
+    outcome_verdict = grade_ask_001a_answer(
+        answer=result["message"]["content"],
+        expected_passages=(first_source, second_source),
+    )
     _record(
         trace_archive,
         request,
@@ -142,13 +149,13 @@ def test_ask_001a_personal_only_answer_observes_quotes_and_conflict_without_web(
             "user_text": user_text,
             "result": result,
             "trace": trace,
+            "outcome_verdict": outcome_verdict.model_dump(mode="json"),
         },
         profile="baseline+web_search",
     )
 
     assert result["disposition"] == "answer"
-    assert first_date in result["message"]["content"]
-    assert second_date in result["message"]["content"]
+    assert outcome_verdict.passed, outcome_verdict.model_dump(mode="json")
     assert "冲突" in result["message"]["content"]
     assert "evidence_span_id" in serialized
     assert "web_search" not in {

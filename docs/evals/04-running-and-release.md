@@ -13,9 +13,9 @@ uv run pytest evals/e2e_quality --collect-only -q --e2e-scope=diagnostic
 
 ```text
 release selection: 9
-diagnostic selection: 19
+diagnostic selection: 39 pytest items (20 catalog cases)
 retired Investigation conformance: 0
-catalog total: 28
+catalog total: 29
 ```
 
 ## 执行机器 release selection
@@ -239,6 +239,25 @@ v3 把每个必需复合概念定义为预声明原子词集合，并要求原�
 
 当前 per-sample 入口收集 20 个 pytest item，每项只执行一次正式 HTTP 请求并形成一份 checksum archive。历史 v1 聚合 archive 保持只读，不能与新 cohort 合并。
 
+显式验收要求的研究请求使用独立单样本入口，不加入上述 20-item promotion cohort，也不改变默认 release matrix。用例目的、独立评测器、成本和停止条件见[当前用例盘点](02-current-case-inventory.md#verifier-显式验收请求的单样本-baseline)。先只收集，再执行一次：
+
+```powershell
+$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
+$env:PERSONAL_AGENT_CONVERSATION_RESEARCH_DELIVERY_001_EVIDENCE_ROLE = "baseline"
+$env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "<本次独立归档根目录>"
+.\.venv\Scripts\python.exe -X utf8 -m pytest --collect-only -q `
+  evals/product_baselines/test_conversation_research_review_001.py
+.\.venv\Scripts\python.exe -X utf8 -m pytest -q -s `
+  evals/product_baselines/test_conversation_research_review_001.py
+```
+
+该入口复用 `CONVERSATION-RESEARCH-DELIVERY-001` 的正式请求与归档协议，`scenario_id`、用户输入 digest 和数据集版本独立；不能与普通研究请求拼接为同输入配对。命名为 baseline 不代表一定复现产品错误，未复现时停止生产实施。
+
+网页工具拆分候选继续使用这个节点，执行 target 时将 evidence role 设为 `target`，而非另建用户契约。
+2026-09-04 的执行包装、源码快照和只读审计位于 `C:/pae/web-tools-split-20260904/`；包装脚本只启动原 pytest
+和归档，不替换生产模型或注入执行事实。该次已超过单样本成本停止线，不重复执行包装脚本刷通过。
+剩余对照与失败归因见[候选评测记录](02-current-case-inventory.md#网页发现与指定来源读取分离候选)。
+
 后台持续能力边界已采用同样的逐样本结构，当前可执行入口只保留参数化 v2：
 
 ```powershell
@@ -353,6 +372,30 @@ uv run pytest -q -s `
 Outputs 事实正确性场景，其余两类均为 `5/5 honest_boundary`，未达到跨两类 A1 门槛。该组包含 62 次模型调用、47 个
 模型轮次、35 次工具调用和 515,546 个令牌，模型调用延迟 P95 为 44.75 秒。执行期间代码身份变化的归档与历史错误 grader
 归档只作为诊断，不能参与门禁或结果合并。
+
+## 研究答案评测器的前置校准
+
+`RESEARCH-ANSWER-OUTCOME-001` 是 Offline Eval，不是 Product E2E。先收集 20 个独立 item，再只运行一个历史错误答案 pilot；确认判断与理由、用时和 token 正常后，才执行同版本剩余控制。历史 archive 只读，新增结果独立封印，不能改写旧 pytest outcome。
+
+当前评测器为 `research-answer-official-support-zh-v3`。它补齐 Tool choice 的子集控制和 MCP
+安全要求的规范强度，并区分“与依据矛盾”和“依据未覆盖”；后者仍阻止通过，但不得冒充事实错误。
+`correct-table` 控制覆盖 `allowed_tools`、服务器必须执行访问控制、应用应提供确认界面的相邻正例。
+修复该误判时可先运行此控制，再执行不重复 pilot 的剩余 19 项；样本数与全部正确门槛不变。
+事实依据来自已封存官方正文，不来自生产 Verifier 的判断；版本变化后的评分不能追溯改写旧 E2E。
+v3 已完成 20/20 校准，但真实长答案反例仍存在；该校准不能作为修复完成或产品通过证据，
+当前状态见[评测体系入口](README.md)。后续先诊断原始反例，不重复本组刷通过。
+
+```powershell
+$env:PERSONAL_AGENT_RUN_RESEARCH_GRADER_CALIBRATION = "true"
+$env:PERSONAL_AGENT_RESEARCH_ORIGINAL_ARCHIVE = "<原历史样本的密封目录>"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "<本次独立归档根目录>"
+.\.venv\Scripts\python.exe -X utf8 -m pytest --collect-only -q `
+  evals/e2e_quality/test_research_answer_outcome.py
+.\.venv\Scripts\python.exe -X utf8 -m pytest -q -s `
+  'evals/e2e_quality/test_research_answer_outcome.py::test_research_answer_outcome_calibration[1-historical-sealed-answer]'
+```
+
+固定模型为 `mimo-v2.5`、`json_object`、关闭 thinking；样本输入含完整中文回答和人工核对的官方事实，不允许以生产 Verifier 自述代替独立判定。预声明 10 类 × 2 次、`20/20` 正确，预计不超过 80,000 tokens 和 10 分钟，安全上限 120,000 tokens，货币成本不可用。一个原子样本超过 60 秒、首次错误、Provider 失败或累计超限后停止新增样本，保留全部已执行结果和未执行分母；不得重刷到通过。剩余样本用显式 node selection 与 `-x` 执行，不重复已完成的 pilot，不运行 Product 矩阵。
 
 ## Release gate
 

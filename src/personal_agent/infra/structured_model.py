@@ -44,6 +44,7 @@ from personal_agent.kernel.config_models import LangSmithConfig, OpenAIConfig, S
 from personal_agent.kernel.llm_schemas import structured_response_format
 from personal_agent.kernel.llm_telemetry import record_llm_usage
 from personal_agent.kernel.logging_utils import log_event
+from personal_agent.kernel.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -822,24 +823,22 @@ class OpenAIModelClient:
 def _schema_repair_instruction(
     schema: dict[str, Any],
     parse_error: str,
-) -> dict[str, str]:
-    return {
+) -> tuple[dict[str, str], dict[str, str]]:
+    prompt = get_prompt("structured.repair.system")
+    return ({
         "role": "system",
-        "content": (
-            "Your previous structured response was rejected by the typed output contract. "
-            "The validation feedback and schema are authoritative. Never repeat a value "
-            "identified as invalid in the feedback. For literal or enum failures, use only "
-            "a value explicitly listed by the contract. Do not relabel invalid behavior "
-            "with an allowed value merely to pass validation; when the enclosing array item "
-            "is optional and no allowed value preserves its semantics, omit that item. "
-            "Author a complete new JSON object for the original request; do not explain, "
-            "patch, or refer to the rejected response. Respect all mutually exclusive "
-            "fields and return only JSON. Validation feedback:\n"
-            + parse_error[:2000]
-            + "\nOutput schema:\n"
-            + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        "content": prompt.render(
+            validation_feedback=parse_error[:2000],
+            output_schema=json.dumps(
+                schema,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         ),
-    }
+    }, {
+        "structured_prompt_name": prompt.name,
+        "structured_prompt_version": prompt.version,
+    })
 
 
 class StrictJsonSchemaAdapter(OpenAIModelClient):
@@ -853,11 +852,18 @@ class StrictJsonSchemaAdapter(OpenAIModelClient):
         parse_error: str | None,
     ) -> StructuredModelRequest[StructuredOutputT]:
         messages = request.messages
+        metadata = request.metadata
         if parse_error is not None:
-            messages = [_schema_repair_instruction(schema, parse_error), *messages]
+            instruction, prompt_metadata = _schema_repair_instruction(
+                schema,
+                parse_error,
+            )
+            messages = [instruction, *messages]
+            metadata = {**metadata, **prompt_metadata}
         return replace(
             request,
             messages=messages,
+            metadata=metadata,
             kind="text",
             response_format=structured_response_format(request.operation, schema),
         )
@@ -874,20 +880,30 @@ class JsonObjectStructuredAdapter(OpenAIModelClient):
         parse_error: str | None,
     ) -> StructuredModelRequest[StructuredOutputT]:
         if parse_error is None:
+            prompt = get_prompt("structured.system")
             instruction = {
                 "role": "system",
-                "content": (
-                    "Return exactly one JSON object that conforms to the output schema below. "
-                    "Do not add Markdown, explanation, or fields absent from the schema. "
-                    "Do not omit required fields.\nOutput schema:\n"
-                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                "content": prompt.render(
+                    output_schema=json.dumps(
+                        schema,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 ),
             }
+            prompt_metadata = {
+                "structured_prompt_name": prompt.name,
+                "structured_prompt_version": prompt.version,
+            }
         else:
-            instruction = _schema_repair_instruction(schema, parse_error)
+            instruction, prompt_metadata = _schema_repair_instruction(
+                schema,
+                parse_error,
+            )
         return replace(
             request,
             messages=[instruction, *request.messages],
+            metadata={**request.metadata, **prompt_metadata},
             kind="text",
             response_format={"type": "json_object"},
         )

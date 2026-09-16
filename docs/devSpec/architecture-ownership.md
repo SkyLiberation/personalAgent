@@ -4,25 +4,15 @@
 
 ## 1. 单一事实与单一写入口
 
-每个业务事实必须只有一个权威 owner、一个 canonical model、一个合法写入口，以及一套生命周期、版本和失效规则。无法说明字段的 owner、来源、写入者、失效条件和重建方式时，禁止编码。
+业务事实必须遵守[根规范第 2.2 节](../../AGENTS.md#22-一个事实只有一个-owner)的单一归属和写入口。编码前须能逐字段说明责任主体、来源、写入者、生命周期、版本、失效条件和重建方式；缺一项不得编码。
 
-禁止：
-
-- 新旧字段双写或 singular/plural 双轨状态；
-- 多个 Model 镜像同一业务事实；
-- 用 validator、listener 或 converter 同步副本；
-- 为读取方便新增可写镜像字段；
-- 持久化可由 canonical facts 确定性重建的派生值。
+新旧字段双写、singular/plural 双轨、可写镜像及用 validator、listener、converter 同步副本，均属于重复事实，不得以读取方便或字段形状不同为由保留。
 
 ## 2. 决策所有权
 
-- **模型或外部权威**：负责开放世界语义判断；
-- **确定性代码**：负责权限、唯一推导、状态迁移和不变量；
-- **执行系统**：产生执行事实；
-- **Verifier**：判断 Goal 是否语义满足；
-- **Completion Gate**：判断 required result contract 的证据是否齐全。
+决策权按[根规范第 2.2 节](../../AGENTS.md#22-一个事实只有一个-owner)分配。新增分支必须明确归属以下一种责任，不能同时充当建议、执行事实和完成判断：
 
-新增分支必须归属于 Semantic Decision、Deterministic Derivation、Policy Decision、Environment Fact、Execution Fact、Semantic Verification 或 Completion Decision 之一。
+`Semantic Decision`、`Deterministic Derivation`、`Policy Decision`、`Environment Fact`、`Execution Fact`、`Semantic Verification` 或 `Completion Decision`。
 
 ## 3. 强制术语与能力分层
 
@@ -58,7 +48,7 @@
 
 ## 5. 依赖方向与模块职责
 
-稳定依赖方向为：`Interface -> Application Capability -> Domain/Product Aggregate`。Application 只依赖 Port；Runtime、Governance 和 Provider Adapter 从外层实现 Port，并统一在 Composition Root 装配。
+依赖方向与 Composition Root 装配遵守[根规范第 2.3 节](../../AGENTS.md#23-只实现最小生产纵向切片)，各层只承担以下职责。
 
 - **Domain / Product Aggregate**：拥有 canonical facts、核心不变量、Command 适用性和确定性迁移；禁止依赖 LangGraph、ORM、模型或 MCP SDK、网络、UI 或 Prompt。
 - **Application Capability**：接收 Use Case，协调 Domain、语义决策 Port、Governance Port 和 Runtime Port，并管理事务和阶段；不得猜测 payload、复制领域规则或把执行失败伪装成成功。
@@ -79,7 +69,7 @@
 - Runtime Projection：当前执行视图；
 - View/DTO：展示结构。
 
-只有恢复、审计、重放、授权或审批边界、长生命周期一致性，或无法确定性重建时，才允许持久化派生信息。“以后可能有用”不是理由。
+持久化必须有恢复、审计、重放、授权或审批边界、长生命周期一致性等真实需求。可由 canonical facts 确定性重建的派生值仍受根规范禁止持久化的门禁约束；不能以这些需求为由建立第二事实源。“以后可能有用”不是理由。
 
 Event 只记录已发生事实。只有具有恢复、审计、重放或长生命周期消费者的核心 Aggregate 才使用完整 Event 与 Projection；固定小状态机不得默认事件化。
 
@@ -87,8 +77,8 @@ Identity 和 scope 禁止使用空字符串、裸字符串或 raw dict。Identit
 
 ## 7. 生产可达性
 
-能力只有形成 `正式入口 -> Application Capability -> Domain/canonical state -> 真实 Runtime/Provider/Persistence -> Verification/Completion -> 用户结果` 的最小纵向切片才算落地。
+能力落地必须形成 `正式入口 -> Application Capability -> Domain/canonical state -> 真实 Runtime/Provider/Persistence -> Verification/Completion -> 用户结果` 的最小纵向切片；独立用例不能拼成组合能力证据。
 
-每个新增生产结构必须能指出正式入口可达链、生产构造点、调用者或消费者，以及删除后会失败的测试。持久化事实或投影还必须有真实写入者与读取者；注入式协作者必须在 Composition Root 装配。缺一项即删除，不得以阶段名称或未来接入保留。
+对每个新增生产结构，按[根规范第 2.3 节](../../AGENTS.md#23-只实现最小生产纵向切片)列出入口、构造或装配点、调用者、消费者及删除后失败的测试；持久化事实或投影还须有真实写读者，注入式协作者须在 Composition Root 装配。缺项即删除，不得以阶段名称或未来接入保留。
 
-不可控第三方可以使用生产 Port 的 Fake，但必须有 contract test，并在宣称真实交付或上线前通过真实环境 smoke 或 E2E。多个独立用例不能拼成组合能力证据。
+Test Double 与真实接入的证据范围遵守[QLT](quality-security.md#1-测试职责与覆盖)。不可控第三方的 Fake 须实现生产 Port 并有 Contract；宣称真实交付或上线前，仍须通过对应真实环境 smoke 或 E2E。

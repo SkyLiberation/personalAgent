@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from personal_agent.capabilities.contracts.verification import ConversationAnswerSegment
 from langchain_core.tools import StructuredTool
 import pytest
 
@@ -77,7 +78,7 @@ class _AdversarialInteractionModel:
             )
         final = FinalMessage(
             disposition="limitation",
-            message="该能力不可用于当前对话，因此没有执行。",
+            segments=(ConversationAnswerSegment(text="该能力不可用于当前对话，因此没有执行。"),),
         )
         return StructuredModelResponse(
             value=final,

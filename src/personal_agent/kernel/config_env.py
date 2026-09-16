@@ -174,7 +174,7 @@ def settings_from_env(settings_cls: type):
                 or os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")
             ),
             output_transport=os.getenv(
-                "STRUCTURED_OUTPUT_TRANSPORT", "json_schema"
+                "STRUCTURED_OUTPUT_TRANSPORT", "json_object"
             ),
             extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
             or _parse_json_env("ROUTER_EXTRA_BODY"),

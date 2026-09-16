@@ -39,6 +39,11 @@
       "expected": null
     },
     {
+      "id": "production_prompt_overlay",
+      "path": "src/personal_agent/kernel/prompt_templates/runtime.py",
+      "expected": "src/personal_agent/kernel/prompt_templates/AGENTS.md"
+    },
+    {
       "id": "root_test_no_overlay",
       "path": "tests/test_api.py",
       "expected": null
@@ -133,6 +138,11 @@
     {
       "id": "cod_graph_planner",
       "task": "LangGraph、Router、Planner 与 Workflow 各自负责什么？",
+      "expected": "COD"
+    },
+    {
+      "id": "cod_production_prompt",
+      "task": "修改生产 Prompt 时，怎样组织任务目标、Context、成功标准、约束和 typed 输出？",
       "expected": "COD"
     },
     {

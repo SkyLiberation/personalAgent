@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DEFAULT_TIMEOUT=120
 
+RUN apt-get update && apt-get install -y --no-install-recommends ripgrep && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE ./

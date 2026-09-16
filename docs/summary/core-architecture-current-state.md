@@ -80,7 +80,7 @@ MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝�
 
 Application 只依赖 `StructuredModelClient`。组合根根据 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；两者都在调用边界携带 Schema，并将结果物化为同一 Pydantic 契约。
 
-当前本地配置使用 `mimo-v2.5 + json_schema`，关闭 thinking；网页搜索显式绑定 AnySearch，URL 正文读取绑定 builtin。配置只证明部署选择，不证明服务健康或产品结果。
+当前本地模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索显式绑定 AnySearch，URL 正文读取绑定 builtin。配置只证明部署选择，不证明服务健康或产品结果。
 
 GPT Researcher 在独立进程中运行，不会继承主工程的 `STRUCTURED_OUTPUT_TRANSPORT`。远端 `choose_agent()` 的自由文本 JSON 处理属于 GPT Researcher 调用边界，不能通过切换主工程 Adapter 修复。
 

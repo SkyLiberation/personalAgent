@@ -25,7 +25,7 @@ def test_catalog_declares_one_explicit_evidence_responsibility_per_case() -> Non
     application_ids = {
         case.case_id
         for case in EVIDENCE_CASES
-        if case.evidence_class is EvidenceClass.APPLICATION_E2E
+        if case.evidence_class is EvidenceClass.APPLICATION_INTEGRATION
     }
     profile_ids = {
         case.case_id
@@ -36,6 +36,19 @@ def test_catalog_declares_one_explicit_evidence_responsibility_per_case() -> Non
     assert "E08" not in application_ids
     assert "IP01" not in application_ids
     assert profile_ids == {"E16", "E18", "E19", "E21"}
+
+
+def test_e2e_name_is_reserved_for_full_agent_user_outcomes() -> None:
+    assert {
+        evidence_class
+        for evidence_class in EvidenceClass
+        if evidence_class.value.endswith("_e2e")
+    } == {EvidenceClass.PRODUCT_E2E}
+    assert all(
+        case.release_eligible
+        for case in EVIDENCE_CASES
+        if case.evidence_class is EvidenceClass.PRODUCT_E2E
+    )
 
 
 def test_product_release_matrix_contains_only_qualified_user_outcomes() -> None:

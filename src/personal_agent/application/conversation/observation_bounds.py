@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 MAX_OBSERVATION_PAYLOAD_CHARS = 20_000
 """Serialized ceiling for one observation payload entering the context."""
@@ -178,89 +180,44 @@ def select_offload_text(
 MAX_EXCERPT_LINES = 200
 """Lines returned by one re-read of an offloaded payload."""
 
-_CONTEXT_BEFORE = 2
-_CONTEXT_AFTER = 4
-"""Lines kept around each keyword hit, as ``grep -C`` does.
+class ReadWindowRequest(BaseModel):
+    """An exact sequential position, independent of resource identity."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    start_line: int = Field(default=1, ge=1, description="从此行开始顺序读取；续读使用 continuation.start_line。")
 
-A bare matching line is rarely the answer. Searching a maintainer file for a
-section name returns the section header, and what the goal needed sat three
-lines under it; without context the model must guess a second call or answer
-from the header. Context is what makes one search answer one question.
-"""
+
+ReadWindowOutcome = Literal["window_returned", "empty_resource", "start_out_of_bounds"]
+
+
+class ReadWindowState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    request: ReadWindowRequest
+    outcome: ReadWindowOutcome
+    continuation: ReadWindowRequest | None
+    explanation: str = "仅返回本次顺序窗口；continuation 为空只表示此后缀结束，不证明累计全文已读。"
 
 
 @dataclass(frozen=True, slots=True)
 class PayloadExcerpt:
-    """A window into an offloaded payload, plus how to ask for the next one."""
-
     lines: tuple[tuple[int, str], ...]
     total_lines: int
-    matched_lines: tuple[int, ...]
-    next_start_line: int | None
+    read_state: ReadWindowState
 
 
-def excerpt_payload_text(
-    text: str,
-    *,
-    keyword: str = "",
-    start_line: int = 1,
-    max_lines: int = MAX_EXCERPT_LINES,
-) -> PayloadExcerpt:
-    """Return a 1-indexed line window of ``text``, optionally keyword-anchored.
-
-    With a keyword, each hit is returned with the lines around it, wherever it
-    sits in the payload — which is what makes a fact at 96% of a file reachable
-    without paging through the first 96%, and what lets a section header answer a
-    question about the lines under it. Without a keyword the window starts at
-    ``start_line``. Selecting the keyword and deciding whether the window answered
-    the goal stay with the model.
-    """
-
+def excerpt_payload_text(text: str, *, start_line: int = 1,
+                         max_lines: int = MAX_EXCERPT_LINES,
+                         max_chars: int | None = None) -> PayloadExcerpt:
+    """Return a sequential 1-indexed artifact window without searching."""
     all_lines = text.splitlines()
-    total = len(all_lines)
-    last_hit: int | None = None
-    if keyword:
-        folded = keyword.casefold()
-        matched = tuple(
-            number for number, line in enumerate(all_lines, start=1) if folded in line.casefold()
-        )
-        chosen: list[int] = []
-        for hit in (number for number in matched if number >= start_line):
-            window = range(
-                max(1, hit - _CONTEXT_BEFORE), min(total, hit + _CONTEXT_AFTER) + 1
-            )
-            addition = [number for number in window if number not in set(chosen)]
-            if len(chosen) + len(addition) > max_lines and chosen:
-                break
-            chosen.extend(addition[: max_lines - len(chosen)])
-            last_hit = hit
-            if len(chosen) >= max_lines:
-                break
-        chosen.sort()
-    else:
-        matched = ()
-        chosen = [
-            number for number in range(max(1, start_line), total + 1)][:max_lines]
-    lines = tuple((number, all_lines[number - 1]) for number in chosen)
-    last = last_hit if keyword else (chosen[-1] if chosen else None)
-    remaining = bool(matched) and any(number > (last or 0) for number in matched)
-    if not keyword:
-        remaining = last is not None and last < total
-    return PayloadExcerpt(
-        lines=lines,
-        total_lines=total,
-        matched_lines=matched,
-        next_start_line=(last + 1) if (last is not None and remaining) else None,
-    )
-
-
-__all__ = [
-    "MAX_EXCERPT_LINES",
-    "MAX_OBSERVATION_PAYLOAD_CHARS",
-    "BoundedPayload",
-    "PayloadExcerpt",
-    "bound_observation_payload",
-    "excerpt_payload_text",
-    "select_offload_text",
-    "serialized_length",
-]
+    chosen = []
+    used_chars = 2
+    for number in range(max(1, start_line), len(all_lines) + 1):
+        cost = serialized_length({"line": number, "text": all_lines[number - 1]}) + 2
+        if chosen and (len(chosen) >= max_lines or (max_chars is not None and used_chars + cost > max_chars)):
+            break
+        chosen.append((number, all_lines[number - 1]))
+        used_chars += cost
+    continuation = ReadWindowRequest(start_line=chosen[-1][0] + 1) if chosen and chosen[-1][0] < len(all_lines) else None
+    outcome: ReadWindowOutcome = "empty_resource" if not all_lines else "start_out_of_bounds" if start_line > len(all_lines) else "window_returned"
+    return PayloadExcerpt(lines=tuple(chosen), total_lines=len(all_lines), read_state=ReadWindowState(
+        request=ReadWindowRequest(start_line=start_line), outcome=outcome, continuation=continuation))

@@ -239,10 +239,8 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
             harness_003_values[name] in answer
             for name in ("ALPHA", "BETA", "GAMMA")
         ),
-        "revised_requirement_present": f"当前阈值：{new_threshold}" in answer,
-        "superseded_requirement_absent": (
-            f"当前阈值：{old_threshold}" not in answer
-        ),
+        "revised_requirement_present": new_threshold in answer,
+        "superseded_requirement_absent": old_threshold not in answer,
         "duplicate_source_read_count": sum(
             max(0, all_reads.count(name) - 1)
             for name in ("ALPHA", "BETA", "GAMMA")
@@ -305,7 +303,7 @@ def test_harness_003_preserves_partial_results_across_steering_boundary(
                     "max_total_tokens": 128000,
                 },
             }),
-            grader_version="harness-003-explicit-plan-fact-consumption-v4",
+            grader_version="harness-003-explicit-plan-fact-consumption-v5",
         ),
         report=report,
     )

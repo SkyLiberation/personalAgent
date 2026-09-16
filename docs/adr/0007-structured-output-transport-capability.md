@@ -1,6 +1,6 @@
 # ADR 0007: Structured Output Transport Capability Isolation
 
-- 状态：Accepted for experimental implementation；not merge-ready
+- 状态：Accepted；MiMo JSON Object 正式 target 已通过
 - 日期：2026-07-28
 - baseline：`data/e2e_traces/20260728T135746.012529Z-20360-ce914ffb`
 - target evidence：`data/e2e_traces/20260728T143217.175037Z-28784-bb0ed0e8`
@@ -79,3 +79,25 @@ canonical schema、最多请求一次模型完整重写、聚合两次 latency/t
 
 当前工程验证：相关模型/config/catalog 测试 77 passed；完整低层套件 659 passed、4 warnings、
 242.52 秒；变更范围 Ruff、compileall 与 package DAG gate 均通过。这些不能替代失败的 IP01。
+
+## 2026-09-03 决策补充：MiMo JSON Object 生产候选
+
+MiMo 官方结构化输出文档现明确以 `response_format={"type":"json_object"}` 支持
+`mimo-v2.5` 与 Pro，并要求 Prompt 完整定义字段、层级和类型，再由应用侧执行 JSON Schema 校验。
+`CONVERSATION-FINAL-GENERATION-STABILITY-001` 的历史真实失败和同一 Final 输入诊断进一步显示：
+base/Pro 的 JSON Object Adapter 均交付两组 URL 且没有重复退化，而 Strict Adapter 的既有轨迹漏掉
+两组 URL。该证据只准入 MiMo JSON Object 生产候选，不把单样本写成普遍稳定性结论。
+
+当前实现由既有 `StructuredConfig.output_transport` 唯一选择 Adapter，不增加结构、fallback 或双写；
+JSON Object Adapter 注入注册的中文 Schema instruction，仍由同一 Pydantic 类型校验并只允许一次完整
+修复。通用 Strict Adapter 保留给显式支持原生 strict Schema 的其他 Provider。
+
+`CONVERSATION-RESEARCH-DELIVERY-001/tool-protocol-boundary-run-1` 已从正式 HTTP 入口执行：当前
+`mimo-v2.5 + json_object + thinking disabled` 配置下为 `1/1 passed`，三项比较与两组官方 URL 全部
+交付，5 次 Tool 执行均成功、零 DecisionFeedback，总计 `40,387` tokens，Conversation 用时
+`47.380s`。归档为
+`data/e2e_traces/product_baselines/conversation-research-delivery-001/target/
+20260903T144509.930958Z-24312-8aa05f38/`，trace checksum 为
+`f86a9f228f84424b0e9c50e1d440e0bf6f4f7eafd8d5b6a1fedd26a6c98d6129`。该结果关闭本次 MiMo
+transport 缺陷修复，不证明跨场景稳定率、成本收益、Graphiti/LangExtract 的独立 transport 或完整
+release matrix 已通过。

@@ -25,6 +25,7 @@ from personal_agent.tools import (
     build_review_digest_tool,
     build_update_note_tool,
     build_web_search_tool,
+    build_web_read_tool,
     mcp_capability_from_tool,
     tool_governance,
 )
@@ -98,7 +99,8 @@ def _build_registered_tools():
     dependency = _NotInvoked()
     return [
         build_graph_search_tool(dependency),
-        build_web_search_tool(Settings(), dependency, dependency),
+        build_web_search_tool(Settings(), dependency),
+        build_web_read_tool(Settings(), dependency),
         build_capture_text_tool(lambda **kwargs: dependency.capture_text(**kwargs)),
         build_capture_url_tool(dependency),
         build_capture_upload_tool(dependency, dependency),

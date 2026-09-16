@@ -21,7 +21,7 @@
 | 分类 | 数量 | 发布用途 |
 | --- | ---: | --- |
 | 产品端到端（Product E2E） | 9 | release selection |
-| Application E2E | 8 | diagnostic selection |
+| Application Integration | 8 | diagnostic selection |
 | Runtime Conformance | 7 | diagnostic selection |
 | Capability Profile | 4 | diagnostic selection |
 | **合计** | **28** | **9 个 release，19 个 diagnostic** |
@@ -30,7 +30,7 @@
 
 ## 3. 当前目录中的代表用例
 
-**代表用例只能说明各自入口和反事实；只有绑定类型化 `UserOutcomeContract` 的 Product E2E 才进入发布分母。** Application E2E、Runtime Conformance、历史归档和独立 baseline 都必须保留原证据层级。
+**代表用例只能说明各自入口和反事实；只有绑定类型化 `UserOutcomeContract` 且经过目标 Agent 完整生产链的 Product E2E 才进入发布分母。** Application Integration、Runtime Conformance、历史归档和独立 baseline 都必须保留原证据层级。
 
 | 用户旅程 | 用例 | 证明结果 | 关键反事实 |
 | --- | --- | --- | --- |
@@ -38,7 +38,7 @@
 | 有证据的回答 | ASK-001A、ASK-001B | 仅个人证据，以及个人证据结合官方网页，统一由当前对话回答 | 不跨用户、不写长期陈述、不产生第二条答案链 |
 | 显式保存 | E14/L07 | 确认后保存用户原文，并在新会话召回 | E14 验收写入与恢复边界，L07 验收跨会话用户结果 |
 | 删除与恢复 | E04/E10/E22 | 删除一次、可恢复、可重放 | E04/E10 是业务或运行机制证据，E22 是自然语言入口 |
-| 周期研究 | E05/E13 | 研究运行、摘要、投递和反馈记录 | 验收运行、`digest`、投递记录和反馈绑定；证据层级为 Application E2E |
+| 周期研究 | E05/E13 | 研究运行、摘要、投递和反馈记录 | 验收运行、`digest`、投递记录和反馈绑定；证据层级为 Application Integration |
 | 后台持续请求边界 | INVESTIGATION-CONSOLIDATION-001 的历史归档 | 旧第二循环与四槽位候选均为 `0/20 delivered`；当前普通 Conversation 对照也为 `0/20` | 证明旧机制没有交付且需求 baseline 缺失，因此机制已删除；不证明普通研究质量已经修复 |
 | 重启后的作用域隔离 | DUR-001 | 原用户可读取追踪记录，另一用户得到 404 | 安全和运维边界，不是普通对话用户结果 |
 

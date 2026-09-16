@@ -27,7 +27,7 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.application.conversation.interaction_intent import (
     _DERIVATION_INSTRUCTION,
 )
-from personal_agent.tools.interaction_verifier import _VERIFICATION_INSTRUCTION
+from personal_agent.kernel.prompts import get_prompt
 
 
 _CASE_ID = "PLAN-REPLAN-001"
@@ -327,8 +327,11 @@ def _config_cohort(server: LiveWebProcess) -> str:
             _DERIVATION_INSTRUCTION
         ),
         "verifier_instruction_digest": canonical_evidence_digest(
-            _VERIFICATION_INSTRUCTION
+            get_prompt("interaction_verification.system").template
         ),
+        "verifier_prompt_version": get_prompt(
+            "interaction_verification.system"
+        ).version,
         "web_search_provider": settings.web_search.provider,
         "web_search_base_url": settings.web_search.base_url,
         "interaction_policy_revision": settings.interaction_loop.policy_revision,

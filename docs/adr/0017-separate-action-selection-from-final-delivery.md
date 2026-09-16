@@ -3,7 +3,7 @@
 - 状态：Accepted，target 与 Tool Calling 影响验证已通过，独立因果验证待完成
 - 日期：2026-08-31
 - 影响范围：Conversation 模型动作协议、Provider Adapter、Semantic Verification、FinalMessage 交付
-- 详细设计：[普通对话研究交付与 Plan 边界优化方案](../future/conversation-research-delivery.md)
+- 当前事实：[Runtime 与编排](../topics/runtime.md)
 
 ## 1. 背景与目标
 
@@ -41,8 +41,8 @@ tool calls 时继续循环，并允许并行执行多个调用。Anthropic 的
 | 是否已准备生成最终结果 | 模型 | 无 payload 的 `prepare_final` 控制；它不是答案，也不是完成证明 |
 | Action 与 Final 顶层互斥 | Conversation Application | action phase 不接受 typed Final；finalization phase 不暴露任何 action definitions |
 | Provider 是否返回合法 action envelope | Provider Adapter | `tool_choice=required` 下缺少 action 时只做一次同 Schema 协议修复；再次失败则返回稳定 typed failure |
-| 草稿是否满足语义标准 | Verifier | `passed`、`needs_revision` 或 `insufficient_evidence`；不得改写执行事实 |
-| 下一轮进入哪个阶段 | Conversation Application | `needs_revision` 保持 finalization；`insufficient_evidence` 返回 action phase；`passed` 进入 Completion |
+| 草稿是否满足语义标准 | Verifier | Receipt 只聚合 `passed|failed`；逐判据诊断不得改写执行事实或选择工具相位 |
+| 下一轮进入哪个阶段 | Conversation Application | `passed` 进入 Completion；`failed` 把 feedback 交还智能体；预算耗尽直接停止，不通过隐藏工具强制选择 Final |
 | 用户可见最终文本 | `FinalMessage` / Completion 出口 | 只来自独占 finalization phase，通过适用门禁后提交 |
 
 破坏式迁移如下：
@@ -52,8 +52,8 @@ tool calls 时继续循环，并允许并行执行多个调用。Anthropic 的
 3. `StructuredModelResponse` 禁止同时携带 typed value 与 action invocations；
 4. action phase 允许多个兼容 Tool/Agent/Plan actions，执行完后才按 `prepare_final` 进入 finalization；
 5. finalization phase 不投影工具、Agent 或 Plan actions，只接收 `FinalMessage`；
-6. Verifier 的 `needs_revision` 直接再生成 typed Final，不插入没有业务意义的 action 回合；
-7. `insufficient_evidence` 才恢复动作能力，以便补取证据；
+6. Verifier 返回 `failed` 时只交付完整诊断，不根据失败类别选择下一阶段；
+7. 预算内由智能体选择修订、取证或 `prepare_final`；下一调用前已耗尽预算则返回 `limitation`，不提供强制 Final 宽限；
 8. Provider 在 required action phase 返回纯文本时，Adapter 使用同一 action schema 做一次协议修复，不把
    纯文本猜成 Final，也不做无界重试。
 
@@ -87,7 +87,16 @@ action及其混合响应拒绝分支。
 节点均无 action protocol rejection。密封归档为
 `data/e2e_traces/tool-calling-validation/20260831T054359.245940Z-19676-8b59b6c6`，checksum 有效。
 
-如果同一阻塞再次表现为 Final 与动作混合、Final 修订被送回 required action phase、一次协议修复后仍
+2026-09-04 按用户要求退役预算触发的宽限扩展，保留模型自主 `prepare_final`。旧机制在硬边界后仍可能
+生成草稿、调用 Verifier，最终又被未读资料门禁拒绝，故不再把隐藏工具作为预算收尾策略。当前以已提交
+usage 在下一决策调用前直接终止；删除 `BudgetFinalizationEvent`、Trace 宽限字段和重入状态，不改预算值。
+该取舍参考 [OpenAI Agents SDK 的 max_turns](https://github.com/openai/openai-agents-python/blob/89c02c828ee8510fe9a84ee6675608193aa13b02/docs/running_agents.md#the-agent-loop)
+和 [Gemini CLI 的确定性停止](https://github.com/google-gemini/gemini-cli/blob/55b495d6db1794bf5b7f37a9bc03ebcab5103673/packages/core/src/core/client.ts#L583)。
+不采纳 Hermes 的单次总结宽限；各实现并非统一选择。旧轨迹中的事件仍作为归档历史保存，不反向改写。
+本地活动快照不含退役字段，未改写数据；其他部署如含该字段，须在启动新版本前迁移最新快照，保留原件。
+执行结果、独立代码对照和剩余门禁由[当前评测用例盘点](../evals/02-current-case-inventory.md)拥有。
+
+如果同一阻塞再次表现为 Final 与动作混合、二态 Verifier 失败越界改写工具相位、一次协议修复后仍
 经常缺 action，或该控制需要新增持久状态和启发式路由，应撤回本决策并重新评估无 tool-call 终止协议。
 当前 target 是 dirty candidate 的单样本，不证明跨 Provider 的普遍稳定性、通用成本收益或发布完成；
-剩余准入与回归状态由[设计优化队列](../future/design-optimization-backlog.md)维护。
+本 ADR 顶部保留的独立因果验证缺口不能由后续预算缺陷修复的 Contract 或 Product target 替代。

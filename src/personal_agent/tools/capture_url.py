@@ -41,9 +41,10 @@ def build_capture_url_tool(capture_service: CaptureService) -> BaseTool:
         ),
     )
     def capture_url(url: str):
+        captured = capture_service.capture_url(url)
         return tool_response(tool_success({
-            "url": url,
-            "text": capture_service.capture_text_from_url(url),
+            "url": captured.url,
+            "text": captured.text,
         }))
 
     return capture_url

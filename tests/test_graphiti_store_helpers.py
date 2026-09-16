@@ -69,6 +69,15 @@ def test_settings_prefers_structured_llm_over_router_env(monkeypatch):
     assert settings.structured.extra_body == {"reasoning": {"effort": "minimal"}}
 
 
+def test_settings_defaults_structured_transport_to_json_object(monkeypatch):
+    monkeypatch.setattr(config_env_module, "load_dotenv", lambda override: None)
+    monkeypatch.delenv("STRUCTURED_OUTPUT_TRANSPORT", raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.structured.output_transport == "json_object"
+
+
 def test_settings_preserves_injected_environment_when_dotenv_is_disabled(monkeypatch):
     def forbidden_load(*, override):
         raise AssertionError(f"load_dotenv must not run with override={override}")

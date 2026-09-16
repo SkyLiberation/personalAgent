@@ -1,0 +1,39 @@
+{
+  "grader_version": "ask-001a-original-passages-v1",
+  "expected_passages": [
+    "Northstar-CONTROL 的生产迁移日期是 2026-09-10。",
+    "Northstar-CONTROL 的生产迁移日期不是 2026-09-10，而是 2026-10-15。"
+  ],
+  "cases": [
+    {
+      "case_id": "list-positive",
+      "answer": "两条资料存在冲突：\n- 原文一：“Northstar-CONTROL 的生产迁移日期是 2026-09-10。”\n- 原文二：“Northstar-CONTROL 的生产迁移日期不是 2026-09-10，而是 2026-10-15。”",
+      "expected_passed": true
+    },
+    {
+      "case_id": "table-positive",
+      "answer": "两条记录不一致。\n| 来源 | 原文 |\n| A | Northstar-CONTROL 的生产迁移日期是 2026-09-10。 |\n| B | Northstar-CONTROL 的生产迁移日期不是 2026-09-10，而是 2026-10-15。 |",
+      "expected_passed": true
+    },
+    {
+      "case_id": "paragraph-markup-positive",
+      "answer": "保存资料一写道：**Northstar-CONTROL 的生产迁移日期是 2026-09-10。** 保存资料二则写道：`Northstar-CONTROL 的生产迁移日期不是 2026-09-10，而是 2026-10-15。` 因而目前不能确定唯一日期。",
+      "expected_passed": true
+    },
+    {
+      "case_id": "summary-only-negative",
+      "answer": "资料给出了 2026-09-10 和 2026-10-15 两个日期，因此存在冲突。",
+      "expected_passed": false
+    },
+    {
+      "case_id": "one-passage-negative",
+      "answer": "原文是“Northstar-CONTROL 的生产迁移日期是 2026-09-10。”，另一条记录给出了 2026-10-15。",
+      "expected_passed": false
+    },
+    {
+      "case_id": "unrelated-passage-negative",
+      "answer": "原文一是“Northstar-CONTROL 的生产迁移日期是 2026-09-10。”，原文二是“Northstar-CONTROL 的演练环境在 2026-10-15 开放。”",
+      "expected_passed": false
+    }
+  ]
+}

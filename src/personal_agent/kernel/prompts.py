@@ -4,14 +4,22 @@ from typing import Any
 
 from personal_agent.kernel.prompt_registry import PromptSpec
 from personal_agent.kernel.prompt_templates.ask import PROMPTS as ASK_PROMPTS
+from personal_agent.kernel.prompt_templates.conversation import PROMPTS as CONVERSATION_PROMPTS
 from personal_agent.kernel.prompt_templates.graph import PROMPTS as GRAPH_PROMPTS
+from personal_agent.kernel.prompt_templates.interaction_verification import (
+    PROMPTS as INTERACTION_VERIFICATION_PROMPTS,
+)
 from personal_agent.kernel.prompt_templates.runtime import PROMPTS as RUNTIME_PROMPTS
+from personal_agent.kernel.prompt_templates.web_search import PROMPTS as WEB_SEARCH_PROMPTS
 
 
 _PROMPTS: dict[str, PromptSpec] = {
     **ASK_PROMPTS,
+    **CONVERSATION_PROMPTS,
     **GRAPH_PROMPTS,
+    **INTERACTION_VERIFICATION_PROMPTS,
     **RUNTIME_PROMPTS,
+    **WEB_SEARCH_PROMPTS,
 }
 
 

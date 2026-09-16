@@ -81,7 +81,7 @@ class StructuredConfig(_StrictBase):
     model: str = DEFAULT_GENERATIVE_MODEL
     timeout_seconds: float = 60.0
     max_retries: int = 2
-    output_transport: Literal["json_schema", "json_object"] = "json_schema"
+    output_transport: Literal["json_schema", "json_object"] = "json_object"
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
     @property

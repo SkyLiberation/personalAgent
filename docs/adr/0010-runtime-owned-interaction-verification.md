@@ -7,6 +7,13 @@
 
 > 2026-08-26：Conversation 的 Runtime-owned verification 结论仍有效；本文涉及 `InvestigationProject` 的实现坐标只作历史记录，该产品循环已经删除。当前决策见 [ADR 0015](0015-withdraw-investigation-project.md)。
 
+> 2026-09-07 边界修正：下文把所有非 `answer` 当作绕过验证、并断言请求已提供待改正文的决定不再适用。
+> 当前工作树已删除该推导；有冻结标准的 `answer` 仍须验证，其他 typed 终态不冒充已验证答案。
+> 这是恢复用户目标和实际输入边界的修复，不撤回验证所有权、判据冻结或凭据字节约束。
+> 责任边界检查已执行；恢复本地依赖后的真实 E2E 进入 Action，但在模型 Final 前耗尽预算，不声明修复闭环。
+> 当前行为见[Runtime](../topics/runtime.md)，执行证据见[边界修复记录](../evals/02-current-case-inventory.md#验收条件不再推导改稿任务的边界修复)。
+> 下文原决定和数字保留为历史依据，不作为此次修复的验收结果。
+
 ## Goal / Current Incorrect Behavior / Expected User-visible Result
 
 用户请求「审查并修订这段答复」时，发出的文本必须真的经过语义验证，且验证所用的判据必须

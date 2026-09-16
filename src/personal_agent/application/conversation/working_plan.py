@@ -338,10 +338,16 @@ def admit_action_plan_state(
         return DecisionFeedback(
             action_id=actions[0].action_id,
             reason_code="working_plan_terminal",
-            message="A terminal working plan has no executable work item.",
-            repairable_fields=("actions",),
-            immutable_fields=("working_plan",),
-            required_repair="Return the final result or create a genuinely new plan.",
+            working_plan_revision=working_plan.revision,
+            message="当前计划已终止，没有可关联新动作的活动工作项。",
+            repairable_fields=("working_plan", "actions", "wait_for_user"),
+            immutable_fields=("messages", "inputs", "interaction_mode"),
+            required_repair=(
+                "若原任务仍需补证或修订，使用计划控制动作提出后续工作计划，"
+                "并按当前交互模式等待审阅或设置唯一活动项；再提交必要动作。"
+                "不得只修改或重发工具动作，也不得改写已发生的执行事实。"
+                "仅当原任务已完成或确有无法继续的阻塞时，才提交相应最终结果。"
+            ),
         )
     if active_working_plan_step_id(working_plan) is None:
         return DecisionFeedback(

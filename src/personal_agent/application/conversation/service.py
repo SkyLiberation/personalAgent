@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.capabilities.contracts.verification import ConversationAnswerSegment
+from personal_agent.kernel.prompts import get_prompt
+
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -11,6 +14,8 @@ from typing import Any
 from uuid import uuid4
 
 from pydantic import ValidationError
+
+from personal_agent.application.capture.web_source import WEB_SOURCE_FORMAT, WebReadOutput
 
 from personal_agent.capabilities.contracts.grants import (
     DelegationGrant,
@@ -26,7 +31,7 @@ from personal_agent.capabilities.contracts.model import (
 from personal_agent.capabilities.contracts.verification import VerificationVerdict
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.contracts.derivation import canonical_digest
-from personal_agent.kernel.contracts.resource import OperationScope, ResourceSelector
+from personal_agent.kernel.contracts.resource import OperationScope, ResourceRef, ResourceSelector
 from personal_agent.kernel.contracts.scope import (
     ExecutionScope,
     AuthenticatedPrincipal,
@@ -35,15 +40,24 @@ from personal_agent.kernel.observability import record_policy_decision
 from personal_agent.kernel.logging_utils import log_event
 
 from .observation_bounds import (
+    MAX_OBSERVATION_PAYLOAD_CHARS,
     bound_observation_payload,
     excerpt_payload_text,
     select_offload_text,
+    serialized_length,
 )
 from .context_materialization import (
     READ_ACTION_OUTPUT_CAPABILITY,
+    READ_ARTIFACT_CAPABILITY,
+    SEARCH_ACTION_OUTPUT_CAPABILITY,
+    ARTIFACT_OUTPUT_CAPABILITIES,
     materialize_interaction_inputs,
 )
+from .artifact_search import ArtifactSearchPort, SearchActionOutputArguments, search_artifact_text
+from .artifact_reading import ReadArtifactArguments, read_artifact_text
+from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context
 from .interaction_prompt import build_interaction_system_prompt
+from .source_reading import materialize_source_reading_state
 from .model_actions import (
     build_model_action_definitions,
     decode_model_action_invocations,
@@ -144,6 +158,7 @@ class ConversationService:
         tool_port: InteractionToolPort | None = None,
         agent_port: InteractionAgentPort | None = None,
         artifact_port: InteractionArtifactPort | None = None,
+        artifact_search: ArtifactSearchPort | None = None,
         knowledge_writer: ConversationKnowledgeWriter | None = None,
         knowledge_reader: ConversationKnowledgeReadPort | None = None,
         knowledge_lifecycle: ConversationKnowledgeLifecyclePort | None = None,
@@ -155,6 +170,7 @@ class ConversationService:
         self._tool_port = tool_port
         self._agent_port = agent_port
         self._artifact_port = artifact_port
+        self._artifact_search = artifact_search
         self._knowledge_writer = knowledge_writer
         self._knowledge_reader = knowledge_reader
         self._knowledge_lifecycle = knowledge_lifecycle
@@ -322,6 +338,7 @@ class ConversationService:
             )
 
         finalization_pending = False
+
         while True:
             repeated_feedback = self._repeated_action_feedback(tuple(inputs))
             if repeated_feedback is not None:
@@ -344,10 +361,12 @@ class ConversationService:
                 )
             if (
                 usage.model_turns >= self._budget_policy.max_model_turns
-                and not finalization_pending
+                or usage.total_tokens >= self._budget_policy.max_total_tokens
+                or (
+                    self._budget_policy.max_tool_calls > 0
+                    and usage.tool_calls >= self._budget_policy.max_tool_calls
+                )
             ):
-                break
-            if usage.total_tokens >= self._budget_policy.max_total_tokens:
                 return self._budget_exhausted(
                     conversation_id,
                     run_ref,
@@ -459,26 +478,12 @@ class ConversationService:
                         ),
                         working_plan=working_plan,
                     )
-                if review_criteria.requires_review and decision.disposition != "answer":
-                    inputs.append(self._review_answer_required_feedback(decision))
-                    self._commit(
-                        run_ref,
-                        principal,
-                        messages,
-                        inputs,
-                        usage,
-                        execution_order,
-                        concurrent_batches,
-                        context_composition,
-                        review_criteria=review_criteria,
-                        working_plan=working_plan,
-                    )
-                    continue
-                if review_criteria.requires_review:
-                    verified, result, usage, verification_verdict = (
+                if review_criteria.requires_review and decision.disposition == "answer":
+                    verified, result, usage = (
                         self._verify_before_send(
                             decision,
                             review_criteria=review_criteria,
+                            verification_inputs=tuple(inputs),
                             conversation_id=conversation_id,
                             run_ref=run_ref,
                             principal=principal,
@@ -491,13 +496,8 @@ class ConversationService:
                     inputs.append(result.interaction_input)
                     execution_order.append(result.action_id)
                     if verified is None:
-                        # A semantic draft correction needs another exclusive Final,
-                        # not a return to the action protocol. Missing evidence is
-                        # different: the model must regain access to concrete actions.
-                        finalization_pending = (
-                            verification_verdict == "needs_revision"
-                            and usage.model_turns < self._budget_policy.max_model_turns
-                        )
+                        # Verifier owns acceptance, not the next action.
+                        # Check the hard budget before the model chooses again.
                         self._commit(
                             run_ref,
                             principal,
@@ -1125,10 +1125,8 @@ class ConversationService:
         inputs.append(feedback)
         final = FinalMessage(
             disposition="limitation",
-            message=(
-                "当前不支持在本次响应结束后继续运行、稍后查询或调整的后台任务；"
-                "系统没有启动后台工作。你可以改为在当前对话中继续完成。"
-            ),
+            segments=(ConversationAnswerSegment(text="当前不支持在本次响应结束后继续运行、稍后查询或调整的后台任务；"
+                "系统没有启动后台工作。你可以改为在当前对话中继续完成。"),),
         )
         self._commit(
             run_ref,
@@ -1224,32 +1222,6 @@ class ConversationService:
         )
 
     @staticmethod
-    def _review_answer_required_feedback(decision):
-        """Close the non-answer route around verification.
-
-        A review request supplies both the text and the standard, so nothing is
-        missing from the user. Ending the turn as a clarification, limitation, or
-        failure would deliver unverified text under a disposition the verify step
-        never sees, so the runtime rejects the disposition itself and asks for the
-        revision that was requested.
-        """
-        return DecisionFeedback(
-            action_id="interaction_turn",
-            reason_code="review_requires_sendable_answer",
-            message=(
-                f"A review request cannot end as {decision.disposition!r}. The user "
-                "supplied both the text to review and the requirements it must meet."
-            ),
-            repairable_fields=("disposition", "message"),
-            immutable_fields=("messages",),
-            required_repair=(
-                "Return disposition 'answer' whose message is the revised sendable "
-                "text. Satisfy a requirement that forbids an unevidenced claim by "
-                "removing that claim, not by asking the user for the evidence."
-            ),
-        )
-
-    @staticmethod
     def _unread_output_feedback(decision, resource_id: str) -> DecisionFeedback:
         """Reject the exit, not the conclusion.
 
@@ -1268,8 +1240,8 @@ class ConversationService:
             ),
             repairable_fields=("disposition", "message"),
             required_repair=(
-                "Call read_action_output for resource_id "
-                f"{resource_id!r} with a keyword or start_line that would locate what "
+                "Call search_action_output or read_artifact for resource_id "
+                f"{resource_id!r} with the selected tool's keyword or start_line to locate what "
                 "is missing. If the omitted part turns out not to contain it, say so "
                 "from what the windows showed."
             ),
@@ -1300,10 +1272,13 @@ class ConversationService:
         for item in inputs:
             if (
                 isinstance(item, ActionObservation)
-                and item.capability_id == READ_ACTION_OUTPUT_CAPABILITY
+                and item.capability_id in ARTIFACT_OUTPUT_CAPABILITIES
                 and item.status == "succeeded"
             ):
-                offloaded.pop(str(item.payload.get("resource_id", "")), None)
+                ref = ResourceRef.model_validate(item.payload["resource_ref"])
+                binding = offloaded.get(ref.resource_id)
+                if binding is not None and ResourceRef.model_validate(binding[2]) == ref:
+                    offloaded.pop(ref.resource_id)
         return offloaded
 
     @staticmethod
@@ -1325,7 +1300,7 @@ class ConversationService:
         for item in inputs:
             if not isinstance(item, ActionObservation):
                 continue
-            if item.capability_id == READ_ACTION_OUTPUT_CAPABILITY:
+            if item.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
                 continue
             if item.status != "succeeded":
                 continue
@@ -1348,6 +1323,7 @@ class ConversationService:
         decision,
         *,
         review_criteria,
+        verification_inputs,
         conversation_id,
         run_ref,
         principal,
@@ -1364,21 +1340,34 @@ class ConversationService:
         emitted bytes identical to the judged bytes without asking a model to
         copy them.
 
-        Returns ``(final_message | None, action_result, usage, verdict)``. The
-        verdict is carried separately so the loop can keep prose-only revisions
-        in the exclusive finalization phase while sending insufficient evidence
-        back to the action phase.
+        Returns ``(final_message | None, action_result, usage)``. A failed
+        verification remains visible to the next agent turn as the typed receipt,
+        but it does not choose that turn's action availability.
         """
         action_id = f"runtime-verify-{attempt}"
+        try:
+            cited_units = materialize_cited_draft(
+                decision.segments, verification_inputs,
+            )
+        except CitationBindingError as exc:
+            return None, _ActionResult(action_id, DecisionFeedback(
+                action_id=action_id,
+                action_name="final_message",
+                reason_code=exc.reason_code,
+                message=f"{exc}\n本次被拒绝的完整提交（待修正数据）：\n{decision.model_dump_json()}",
+                repairable_fields=("segments",),
+                required_repair="修正引用或补读后重新提交草稿和对应引用，不要编造证据。",
+            )), usage
         arguments = {
             "draft": decision.message,
             "success_criteria": list(review_criteria.criteria),
-            "evidence_refs": list(
-                self._journal.conversation_evidence_refs(
-                    conversation_id,
-                    principal,
+            "cited_units": [unit.model_dump(mode="json") for unit in cited_units],
+            "source_reading_state": [
+                state.model_dump(mode="json")
+                for state in materialize_source_reading_state(
+                    verification_inputs, verifier_capability_id=_VERIFICATION_CAPABILITY,
                 )
-            ),
+            ],
         }
         execution_scope = ExecutionScope(
             principal=principal,
@@ -1425,13 +1414,10 @@ class ConversationService:
         )
         passed = receipt if verdict == "passed" else None
         if passed is None:
-            return None, result, usage, verdict
-        return (
-            FinalMessage(disposition="answer", message=passed.verified_draft),
-            result,
-            usage,
-            verdict,
-        )
+            return None, result, usage
+        if decision.message.strip() != passed.verified_draft:
+            raise ValueError("verified receipt must bind the submitted answer")
+        return (decision, result, usage)
 
     def _decide(
         self,
@@ -1500,8 +1486,9 @@ class ConversationService:
                 )
             )
             visible_inputs = materialize_interaction_inputs(decision_inputs)
+            final_inputs = materialize_citation_context(visible_inputs)
             typed_inputs_content = "Typed execution inputs:\n" + json.dumps(
-                [item.model_dump(mode="json") for item in visible_inputs],
+                [item.model_dump(mode="json") for item in final_inputs],
                 ensure_ascii=False,
                 default=str,
             )
@@ -1509,7 +1496,9 @@ class ConversationService:
         response = self._generate_model(
             StructuredModelRequest(
                 operation="agent_interaction_turn",
-                version=("v3-final" if finalization_mode else "v3-actions"),
+                version=get_prompt(
+                    "conversation.final" if finalization_mode else "conversation.action"
+                ).version,
                 messages=visible_messages,
                 output_type=FinalMessage,
                 context_projection_ref=sealed_context_projection_ref(
@@ -1517,7 +1506,7 @@ class ConversationService:
                     messages=visible_messages,
                 ),
                 temperature=0,
-                max_tokens=1_600,
+                max_tokens=32_768,
                 kind=("structured" if finalization_mode else "tool_calling"),
                 action_definitions=action_definitions,
                 action_choice=(None if finalization_mode else "required"),
@@ -1697,22 +1686,21 @@ class ConversationService:
         if self._artifact_port is not None:
             tools.append(
                 EffectiveToolCapability(
-                    name=READ_ACTION_OUTPUT_CAPABILITY,
-                    description=(
-                        "Re-read the part of an earlier action output that was omitted from its "
-                        "observation excerpt. Pass the retrieval.resource_ref from that observation, "
-                        "plus a keyword to locate lines anywhere in the full output, or start_line to "
-                        "read sequentially. Each keyword hit is returned with the few lines before "
-                        "and after it, so a heading also shows what is written under it. Line numbers "
-                        "are the source's own, counted from 1. Returns numbered lines, total_lines "
-                        "and next_start_line. Read-only."
-                    ),
-                    input_schema=ReadActionOutputArguments.model_json_schema(),
+                    name=READ_ARTIFACT_CAPABILITY,
+                    description=get_prompt("conversation.read_artifact.description").template,
+                    input_schema=ReadArtifactArguments.model_json_schema(),
                     read_only=True,
                     planning_safe=True,
                     safely_retryable=True,
                 )
             )
+        if self._artifact_port is not None and self._artifact_search is not None:
+            tools.append(EffectiveToolCapability(
+                name=SEARCH_ACTION_OUTPUT_CAPABILITY,
+                description=get_prompt("conversation.search_output.description").template,
+                input_schema=SearchActionOutputArguments.model_json_schema(),
+                read_only=True, planning_safe=True, safely_retryable=True,
+            ))
         if self._knowledge_reader is not None:
             tools.append(
                 EffectiveToolCapability(
@@ -1818,7 +1806,7 @@ class ConversationService:
                 )
                 and not (
                     not has_readable_offloaded_output
-                    and tool.name == READ_ACTION_OUTPUT_CAPABILITY
+                    and tool.name in ARTIFACT_OUTPUT_CAPABILITIES
                 )
             ),
         })
@@ -1896,17 +1884,17 @@ class ConversationService:
             ),
             -1,
         )
-        counts: dict[tuple[str, str, int | None], int] = {}
+        attempts: dict[tuple[str, str, int | None], set[int]] = {}
         for item in inputs[last_progress + 1 :]:
-            if not isinstance(item, DecisionFeedback):
+            if not isinstance(item, DecisionFeedback) or item.decision_turn is None:
                 continue
             key = (
                 item.action_name or item.action_id,
                 item.reason_code,
                 item.working_plan_revision,
             )
-            counts[key] = counts.get(key, 0) + 1
-            if counts[key] >= 2:
+            attempts.setdefault(key, set()).add(item.decision_turn)
+            if len(attempts[key]) >= 2:
                 return item
         return None
 
@@ -1941,7 +1929,7 @@ class ConversationService:
                 feedback is not None
                 or not isinstance(action, ToolCallProposal)
                 or not (
-                    action.tool_name == READ_ACTION_OUTPUT_CAPABILITY
+                    action.tool_name in ARTIFACT_OUTPUT_CAPABILITIES
                     or self._safe_for_concurrency(action)
                 )
             ):
@@ -2077,11 +2065,11 @@ class ConversationService:
             )
         if (
             isinstance(action, ToolCallProposal)
-            and action.tool_name == READ_ACTION_OUTPUT_CAPABILITY
+            and action.tool_name in ARTIFACT_OUTPUT_CAPABILITIES
         ):
             # Service-owned: the artifact port serves it, so the tool registry has no
             # entry to validate against and its schema is the contract.
-            if self._artifact_port is None:
+            if action.tool_name == READ_ACTION_OUTPUT_CAPABILITY or self._artifact_port is None or (action.tool_name == SEARCH_ACTION_OUTPUT_CAPABILITY and self._artifact_search is None):
                 return DecisionFeedback(
                     action_id=action.action_id,
                     reason_code="capability_missing",
@@ -2091,7 +2079,8 @@ class ConversationService:
                     required_repair="Choose an available tool or explain the capability limitation.",
                 )
             try:
-                arguments = ReadActionOutputArguments.model_validate(action.arguments)
+                argument_type = SearchActionOutputArguments if action.tool_name == SEARCH_ACTION_OUTPUT_CAPABILITY else ReadArtifactArguments
+                arguments = argument_type.model_validate(action.arguments)
             except ValidationError as error:
                 return DecisionFeedback(
                     action_id=action.action_id,
@@ -2111,7 +2100,7 @@ class ConversationService:
                     action_id=action.action_id,
                     reason_code="offloaded_output_reference_invalid",
                     message=(
-                        "read_action_output can read only an exact resource_ref from "
+                        "Artifact search/read accepts only an exact resource_ref from "
                         "an offloaded observation visible in this interaction."
                     ),
                     repairable_fields=("arguments",),
@@ -2152,8 +2141,8 @@ class ConversationService:
                     repairable_fields=("tool_name", "arguments"),
                     immutable_fields=("action_id",),
                     required_repair=(
-                        "Call read_action_output with the previously supplied resource_ref "
-                        f"for resource_id {unread_resource!r} and a keyword or start_line."
+                        "Use search_action_output or read_artifact with the previously supplied resource_ref "
+                        f"for resource_id {unread_resource!r} and the corresponding search or read parameters."
                     ),
                 )
         if (
@@ -2361,19 +2350,28 @@ class ConversationService:
 
         The bound is what keeps ``max_total_tokens`` meaningful for a single
         oversized return. Offloading is what keeps the bound from destroying
-        evidence: the omitted text stays readable through ``read_action_output``,
+        evidence: the omitted text stays readable through ``read_artifact``,
         so choosing which part matters remains the model's decision.
         """
 
         bounded = bound_observation_payload(payload)
         if not bounded.is_bounded:
             return bounded.payload
-        fitted = dict(bounded.payload)
         retrieval: dict[str, Any] = {
             "omitted_chars": bounded.omitted_chars,
             "original_chars": bounded.original_chars,
         }
-        full_text = select_offload_text(payload)
+        # 抓取契约在读取边界校验；明确选择来源载荷，不依赖最长叶子或工具名注册表。
+        data = payload.get("data")
+        source_output = (
+            WebReadOutput.model_validate(data)
+            if isinstance(data, dict) and data.get("format") == WEB_SOURCE_FORMAT
+            else None
+        )
+        full_text = (
+            source_output.source_text if source_output and source_output.source_text
+            else select_offload_text(payload)
+        )
         try:
             resource_ref = self._artifact_port.write_generated(
                 owner=owner,
@@ -2397,13 +2395,55 @@ class ConversationService:
             )
         else:
             retrieval["resource_ref"] = resource_ref.model_dump(mode="json")
+            retrieval["total_lines"] = len(full_text.splitlines())
             retrieval["read_more"] = (
                 "This excerpt omits the middle of the output. To read the omitted part, "
-                "call read_action_output with this resource_ref plus either a keyword to "
-                "locate it or a start_line to read sequentially."
+                "call search_action_output with this resource_ref and keyword to "
+                "locate it, or call read_artifact with start_line to read sequentially."
             )
+        # retrieval 自身也占 Context，原有边界不能在附加引用后被突破。
+        final_bound = bound_observation_payload(
+            payload, max_chars=MAX_OBSERVATION_PAYLOAD_CHARS
+            - serialized_length({"retrieval": retrieval}) - 32,
+        )
+        fitted = dict(final_bound.payload)
+        retrieval["omitted_chars"] = final_bound.omitted_chars
         fitted["retrieval"] = retrieval
         return fitted
+
+    def _search_action_output(self, action, *, principal, owner, inputs):
+        try:
+            arguments = SearchActionOutputArguments.model_validate(action.arguments)
+            text = self._artifact_port.read_text(arguments.resource_ref, principal=principal, owner=owner)
+            result = search_artifact_text(text, arguments=arguments, matcher=self._artifact_search)
+            return _ActionResult(action.action_id, ActionObservation(
+                kind="tool_result", action_id=action.action_id, capability_id=SEARCH_ACTION_OUTPUT_CAPABILITY,
+                status="succeeded", payload={"ok": True, **result.model_dump(mode="json")}))
+        except (ValidationError, ValueError) as error:
+            error_kind = "invalid_param"
+            message = str(error)
+        except Exception as error:
+            error_kind = "execution_failure"
+            message = f"{type(error).__name__}: {error}"
+        return _ActionResult(action.action_id, ActionObservation(
+            kind="tool_result", action_id=action.action_id, capability_id=SEARCH_ACTION_OUTPUT_CAPABILITY,
+            status="failed", payload={"ok": False, "error_kind": error_kind, "error": message}))
+
+    def _read_artifact(self, action, *, principal, owner):
+        try:
+            arguments = ReadArtifactArguments.model_validate(action.arguments)
+            text = self._artifact_port.read_text(arguments.resource_ref, principal=principal, owner=owner)
+            result = read_artifact_text(text, arguments=arguments)
+            return _ActionResult(action.action_id, ActionObservation(
+                kind="tool_result", action_id=action.action_id, capability_id=READ_ARTIFACT_CAPABILITY,
+                status="succeeded", payload={"ok": True, **result.model_dump(mode="json")}))
+        except (ValidationError, ValueError) as error:
+            error_kind, message = "invalid_param", str(error)
+        except Exception as error:
+            error_kind, message = "execution_failure", f"{type(error).__name__}: {error}"
+        return _ActionResult(action.action_id, ActionObservation(
+            kind="tool_result", action_id=action.action_id, capability_id=READ_ARTIFACT_CAPABILITY,
+            status="failed", payload={"ok": False, "error_kind": error_kind, "error": message}))
 
     def _read_action_output(self, action, *, principal, owner):
         """Serve a window of an offloaded action output back to the model.
@@ -2452,33 +2492,54 @@ class ConversationService:
                     },
                 ),
             )
+        read_request = arguments.model_dump(mode="json", exclude={"resource_ref"})
+        # 为两份实际参数及状态说明预留空间，避免把可执行续读参数截成不完整字符串。
+        envelope_chars = serialized_length({
+                "ok": True, "resource_ref": arguments.resource_ref.model_dump(mode="json"),
+                "lines": [], "total_lines": len(text),
+
+                "read_state": {"request": read_request, "continuation": {
+                    "start_line": max(len(text), arguments.start_line),
+                }},
+            }) + 1_024
+        if envelope_chars >= MAX_OBSERVATION_PAYLOAD_CHARS:
+            return _ActionResult(action.action_id, observation(
+                status="failed", payload={"ok": False, "error_kind": "invalid_param",
+                    "error": "读取参数过长，无法在输出预算内完整回显和提供续读参数；请缩短字面关键词。"},
+            ))
         excerpt = excerpt_payload_text(
-            text, keyword=arguments.keyword, start_line=arguments.start_line
+            text, start_line=arguments.start_line,
+            max_chars=MAX_OBSERVATION_PAYLOAD_CHARS - envelope_chars,
         )
         payload = {
             "ok": True,
             # Naming the source makes each window attributable when several outputs were
             # offloaded, and lets the loop tell a read remainder from an unread one.
-            "resource_id": arguments.resource_ref.resource_id,
+            "resource_ref": arguments.resource_ref.model_dump(mode="json"),
             "lines": [{"line": number, "text": line} for number, line in excerpt.lines],
             "total_lines": excerpt.total_lines,
-            "keyword_match_count": len(excerpt.matched_lines),
-            "next_start_line": excerpt.next_start_line,
+            "read_state": excerpt.read_state.model_dump(mode="json"),
         }
         # A window is already line-bounded, but one line can still be huge. Bound it
         # without offloading again: the remainder is still in the same artifact, so a
         # narrower range is the model's remedy, not a second copy.
-        bounded = bound_observation_payload(payload)
-        window = dict(bounded.payload)
+        metadata = {key: value for key, value in payload.items() if key != "lines"}
+        # 截断只作用于正文，不能改写请求回显或可执行的 continuation。
+        bounded = bound_observation_payload(
+            {"lines": payload["lines"]},
+            max_chars=MAX_OBSERVATION_PAYLOAD_CHARS - serialized_length(metadata) - 512,
+        )
+        window = {**metadata, **bounded.payload}
         if bounded.is_bounded:
             window["retrieval"] = {
                 "omitted_chars": bounded.omitted_chars,
                 "original_chars": bounded.original_chars,
                 "read_more": (
                     "This window was too large to show in full. Request a narrower "
-                    "start_line range, or a more specific keyword."
+                    "start_line range."
                 ),
             }
+        assert serialized_length(window) <= MAX_OBSERVATION_PAYLOAD_CHARS
         return _ActionResult(
             action.action_id,
             observation(
@@ -2497,9 +2558,13 @@ class ConversationService:
         )
         if (
             isinstance(action, ToolCallProposal)
-            and action.tool_name == READ_ACTION_OUTPUT_CAPABILITY
+            and action.tool_name in ARTIFACT_OUTPUT_CAPABILITIES
         ):
-            return self._read_action_output(action, principal=principal, owner=owner)
+            if action.tool_name == SEARCH_ACTION_OUTPUT_CAPABILITY:
+                trace = self._journal.get(run_ref)
+                return self._search_action_output(action, principal=principal, owner=owner,
+                                                  inputs=trace.inputs if trace else ())
+            return self._read_artifact(action, principal=principal, owner=owner)
         if (
             isinstance(action, ToolCallProposal)
             and action.tool_name == _SEARCH_PERSONAL_KNOWLEDGE_CAPABILITY
@@ -2786,7 +2851,7 @@ class ConversationService:
         review_criteria=None,
         working_plan=None,
     ):
-        final = FinalMessage(disposition="limitation", message=message)
+        final = FinalMessage(disposition="limitation", segments=(ConversationAnswerSegment(text=message),))
         self._commit(
             run_ref,
             principal,
@@ -2828,6 +2893,14 @@ class ConversationService:
         working_plan=None,
     ):
         prior = self._journal.get(run_ref)
+        # Admission creates per-action feedback; only this loop owns the decision
+        # boundary. A batch of rejected siblings is one attempt, including on resume.
+        for index in range(len(prior.inputs) if prior is not None else 0, len(inputs)):
+            item = inputs[index]
+            if isinstance(item, DecisionFeedback):
+                inputs[index] = item.model_copy(
+                    update={"decision_turn": usage.model_turns or None}
+                )
         self._journal.put(
             InteractionTrace(
                 revision=(prior.revision + 1 if prior is not None else 1),

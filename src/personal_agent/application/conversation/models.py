@@ -5,12 +5,14 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from personal_agent.capabilities.contracts.verification import ConversationAnswerSegment
 
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteOperationView,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.application.conversation.observation_bounds import ReadWindowRequest
 
 
 ConversationInteractionMode = Literal["default", "auto"]
@@ -129,7 +131,7 @@ class KnowledgeSaveArguments(_StrictModel):
     selections: tuple[KnowledgeSaveSelection, ...] = Field(min_length=1)
 
 
-class ReadActionOutputArguments(_StrictModel):
+class ReadActionOutputArguments(ReadWindowRequest):
     """What the model may choose when re-reading an offloaded action output.
 
     Identity is deliberately absent. The artifact belongs to the interaction that
@@ -139,18 +141,6 @@ class ReadActionOutputArguments(_StrictModel):
 
     resource_ref: ResourceRef = Field(
         description="The retrieval.resource_ref carried by the excerpted observation."
-    )
-    keyword: str = Field(
-        default="",
-        description=(
-            "Locate lines containing this text anywhere in the full output. "
-            "Leave empty to read sequentially from start_line."
-        ),
-    )
-    start_line: int = Field(
-        default=1,
-        ge=1,
-        description="First line of this window; use the previous next_start_line to continue.",
     )
 
 
@@ -196,15 +186,16 @@ ActionProposal = ToolCallProposal | AgentDelegationProposal
 
 
 class FinalMessage(_StrictModel):
-    """Close the interaction only after required user-visible results are resolved.
-
-    If available capabilities can continue an unresolved obligation now or in a
-    later interaction, return the necessary provider action calls instead.
-    """
+    """The writer owns ordered answer text and its evidence references."""
 
     kind: Literal["final_message"] = "final_message"
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
-    message: str = Field(min_length=1)
+    segments: tuple[ConversationAnswerSegment, ...] = Field(min_length=1)
+
+    @property
+    def message(self) -> str:
+        """Render the sole canonical body; never serialize a writable duplicate."""
+        return "".join(segment.text for segment in self.segments)
 
 
 class ContinueTurnProposal(_StrictModel):
@@ -288,6 +279,14 @@ class DecisionFeedback(_StrictModel):
     action_name: str = ""
     reason_code: str
     working_plan_revision: int | None = Field(default=None, ge=1)
+    decision_turn: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "ConversationService binds feedback to the model decision that produced it "
+            "when committing inputs. None denotes feedback without a model decision."
+        ),
+    )
     message: str
     repairable_fields: tuple[str, ...] = ()
     immutable_fields: tuple[str, ...] = ()

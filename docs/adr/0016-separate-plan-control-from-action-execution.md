@@ -3,7 +3,7 @@
 - 状态：Accepted，核心迁移与跨轮 target 已通过，当前单变量证据待完成
 - 日期：2026-08-30
 - 影响范围：Conversation working plan、模型动作协议、Admission、执行事实关联、Verification 与 Completion 顺序
-- 详细设计：[普通对话研究交付与 Plan 边界优化方案](../future/conversation-research-delivery.md)
+- 相关交付协议：[ADR 0017：分离动作选择与最终交付](0017-separate-action-selection-from-final-delivery.md)
 
 ## 1. 背景与目标
 

@@ -64,6 +64,7 @@ from personal_agent.tools.research_pipeline import (
     build_research_verify_digest_tool,
 )
 from personal_agent.tools.web_search import build_web_search_tool
+from personal_agent.tools.web_read import build_web_read_tool
 
 __all__ = [
     "ToolArtifact",
@@ -111,6 +112,7 @@ __all__ = [
     "build_inspect_worker_queue_tool",
     "build_retry_worker_task_tool",
     "build_web_search_tool",
+    "build_web_read_tool",
     "governance_extras",
     "ToolGovernance",
     "ToolInvocationEvent",

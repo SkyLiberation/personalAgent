@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from personal_agent.capabilities.contracts.verification import ConversationAnswerSegment
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -107,7 +108,7 @@ def test_trace_archive_automatically_extracts_typed_interaction_measurement(
             agent_calls=0,
             total_tokens=120,
         ),
-        final_message=FinalMessage(disposition="answer", message="done"),
+        final_message=FinalMessage(disposition="answer", segments=(ConversationAnswerSegment(text="done"),)),
     )
 
     path = archive.write_trace(

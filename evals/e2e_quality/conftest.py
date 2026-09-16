@@ -46,6 +46,10 @@ def server_temp_dir(request: pytest.FixtureRequest) -> Path:
 @pytest.fixture(autouse=True)
 def clean_e2e_database(request: pytest.FixtureRequest) -> None:
     """Reset canonical tables per journey while application processes are reused."""
+    key = (Path(str(request.node.path)).name, request.node.name.split("[")[0])
+    case = EVIDENCE_BY_NODE.get(key)
+    if case is not None and not case.real_postgres_required:
+        return
     request.getfixturevalue("clean_postgres_business_tables")
 
 

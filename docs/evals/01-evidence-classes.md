@@ -7,7 +7,7 @@
 | 分类 | 必须具备 | 可以使用的替代 | 能证明 | 不能证明 |
 | --- | --- | --- | --- | --- |
 | Product E2E | 真实目标用户、自然输入、正式用户入口、生产主路径、真实模型、用户可观察结果和关键反事实 | 只允许替代不可控第三方、付费边界或危险副作用，且 Fake 实现生产 Port | 该用户目标在该 profile 下成立 | 设计最初有必要、所有用户场景、框架优越性 |
-| Application E2E | 正式 API/CLI/Application Use Case、生产 Domain/Store/Runtime、结果契约 | 外部 Provider 可冻结 | 某个正式 Application contract 从入口到结果成立 | Agent 能从自然语言自主选择该能力 |
+| Application Integration | 正式 API/CLI/Application Use Case、生产 Domain/Store/Runtime、结果契约 | 外部 Provider 可冻结 | 某个正式 Application contract 从入口到结果成立 | Agent 能从自然语言自主选择该能力；完整用户目标已经满足 |
 | Runtime Conformance | 真实 Application/Domain/Store，可精确构造 Command、Plan、故障或 Provider outcome | scripted model、frozen provider、故障注入 | 幂等、恢复、状态迁移、Admission、Completion 等机械协议 | 用户会提出该目标、模型能做出正确语义决策 |
 | Integration | 两个或多个生产组件的协议与装配 | 边界 Fake/Stub | 组件间契约可执行 | 完整用户目标 |
 | Capability Profile | 真实 MCP/A2A/外部 Provider 和生产 Gateway | 通常不使用 Provider Fake | 特定连接器/profile 可用 | 本产品需要该 Provider、完整产品完成率 |
@@ -16,7 +16,7 @@
 
 ## 证据分类与横切验证不能混用
 
-每条 E2E 在 `evidence_catalog.py` 中只能拥有一个证据分类。Tool Calling、MCP dispatch、A2A Artifact 返回等横切套件不是新的证据类别，而是对同一份密封 Trace 的机制检查；同一用例可以进入多个套件。报告必须并列保留整例 `pytest_outcome` 和关键检查点结果，不能用机制通过覆盖 Product、Provider 或用户结果失败。
+每条 catalog 用例在 `evidence_catalog.py` 中只能拥有一个证据分类。Tool Calling、MCP dispatch、A2A Artifact 返回等横切套件不是新的证据类别，而是对同一份密封 Trace 的机制检查；同一用例可以进入多个套件。报告必须并列保留整例 `pytest_outcome` 和关键检查点结果，不能用机制通过覆盖 Product、Provider 或用户结果失败。
 
 只有现有用例无法承载新的用户目标、入口、初始事实、故障边界或关键反事实时才新增 E2E。共享 Observation、Receipt、Artifact、policy fact 或局部不变量时，优先在 `validation_catalog.py` 中增加 typed 检查点，不复制 live workload。
 

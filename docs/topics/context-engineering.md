@@ -104,20 +104,37 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 | 事实 | 写入口 |
 | --- | --- |
 | 一次 Observation 能进入 Context 的体积（`MAX_OBSERVATION_PAYLOAD_CHARS = 20_000`） | `bound_observation_payload` |
-| 被卸载文本的形态（原始串而非序列化结果） | `select_offload_text` |
-| 某个窗口的内容（命中行带 before=2 / after=4，1 起计行号） | `excerpt_payload_text` |
-| 「读哪一段」 | 模型，经 `read_action_output` 的 `keyword` / `start_line` |
+| 被卸载文本的形态 | 通用结果由 `select_offload_text` 选择；网页正文由 Conversation 校验 `WebReadOutput` 后明确选择 `source_text` |
+| 某个正文窗口的内容 | `read_artifact_text` 按正文行读取；长行的实际列范围与 `next_read` 明确续读位置 |
+| 「读哪一段」 | 模型用 `search_action_output` 搜索，用 `read_artifact` 的 `start_line` / `limit` 读取同一正文 |
 | 「未读完能否收尾」 | `ConversationService._unread_offloaded_resource`；所有 disposition 均受约束 |
 
 被界定的 Observation 回带 `retrieval.omitted_chars`、`original_chars` 与 `resource_ref`，
 所以「这个远端输出读过没有」是对 committed inputs 的纯函数判定，不需要另存已读集合。
 卸载失败时 `unavailable_reason` 可见，不静默。
 
+### 网页来源正文保留与重读
+
+**已取得的提取文本先保留，再由 Observation 边界限制模型输入；搜索摘要不能冒充网页正文。** `CaptureService.capture_url()` 返回 typed `UrlCaptureResult(url, text, provider)`，抓取 Provider 不再把返回文本静默截成 12,000 字符。完整仅指保留 Provider 实际交付的提取文本，不保证动态网页、图片或 Provider 未返回内容也已取得。
+
+内置 HTML 提取的唯一 owner 是 `application/capture/utils.py`：按原文顺序连接内联文本，以块、表格单元格和定义项为边界输出，普通段落只折叠 HTML 空白，`pre` 保留换行和缩进；不再全局去重文本节点、词语或段落。`script/style/noscript` 仍排除。该实现不运行 JavaScript、不计算 CSS 可见性，也不承担主内容选择、来源权威判断或事实校验。当前版本的确定性反事实、正式入口 Capture 消费与 Artifact 精确读取检查点均已成立；研究仍有取证未收敛、预算内未交付的问题，不能将局部验收写成 Product E2E 通过。
+
+`web_search(query, limit)` 的 `results/evidence` 只保存发现摘要，不再接受 `scrape` 或隐式抓取前两个结果。`web_read(url)` 由模型直接选择来源，经同一 `CaptureService` 返回 `WebReadOutput(source_url, provider, source_text)`；失败由 `ToolArtifact` 表达，不返回伪成功正文。原 `capture_url` 仍服务确定性 Research 采集流程，不进入普通模型可见工具面，两者共用抓取事实 owner。
+
+成功正文由 `application/capture/web_source.py` 原样保存在 `source_text`，URL 与服务方由外层 `WebReadOutput` 拥有；不把 JSON 元数据混入正文搜索。网页格式为 `web-source-text-v2`。网络响应上限仍为 4 MiB，提取正文上限为 16 MiB；超限显式失败，不宣称全局容量。
+
+目标代码的搜索与读取共同使用正文行号，分别返回命中位置和连续窗口。只搜索到局部不能视为全文已读；超长行按 `next_read.start_column` 续读，代码累计实际范围，覆盖一整行才计入完整行。正文及参数共同受 20,000 字符 Observation 上限约束。Artifact 的 UTF-8 字节读写保持换行，不让宿主操作系统转换原文。旧读取实现保留但不投影且准入拒绝，无回退；试接入范围、证据与风险见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
+
+正文保留与重读的历史缺陷证据，以及搜索/读取分离候选的当前结果，分别由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。既有保真修复闭环不能替代新候选准入，也不证明通用事实合成正确率、网络稳定性或成本下降。
+
 ### Artifact-backed Observation 的请求级物化
 
 **Journal 保存完整 bounded Observation；模型后续回合不重复接收其中无证明力的截断正文。**当 Observation 已有
-`retrieval.resource_ref` 时，`context_materialization.py` 只向模型物化状态、omission metadata 和重读 ref；
-`read_action_output` 返回的 exact window 则原样保留。该投影是 request-local view，不改写 journal，不增加已读
+`retrieval.resource_ref` 时，`context_materialization.py` 保留状态、omission metadata 和重读 ref。对具有合法
+`WebReadOutput` 的网页结果，还保留已提交的 `source_url/provider`：指定来源和抓取 Provider
+不会随正文消失；投影的 `source_text` 为空，已有 omission 标记和同一 ref 表示正文仍在 Artifact 中。
+这不代表正文已读，也不构成证据充分或任务完成结论。Final 与 Verifier 复用同一投影，未读门禁不放宽。
+当前搜索和 `read_artifact` 返回的窗口原样保留。该投影是 request-local view，不改写 journal，不增加已读
 状态，也不把 Artifact 复制成第二事实源。
 
 CTX-001 的正式 HTTP E2E 同时读取三份超大冻结资料。改动前第二轮 typed inputs 为 48,815 字符、累计
@@ -131,6 +148,10 @@ Admission 在同 capability 已有未读卸载结果时拒绝这种无进展 ref
 冒充重读”。它**没有证明**普通 Conversation messages
 需要 segment index、滚动摘要、向量化历史或 Provider 原生 compaction，因此当前不实现这些机制。若未来同一自然
 用户目标在消息历史增长上失败，必须重新取得独立 baseline。
+
+### 可见证据的随文引用编号
+
+目标代码在 Action 和 Final 的同一可见输入上生成 `CitableInput`。观察和原文行旁直接给出 `evidence_id`，Conversation 原样复制到正文段引用；不再展示需要组合的观察序号与行号目录。执行记录保持原值，编号是请求内派生视图；恢复只接受同一可见输入生成的编号，不读取隐藏 Artifact、不选择邻片、不代替支持判断。失败与 Verifier 输出不产生引用，正文不因漏引被丢弃。当前试接入证据见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
 
 ### 上下文构成度量
 

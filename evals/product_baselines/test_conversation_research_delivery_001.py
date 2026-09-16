@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from hashlib import sha256
 import os
+from pathlib import Path
 import re
 from time import perf_counter
 from typing import Any
@@ -14,6 +16,10 @@ from urllib.parse import urlencode, urlparse
 import pytest
 
 from evals.e2e_quality.failure_diagnostics import diagnose_earliest_failure
+from evals.e2e_quality.evidence_catalog import RESEARCH_TOOL_PROTOCOL_OUTCOME, UserOutcomeContract
+from evals.e2e_quality.research_answer_outcome import (
+    GRADER_VERSION, grade_research_answer, research_answer_request,
+)
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
     _get_json,
@@ -26,6 +32,7 @@ from evals.product_baselines.evidence import (
     product_evidence_role,
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.infra.structured_model import build_structured_model_client
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.product_e2e]
@@ -47,11 +54,14 @@ class _Scenario:
     request: str
     required_concepts: tuple[tuple[str, ...], ...]
     official_source_groups: tuple[tuple[str, ...], ...]
+    outcome_contract: UserOutcomeContract | None = None
+    dataset_revision: str = _DATASET_REVISION
 
 
 _SCENARIOS = (
     _Scenario(
         scenario_id="tool-protocol-boundary",
+        outcome_contract=RESEARCH_TOOL_PROTOCOL_OUTCOME,
         request=(
             "请实际查阅 OpenAI 官方工具文档和 MCP 官方 tools 规范，在这次回复中比较"
             "工具选择、权限边界和结果契约，给出带官方 URL 的中文结论。"
@@ -225,7 +235,7 @@ def _execution_counts(trace: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def _config_cohort(server: LiveWebProcess) -> str:
+def _config_cohort(server: LiveWebProcess, scenario: _Scenario) -> str:
     settings = server.settings
     return canonical_evidence_digest({
         "structured_model": settings.structured.model,
@@ -257,19 +267,27 @@ def _config_cohort(server: LiveWebProcess) -> str:
             os.getenv("PERSONAL_AGENT_E2E_REQUEST_TIMEOUT_SECONDS", "300")
         ),
         "persistence": "production-postgres-composition",
-        "dataset_revision": _DATASET_REVISION,
+        "dataset_revision": scenario.dataset_revision,
     })
 
 
-@pytest.mark.parametrize(
-    ("scenario", "repetition"),
-    _SAMPLES,
-    ids=[
-        f"{scenario.scenario_id}-run-{repetition}"
-        for scenario, repetition in _SAMPLES
-    ],
-)
-def test_conversation_research_delivery_001(
+def _web_source_artifacts(server: LiveWebProcess, trace: dict[str, Any]) -> list[dict[str, str]]:
+    """仅封存此测试进程的已返回来源，不向 Agent 注入任何内容。"""
+    resource_ids = set()
+    for item in trace.get("inputs", ()):
+        if item.get("capability_id") == "web_read":
+            ref = item.get("payload", {}).get("retrieval", {}).get("resource_ref", {})
+            if isinstance(ref.get("resource_id"), str):
+                resource_ids.add(ref["resource_id"])
+    root = Path(server.child_env["PERSONAL_AGENT_DATA_DIR"]) / "generated_artifacts"
+    return [
+        {"resource_id": path.stem, "sha256": sha256(path.read_bytes()).hexdigest(),
+         "content": path.read_text(encoding="utf-8")}
+        for path in root.glob("artg_*.txt") if path.stem in resource_ids
+    ]
+
+
+def run_research_scenario(
     request: pytest.FixtureRequest,
     live_web_search_process: LiveWebProcess,
     product_evidence_recorder: ProductEvidenceRecorder,
@@ -285,7 +303,7 @@ def test_conversation_research_delivery_001(
         "repetition": repetition,
         "initial_conversation_count": 0,
         "restart_server_after_entry_error": True,
-        "dataset_revision": _DATASET_REVISION,
+        "dataset_revision": scenario.dataset_revision,
     }
     product_evidence_recorder.enroll(
         nodeid=request.node.nodeid,
@@ -301,8 +319,8 @@ def test_conversation_research_delivery_001(
             ),
             user_input_digest=canonical_evidence_digest(scenario.request),
             initial_state_digest=canonical_evidence_digest(initial_state),
-            config_cohort=_config_cohort(live_web_search_process),
-            grader_version=_GRADER_VERSION,
+            config_cohort=_config_cohort(live_web_search_process, scenario),
+            grader_version=GRADER_VERSION if scenario.outcome_contract else _GRADER_VERSION,
         ),
     )
 
@@ -326,6 +344,37 @@ def test_conversation_research_delivery_001(
         and all(concept_coverage)
         and all(source_coverage)
     )
+    semantic_report = None
+    if scenario.outcome_contract is not None:
+        # 原场景只验收用户答案；Observation 和生产 Verifier 不作为评分输入。
+        delivered = False
+        semantic_report = {"outcome_id": scenario.outcome_contract.outcome_id}
+        if result.get("disposition") == "answer":
+            settings = live_web_search_process.settings
+            client = build_structured_model_client(settings.structured, settings.langsmith)
+            model_request = research_answer_request(user_request=scenario.request, answer=answer)
+            semantic_report.update({
+                "request_messages": model_request.messages,
+                "request_schema": model_request.output_type.model_json_schema(),
+                "context_projection_ref": model_request.context_projection_ref,
+            })
+            started = perf_counter()
+            try:
+                if client is None:
+                    raise RuntimeError("独立研究答案评测模型未配置")
+                verdict = grade_research_answer(client, user_request=scenario.request, answer=answer)
+                delivered = verdict.value.passed
+                semantic_report.update({
+                    "verdict": verdict.value.model_dump(mode="json"),
+                    "passed": delivered, "model": verdict.model,
+                    "total_tokens": verdict.total_tokens, "response_content": verdict.content,
+                })
+            except Exception as error:
+                semantic_report["execution_failure_type"] = type(error).__name__
+            finally:
+                semantic_report["wall_seconds"] = perf_counter() - started
+        else:
+            semantic_report["not_run_reason"] = "生产未交付 answer；用户结果已失败，不追加评测模型调用。"
     report = {
         "case_id": _CASE_ID,
         "scenario_id": scenario.scenario_id,
@@ -343,6 +392,8 @@ def test_conversation_research_delivery_001(
         "result": result,
         "interaction_trace": trace,
         "delivered": delivered,
+        "semantic_outcome": semantic_report,
+        "web_source_artifacts": _web_source_artifacts(live_web_search_process, trace),
     }
     failure_diagnostic = diagnose_earliest_failure(
         delivered=delivered,
@@ -365,3 +416,23 @@ def test_conversation_research_delivery_001(
     product_evidence_recorder.capture_report(report)
 
     assert delivered, report["result_metrics"]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "repetition"),
+    _SAMPLES,
+    ids=[
+        f"{scenario.scenario_id}-run-{repetition}"
+        for scenario, repetition in _SAMPLES
+    ],
+)
+def test_conversation_research_delivery_001(
+    request: pytest.FixtureRequest,
+    live_web_search_process: LiveWebProcess,
+    product_evidence_recorder: ProductEvidenceRecorder,
+    scenario: _Scenario,
+    repetition: int,
+) -> None:
+    run_research_scenario(
+        request, live_web_search_process, product_evidence_recorder, scenario, repetition,
+    )

@@ -873,59 +873,31 @@ class TestToolExecutor:
         with pytest.raises(ValueError, match="HTTP 400"):
             TavilyWebSearchProvider(settings).search("x" * 401)
 
-    def test_web_search_scrape_respects_allowed_domains(self):
-        from personal_agent.application.capture.providers.web_search import WebSearchResult
+    def test_web_read_respects_allowed_domains(self):
+        from personal_agent.application.capture.models import UrlCaptureResult
         from personal_agent.kernel.config import Settings, WebSearchConfig
-        from personal_agent.tools.web_search import build_web_search_tool
+        from personal_agent.kernel.contracts.tool import ToolError
+        from personal_agent.tools.web_read import build_web_read_tool
 
         captured_urls: list[str] = []
 
-        class DummyProvider:
-            name = "dummy"
-
-            def search(self, query: str, limit: int = 5):
-                return [
-                    WebSearchResult(
-                        title="Allowed",
-                        url="https://allowed.example/page",
-                        snippet="Allowed snippet",
-                        source="dummy",
-                    ),
-                    WebSearchResult(
-                        title="Blocked",
-                        url="https://blocked.example/page",
-                        snippet="Blocked snippet",
-                        source="dummy",
-                    ),
-                ]
-
         class DummyCaptureService:
-            def capture_text_from_url(self, url: str) -> str:
+            def capture_url(self, url: str):
                 captured_urls.append(url)
-                return f"body for {url}"
+                return UrlCaptureResult(url=url, text="指定来源正文", provider="dummy")
 
-        settings = Settings(
-            web_search=WebSearchConfig(
-                provider="tavily",
-                api_key="test-key",
-                allowed_domains=("allowed.example",),
-            )
-        )
-        search_tool = build_web_search_tool(
-            settings,
-            DummyProvider(),
-            capture_service=DummyCaptureService(),
-        )
-        assert tool_governance(search_tool).timeout_seconds == 60.0
-
-        message = search_tool.invoke({
-            "name": "web_search",
-            "args": {"query": "agent tools", "scrape": True},
-            "id": "call-1",
-            "type": "tool_call",
+        settings = Settings(web_search=WebSearchConfig(allowed_domains=("allowed.example",)))
+        read_tool = build_web_read_tool(settings, DummyCaptureService())
+        assert tool_governance(read_tool).exposure == "public_agent"
+        assert tool_governance(read_tool).timeout_seconds == 30.0
+        message = read_tool.invoke({
+            "name": "web_read", "args": {"url": "https://allowed.example/page"},
+            "id": "call-1", "type": "tool_call",
         })
-
+        assert message.artifact.ok
         assert captured_urls == ["https://allowed.example/page"]
-        results = message.artifact.data["results"]
-        assert "body for https://allowed.example/page" in results[0]["snippet"]
-        assert "已跳过抓取" in results[1]["snippet"]
+        assert "指定来源正文" in message.artifact.data["source_text"]
+        with pytest.raises(ToolError) as error:
+            read_tool.invoke({"url": "https://blocked.example/page"})
+        assert error.value.kind == "permission"
+        assert captured_urls == ["https://allowed.example/page"]

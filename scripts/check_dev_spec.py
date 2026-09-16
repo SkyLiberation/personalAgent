@@ -15,10 +15,17 @@ AGENTS = ROOT / "AGENTS.md"
 CLAUDE = ROOT / "CLAUDE.md"
 SPEC_DIR = ROOT / "docs" / "devSpec"
 CASES = SPEC_DIR / "recognition-cases.json"
-MODULE_INSTRUCTIONS = [ROOT / "docs" / "AGENTS.md", ROOT / "evals" / "AGENTS.md"]
+MODULE_INSTRUCTIONS = [
+    ROOT / "docs" / "AGENTS.md",
+    ROOT / "evals" / "AGENTS.md",
+    ROOT / "src" / "personal_agent" / "kernel" / "prompt_templates" / "AGENTS.md",
+]
 MODULE_OVERLAYS = {
     "docs": "docs/AGENTS.md",
     "evals": "evals/AGENTS.md",
+    "src/personal_agent/kernel/prompt_templates": (
+        "src/personal_agent/kernel/prompt_templates/AGENTS.md"
+    ),
 }
 MAX_INSTRUCTION_BYTES = 32 * 1024
 MAX_INSTRUCTION_LINES = 200
@@ -103,8 +110,16 @@ def predict(task: str, routes: list[Route]) -> str:
 
 
 def identify_module_overlay(target: str) -> str | None:
-    first_part = Path(target).parts[0] if Path(target).parts else ""
-    return MODULE_OVERLAYS.get(first_part)
+    normalized_target = Path(target).as_posix().strip("/")
+    matching_prefixes = [
+        prefix
+        for prefix in MODULE_OVERLAYS
+        if normalized_target == prefix
+        or normalized_target.startswith(f"{prefix}/")
+    ]
+    if not matching_prefixes:
+        return None
+    return MODULE_OVERLAYS[max(matching_prefixes, key=len)]
 
 
 def check_links(paths: list[Path]) -> int:

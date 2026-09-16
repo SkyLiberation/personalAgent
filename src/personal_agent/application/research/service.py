@@ -1331,7 +1331,6 @@ class ResearchService:
                 "web_search",
                 query=query,
                 limit=min(10, remaining),
-                scrape=False,
                 user_id=run.user_id,
                 run_id=run.id,
                 _trace_decision_id=decision.id if decision is not None else None,

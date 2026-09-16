@@ -1,6 +1,14 @@
+from pathlib import Path
+
+from evals.e2e_quality.evidence_catalog import (
+    RESEARCH_TOOL_PROTOCOL_OUTCOME,
+    RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME,
+)
 from evals.product_baselines.test_conversation_research_delivery_001 import (
+    _SAMPLES,
     _concept_coverage,
 )
+from evals.product_baselines.test_conversation_research_review_001 import REVIEW_SCENARIO
 
 
 _RESEARCH_CONCEPTS = (
@@ -34,3 +42,14 @@ def test_concept_coverage_remains_case_insensitive_for_protocol_terms() -> None:
         "Checkpoint 记录状态；REPLAY 恢复执行；副作用需要幂等。",
         concepts,
     ) == (True, True, True)
+
+
+def test_review_pilot_preserves_original_cohort_and_canonical_result_contract() -> None:
+    assert len(_SAMPLES) == 20
+    assert all(scenario.dataset_revision != REVIEW_SCENARIO.dataset_revision for scenario, _ in _SAMPLES)
+    assert REVIEW_SCENARIO.outcome_contract is RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME
+    assert RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME.observable_result == RESEARCH_TOOL_PROTOCOL_OUTCOME.observable_result
+    assert RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME.counterfactuals == RESEARCH_TOOL_PROTOCOL_OUTCOME.counterfactuals
+    root = Path(__file__).resolve().parents[1]
+    assert (root / RESEARCH_TOOL_PROTOCOL_OUTCOME.source_ref).is_file()
+    assert (root / RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME.source_ref).is_file()

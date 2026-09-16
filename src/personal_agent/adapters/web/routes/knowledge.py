@@ -153,13 +153,13 @@ def register_knowledge_routes(
     @app.post("/api/knowledge/ingest-url", response_model=CapturedResourceResult)
     def ingest_url(body: IngestUrlRequest, request: Request) -> CapturedResourceResult:
         principal = resolve_requested_principal(request, settings, body.user_id)
-        text = capture_service.capture_text_from_url(body.url)
+        captured = capture_service.capture_url(body.url)
         ingest = knowledge_service.ingest_text(
-            text,
+            captured.text,
             user_id=principal.user_id,
             owner_id=principal.principal_id,
             source_type="link",
-            source_ref=body.url,
+            source_ref=captured.url,
         )
         return CapturedResourceResult(ingest_result=ingest)
 

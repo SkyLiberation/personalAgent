@@ -7,7 +7,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 
 当前系统分层、框架不变量、目标责任链、LLM/确定性边界、Capability/MCP/A2A、知识与运行时事实
 统一见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
-用例状态、归档数据和证据限制只在[当前端到端用例盘点](evals/02-current-case-inventory.md)维护，不再复制到架构摘要或生产风险文档。
+用例状态、归档数据和发布证据限制由[当前评测用例盘点](evals/02-current-case-inventory.md)维护；验证优化的过程与经验集中在 [optimization](optimization/README.md)，不再只保存在会话或仓库外报告中。
 
 ## 目录分工
 
@@ -20,33 +20,19 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
 | `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
-| `interview/` | 面试材料：项目讲稿、请求走查、能力轴、Memory 架构、证据口径与速答；补充规则见 `interview/00-writing-spec.md` |
+| `interview/` | 面试材料：只组织已有事实并链接权威来源；补充规则见 `interview/00-writing-spec.md` |
 | `mermaid/` | Model / Layer 依赖类图 |
-| `future/` | 未来能力与优化设想 |
-| `adr/` | 已接受的跨模块架构决策、baseline、迁移和退出条件 |
+| `future/` | 尚未闭环的准入项；状态收敛与退出见 [Future 规则](future/README.md) |
+| [`optimization/`](optimization/README.md) | 按问题集中保存验证优化过程、候选取舍、结论更正和可复用经验；不维护生产或发布状态 |
+| `adr/` | 已接受决策、迁移与退出条件，以及有保留价值的候选取舍记录 |
+| `evals/` | 执行结果、测量报告、评测证据与发布限制；入口见 [评测体系](evals/README.md) |
 | 顶层散文档 | API、部署、环境变量、评测、检索策略等独立主题 |
 
 ## 文档书写原则
 
-**所有新增文档和被修改的段落都必须遵守[中文工程文档统一规范](chinese-writing-spec.md)。** 存量文档先清理冗余和过期内容，再按目录分批迁移；尚未进入迁移批次，不代表可以继续新增不符合规范的文字。
+文档治理统一遵守[文档模块规范](AGENTS.md)，中文表达遵守[中文写作规范](chinese-writing-spec.md)。新增前先确认主题的权威文档，更新时核对当前代码与已执行证据，先删除过期和重复正文。
 
-文档必须基于当前代码和已落地能力书写，而不是把讨论中的新想法直接追加成补丁式段落。更新架构文档前，先确认对应模块、测试和运行链路的真实职责；如果代码和文档不一致，应优先判断是代码需要调整、文档需要修正，还是需要同时修改两者。
-
-写文档时遵守以下约束：
-
-- **单一事实源**：不要在多个文档或多个层次重复维护同一份流程拓扑、工具契约或治理规则。
-  Conversation Proposal、领域事实、执行事实和发布证据必须分别指向其 canonical owner。
-- **按现有能力组织**：章节应围绕已经存在的模块边界和能力边界展开，不以旧类名或理想化
-  框架目录反推当前能力。
-- **避免补丁式写法**：不要在原文后面堆叠“注意 / 但是 / 其实”来修补前文。若原结构表达不准确，应重写相关小节，让最终文档读起来像一版一致的设计说明。
-- **不要路径先行**：架构文档不要在开头罗列一串文件路径。文档应先解释层级、职责、关键组件和协作关系；组件名本身足以引导读者在当前目录结构中定位代码。只有在 API、部署、故障排查这类需要精确操作的文档里，才把具体路径作为必要信息出现。
-- **区分现状和未来**：已落地能力写在 `topics/`、`workflow/` 或顶层权威文档；未来设想写入 `future/` 或明确标注为演进方向，不能把目标状态写成当前能力。
-- **先 baseline E2E 后目标能力**：每个 Agent 能力的新增、优化或修复，必须先从正式入口实际执行同一用户目标的最简单生产 baseline，证明失败来自当前产品行为；随后才定义目标 E2E 和 Golden Set。baseline 未失败就停止，实现后必须验证用户结果、关键反事实和核心回归。组件文档只描述已被代码和执行证据支撑的能力。
-- **测试新增克制**：不能因为每次小改动随意新增单测。新增测试必须服务于清晰的工程边界：新增或修复 Agent 能力边界、复现 golden set / 线上问题并提供可定位信号、保护安全/副作用/权限/幂等不变式、或锁定容易误合并/误路由的核心决策点。纯重构、实现细节调整、已被上层 golden set 清楚覆盖且定位足够明确的变化，不应再额外堆叠单测。
-- **语义判断归模型，确定性事实归代码**：涉及开放世界的目标理解、候选选择、答案组织和动态
-  修订时，模型产生 typed Proposal；Admission 只接受或拒绝，模型不可用时 fail closed 或请求
-  用户输入。权限、流程真源、工具执行、状态迁移、幂等和审计由确定性系统负责。
-- **和测试/代码同步**：如果文档声明某个模块不承担某职责，代码和测试也应体现这个边界。架构级约束优先沉到 CI 门禁；Procedure contract、Capability scope 和 trajectory eval 分别验证确定性拓扑、授权边界与开放策略质量。
+能力准入与设计证据见[开发细则](devSpec/README.md)，测试分工与新增测试条件见[测试细则](devSpec/quality-security.md)。本索引只维护目录分工和主题入口。
 
 ## 按主题找权威文档
 
@@ -54,16 +40,17 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | --- | --- |
 | 当前核心架构与主链接入状态 | [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md) |
 | 当前未解决问题与优化准入 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
-| 当前用例、机制证据与发布限制 | [evals/02-current-case-inventory.md](evals/02-current-case-inventory.md) |
+| 优化推进过程与经验 | [optimization/README.md](optimization/README.md)；[研究回答来源支持记录](optimization/conversation-source-support.md) |
+| 当前用例、机制证据与发布限制 | [当前评测用例盘点](evals/02-current-case-inventory.md) |
 | Phase 0 历史边界与当前证据入口 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
 | Memory 与知识事实边界 | [topics/memory.md](topics/memory.md) |
 | Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md) |
 | Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
-| Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md) |
-| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md) |
-| 单次 Observation 的上下文边界与卸载重读 | [adr/0013-bounded-observation-and-offloaded-read.md](adr/0013-bounded-observation-and-offloaded-read.md) |
+| Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md)、[ADR 0018](adr/0018-bind-semantic-verification-to-execution-evidence.md)、[ADR 0020](adr/0020-require-conversation-source-support-verification.md)、[ADR 0021](adr/0021-separate-document-absence-from-reading-coverage.md)、[ADR 0022：引用试接入与撤回](adr/0022-conversation-owned-citations-and-support-repair.md)、[ADR 0023：原生分段引用候选](adr/0023-native-answer-segments-and-visible-citations.md) |
+| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md)、[ADR 0019](adr/0019-bind-feedback-to-decision-turn.md) |
+| 单次 Observation 的上下文边界与卸载重读 | [ADR 0013](adr/0013-bounded-observation-and-offloaded-read.md)、[ADR 0024：正文搜索读取与引用](adr/0024-plain-source-tools-and-inline-citations.md) |
 
 **当前架构只以上表的 canonical 文档和生产代码为事实源。**其他 topic、workflow、mermaid 与评测
 归档是专题说明或 paired evidence，不得反向定义主链、能力状态和发布资格。
@@ -82,7 +69,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 
 | 主题 | 文档 |
 | --- | --- |
-| Future 范围与退出规则 | [future/README.md](future/README.md) |
+| Future 范围、状态收敛与退出规则 | [future/README.md](future/README.md) |
 | 当前未解决问题、准入状态与架构评审入口 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 
 ## 运维与参考

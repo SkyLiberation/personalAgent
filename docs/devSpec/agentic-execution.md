@@ -4,9 +4,9 @@
 
 ## 1. Proposal、Admission 与降级边界
 
-模型可以提出 Goal、Plan、ToolCall、业务参数、恢复建议或最终回答，但 Proposal 不是权限、Command、执行事实或完成证明。直接回答不得为形式统一伪造 Task、Command、Receipt 或 CompletionReport。
+模型可提出 Goal、Plan、ToolCall、业务参数、恢复建议或最终回答；权力边界遵守[根规范第 2.4 节](../../AGENTS.md#24-决策执行与完成不得混装)。直接回答不得为形式统一伪造 Task、Command、Receipt 或 CompletionReport。
 
-Admission 只能接受或拒绝 Proposal，禁止补业务字段、拼接约束、修改 payload、替换 Goal、生成或重排 Plan，或静默降级。拒绝必须返回 typed `DecisionFeedback`，说明原因、mutable/immutable fields、required repair、revision scope 和 disposition。
+Admission 按根规范接受或拒绝 Proposal，不得拼接业务约束或重排 Plan。拒绝须返回 typed `DecisionFeedback`，说明原因、mutable/immutable fields、required repair、revision scope 和 disposition。
 
 模型不可用或 Proposal 连续不合法时，只允许 fail closed、暂停、请求用户或外部权威输入、请求缺失能力、等待环境变化、执行已冻结 Command，或对同一 digest 做幂等技术重试。禁止生成替代 Goal、Plan、查询、写入内容或业务回答。
 
@@ -16,13 +16,7 @@ Procedure 只封装 prepare、confirm、commit、receipt、compensate 和 reconc
 
 ## 2. Execution、Verification 与 Completion
 
-必须分离：
-
-1. **Execution Fact**：工具或 Command 是否执行；
-2. **Semantic Verification**：Goal 是否达到；
-3. **Completion**：required result contract 是否全部满足。
-
-Receipt 不能直接代表 Goal 完成；模型 Verifier 也不能推翻确定性执行事实。
+执行事实、语义验证与结果契约完成按[根规范第 2.4 节](../../AGENTS.md#24-决策执行与完成不得混装)分离。以下规定 Plan 与最终交付如何接入这三类责任。
 
 ### 2.1 Plan 控制与具体工具不得混装
 
@@ -54,9 +48,9 @@ FinalMessage 不得通过重复枚举全部 Plan Step ID 来替代 Verifier。�
 
 ## 3. Tool、Command、digest 与 Receipt
 
-只读、低风险、可安全重试的 ToolCall 在 Admission 后直接执行，禁止为形式统一持久化 Command。
+是否形成 Command 按[根规范第 2.4 节](../../AGENTS.md#24-决策执行与完成不得混装)判断；禁止为形式统一持久化只读、低风险且可安全重试的 ToolCall。
 
-需要审批、具有外部副作用、不可安全重试、需要 durable execution，或跨授权或恢复边界的调用，必须形成 immutable Command。Command 只能缩权、不可覆盖；参数变化必须创建 superseding command。
+获准的 Command 必须不可变，只能缩权、不可覆盖；参数变化须创建 superseding command。
 
 digest 是冻结 canonical payload 的一致性指纹，不是身份、授权或执行证明。默认使用一个 canonical `CommandDigest` 绑定 Confirmation、Journal 和 Receipt。
 

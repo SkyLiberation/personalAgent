@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from personal_agent.application.capture.models import UploadCaptureRequest
+from personal_agent.application.capture.models import UploadCaptureRequest, UrlCaptureResult
 from personal_agent.application.capture.providers import (
     BuiltinUrlCaptureProvider,
     DefaultUploadCaptureProvider,
@@ -58,14 +58,14 @@ class CaptureService:
             )
         )
 
-    def capture_text_from_url(self, raw_url: str) -> str:
+    def capture_url(self, raw_url: str) -> UrlCaptureResult:
         url = validate_capture_url(raw_url)
         for provider in self.url_providers:
             if not provider.can_handle(url):
                 continue
             result = provider.capture(url)
             self.logger.info("URL capture completed provider=%s url=%s", result.provider, url)
-            return result.text
+            return result
         raise RuntimeError("No URL capture provider is available.")
 
     def _build_default_url_providers(self) -> list[UrlCaptureProvider]:
