@@ -31,7 +31,7 @@
 
 编写用例前必须明确它验证的是用户结果、正式业务入口的事实链、运行不变量，还是外部能力配置。设计项编号、证据类别、目标、关键反事实、范围外事项及断言责任主体，必须能从 catalog、typed contract 或评测权威文档反查。
 
-- 每条断言必须对应目标结果、必要反事实或全局权限、隔离、幂等与副作用不变量。删除后不影响验收目的的断言属于冗余，须删除或移入对应 Contract、Conformance 或横切套件。
+- 每条断言必须对应目标结果、必要反事实或全局权限、隔离、幂等与副作用不变量。删除后不影响验收目的的断言属于冗余，须删除，或按真实失败边界纳入 Offline Eval 或 E2E 横切检查点，禁止另建单元套件。
 - 优化用例只验收声明的变量与结果，不得追加未改变的 Plan、工具、委托、查询、调用次数、顺序、措辞、产物数量或内部状态要求。内部路径只能作为执行后证据或独立机制检查，除非它本身属于公开产品契约。
 - 同一用例可以供多个横切套件复用。各套件只检查预声明的局部能力，整例用户结果、原始 `pytest_outcome` 和局部 verdict 必须分开。
 - E2E 失败必须执行[QLT 阻塞处理](../docs/devSpec/quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)。在 checksum 有效的 archive、report 或评测权威文档中保存 case id 和完整审查记录，不另建用例状态或发布清单。
@@ -48,7 +48,7 @@ grader 必须在实现前固定版本、输入和结果契约，直接判断用�
 
 每次执行生成独立、带 checksum 封印的 archive。历史 archive 只读，不得覆盖；baseline、适用消融或责任边界反事实、target 必须分别可还原。
 
-本项目后续临时诊断脚本、隔离测试源码、来源快照、日志与证据归档统一保存到项目根目录的 `.tmp/<专题>-<日期>/`，不得继续向 `C:/pae` 新写文件。正式回归测试源码仍按职责保存在 `tests/` 或 `evals/`。运行前显式将适用的 `PERSONAL_AGENT_E2E_TRACE_DIR`、`PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR` 或脚本输出根目录设为该目录下的独立子目录，不依赖旧默认路径；子进程同样遵守。历史归档只读保留，未迁移前不得仅改文档路径而伪装已经迁移。过程与经验持续写入 `docs/optimization/` 并与 Future 联动；`.tmp/` 已被 Git 忽略，不能作为唯一的经验记录。
+本项目后续临时诊断脚本、隔离测试源码、来源快照、日志与证据归档统一保存到项目根目录的 `.tmp/<专题>-<日期>/`，不得继续向 `C:/pae` 新写文件。正式 E2E 和 Offline Eval 源码保存在 `evals/`；`tests/` 按根规范停用，禁止新增、维护、修复、收集和运行，也不得整体迁移后改名。运行前显式将适用的 `PERSONAL_AGENT_E2E_TRACE_DIR`、`PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR` 或脚本输出根目录设为该目录下的独立子目录，不依赖旧默认路径；子进程同样遵守。历史归档只读保留，未迁移前不得仅改文档路径而伪装已经迁移。过程与经验持续写入 `docs/optimization/` 并与 Future 联动；`.tmp/` 已被 Git 忽略，不能作为唯一的经验记录。
 
 - 保存用户输入、principal、正式入口、交互模式、初始事实、seed、环境与配置 cohort、代码身份、Prompt、模型与服务提供方版本、transport、schema、预算、fixture、grader 版本、重复次数、追踪记录、报告、最终结果和 checksum。
 - 比较必须固定用户目标、输入、身份、入口、初始事实、评测契约及除声明变量外的条件。baseline 与 target 使用相同 seed；新设计消融只改变目标机制，不能同时更换 Prompt、Provider 或其他变量。
@@ -82,7 +82,7 @@ grader 必须在实现前固定版本、输入和结果契约，直接判断用�
 - promotion cohort 不得用 pytest `--maxfail` 绕过 typed 门禁。早停只能由预声明约束和已封存独立样本判定；局部良好结果不能提前通过，执行失败、缺 report 或成本超限必须进入分母并保持失败。
 - 不得为提速降低用户结果门槛、模型或工具预算、重复次数与反事实覆盖，或替换结果依赖的真实边界。更换 Provider、Prompt、transport、grader 或 fixture 必须作为新评测设计与 cohort 重新准入。
 - 每项提速改动保存重构前工程基线和重构后证据，报告完整收集数量、首个决策反馈时间、完整运行时间、实际执行与避免的样本数、token 与外部调用变化、回退行为，以及发布契约保持情况。未提速、覆盖下降或引入第二命令责任主体时，删除候选。
-- evaluator、grader、文档及无生产影响的脚手架变更，使用受影响 Contract/Conformance、历史 archive 只读回放和默认工程回归。仅在生产候选取得适用消融或责任边界反事实与定向 target、目标 clean revision 需要发布判断，或 Provider/Prompt 漂移需周期复核时，执行完整 release matrix。
+- evaluator、grader、文档及无生产影响的脚手架变更，使用相关 Offline Eval、历史 archive 只读回放和静态工程检查。仅在生产候选取得适用消融或责任边界反事实与定向 target、目标 clean revision 需要发布判断，或 Provider/Prompt 漂移需周期复核时，执行完整 release matrix。
 - 新能力域优先复用既有正式 E2E 并读取同一 Trace。只有现有用例不能承载新的用户目标、入口、初始事实、故障边界或关键反事实时才新增 case；局部不变量重合不等于重复旅程。
 
 收集、配对、promotion 与 release gate 命令由[运行、归档与发布](../docs/evals/04-running-and-release.md)唯一维护。

@@ -104,7 +104,7 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 | 事实 | 写入口 |
 | --- | --- |
 | 一次 Observation 能进入 Context 的体积（`MAX_OBSERVATION_PAYLOAD_CHARS = 20_000`） | `bound_observation_payload` |
-| 被卸载文本的形态 | 通用结果由 `select_offload_text` 选择；网页正文由 Conversation 校验 `WebReadOutput` 后明确选择 `source_text` |
+| 被卸载文本的形态 | 通用结果由 `select_offload_text` 选择；网页正文明确选择 `source_text`；网页搜索保存不含查询参数的完整结果 JSON |
 | 某个正文窗口的内容 | `read_artifact_text` 按正文行读取；长行的实际列范围与 `next_read` 明确续读位置 |
 | 「读哪一段」 | 模型用 `search_action_output` 搜索，用 `read_artifact` 的 `start_line` / `limit` 读取同一正文 |
 | 「未读完能否收尾」 | `ConversationService._unread_offloaded_resource`；所有 disposition 均受约束 |
@@ -117,9 +117,11 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 
 **已取得的提取文本先保留，再由 Observation 边界限制模型输入；搜索摘要不能冒充网页正文。** `CaptureService.capture_url()` 返回 typed `UrlCaptureResult(url, text, provider)`，抓取 Provider 不再把返回文本静默截成 12,000 字符。完整仅指保留 Provider 实际交付的提取文本，不保证动态网页、图片或 Provider 未返回内容也已取得。
 
-内置 HTML 提取的唯一 owner 是 `application/capture/utils.py`：按原文顺序连接内联文本，以块、表格单元格和定义项为边界输出，普通段落只折叠 HTML 空白，`pre` 保留换行和缩进；不再全局去重文本节点、词语或段落。`script/style/noscript` 仍排除。该实现不运行 JavaScript、不计算 CSS 可见性，也不承担主内容选择、来源权威判断或事实校验。当前版本的确定性反事实、正式入口 Capture 消费与 Artifact 精确读取检查点均已成立；研究仍有取证未收敛、预算内未交付的问题，不能将局部验收写成 Product E2E 通过。
+内置 HTML 提取的唯一 owner 是 `application/capture/utils.py`：页面有唯一外层 `main` 或 `role="main"` 时选择该区域，并移除其中明确的 `nav`／`role="navigation"`；位于 `script/style/noscript` 祖先中的区域不参与选择。无主区域或多个外层主区域时保留原全文范围，不按题目关键词、长度或站点规则猜测正文。正文内的 `header`、`footer` 不额外过滤。
 
-`web_search(query, limit)` 的 `results/evidence` 只保存发现摘要，不再接受 `scrape` 或隐式抓取前两个结果。`web_read(url)` 由模型直接选择来源，经同一 `CaptureService` 返回 `WebReadOutput(source_url, provider, source_text)`；失败由 `ToolArtifact` 表达，不返回伪成功正文。原 `capture_url` 仍服务确定性 Research 采集流程，不进入普通模型可见工具面，两者共用抓取事实 owner。
+选定范围后，原解析器按原文顺序连接内联文本，以块、表格单元格和定义项为边界输出，普通段落只折叠 HTML 空白，`pre` 保留换行和缩进；不全局去重文本节点、词语或段落。`script/style/noscript` 仍排除。该实现不运行 JavaScript、不计算 CSS 可见性，不承担来源权威判断或事实校验。新正文使用自身 Artifact 身份和行坐标，不重写历史版本。确定性反事实、最终代码的正式 Capture 消费与精确读取检查点已成立；完整研究仍有修订、预算和成文解析阻塞，不能将局部验收写成 Product E2E 通过。验证与保留边界见[正文提取第 110 节](../optimization/source-extraction.md#110-唯一主区域选择的保真与正式消费验证)。
+
+`web_search(query, limit)` 的 `results/evidence` 只保存发现摘要，`WebSearchOutput` 同时保存执行使用的 `query/limit`，不再接受 `scrape` 或隐式抓取前两个结果。`web_read(url)` 由模型直接选择来源，经同一 `CaptureService` 返回 `WebReadOutput(source_url, provider, source_text)`；失败由 `ToolArtifact` 表达，不返回伪成功正文。原 `capture_url` 仍服务确定性 Research 采集流程，不进入普通模型可见工具面，两者共用抓取事实 owner。
 
 成功正文由 `application/capture/web_source.py` 原样保存在 `source_text`，URL 与服务方由外层 `WebReadOutput` 拥有；不把 JSON 元数据混入正文搜索。网页格式为 `web-source-text-v2`。网络响应上限仍为 4 MiB，提取正文上限为 16 MiB；超限显式失败，不宣称全局容量。
 
@@ -153,10 +155,16 @@ Admission 在同 capability 已有未读卸载结果时拒绝这种无进展 ref
 
 目标代码在 Action 和 Final 的同一可见输入上生成 `CitableInput`。观察和原文行旁直接给出 `evidence_id`，Conversation 原样复制到正文段引用；不再展示需要组合的观察序号与行号目录。执行记录保持原值，编号是请求内派生视图；恢复只接受同一可见输入生成的编号，不读取隐藏 Artifact、不选择邻片、不代替支持判断。失败与 Verifier 输出不产生引用，正文不因漏引被丢弃。当前试接入证据见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
 
+### 查询执行事实与来源证据
+
+当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_ref`。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`CitableInput.executed_query` 是请求内执行说明；引用恢复只使用排除查询字段的来源投影，来源和读取窗口仍使用原编号。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
+
+查询说明随原 `materialize_citation_context` 进入既有 `Typed execution inputs` 消息，最新 Verification 的原有保留规则不变。整体 Context 行为候选已撤回；当前没有新增历史 user 消息、独立反馈分区或扩源指令。本轮局部成果见[完成文档](../optimization/completed/query-execution-handoff.md)，候选失败、保留范围及产品限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
+
 ### 上下文构成度量
 
 `TurnContextComposition` 逐轮记录**四个互不重叠且加总等于该轮实际发出输入**的字符分段——
-capability 投影、system prompt 其余部分、committed messages、typed inputs——外加 Provider
+capability 投影、system prompt 其余部分、committed messages、typed inputs——以及独立的原生 action definitions 分段，外加 Provider
 报告的 `input_tokens` 与 `turn_index`，随 `InteractionTrace` 生命周期存在。
 
 三条边界使它属于 Observability 而非产品行为：

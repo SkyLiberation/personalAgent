@@ -29,9 +29,7 @@ class SearchActionOutputArguments(BaseModel):
     result_offset: int = Field(default=0, ge=0, description="搜索结果分页偏移；续页原样使用 next_offset，不是文件行号。")
 
 
-class SourceSearchResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    resource_ref: ResourceRef
+class SourceSearchResult(SearchActionOutputArguments):
     lines: tuple[ReturnedSourceLine, ...]
     total_lines: int
     matched_record_count: int
@@ -66,7 +64,7 @@ def search_artifact_text(text: str, *, arguments: SearchActionOutputArguments,
     if arguments.result_offset > len(ordered):
         raise ValueError("搜索结果分页偏移超出匹配记录数。")
     selected: list[ReturnedSourceLine] = []
-    result = SourceSearchResult(resource_ref=arguments.resource_ref, lines=(),
+    result = SourceSearchResult(**arguments.model_dump(), lines=(),
                                 total_lines=len(records), matched_record_count=len(ordered), next_offset=None)
     for number in ordered[arguments.result_offset:]:
         original = records[number - 1]

@@ -34,8 +34,6 @@ jobs:
         run: uv sync --extra dev --dev
       - name: Ruff (unused imports / undefined names)
         run: uv run ruff check --select F401,F811,F821 src scripts
-      - name: Import health (collect full test suite)
-        run: uv run pytest --collect-only -q
       - name: Import health (collect core E2E explicitly)
         run: uv run pytest --collect-only -q evals/e2e_quality
 

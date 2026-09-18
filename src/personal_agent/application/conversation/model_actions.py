@@ -22,6 +22,7 @@ from personal_agent.capabilities.contracts.model import (
     StructuredOutputFailure,
     StructuredOutputFailureCode,
 )
+from personal_agent.kernel.prompts import get_prompt
 from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_schema
 
 from .models import (
@@ -149,10 +150,7 @@ def build_model_action_definitions(
             name=_wire_name("control", _WORKING_PLAN_TARGET),
             kind="working_plan",
             target_name=_WORKING_PLAN_TARGET,
-            description=(
-                "Propose or revise the user-visible working plan. This is a control "
-                "action, not an executed tool."
-            ),
+            description=get_prompt("conversation.working_plan.description").render(),
             input_schema=_working_plan_action_schema(),
         )
     )
@@ -161,11 +159,7 @@ def build_model_action_definitions(
             name=_wire_name("control", _FINALIZE_TARGET),
             kind="finalize",
             target_name=_FINALIZE_TARGET,
-            description=(
-                "Request the exclusive typed FinalMessage phase after every "
-                "compatible action in this response has completed. This control "
-                "action carries no user-visible answer."
-            ),
+            description=get_prompt("conversation.prepare_final.description").render(),
             input_schema=_finalize_action_schema(),
         )
     )

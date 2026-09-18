@@ -189,6 +189,31 @@
       "id": "rel_gate",
       "task": "发布评审和合并验收前，完整完成门禁是什么？",
       "expected": "REL"
+    },
+    {
+      "id": "ctx_actual_model_input",
+      "task": "模型反复重复读取，先核对模型输入的实际消息、工具说明与历史反馈是否冲突。",
+      "expected": "CTX"
+    },
+    {
+      "id": "ctx_system_prompt_design",
+      "task": "设计 System Prompt 时，怎样区分当前拒绝、历史记录与默认操作建议的优先关系？",
+      "expected": "CTX"
+    },
+    {
+      "id": "ctx_feedback_not_followed",
+      "task": "定位反馈执行异常：模型说已经理解，但下一步仍未修正，如何审查实际输入？",
+      "expected": "CTX"
+    },
+    {
+      "id": "qlt_retired_unit_tests",
+      "task": "单元测试停用后，tests/ 还需要维护、收集或运行吗？",
+      "expected": "QLT"
+    },
+    {
+      "id": "qlt_offline_replay",
+      "task": "Offline Eval 如何使用固定历史失败样本验证局部问题，并避免冒充 Real E2E？",
+      "expected": "QLT"
     }
   ]
 }

@@ -2,6 +2,8 @@
 
 **canonical catalog 当前登记 29 条证据：9 条有 typed `UserOutcomeContract` 的 Product E2E，以及 20 条 supporting evidence。** 后者包括 8 条 Application Integration、7 条 Runtime Conformance、4 条 Capability Profile 和 1 条用于校准研究答案评测器的 Boundary Evaluation。产品发布完成率仍只消费前 9 条；横切验证套件不改变发布分母。
 
+自 2026-09-18 起，新增验证以 E2E 与 Offline Eval 为主，`tests/` 不再维护、收集或运行；既有 catalog 分类与历史证据不改名、不改分母。静态检查及存量评测基础设施复用的边界见 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)。运行时显式选择评测路径及样本，不以停用单元测试为由启动全量 live 矩阵。
+
 ## 文档入口
 
 | 文档 | 回答的问题 |

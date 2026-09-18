@@ -101,7 +101,7 @@ def test_body_is_stored_once_and_never_matched_against_a_second_copy(text):
     units = materialize_cited_draft(value.segments, (observation(),))
     assert value.message == text + text == "".join(u.draft for u in units)
     assert [u.execution_evidence[0].text for u in units] == ["支持 auto。", "还支持 required。"]
-    assert set(value.model_dump()) == {"kind", "disposition", "segments"}
+    assert set(value.model_dump()) == {"kind", "disposition", "segments", "evidence_sufficiency"}
     assert "message" not in FinalMessage.model_json_schema()["properties"]
 
 
@@ -188,11 +188,14 @@ def test_support_rejection_cannot_be_overridden_and_same_draft_can_be_supplement
     assert json.loads(model.requests[1].messages[1]["content"])[
         "execution_evidence"
     ] == [
-        {"id": "e001", "text": "支持 auto。"},
-        {"id": "e002", "text": "还支持 required。"},
+        {"id": "e001", "text": "支持 auto。", "source": {"resource_ref": observation().payload["resource_ref"], "source_url": None, "line": 1, "start_column": 1}},
+        {"id": "e002", "text": "还支持 required。", "source": {"resource_ref": observation().payload["resource_ref"], "source_url": None, "line": 2, "start_column": 1}},
     ]
     ordinary = json.loads(model.requests[-1].messages[1]["content"])
-    assert ordinary["execution_evidence"] == ["支持 auto。", "还支持 required。"]
+    assert ordinary["execution_evidence"] == [
+        {key: value for key, value in e.items() if key != "id"}
+        for e in json.loads(model.requests[1].messages[1]["content"])["execution_evidence"]
+    ]
 
 
 def test_final_message_retains_writer_citations_in_serialized_contract():

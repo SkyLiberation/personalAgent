@@ -17,9 +17,9 @@
 | [EVD：变更证据与设计准入](change-evidence.md) | 基线与反事实设计、因果归因、复杂度准入、外部参考分级及设计决策模板 |
 | [ARC：架构边界与事实归属](architecture-ownership.md) | 能力分层、事实与决策归属、依赖方向、模型边界及生产可达性 |
 | [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan、Admission、执行、Verification、Completion、Command 与持久执行协议 |
-| [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 存储边界、模型可见反馈与机器协议的表达分工、能力投影和服务提供方等价绑定 |
+| [CTX：上下文、记忆与检索](context-memory-retrieval.md) | System Prompt 与实际模型输入的设计及问题审计、存储边界、模型可见反馈与机器协议的表达分工、能力投影和服务提供方等价绑定 |
 | [COD：代码组织与实现约束](code-structure.md) | 类型与模块实现、编排、错误、注入、命名和生产 Prompt 通用语义契约 |
-| [QLT：测试、评估、观测与安全](quality-security.md) | 测试分类、Test Double、Golden Set、覆盖、E2E 阻塞流程、追踪记录与安全 |
+| [QLT：测试、评估、观测与安全](quality-security.md) | E2E 与 Offline Eval 分工、单元测试停用、Test Double、Golden Set、覆盖、阻塞流程与安全 |
 | [REL：迁移、ADR 与完成门禁](migration-release.md) | 数据与调用方迁移、兼容例外、ADR 和完整合并检查表 |
 | [DOC：文档模块规范](../AGENTS.md) | `docs/**` 事实治理、生命周期、写作接入和文档检查 |
 | [EVM：评测模块规范](../../evals/AGENTS.md) | `evals/**` 用例登记、grader、比较身份、归档、运行声明与效率门禁 |
@@ -59,7 +59,7 @@ Codex 不会因为 Markdown 链接而自动加载细则。主文档因此使用�
 .\.venv\Scripts\python.exe scripts/check_dev_spec.py
 ```
 
-合并门槛是首选细则识别 `28/28`、目录模块覆盖识别 `8/8`、两个主入口逐字一致、仓库根入口与各模块入口的组合少于 32 KiB，以及本次治理范围内的本地链接全部有效。失败输出必须列出误判样本或损坏坐标。
+合并门槛是首选细则识别 `33/33`（含模型输入审计的三个样本及单元测试停用、离线回放两个样本）、目录模块覆盖识别 `8/8`、两个主入口逐字一致、仓库根入口与各模块入口的组合少于 32 KiB，以及本次治理范围内的本地链接全部有效。失败输出必须列出误判样本或损坏坐标。
 
 该评测只回答“给定样本能否从主文档准确找到第一份细则”，不能证明模型理解了全部正文，也不能替代具体变更的产品 baseline、E2E 或人工设计评审。评测结果必须同时报告命中数、样本数和准确率，禁止只报告百分比。
 

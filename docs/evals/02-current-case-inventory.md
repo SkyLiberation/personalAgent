@@ -425,7 +425,7 @@ Journal 提交用量为 300,602 tokens，15 个模型决策回合、16 次已记
 
 独立机制检查确认首份合法报告拒绝“应用执行代码，因此开发者负责权限检查”，Conversation 继续读取、实际删除该推导，新稿重验并与通过回执逐字绑定发送。但人工对照真实已读来源确认最终仍有错误：OpenAI 只读 32/122 片段却断言文档未定义权限责任；把 Forced Function 的对象参数写成 `forced` 字符串；把 MCP 结构化结果兼容性重复返回的 SHOULD 扩为所有结果都必须进入 `content`。后两项正确条款已经进入实际读取窗口，第二轮六项均 `satisfied`，构成独立于后置评测失败的生产误放证据。原 strict 参数保证扩为执行结果保证的特定错误本稿未复现，不以 MCP 的另一错误覆盖该区别。
 
-HTTP 耗时 454.100 秒，pytest 522.50 秒；14 个 Conversation 决策回合、20 次工具调用，其中两次验证。Journal 记录 359,688 tokens，未纳入两次成功 Verifier 调用，后置评测完整用量也缺失，不能称完整成本。生产未预算耗尽、没有扩额或追加样本。原机器 `earliest_failure=offloaded_output_refetch` 后来恢复，不取代最终语义误放和后置评测协议失败的分别归因。完整输入摘要绑定、窗口、反馈消费与原结果见[推进记录第 65 节](../optimization/revision-feedback-loop.md#65-原正式研究任务的循环收益迁移验证)和[原始 target](../../.tmp/source-support-20260911/formal-research-loop/formal-target/evidence/conversation-research-delivery-001/target/20260911T025251.277711Z-31412-4c5a5f17)。本次证明正式循环存在一次有效修订，不证明多轮能够完整修复，也不构成发布通过。
+HTTP 耗时 454.100 秒，pytest 522.50 秒；14 个 Conversation 决策回合、20 次工具调用，其中两次验证。Journal 记录 359,688 tokens，未纳入两次成功 Verifier 调用，后置评测完整用量也缺失，不能称完整成本。生产未预算耗尽、没有扩额或追加样本。原机器 `earliest_failure=offloaded_output_refetch` 后来恢复，不取代最终语义误放和后置评测协议失败的分别归因。完整输入摘要绑定、窗口、反馈消费与原结果见[机制审计](../../.tmp/source-support-20260911/formal-research-loop/mechanism-review.json)与[人工来源核对](../../.tmp/source-support-20260911/formal-research-loop/human-review.json)和[原始 target](../../.tmp/source-support-20260911/formal-research-loop/formal-target/evidence/conversation-research-delivery-001/target/20260911T025251.277711Z-31412-4c5a5f17)。本次证明正式循环存在一次有效修订，不证明多轮能够完整修复，也不构成发布通过。
 
 ## 读取状态修正的原研究任务复验
 
@@ -1044,3 +1044,58 @@ Conversation 自然提出长调查
 因同一引用错误反复出现且多次模型超时，执行代理在用户询问耗时后主动停止长跑，停止原因与当时完整 Journal 先行保存。随后 pytest 按原未交付断言记录 **1 failed**：HTTP 4038.331487 秒、pytest 4059.07 秒。该终止是人工干预，不伪装为自然预算耗尽、正常产品结束或后置评测错误。Journal 的 27 个决策回合、36 次工具调用、1,513,273 tokens 不含完整失败请求与 Verifier 子调用成本。
 
 原自动归档：`.tmp/conversation-native-citations-20260915/live-target/target/conversation-research-delivery-001/target/20260915T092739.234198Z-11152-7b45961c`。对应 `manual-stop.json`、`pre-stop.zip`、`target-identity.json`、`target-code.zip` 和服务日志在同轮 `live-target/`。合法交接及既有覆盖拒绝的局部证据保留；引用修正、局部支持核验与完整用户结果尚未闭环，不声明产品完成或可发布。
+
+## 主区域正文选择的正式验证
+
+2026-09-17 的正文候选保持原中文 `test_conversation_research_review_001` 用户输入、模型、工具、语义核验和评测标准，改变内置 HTML 提取的主区域范围。原文保真反事实、运行消费点和候选自身反例由[正文提取第 110 节](../optimization/source-extraction.md#110-唯一主区域选择的保真与正式消费验证)拥有，不能与产品交付合并统计。
+
+首版真实 target 自然耗尽 64 个决策回合，返回 `limitation`，没有报告交付；HTTP 4523.000542 秒，pytest **1 failed**、4546.97 秒。Journal 记录 63 次工具调用与 4,595,172 tokens，未完整归集 Verifier 子调用成本。失败断言为 `delivered=False`，未进入后置答案评分，不属于评测器误判。原始自动归档为 `.tmp/main-content-boundary-20260917/formal-target/target/conversation-research-delivery-001/target/20260917T045457.767463Z-24556-d2323b8b`；代码、运行审计和文件校验和在同轮 `formal-target/`。
+
+真实读取检查点已到达：2603 条返回行记录与原文和列坐标匹配，覆盖门禁和局部支持拒绝仍被消费。但首版本身存在 `noscript` 祖先丢失的确定性反例，不准入。一次有界修正后，最终代码 37 项 HTML／Capture／来源表示检查通过，修正版同入口 target 独立执行。
+
+修正版仍为 **1 failed**：HTTP 773.785886 秒后返回 503，pytest 791.45 秒，`delivered=False`、`entry_error=True`。不是启动环境错误；实际模型已进行搜索和读取，失败位于成文的 `provider_structured_decode`／`structured_output_invalid`，没有进入 Verifier 或后置评分。最后已提交快照记录 8 个决策回合、12 次工具调用、278,209 tokens，未包含完整失败生成及修复用量，不能当作全部成本。自动归档为 `.tmp/main-content-boundary-20260917/formal-target-v2/target/conversation-research-delivery-001/target/20260917T050957.258365Z-27268-a55e8f6c`。
+
+修正版正式消费的 531 条行记录与原文坐标一致，固定正文和忽略范围控制也通过，因此保留正文提取的局部机制；两次原始产品失败及成文交接阻塞同时保留。未用该局部收益更新产品完成率，未执行全发布矩阵。
+
+## 完整查询交接与 Context 候选的正式验证
+
+2026-09-17 的候选保持原中文 `test_conversation_research_review_001`、用户结果契约、正式入口、真实 Composition Root、MiMo v2.5 及真实工具。局部机制与撤回范围见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)和[第 115 节](../optimization/evidence-acquisition.md#115-完整查询交接与-context-重组的正式接入验证)。
+
+首轮移植遗漏此前整体候选的两段指引，执行代理人工终止，不计自然失败或通过；保存的 Conversation 用量为 1,496,664 tokens，原始代码、终止原因与文件校验和保存在 `.tmp/query-context-integration-20260917/formal-target/`。一次有界修正后，完整候选仅回跑原例一次。
+
+正式回跑为 **1 failed**，HTTP 2185.878024 秒、pytest 2194.53 秒（约 36.6 分钟），53 个决策回合、54 次工具调用、2,194,884 已记录 tokens。四稿经历三次覆盖拒绝和一次引用支持拒绝，最终返回 `confirmation_required`，请求用户确认保存原研究请求，没有交付比较报告、没有知识写入，后置答案评测未运行。未耗尽 64 回合、96 工具或 6M tokens 上限，亦非入口服务异常。曾有一次网页读取失败，但之后继续执行，不能把自动报告的最早工具失败直接作为终止根因。
+
+自动归档为 `.tmp/query-context-integration-20260917/formal-target-v2/target/conversation-research-delivery-001/target/20260917T151702.491747Z-12088-8e72a91d`，含原用户输入、HTTP 结果、完整 Trace、用例身份和评分状态。同轮 `target-code.zip/target-identity.json`、`final-audit.json` 与 `sealed-manifest.json` 保存代码、因果边界和原始文件校验和。Journal 的用量只覆盖已记录 Conversation 请求，Verifier 子调用与完整供应商计费未完整归集，总成本未知。
+
+成功搜索参数与来源引用保真控制成立，局部机制已[独立固化](../optimization/completed/query-execution-handoff.md)。保存准入代码未变、规则未遗漏，却仍不能排除整体 Context 对误选动作的因果责任，因此撤回本轮行为接入，未把该失败归为已确认独立的下游问题。查询交接保留，原正文、Plan、覆盖、引用和修订机制保持。
+
+候选相关 244 项检查、研究消费者补查 26 项、撤回后相关 230 项分别通过；固定状态两次 Offline Eval 未复现扩源，不属于正式消融或用户验收。最终保留组合没有再运行完整 E2E，全发布矩阵未执行。本轮不能声明产品完成、可合并或可发布。
+
+
+### 取证充分性契约的正式验证
+
+2026-09-17 至 18 日，先以新增充分性契约之前的当前代码运行原 `test_conversation_research_review_001`。结果 **1 failed**，pytest 632.74 秒、HTTP 617.029729 秒；一次覆盖拒绝后继续取证，Final 引用对象及结构修复输出先后非法，最终 HTTP 503。未交付答案，未执行后置答案评分。最后提交的 Journal 为 14 次模型请求、13 个决策回合、13 次工具调用、261,326 tokens；后续失败 Final 及修复的完整用量未计入该值。
+
+原脚手架错误设置 REVIEW 名称的证据角色变量，共享 recorder 实际读取 DELIVERY 名称，因此原密封 archive 标签仍为 target。该次实际运行发生于变更前，源码与原始结果完整保留；没有修改 archive 标签或校验和，也不能将其作为机器 baseline/target 晋级配对。后续 runner 已修正变量名。身份、失败阶段与限制见[baseline 审计](../../.tmp/evidence-sufficiency-20260917/baseline/baseline-audit.json)。
+
+候选相关 Contract / Runtime Conformance 为 183 项通过；真实模型初始 3 项中 2 项符合预期，第 3 项因正例遗漏已给定约束而正确拒绝。保留原失败，补全该正例后与此前未执行的 3 项共 4 项均符合预期。两个阶段合计覆盖 6 个有效边界，18 次请求、38,324 tokens、605.106 秒，均为 Offline Eval。正式 target 尚未结束。现阶段无完整用户结果通过或发布资格。取舍见[第 116 节](../optimization/evidence-acquisition.md#116-由模型决定结束取证的契约验证)，接口见 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)。
+
+## 核验意见调用绑定的正式检查点
+
+2026-09-18，以 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md) 的三个文件改动执行一个原中文 `test_conversation_research_review_001`，未改用户输入、生产入口、MiMo v2.5、工具和评测标准。沿用历史宽预算 64 回合、96 工具、6M tokens；这是运行覆盖配置，不是预算收益。
+
+两次生产支持拒稿分别返回两条意见，并带回当前精确段落；首轮意见进入后继输入构造，次稿移除对应开场。局部证据见[固化记录](../optimization/completed/verifier-finding-binding.md)。首轮开场误拒嫌疑与第二轮支持缺口未被本次绑定修复解决，未取得完整报告交付。执行代理按局部机制检查点成立后停止长跑的范围要求人工中断；pytest 为 `KeyboardInterrupt`，1385.76 秒，不能记作通过、自然预算耗尽或完整的自动失败判定。
+
+最后留存的快照诊断为 16 次模型调用、15 个决策回合、20 次工具调用、561,182 tokens；这不是最终完整成本，Verifier 子调用及在途请求用量未完整归集。原始运行的临时服务日志和 Journal 被 fixture 清理，首次停止前复制遇到临时文件锁，停止后检查两份 zip 均为空。保留错误记录及更正，不把空归档当成封存成功。已有代码身份、提前保存的反馈物化、检查点及从当前任务工具结果恢复的诊断输出位于 `.tmp/verifier-unit-binding-20260918/target/`，详见[最终审计](../../.tmp/verifier-unit-binding-20260918/target/final-audit.json)。
+
+本轮六次真实模型 Offline Eval 与历史回放只支撑局部边界；未维护或运行单元测试，未执行全发布矩阵。完整用户结果、完整 E2E 归档及发布门禁尚未满足，不声明产品完成或可发布。
+
+## 同代码重新验证核验反馈与修订
+
+2026-09-18 按用户要求重新执行原中文 `test_conversation_research_review_001` 一例，结果为**运行中断、未交付，不能记通过**。源码与上轮候选逐文件哈希一致，模型、正式入口、原评分器及 64 回合／96 工具／6M tokens／7200 秒请求预算不变；未修改生产或用例，未运行单元测试。collect-only 仅一项，复用既有影响路由，不代表完整发布矩阵。
+
+运行取得四份语义拒稿，随后第五稿因不可见引用 `e1698` 在准入阶段被拒。核验反馈的局部结果只由[固化记录](../optimization/completed/verifier-finding-binding.md)拥有；改稿遗漏证据及新增无据论断见[修订观察](../optimization/revision-feedback-loop.md#同代码复验中的引用覆盖反复)。最后已提交快照记录 34 次模型调用、33 个决策回合、45 次工具调用和 2,102,782 tokens；未完整归集核验子调用及在途请求，不能当全部成本。
+
+为避免上轮清理丢失，临时脚手架每两秒只读复制服务目录，并配置 teardown 前复制。实际持续采集 3389.049 秒（约 56.5 分钟），保存 34 份 Journal 快照、服务日志及来源文件，共 44 个文件，复制错误为零。采集最后时间为北京时间 16:02:43，此后没有 teardown、runner 结果或 canonical 产品报告。后续检查确认进程不存在、exec 会话失效；退出原因与确切时间未知，不归因为模型自然停止、预算耗尽或已知服务故障。
+
+执行代理曾仅轮询静态快照，误报仍在等待响应；后续核对进程后已纠正，误轮询时长不计产品运行耗时。状态脚本现区分采集心跳过期与新快照。没有将新运行冒充原进程续跑，未追加第二个昂贵样本。代码身份、原始备份、停止审计与校验和位于[本次归档](../../.tmp/verifier-e2e-rerun-20260918)，结论见[最终审计](../../.tmp/verifier-e2e-rerun-20260918/final-audit.json)。本次证据不满足完整用户结果或发布门禁。

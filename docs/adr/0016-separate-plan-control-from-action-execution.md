@@ -5,6 +5,8 @@
 - 影响范围：Conversation working plan、模型动作协议、Admission、执行事实关联、Verification 与 Completion 顺序
 - 相关交付协议：[ADR 0017：分离动作选择与最终交付](0017-separate-action-selection-from-final-delivery.md)
 
+> 本文保留 2026-08 的历史决策与证据；Plan 进度可修订性、工具准入与新计划交付边界的后续整体调整由 [ADR 0025](0025-revisable-plan-progress.md) 拥有。本文的强制活动项与完成进度约束不再作为该候选的当前规则。
+
 ## 1. 背景与目标
 
 普通 Conversation 已能执行真实 Web Search，却可能在交付答案前持续失败于

@@ -13,6 +13,7 @@ from personal_agent.capabilities.contracts.model import (
 )
 from personal_agent.capabilities.contracts.verification import (
     DocumentAbsenceReport,
+    EvidenceSufficiencyAssessment,
     CitedDraftUnit,
     CitedSupportRejection,
     OverreachReport,
@@ -31,6 +32,7 @@ class VerifyInteractionDraftArgs(BaseModel):
     success_criteria: tuple[str, ...] = Field(min_length=1)
     cited_units: tuple[CitedDraftUnit, ...] = ()
     source_reading_state: tuple[SourceReadingState, ...] = ()
+    evidence_sufficiency: EvidenceSufficiencyAssessment | None = None
 
     @model_validator(mode="after")
     def check_draft_coverage(self):
@@ -71,6 +73,7 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
         success_criteria: tuple[str, ...],
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
+        evidence_sufficiency: EvidenceSufficiencyAssessment | None = None,
     ):
         prompt = get_prompt("interaction_verification.system")
         support_prompt = get_prompt("interaction_verification.source_support")
@@ -82,6 +85,7 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             success_criteria=verification_criteria,
             cited_units=cited_units,
             source_reading_state=source_reading_state,
+            evidence_sufficiency=evidence_sufficiency,
         )
         units = verification_input.cited_units or (CitedDraftUnit(draft=draft),)
         # Only writer-submitted evidence reaches either semantic consumer.
@@ -89,7 +93,8 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             "draft": draft,
             "success_criteria": list(verification_criteria),
             "execution_evidence": [
-                evidence.text for unit in units for evidence in unit.execution_evidence
+                evidence.model_dump(mode="json", exclude={"id"})
+                for unit in units for evidence in unit.execution_evidence
             ],
             "source_reading_state": [
                 state.model_dump(mode="json") for state in verification_input.source_reading_state
@@ -118,7 +123,7 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
                 draft, classification,
                 verification_input.source_reading_state,
             )
-            if rejection is not None:
+            if rejection is not None and verification_input.evidence_sufficiency is None:
                 source_prompt = get_prompt("interaction_verification.coverage_source")
                 source_reading = "\n".join(
                     source_prompt.render(
@@ -159,13 +164,11 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             )).value
             valid_ids = {evidence.id for evidence in unit.execution_evidence}
             for finding in support.findings:
-                if finding.draft_quote not in unit.draft:
-                    raise ValueError("support finding must quote the exact submitted draft")
                 if len(set(finding.evidence_ids)) != len(finding.evidence_ids) or not set(finding.evidence_ids).issubset(valid_ids):
                     raise ValueError("support finding must reference only submitted evidence")
             if support.findings:
                 rejection = CitedSupportRejection(
-                    rejected_draft=draft, findings=support.findings,
+                    rejected_draft=draft, checked_draft=unit.draft, findings=support.findings,
                 )
                 return tool_response(ToolArtifact(
                     ok=False, data=rejection.model_dump(mode="json"),

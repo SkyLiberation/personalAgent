@@ -2162,6 +2162,7 @@ name = "personal-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "fastapi" },
     { name = "graphiti-core" },
     { name = "jsonschema" },
@@ -2200,6 +2201,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "fastapi", specifier = ">=0.121.0" },
     { name = "graphiti-core", specifier = ">=0.29.0" },
     { name = "huggingface-hub", marker = "extra == 'dev'", specifier = ">=0.28.0" },

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from personal_agent.application.capture.web_source import WEB_SOURCE_FORMAT, WebReadOutput
+from personal_agent.application.capture.web_source import WEB_SOURCE_FORMAT, WebReadOutput, WebSearchOutput
 
 from personal_agent.capabilities.contracts.grants import (
     DelegationGrant,
@@ -116,7 +116,6 @@ from .interaction_intent import ungrounded_criteria_feedback
 from .verification_admission import observed_receipts
 from .working_plan import (
     active_working_plan_step_id,
-    admit_action_plan_state,
     admit_continue_turn_progress,
     admit_new_plan_interaction_mode,
     admit_plan_wait_boundary,
@@ -262,9 +261,8 @@ class ConversationService:
             )
         if prior is not None:
             inputs = list(prior.inputs)
-        elif working_plan is not None and any(
-            step.status in {"pending", "in_progress"}
-            for step in working_plan.steps
+        elif working_plan is not None and not self._journal.plan_result_delivered(
+            conversation_id, principal, working_plan,
         ):
             inputs = list(self._journal.working_plan_observations(
                 conversation_id,
@@ -621,9 +619,16 @@ class ConversationService:
 
             previous_plan = working_plan
             if decision.working_plan is not None:
+                result_delivered = (
+                    working_plan is not None
+                    and self._journal.plan_result_delivered(
+                        conversation_id, principal, working_plan,
+                    )
+                )
                 mode_feedback = admit_new_plan_interaction_mode(
                     decision,
                     current=working_plan,
+                    result_delivered=result_delivered,
                     interaction_mode=interaction_mode,
                     unsafe_execution_started=(
                         self._unsafe_execution_started_before_plan(
@@ -653,6 +658,7 @@ class ConversationService:
                     current=working_plan,
                     inputs=tuple(inputs),
                     wait_for_user=decision.wait_for_user,
+                    result_delivered=result_delivered,
                 )
                 if feedback is not None:
                     inputs.append(feedback)
@@ -677,28 +683,6 @@ class ConversationService:
             )
             if progress_feedback is not None:
                 inputs.append(progress_feedback)
-                self._commit(
-                    run_ref,
-                    principal,
-                    messages,
-                    inputs,
-                    usage,
-                    execution_order,
-                    concurrent_batches,
-                    context_composition,
-                    review_criteria=review_criteria,
-                    working_plan=working_plan,
-                )
-                continue
-            action_plan_feedback = admit_action_plan_state(
-                decision.actions,
-                working_plan=working_plan,
-            )
-            if action_plan_feedback is not None:
-                inputs.append(self._name_action_feedback(
-                    action_plan_feedback,
-                    decision.actions,
-                ))
                 self._commit(
                     run_ref,
                     principal,
@@ -1361,6 +1345,10 @@ class ConversationService:
         arguments = {
             "draft": decision.message,
             "success_criteria": list(review_criteria.criteria),
+            "evidence_sufficiency": (
+                decision.evidence_sufficiency.model_dump(mode="json")
+                if decision.evidence_sufficiency is not None else None
+            ),
             "cited_units": [unit.model_dump(mode="json") for unit in cited_units],
             "source_reading_state": [
                 state.model_dump(mode="json")
@@ -2368,8 +2356,13 @@ class ConversationService:
             if isinstance(data, dict) and data.get("format") == WEB_SOURCE_FORMAT
             else None
         )
+        search_output = (
+            WebSearchOutput.model_validate(data)
+            if capability_id == "web_search" and payload.get("ok") else None
+        )
         full_text = (
             source_output.source_text if source_output and source_output.source_text
+            else search_output.model_dump_json(exclude={"query", "limit"}) if search_output
             else select_offload_text(payload)
         )
         try:
@@ -2402,11 +2395,21 @@ class ConversationService:
                 "locate it, or call read_artifact with start_line to read sequentially."
             )
         # retrieval 自身也占 Context，原有边界不能在附加引用后被突破。
+        search_metadata = (
+            search_output.model_copy(update={"results": ()}).model_dump(mode="json")
+            if search_output else None
+        )
         final_bound = bound_observation_payload(
             payload, max_chars=MAX_OBSERVATION_PAYLOAD_CHARS
-            - serialized_length({"retrieval": retrieval}) - 32,
+            - serialized_length({"retrieval": retrieval}) - 32
+            - (serialized_length({"data": search_metadata}) if search_metadata else 0),
         )
         fitted = dict(final_bound.payload)
+        if search_metadata is not None:
+            fitted = {key: value for key, value in fitted.items()
+                      if key in {"ok", "error", "error_kind", "status"}}
+            fitted["observation_excerpt_removed"] = True
+            fitted["data"] = search_metadata
         retrieval["omitted_chars"] = final_bound.omitted_chars
         fitted["retrieval"] = retrieval
         return fitted

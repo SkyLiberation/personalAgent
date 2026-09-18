@@ -35,7 +35,7 @@
 框架能力是 Framework Protocol 与 Runtime Mechanism 的组合。新增或抽取框架能力除满足变更证据与复杂度准入外，还必须同时证明：
 
 1. 机制语义与具体业务无关，且被至少两个独立生产消费者需要；仅有一个消费者时，除非外部协议或安全边界强制标准化，否则保留在该 Application 内；
-2. 有稳定 typed contract、owner、失败语义、版本或兼容边界及 Contract/Runtime Conformance Test；
+2. 有稳定 typed contract、owner、失败语义、版本或兼容边界及对应的 E2E 检查点或 Offline Eval 反事实；
 3. 不拥有 intent、业务 payload、业务 pending 状态、领域合法迁移、语义完成标准或 canonical business facts；
 4. 抽取后由 Application 通过 Port 使用，且删除的重复复杂度大于新增抽象、Registry 和适配成本；
 5. 产品 E2E 仍从用户目标验证结果，不能以框架对象存在或 conformance test 代替。
@@ -79,6 +79,6 @@ Identity 和 scope 禁止使用空字符串、裸字符串或 raw dict。Identit
 
 能力落地必须形成 `正式入口 -> Application Capability -> Domain/canonical state -> 真实 Runtime/Provider/Persistence -> Verification/Completion -> 用户结果` 的最小纵向切片；独立用例不能拼成组合能力证据。
 
-对每个新增生产结构，按[根规范第 2.3 节](../../AGENTS.md#23-只实现最小生产纵向切片)列出入口、构造或装配点、调用者、消费者及删除后失败的测试；持久化事实或投影还须有真实写读者，注入式协作者须在 Composition Root 装配。缺项即删除，不得以阶段名称或未来接入保留。
+对每个新增生产结构，按[根规范第 2.3 节](../../AGENTS.md#23-只实现最小生产纵向切片)列出入口、构造或装配点、调用者、消费者及删除后失败的 E2E 或 Offline Eval 样本；持久化事实或投影还须有真实写读者，注入式协作者须在 Composition Root 装配。缺项即删除，不得以阶段名称或未来接入保留。
 
-Test Double 与真实接入的证据范围遵守[QLT](quality-security.md#1-测试职责与覆盖)。不可控第三方的 Fake 须实现生产 Port 并有 Contract；宣称真实交付或上线前，仍须通过对应真实环境 smoke 或 E2E。
+Test Double 与真实接入的证据范围遵守[QLT](quality-security.md#1-测试职责与覆盖)。不可控第三方的 Fake 须实现生产 Port，并在离线样本中核对替代边界；宣称真实交付或上线前，仍须通过对应真实环境 smoke 或 E2E。

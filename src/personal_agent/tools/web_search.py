@@ -1,24 +1,13 @@
 from __future__ import annotations
 
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.capture.providers.web_search import WebSearchProvider
-from personal_agent.application.capture.web_source import WebSearchOutput
+from personal_agent.application.capture.web_source import WebSearchArgs, WebSearchOutput
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.evidence import EvidenceItem
 from personal_agent.kernel.prompts import get_prompt
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
-
-
-class WebSearchArgs(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(
-        ..., min_length=1, max_length=400,
-        description="要搜索的公网信息问题或关键词，最多 400 个字符。",
-    )
-    limit: int = Field(default=5, ge=1, le=10, description="返回搜索结果数量，范围 1-10。")
 
 
 def build_web_search_tool(settings: Settings, provider: WebSearchProvider) -> BaseTool:
@@ -47,7 +36,7 @@ def build_web_search_tool(settings: Settings, provider: WebSearchProvider) -> Ba
             )
             for result in results if result.url
         ]
-        output = WebSearchOutput(results=tuple(results))
+        output = WebSearchOutput(query=query, limit=limit, results=tuple(results))
         return tool_response(tool_success(output.model_dump(mode="json"), evidence))
 
     return web_search

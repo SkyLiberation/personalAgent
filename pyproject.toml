@@ -5,6 +5,7 @@ description = "A governed personal knowledge agent runtime."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "beautifulsoup4>=4.12.0",
   "fastapi>=0.121.0",
   "graphiti-core>=0.29.0",
   "lark-oapi>=1.6.2",
@@ -35,7 +36,7 @@ personal-agent = "personal_agent.main:app"
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "huggingface_hub>=0.28.0"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["evals/e2e_quality"]
 pythonpath = [".", "src"]
 # magic_stub: on environments where the only resolvable libmagic is the MSYS
 # build (Git-for-Windows), importing python-magic crashes the interpreter. The

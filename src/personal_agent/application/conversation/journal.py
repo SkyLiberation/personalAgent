@@ -59,6 +59,24 @@ class InMemoryInteractionJournal:
         latest = max(candidates, key=lambda trace: trace.working_plan.revision)
         return latest.working_plan
 
+    def plan_result_delivered(
+        self,
+        conversation_id: str,
+        principal: AuthenticatedPrincipal,
+        working_plan: ConversationWorkingPlan,
+    ) -> bool:
+        """Read the existing accepted answer; step progress is not delivery evidence."""
+        with self._lock:
+            return any(
+                trace.conversation_id == conversation_id
+                and trace.principal == principal
+                and trace.working_plan is not None
+                and trace.working_plan.plan_id == working_plan.plan_id
+                and trace.final_message is not None
+                and trace.final_message.disposition == "answer"
+                for trace in self._traces.values()
+            )
+
     def working_plan_observations(
         self,
         conversation_id: str,
@@ -83,29 +101,18 @@ class InMemoryInteractionJournal:
                 trace.interaction_run_ref,
             ),
         )
-        observations_by_step: dict[str, list[ActionObservation]] = {
-            step.step_id: [] for step in working_plan.steps
-        }
+        observations: list[ActionObservation] = []
         seen: set[tuple[str, str]] = set()
         for trace in candidates:
             for item in trace.inputs:
-                key = (item.capability_id, item.action_id) if isinstance(
-                    item, ActionObservation
-                ) else None
-                if (
-                    key is None
-                    or key in seen
-                    or item.status != "succeeded"
-                    or item.plan_step_id not in observations_by_step
-                ):
+                if not isinstance(item, ActionObservation) or item.status != "succeeded":
+                    continue
+                key = (item.capability_id, item.action_id)
+                if key in seen:
                     continue
                 seen.add(key)
-                observations_by_step[item.plan_step_id].append(item)
-        return tuple(
-            observation
-            for step in working_plan.steps
-            for observation in observations_by_step[step.step_id]
-        )
+                observations.append(item)
+        return tuple(observations)
 
     def conversation_evidence_refs(
         self,
@@ -204,6 +211,16 @@ class FileInteractionJournal(InMemoryInteractionJournal):
         for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
             self.get(run_dir.name)
         return super().working_plan(conversation_id, principal)
+
+    def plan_result_delivered(
+        self,
+        conversation_id: str,
+        principal: AuthenticatedPrincipal,
+        working_plan: ConversationWorkingPlan,
+    ) -> bool:
+        for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
+            self.get(run_dir.name)
+        return super().plan_result_delivered(conversation_id, principal, working_plan)
 
     def working_plan_observations(
         self,

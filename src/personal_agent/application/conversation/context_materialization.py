@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from personal_agent.application.capture.web_source import (
     WEB_SOURCE_FORMAT,
     WebReadOutput,
+    WebSearchOutput,
 )
 from personal_agent.application.conversation.models import (
     ActionObservation,
@@ -91,6 +92,11 @@ def materialize_interaction_inputs(
             # 空正文由 omission 标记和同一 retrieval ref 明确解释，不代表未抓取。
             compact_payload["data"] = source_output.model_copy(
                 update={"source_text": ""},
+            ).model_dump(mode="json")
+        elif item.capability_id == "web_search" and item.status == "succeeded":
+            search_output = WebSearchOutput.model_validate(data)
+            compact_payload["data"] = search_output.model_copy(
+                update={"results": ()},
             ).model_dump(mode="json")
         materialized.append(item.model_copy(update={"payload": compact_payload}))
     return tuple(materialized)

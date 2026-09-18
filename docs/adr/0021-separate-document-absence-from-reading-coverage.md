@@ -6,7 +6,7 @@
 
 ## 决定与责任主体
 
-在既有 `verify_interaction_draft` 内接入独立文档缺项分类，不另建工具或循环。2026-09-16 第 104 节将原句与来源复制协议替换为 `DocumentAbsenceReport.absence_by_source`：严格布尔数组与运行系统输入的 `source_reading_state` 等长同序，每项只表示稿件是否对该来源作出了文档级缺项声明。代码校验长度和来源唯一性，按位置恢复来源身份，再拒绝命中且 `fully_read=false` 的项。错误长度不得补齐、截断或默认放行。普通 `satisfied` 不能覆盖该拒绝。没有覆盖拒绝时，原稿仍须通过原有语义审查；完整读取不证明声明有据。
+在既有 `verify_interaction_draft` 内接入独立文档缺项分类，不另建工具或循环。2026-09-16 第 104 节将原句与来源复制协议替换为 `DocumentAbsenceReport.absence_by_source`：严格布尔数组与运行系统输入的 `source_reading_state` 等长同序，每项只表示稿件是否对该来源作出了文档级缺项声明。代码校验长度和来源唯一性，按位置恢复来源身份。原无条件覆盖拒绝已由 [ADR 0027](0027-model-owned-evidence-sufficiency.md) 扩展：对命中且 `fully_read=false`、本稿未提交取证充分性声明的项返回覆盖反馈；声明存在时继续原来源支持与整稿核验。错误长度不得补齐、截断或默认放行。普通 `satisfied` 不能覆盖拒绝，完整读取或充分性声明也不能证明正文有据。
 
 Conversation 执行器唯一拥有卸载总行数和带完整 `ResourceRef` 的返回窗口。覆盖由当前可见的成功、非 Verifier 执行记录临时推导，重复行去重，不合并版本或身份，不计入截断窗口。未知长度和空提取文本不证明外部全文已读。Verifier 不重读原文、不决定继续查找哪里，也不代写答案。
 

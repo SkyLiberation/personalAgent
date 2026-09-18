@@ -21,7 +21,7 @@
 
 当前事实、历史诊断、未来候选和评测证据按[目录分工](README.md#目录分工)分别保存。当前状态文档只保留目标代码状态下仍成立的事实。
 
-- 验证优化过程与经验按 [optimization 记录规则](optimization/README.md)集中维护，原始证据继续封存；已否决候选不得继续列为活动设计。Future 的状态、正文缩减与退出由[Future 规则](future/README.md)唯一拥有，状态改变时在同一变更清理。
+- 验证优化过程与经验按 [optimization 记录规则](optimization/README.md)集中维护；已解决问题按[固化规则](optimization/README.md#已解决问题的固化规则)迁入 `completed/`，删除中间过程正文，保留最小可复核证据归档；已否决候选不得继续列为活动设计。Future 的状态、正文缩减与退出由[Future 规则](future/README.md)唯一拥有，状态改变时在同一变更清理。
 - ADR 按[中文写作规范](chinese-writing-spec.md#6-各类文档的附加要求)组织；评测文档按[证据分类](../evals/AGENTS.md#1-证据分类不能混用)区分产品失败 baseline、指标 baseline、回归 E2E 和 supporting evidence。
 - 移动、重命名或迁移正文时，更新文档索引与全部引用方，搜索旧路径并删除旧正文或入口，不保留“最新版本”式双轨。
 

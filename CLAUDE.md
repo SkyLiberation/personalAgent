@@ -27,6 +27,7 @@
 - 原始用户结果与预声明的局部机制检查点必须分开记录。`limitation`、`failed`、`blocked`、预算耗尽或服务提供方错误是否满足用例，只由预声明的用户结果契约决定；预期成功交付的用例仍记为失败。检查点之后且因果独立的失败仍阻塞产品闭环与发布，但不得否定已成立的机制或迫使候选迎合；局部通过不得覆盖原始 E2E 失败或支撑产品完成声明。
 - 默认产品语言为中文。Product E2E、Golden Set 和 Offline Eval 的用户输入、目标、成功标准、失败反馈与结果解释必须以中文为主；英文仅用于技术术语、协议字面量、代码标识、typed 字段或枚举、命令和 URL。英文样本不得替代中文 baseline、target 或回归；明确的英文或多语言契约须按语言建立自然表达镜像样本、固定相同语义原子并分别报告，禁止跨语言外推通过结果。
 - 每个设计步骤必须说明失败事实、必要性、责任主体、最小改动、通向用户结果的因果链、验证反事实和撤回条件；不能解释怎样解决已证明问题的步骤，不得进入计划或生产代码。
+- 涉及模型语义行为的设计或异常定位，必须按 [System Prompt 与 Context 审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)检查实际模型输入及其构造链，纳入设计依据和验证方案；不得只读模板、输出或可见推理就归因于模型能力或追加提示。输入可疑不等于因果成立，局部动作改善不等于任务完成。
 - 任一证据失败时，先保留原始结果，再按检查点前、检查点内、检查点后及因果关系区分评测错误、环境或服务方失败、候选反例、因果回归和独立产品阻塞。只撤回被反例否定、造成回归或无生产消费者的部分，禁止全盘否定已成立的机制与问题。未获准候选仍须删除生产代码和双轨；存在正交方向时，记录被否定假设、新责任边界和重新准入证据。
 
 ### 2.2 一个事实只有一个 owner
@@ -38,7 +39,7 @@
 ### 2.3 只实现最小生产纵向切片
 
 - 禁止因框架范式、论文、形式完整或未来可能性预建抽象、状态、表、层、Planner、Workflow、Agent、缓存、持久化或治理机制。
-- 每个新增生产结构必须有不可合并的职责、正式入口可达链、生产构造或装配点、真实调用者或消费者，以及删除后会失败的测试。持久化事实或投影还必须有真实写入者与读取者；仅存在于类型、测试、文档或未装配 Adapter 中的概念不算能力落地。
+- 每个新增生产结构必须有不可合并的职责、正式入口可达链、生产构造或装配点、真实调用者或消费者，以及删除后会失败的 E2E 或 Offline Eval 样本。持久化事实或投影还必须有真实写入者与读取者；仅存在于类型、测试、文档或未装配 Adapter 中的概念不算能力落地。
 - 稳定依赖方向是 `Interface -> Application Capability -> Domain/Product Aggregate`。Application 只依赖 Port；Runtime、Governance 和 Provider Adapter 从外层实现 Port，并统一在 Composition Root 装配。
 - 正式上线兼容期前，内部 API、Schema、状态与调用链默认破坏式替换：同一变更迁移全部调用方，删除旧字段、旧写入口、旧执行链、临时状态、无消费者结构、测试旁路、fallback 和双轨。真实外部契约、存量生产数据或混合版本部署的兼容例外必须有期限 ADR。
 
@@ -56,7 +57,14 @@
 - 每条结构性不变量只能有一个命名责任主体；破坏它必须触发类型错误或确定性断言。
 - 新增或实质修改的生产 Prompt 必须是以中文表达、结果优先、最小充分的版本化代码契约，明确动态用户结果、完整产物与成功标准。typed 输出只保证形状，不能证明语义完成；Prompt 不能替代确定性责任主体、无依据固定执行策略或复制 E2E 答案制造通过。结构、Context 边界、分类正反例、失败与停止条件、语言例外和评测要求必须遵守[生产 Prompt 契约](docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)；存量 Prompt 的字节保持迁移不得声称修复语义缺陷。
 - 同一事实只能有一份权威文档。当前事实、历史诊断、未来候选和评测证据分开保存；行为或契约变化必须在同一变更更新权威文档。
+- 已证明解决特定问题的方案必须按问题固化到 `docs/optimization/completed/`，注明证据适用范围与接入状态；失败尝试只保留方案、失败原因推理及结果总结，移除中间过程正文。确认非本方案引入的新问题须单独登记，禁止作为原问题未完成的理由。固化后其他 optimization 文档只保留 completed 引用，不再跟踪该成功问题。归档、引用迁移与重新打开条件遵循 [optimization 固化规则](docs/optimization/README.md#已解决问题的固化规则)。
 - 外部参考只解决“机制怎么做”，不能替代本工程 baseline 来证明“要不要做”。机制候选必须按机制域核对至少两个独立 A 级实现；只有一个时记录检索缺口与不确定性，并停止进入实现。
+
+### 2.6 E2E 与 Offline Eval 优先，停用单元测试
+
+自 2026-09-18 起，后续开发、设计、修复、评审与验收不再新增、维护、修复、收集或运行 `tests/` 下的测试，也不在其他目录新建等价单元测试。现有文件和历史证据只读保留；不得因其未运行或失效而阻塞交付，不得将旧通过数当作当前验收证据。
+
+验证以真实 E2E 和 Offline Eval 为主：E2E 验收正式用户结果，Offline Eval 验证固定样本、历史失败、模型输入和局部因果边界。确定性不变量继续由生产类型及断言保证，按需在 E2E 检查点或真实失败数据的离线回放中检查；禁止把单元测试搬到 `evals/`、改名或改写类别规避本规则。lint、类型检查、依赖、文档及配置检查保留。具体范围与执行顺序见 [QLT](docs/devSpec/quality-security.md#1-测试职责与覆盖)。
 
 ## 3. 任务路由：按识别信号读取细则
 
@@ -68,10 +76,10 @@
 | `REF` | 优秀智能体、外部智能体、Agent Harness 比较、Claude Code 能力参考、GPT/Codex 能力参考、OpenHands 能力参考、DeepSeek Harness 能力参考、Gemini CLI 能力参考、Hermes Agent 能力参考、Letta 能力参考、LangGraph 能力参考 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
 | `ARC` | 架构分层、业务事实、决策归属、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Product Aggregate、生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay、durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
-| `CTX` | Context、Memory、RAG、Artifact、检索、权限过滤、预算物化、Capability Projection、服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
+| `CTX` | Context、System Prompt、模型输入、反馈执行异常、Memory、RAG、Artifact、检索、权限过滤、预算物化、Capability Projection、服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
 | `COD` | 类或模块拆分、内部类型、payload、依赖注入、生产 Prompt、指令模板、LangGraph、Router、Planner、Workflow、错误分类、命名、编码智能体行为 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
 | `DOC` | 新增、修改、移动或评审 Markdown、Mermaid、ADR、评测归档、架构说明、中文写作、文档索引 | [文档模块规范](docs/AGENTS.md) |
-| `QLT` | Unit、Contract、Integration、Golden Set、Real E2E、真实环境 smoke、Trace、安全、权限、审计、评测 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
+| `QLT` | 单元测试、tests/、Offline Eval、Unit、Contract、Integration、Golden Set、Real E2E、真实环境 smoke、Trace、安全、权限、审计、评测 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | Schema 迁移、协议迁移、兼容窗口、ADR、发布评审、合并验收、完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |
 
 目录局部规范作为第二层路由：修改 `docs/**` 时必须读取 [`docs/AGENTS.md`](docs/AGENTS.md)；修改 `evals/**` 时必须读取 [`evals/AGENTS.md`](evals/AGENTS.md)；修改生产 Prompt 时必须读取 [`src/personal_agent/kernel/prompt_templates/AGENTS.md`](src/personal_agent/kernel/prompt_templates/AGENTS.md)。模块规范只收紧或细化根规则，不能放宽全局门禁。
@@ -81,7 +89,7 @@
 | 变更类型 | 实现前的失败证据 | 实现后的必要证据 |
 | --- | --- | --- |
 | 新增或扩展 Application Capability、改变公开契约，或声明新 Runtime Mechanism 收益 | 同一正式入口的失败 baseline；目标用户、自然表达、初始事实和关键反事实固定 | target-minus-mechanism 单变量消融；真实 target E2E；预设用户结果、错误副作用、成本、延迟或恢复指标达标 |
-| 恢复已有权威契约或确定性不变量的缺陷修复 | 同一正式入口的当前失败或可还原历史失败，证明失败来自产品而非环境或测试；最早责任边界与前置条件明确 | 适用的确定性 Contract 或 Runtime Conformance 反事实；同入口真实 target E2E；成功与失败、拒绝或恢复场景；旧路径删除；不强制正式消融 |
+| 恢复已有权威契约或确定性不变量的缺陷修复 | 同一正式入口的当前失败或可还原历史失败，证明失败来自产品而非环境或测试；最早责任边界与前置条件明确 | 基于真实失败输入的 Offline Eval 反事实或 E2E 机制检查点；同入口真实 target E2E；成功与失败、拒绝或恢复场景；旧路径删除；不强制正式消融 |
 | 纯内部重构 | 可重复命令证明生产不可达、职责混装、依赖环、变更耦合或复杂度热点；重构前正式入口 E2E 通过 | 同命令证明工程约束下降；重构后同一正式入口 E2E 证明行为保持；无新产品能力声明 |
 | 纯文档修正 | 代码、配置、测试、既有执行证据或 A 级外部规范坐标 | 权威文档唯一；主入口一致；链接、标题、代码块、表格、Mermaid 和适用识别样本检查通过 |
 
@@ -102,4 +110,4 @@
 
 交付前必须按[迁移、ADR 与完成门禁](docs/devSpec/migration-release.md#3-完成检查表)逐项核对本文件及适用细则，确认目标与范围外事项、责任归属和生产可达性明确，第 4 节证据达标，旧路径已清理且权威文档同步。
 
-适用的 Unit、Contract、Integration、Golden Set、Real E2E、真实环境 smoke、lint、type check、dead-code 和文档检查必须通过；如实报告命令、实际结果、样本量、净复杂度变化和未验证风险。任一适用门禁未满足时，不得声称完成或可上线。
+适用的 Real E2E、Offline Eval（含 Golden Set）、真实环境 smoke、lint、type check、dead-code 和文档检查必须通过；不再要求 `tests/` 或单元测试门禁；如实报告命令、实际结果、样本量、净复杂度变化和未验证风险。任一适用门禁未满足时，不得声称完成或可上线。

@@ -5,14 +5,14 @@ from pydantic import ValidationError
 
 from personal_agent.application.capture.models import UrlCaptureResult
 from personal_agent.application.capture.providers.web_search import WebSearchProvider
-from personal_agent.application.capture.web_source import WebReadOutput
+from personal_agent.application.capture.web_source import WebReadOutput, WebSearchArgs
 from personal_agent.governance import ToolExecutor
 from personal_agent.kernel.config import Settings, WebSearchConfig
 from personal_agent.kernel.contracts.scope import interaction_execution_scope
 from personal_agent.kernel.models import WebSearchResult
 from personal_agent.orchestration.runtime import AgentRuntime
 from personal_agent.tools.web_read import build_web_read_tool
-from personal_agent.tools.web_search import WebSearchArgs, build_web_search_tool
+from personal_agent.tools.web_search import build_web_search_tool
 
 
 class _Search(WebSearchProvider):
@@ -42,7 +42,8 @@ def test_search_does_not_capture_and_reader_accepts_selected_or_direct_url():
         tool_call_id="discover", source_platform="web",
     )
     assert search["ok"]
-    assert set(search["data"]) == {"results"}
+    assert set(search["data"]) == {"query", "limit", "results"}
+    assert search["data"]["query"] == "比较公开规范" and search["data"]["limit"] == 3
     assert capture.urls == []
     for index, url in enumerate((search["data"]["results"][2]["url"], "https://example.org/direct")):
         result = executor.invoke_interaction(

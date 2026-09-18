@@ -9,7 +9,7 @@ from personal_agent.capabilities.contracts.verification import SourceReadingStat
 from personal_agent.kernel.contracts.resource import ResourceRef
 
 from .context_materialization import ARTIFACT_OUTPUT_CAPABILITIES, select_visible_successful_observations
-from .models import InteractionInput
+from .models import ActionObservation, InteractionInput
 
 
 class OffloadedSource(BaseModel):
@@ -35,17 +35,11 @@ class SourceReadWindow(BaseModel):
     lines: tuple[ReturnedSourceLine, ...]
 
 
-def materialize_source_reading_state(
-    inputs: Iterable[InteractionInput],
-    *,
-    verifier_capability_id: str = "verify_interaction_draft",
-) -> tuple[SourceReadingState, ...]:
-    observations = select_visible_successful_observations(
-        inputs, excluded_capability_ids=frozenset({verifier_capability_id}),
-    )
+def source_metadata_by_resource(
+    observations: Iterable[ActionObservation],
+) -> dict[ResourceRef, tuple[str, int | None]]:
+    """Resolve source identity once from already-visible successful execution facts."""
     sources: dict[ResourceRef, tuple[str, int | None]] = {}
-    seen: dict[ResourceRef, set[int]] = {}
-    ranges: dict[tuple[ResourceRef, int], list[tuple[int, int]]] = {}
     for item in observations:
         if item.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
             continue
@@ -62,7 +56,20 @@ def materialize_source_reading_state(
         if binding.resource_ref in sources and sources[binding.resource_ref] != entry:
             raise ValueError("inconsistent metadata for one source version")
         sources[binding.resource_ref] = entry
-        seen.setdefault(binding.resource_ref, set())
+    return sources
+
+
+def materialize_source_reading_state(
+    inputs: Iterable[InteractionInput],
+    *,
+    verifier_capability_id: str = "verify_interaction_draft",
+) -> tuple[SourceReadingState, ...]:
+    observations = select_visible_successful_observations(
+        inputs, excluded_capability_ids=frozenset({verifier_capability_id}),
+    )
+    sources = source_metadata_by_resource(observations)
+    seen: dict[ResourceRef, set[int]] = {ref: set() for ref in sources}
+    ranges: dict[tuple[ResourceRef, int], list[tuple[int, int]]] = {}
     for item in observations:
         if item.capability_id not in ARTIFACT_OUTPUT_CAPABILITIES:
             continue

@@ -62,21 +62,17 @@ def build_interaction_system_prompt(
         "tokens": max(0, policy.max_total_tokens - usage.total_tokens),
     }
     plan_context = (
-        " Current authoritative Conversation working plan (copy completed steps exactly; "
-        "keep at most one unfinished step in_progress and change status only at a "
-        "semantic work boundary): " + model_visible_working_plan_json(working_plan)
-        if working_plan is not None
-        else ""
+        get_prompt("conversation.plan_context").render(
+            total=str(len(working_plan.steps)),
+            completed=str(sum(step.status == "completed" for step in working_plan.steps)),
+            pending=str(sum(step.status == "pending" for step in working_plan.steps)),
+            active=str(sum(step.status == "in_progress" for step in working_plan.steps)),
+            superseded=str(sum(step.status == "superseded" for step in working_plan.steps)),
+            plan_json=model_visible_working_plan_json(working_plan),
+        )
+        if working_plan is not None else ""
     )
-    plan_control = (
-        " The caller selected auto interaction mode, so a new formal working plan may "
-        "use wait_for_user false. Mark exactly one unfinished step in_progress before "
-        "executing it; concrete actions may accompany that plan update."
-        if interaction_mode == "auto"
-        else " The caller selected default interaction mode. A new formal working plan "
-        "must use wait_for_user true and contain no actions; this caller policy is "
-        "immutable during the turn."
-    )
+    plan_control = "调用方交互模式（权威数据）：" + interaction_mode
     if finalization_mode:
         return get_prompt("conversation.final").render(
             requirements=_requirements_instruction(review_criteria),

@@ -15,8 +15,15 @@ MAX_SOURCE_PAYLOAD_BYTES = 16 * 1024 * 1024
 WEB_SOURCE_FORMAT = "web-source-text-v2"
 
 
-class WebSearchOutput(BaseModel):
+class WebSearchArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str = Field(min_length=1, max_length=400, description="要搜索的公网信息问题或关键词，最多 400 个字符。")
+    limit: int = Field(default=5, ge=1, le=10, description="返回搜索结果数量，范围 1-10。")
+
+
+class WebSearchOutput(WebSearchArgs):
+    """搜索执行边界返回实际使用的参数和发现结果。"""
 
     results: tuple[WebSearchResult, ...]
 

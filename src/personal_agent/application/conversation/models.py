@@ -5,7 +5,10 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from personal_agent.capabilities.contracts.verification import ConversationAnswerSegment
+from personal_agent.capabilities.contracts.verification import (
+    ConversationAnswerSegment,
+    EvidenceSufficiencyAssessment,
+)
 
 from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteOperationView,
@@ -191,6 +194,13 @@ class FinalMessage(_StrictModel):
     kind: Literal["final_message"] = "final_message"
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
     segments: tuple[ConversationAnswerSegment, ...] = Field(min_length=1)
+    evidence_sufficiency: EvidenceSufficiencyAssessment | None = None
+
+    @model_validator(mode="after")
+    def _sufficiency_requires_answer(self):
+        if self.evidence_sufficiency is not None and self.disposition != "answer":
+            raise ValueError("evidence_sufficiency applies only to the submitted answer")
+        return self
 
     @property
     def message(self) -> str:

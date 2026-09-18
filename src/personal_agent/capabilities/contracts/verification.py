@@ -34,10 +34,31 @@ class ConversationAnswerSegment(BaseModel):
     references: tuple[ConversationEvidenceReference, ...] = ()
 
 
+class EvidenceSufficiencyAssessment(BaseModel):
+    """Writer decision to end research for this submission, never source evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    reason: str = Field(
+        min_length=1, max_length=2_000,
+        description="现有证据足以支持本次完整回答的理由；这是结束取证的判断，不是事实证据。",
+    )
+
+
+class CitationSource(BaseModel):
+    """Execution-owned location of a cited read window, never writer-supplied."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    resource_ref: ResourceRef
+    source_url: str | None
+    line: int = Field(ge=1)
+    start_column: int = Field(ge=1)
+
+
 class CitedEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: str = Field(min_length=1)
     text: str
+    source: CitationSource | None = None
 
 
 class CitedDraftUnit(BaseModel):
@@ -50,7 +71,6 @@ class CitedDraftUnit(BaseModel):
 
 class OverreachFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    draft_quote: str = Field(min_length=1)
     evidence_ids: tuple[str, ...]
     exceeded_scope: str = Field(min_length=1)
 
@@ -64,6 +84,7 @@ class CitedSupportRejection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["cited_support_rejection"] = "cited_support_rejection"
     rejected_draft: str
+    checked_draft: str = Field(min_length=1)
     findings: tuple[OverreachFinding, ...] = Field(min_length=1)
     explanation: str = (
         "本次提交的证据不足以支持所列草稿声明，暂不交付。"

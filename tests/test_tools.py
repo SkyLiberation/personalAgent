@@ -468,7 +468,7 @@ class TestToolExecutor:
         assert sink.events[0].timed_out is True
 
     def test_explicit_args_schema_rejects_invalid_web_search_limit(self):
-        from personal_agent.tools.web_search import WebSearchArgs
+        from personal_agent.application.capture.web_source import WebSearchArgs
 
         with pytest.raises(ValidationError):
             WebSearchArgs.model_validate({"query": "agent tools", "limit": 99})

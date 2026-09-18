@@ -24,11 +24,13 @@ Procedure 只封装 prepare、confirm、commit、receipt、compensate 和 reconc
 
 Plan 协议必须遵守以下责任边界：
 
-1. 模型通过独立 Plan 控制 Proposal 创建、修订或终止工作项，并在执行前把一个工作项标记为 `in_progress`；等待用户审阅或 Plan 已终止时不得存在活动工作项。
+1. 模型通过独立 Plan 控制 Proposal 创建、修订或终止工作项，可把当前推进的工作项标记为 `in_progress`；等待用户审阅时不得存在活动工作项。进度判断允许根据新证据修订，包括重开 completed；历史执行事实不可改写。
 2. `ConversationWorkingPlan` 或对应 Product Aggregate 唯一拥有 canonical 工作状态。Admission 只校验版本、引用、唯一活动项和合法迁移，不根据工具名、步骤顺序或自然语言猜测活动项。
-3. ToolCall 和 Agent Delegation 只表达具体业务动作。执行网关在 Admission 后读取 canonical `in_progress` 工作项，并把其标识写入内部 `Observation`、`AgentArtifact` 或等价执行事实；没有 Plan 时关联为空，存在非终止 Plan 却没有唯一活动项时失败关闭。
+3. ToolCall 和 Agent Delegation 只表达具体业务动作。执行网关在 Admission 后读取 canonical `in_progress` 工作项，并把其标识写入内部 `Observation`、`AgentArtifact` 或等价执行事实；没有活动项时关联为空，不得以 Plan 进度代替权限或禁止本来合法的工具调用。多个活动项仍由 Plan Admission 确定性拒绝。
 4. 同一活动项下可以连续执行多个动作，不要求逐动作更新 Plan。模型只有在验收条件满足、用户改变目标、新事实要求修订，或需要切换工作项时才提交 Plan 变更。
 5. 与 canonical Plan 完全一致的 Proposal 是幂等 no-op，不创建新版本，也不得阻塞同一 Proposal 中其他合法动作；幂等接受不能替模型完成、切换或改写工作项。
+
+同一未交付任务的 Plan 修订保留身份；新计划的交付边界由 Journal 已接纳的 answer 确定，不从步骤 completed 推导。新计划仍遵守调用方的审阅规则。整体修正与验证范围见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
 工具或 Command 的成功只产生 Execution Fact。模型可以根据执行事实提出中间工作项完成，但 Admission 只能校验状态迁移；它不能用 Receipt 自动生成语义完成事实。
 
@@ -41,7 +43,7 @@ Plan 协议必须遵守以下责任边界：
 1. Admission 校验 FinalMessage 的 Schema、身份、作用域和确定性不变量；
 2. 适用时由 Verifier 判断答案是否满足 Goal 与 review criteria；
 3. Completion Gate 检查 required result contract 和所需证据是否齐全；
-4. 任一语义判断或结果契约失败时返回 typed feedback，Plan 保持未完成并继续模型决策；
+4. 任一语义判断或结果契约失败时返回 typed feedback，不产生最终交付事实，继续模型决策；模型可补证或修订 Plan，不由 Runtime 猜测要重开的步骤；
 5. 两道门禁通过后，运行系统才把剩余 `pending` 或 `in_progress` 工作项物化为已完成，并提交最终答案。
 
 FinalMessage 不得通过重复枚举全部 Plan Step ID 来替代 Verifier。工具成功、Plan 状态、模型自述和固定预算也都不能替代 Semantic Verification 或 Completion Gate。

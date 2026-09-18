@@ -15,16 +15,6 @@ from .models import (
 )
 
 
-_TERMINAL_STEP_STATUSES = frozenset({"completed", "superseded"})
-
-
-def is_terminal_working_plan(plan: ConversationWorkingPlan | None) -> bool:
-    """Return whether every admitted step has a terminal execution fact."""
-    return bool(plan is not None and all(
-        step.status in _TERMINAL_STEP_STATUSES for step in plan.steps
-    ))
-
-
 def supersede_pending_working_plan(
     working_plan: ConversationWorkingPlan,
 ) -> ConversationWorkingPlan:
@@ -63,15 +53,12 @@ def _same_plan_content(
 
 
 def _starts_new_plan(
-    proposal: WorkingPlanProposal,
     current: ConversationWorkingPlan | None,
+    *,
+    result_delivered: bool,
 ) -> bool:
-    if current is None:
-        return True
-    return (
-        all(step.status == "completed" for step in current.steps)
-        and not _same_plan_content(proposal, current)
-    )
+    """Progress is revisable; only a committed answer closes its plan lifecycle."""
+    return current is None or result_delivered
 
 
 def admit_plan_wait_boundary(
@@ -126,11 +113,12 @@ def admit_new_plan_interaction_mode(
     current: ConversationWorkingPlan | None,
     interaction_mode: ConversationInteractionMode,
     unsafe_execution_started: bool = False,
+    result_delivered: bool = False,
 ) -> DecisionFeedback | None:
     proposal = decision.working_plan
     if proposal is None or interaction_mode == "auto":
         return None
-    starts_new_plan = _starts_new_plan(proposal, current)
+    starts_new_plan = _starts_new_plan(current, result_delivered=result_delivered)
     if not starts_new_plan:
         return None
     if unsafe_execution_started:
@@ -174,6 +162,7 @@ def admit_working_plan(
     current: ConversationWorkingPlan | None,
     inputs: tuple,
     wait_for_user: bool = False,
+    result_delivered: bool = False,
 ) -> tuple[DecisionFeedback | None, ConversationWorkingPlan | None]:
     step_ids = tuple(step.step_id for step in proposal.steps)
     if len(step_ids) != len(set(step_ids)):
@@ -185,9 +174,6 @@ def admit_working_plan(
             required_repair="Return one unique step_id per user-visible obligation.",
         ), None
     active_count = sum(step.status == "in_progress" for step in proposal.steps)
-    nonterminal = any(
-        step.status in {"pending", "in_progress"} for step in proposal.steps
-    )
     if wait_for_user and active_count:
         return DecisionFeedback(
             action_id="working_plan",
@@ -199,19 +185,18 @@ def admit_working_plan(
                 "Keep every unfinished step pending until the user authorizes execution."
             ),
         ), None
-    if not wait_for_user and nonterminal and active_count != 1:
+    if active_count > 1:
         return DecisionFeedback(
             action_id="working_plan",
             reason_code="working_plan_active_step_required",
-            message="An executable working plan requires exactly one in_progress step.",
+            message="工作计划最多只能有一个 in_progress 工作项。",
             repairable_fields=("steps",),
             immutable_fields=("goal", "grounding"),
             required_repair=(
-                "Mark exactly one unfinished step in_progress and keep every other "
-                "unfinished step pending."
+                "只保留当前正在推进的一个活动项，其余待办项设为 pending。"
             ),
         ), None
-    starts_new_plan = _starts_new_plan(proposal, current)
+    starts_new_plan = _starts_new_plan(current, result_delivered=result_delivered)
     if current is not None and not starts_new_plan and _same_plan_content(
         proposal,
         current,
@@ -232,25 +217,11 @@ def admit_working_plan(
         if current is not None and not starts_new_plan
         else {}
     )
-    proposed_by_id = {step.step_id: step for step in proposal.steps}
-    for step_id, existing in current_by_id.items():
-        if existing.status != "completed":
-            continue
-        candidate = proposed_by_id.get(step_id)
-        if candidate is None or (
-            candidate.description != existing.description
-            or candidate.status != existing.status
-        ):
-            return DecisionFeedback(
-                action_id="working_plan",
-                reason_code="completed_plan_step_immutable",
-                message=f"Completed step {step_id!r} cannot be removed or rewritten.",
-                immutable_fields=("steps",),
-                required_repair="Preserve every completed step byte-for-byte.",
-            ), None
     def materialize_step(step):
         existing = current_by_id.get(step.step_id)
-        if existing is not None and existing.status == "completed":
+        if (existing is not None and existing.status == "completed"
+                and step.status == "completed"
+                and step.description == existing.description):
             return existing
         return ConversationWorkingPlanStep(
             **step.model_dump(),
@@ -327,43 +298,6 @@ def admit_continue_turn_progress(
     )
 
 
-def admit_action_plan_state(
-    actions,
-    *,
-    working_plan: ConversationWorkingPlan | None,
-) -> DecisionFeedback | None:
-    if not actions or working_plan is None:
-        return None
-    if is_terminal_working_plan(working_plan):
-        return DecisionFeedback(
-            action_id=actions[0].action_id,
-            reason_code="working_plan_terminal",
-            working_plan_revision=working_plan.revision,
-            message="当前计划已终止，没有可关联新动作的活动工作项。",
-            repairable_fields=("working_plan", "actions", "wait_for_user"),
-            immutable_fields=("messages", "inputs", "interaction_mode"),
-            required_repair=(
-                "若原任务仍需补证或修订，使用计划控制动作提出后续工作计划，"
-                "并按当前交互模式等待审阅或设置唯一活动项；再提交必要动作。"
-                "不得只修改或重发工具动作，也不得改写已发生的执行事实。"
-                "仅当原任务已完成或确有无法继续的阻塞时，才提交相应最终结果。"
-            ),
-        )
-    if active_working_plan_step_id(working_plan) is None:
-        return DecisionFeedback(
-            action_id=actions[0].action_id,
-            reason_code="working_plan_active_step_required",
-            message="The current working plan has no unique in_progress step.",
-            repairable_fields=("working_plan",),
-            immutable_fields=("actions",),
-            required_repair=(
-                "Use the working-plan control action to mark exactly one unfinished "
-                "step in_progress; do not add a step ID to the concrete action."
-            ),
-        )
-    return None
-
-
 def complete_working_plan(
     working_plan: ConversationWorkingPlan,
     *,
@@ -402,13 +336,11 @@ def complete_working_plan(
     })
 __all__ = [
     "active_working_plan_step_id",
-    "admit_action_plan_state",
     "admit_continue_turn_progress",
     "admit_new_plan_interaction_mode",
     "admit_plan_wait_boundary",
     "admit_working_plan",
     "complete_working_plan",
-    "is_terminal_working_plan",
     "required_plan_review_feedback",
     "supersede_pending_working_plan",
 ]

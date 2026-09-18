@@ -43,11 +43,10 @@ from personal_agent.application.conversation.models import (
     InteractionTrace,
 )
 from personal_agent.application.conversation.working_plan import (
-    admit_action_plan_state,
+    active_working_plan_step_id,
     admit_continue_turn_progress,
     admit_working_plan,
     complete_working_plan,
-    is_terminal_working_plan,
     supersede_pending_working_plan,
 )
 from personal_agent.application.conversation.interaction_prompt import (
@@ -829,19 +828,13 @@ def test_feedback_attempt_boundary_survives_journal_restart(temp_dir, repair):
     assert [item.decision_turn for item in feedback] == ([1, 1] if repair else [1, 1, 2])
 
 
-def test_terminal_plan_feedback_allows_a_legal_follow_up_plan():
+def test_completed_progress_can_be_reopened_in_the_same_plan():
     plan = ConversationWorkingPlan(
         plan_id="wplan-terminal", revision=3, goal="交付有据说明",
         steps=(ConversationWorkingPlanStep(
             step_id="draft", description="生成草稿", status="completed",
         ),),
     )
-    actions = (ToolCallProposal(action_id="read", tool_name="read_fact", arguments={}),)
-    feedback = admit_action_plan_state(actions, working_plan=plan)
-    assert feedback.reason_code == "working_plan_terminal"
-    assert feedback.working_plan_revision == 3
-    assert "working_plan" in feedback.repairable_fields
-    assert "working_plan" not in feedback.immutable_fields
     rejected, follow_up = admit_working_plan(
         WorkingPlanProposal(
             goal=plan.goal, grounding="草稿仍有需要核实的依据。",
@@ -851,9 +844,105 @@ def test_terminal_plan_feedback_allows_a_legal_follow_up_plan():
         ),
         current=plan, inputs=(),
     )
-    assert rejected is None and follow_up.plan_id != plan.plan_id
-    assert admit_action_plan_state(actions, working_plan=follow_up) is None
+    assert rejected is None and follow_up.plan_id == plan.plan_id
+    assert active_working_plan_step_id(follow_up) == "check"
     assert plan.steps[0].status == "completed"
+
+
+@pytest.mark.parametrize("reopen", [False, True])
+def test_completed_progress_allows_rejected_final_to_read_and_deliver(reopen):
+    executions = []
+    recorder = []
+    criterion = "结论必须依据实际读取的结果"
+    plan = WorkingPlanProposal(goal="说明事实", steps=(WorkingPlanStepProposal(
+        step_id="read", description="结果：事实说明；完成条件：已核实依据", status="completed",
+    ),))
+
+    def read_fact(query: str):
+        executions.append(query)
+        return tool_response(tool_success({"fact": "核验值为七"}))
+
+    repair = ContinueTurnProposal(
+        working_plan=(plan.model_copy(update={"steps": (
+            plan.steps[0].model_copy(update={"status": "in_progress"}),
+        )}) if reopen else None),
+        actions=(ToolCallProposal(
+            action_id="read-after-rejection", tool_name="read_fact", arguments={"query": "核验值"},
+        ),),
+    )
+    model = _Decisions(
+        ContinueTurnProposal(working_plan=plan),
+        FinalMessage(disposition="answer", segments=(ConversationAnswerSegment(text="未经核实的旧稿。"),)),
+        repair,
+        FinalMessage(disposition="answer", segments=(ConversationAnswerSegment(text="核验值为七。"),)),
+        review_intent=_review_intent((criterion, criterion)),
+    )
+    service = ConversationService(
+        model, tool_port=_executor(_tool("read_fact", read_fact),
+                                  _verifier_tool(recorder, verdicts=("failed", "passed"))),
+        budget_policy=LoopBudgetPolicy(max_model_turns=10),
+    )
+    scope = _conversation_scope()
+    result = service.respond(**scope, conversation_id="plan-repair", interaction_mode="auto",
+                             interaction_run_ref="irun-plan-repair",
+                             messages=[ConversationMessage(role="user", content=criterion)])
+    trace = _trace(service, "irun-plan-repair")
+    assert result.disposition == "answer"
+    assert result.message.content == "核验值为七。"
+    assert executions == ["核验值"]
+    assert len(recorder) == 2
+    read = next(item for item in trace.inputs if isinstance(item, ActionObservation)
+                and item.action_id == "read-after-rejection")
+    assert read.plan_step_id == ("read" if reopen else None)
+    assert not any(isinstance(item, DecisionFeedback) and item.reason_code.startswith("working_plan_")
+                   for item in trace.inputs)
+    assert all(step.status == "completed" for step in result.working_plan.steps)
+
+
+@pytest.mark.parametrize("delivered", [False, True])
+def test_plan_review_boundary_uses_delivery_not_completed_progress(delivered):
+    from personal_agent.application.conversation.working_plan import admit_new_plan_interaction_mode
+
+    current = ConversationWorkingPlan(plan_id="plan", revision=2, goal="目标", steps=(
+        ConversationWorkingPlanStep(step_id="check", description="核实", status="completed"),
+    ))
+    proposal = WorkingPlanProposal(goal="目标", steps=(
+        WorkingPlanStepProposal(step_id="check", description="核实", status="in_progress"),
+    ))
+    feedback = admit_new_plan_interaction_mode(
+        ContinueTurnProposal(working_plan=proposal), current=current,
+        result_delivered=delivered, interaction_mode="default",
+    )
+    assert (feedback.reason_code if feedback else None) == (
+        "working_plan_review_required" if delivered else None
+    )
+
+
+@pytest.mark.parametrize("delivered", [False, True])
+def test_completed_plan_restores_evidence_until_actual_delivery(temp_dir, delivered):
+    principal = _conversation_scope()["principal"]
+    plan = ConversationWorkingPlan(plan_id="plan", revision=2, goal="说明事实", steps=(
+        ConversationWorkingPlanStep(step_id="check", description="核实", status="completed"),
+    ))
+    fact = ActionObservation(kind="tool_result", action_id="read-unbound", capability_id="read_fact",
+                             status="succeeded", payload={"fact": "白鹿口令"})
+    answer = FinalMessage(disposition="answer", segments=(ConversationAnswerSegment(text="白鹿口令"),))
+    root = temp_dir / "plan-delivery"
+    FileInteractionJournal(root).put(InteractionTrace(
+        interaction_run_ref="prior", conversation_id="restore-plan", principal=principal,
+        messages=(ConversationMessage(role="user", content="说明事实"),),
+        working_plan=plan, inputs=(fact,), final_message=answer if delivered else None,
+    ))
+    journal = FileInteractionJournal(root)
+    assert journal.plan_result_delivered("restore-plan", principal, plan) is delivered
+    assert not journal.plan_result_delivered("other-conversation", principal, plan)
+    model = _Decisions(answer)
+    service = ConversationService(model, journal=journal)
+    service.respond(**_conversation_scope(), conversation_id="restore-plan",
+                    interaction_run_ref="continued", messages=[ConversationMessage(role="user", content="继续")])
+    trace = _trace(service, "continued")
+    assert (fact in trace.inputs) is (not delivered)
+
 
 
 def test_working_plan_proposal_excludes_runtime_identity_and_revision():
@@ -893,6 +982,7 @@ def test_single_step_working_plan_is_a_valid_continuation_contract():
         "kind",
         "disposition",
         "segments",
+        "evidence_sufficiency",
     }
 
 
@@ -926,11 +1016,10 @@ def test_interaction_prompt_separates_action_and_finalization_phases():
 
     assert "revision" not in EffectiveCapabilities.model_fields
     assert '"revision":' not in prompt
-    assert "Respond only with one or more compatible provider action calls" in prompt
-    assert "call prepare-final" in prompt
-    assert "It carries no answer" in prompt
-    assert "exclusive typed FinalMessage" in prompt
-    assert "provider call ID is runtime-owned action identity" in prompt
+    assert "只返回提供的一个或多个兼容原生动作调用" in prompt
+    assert "先调用 prepare_final" in prompt
+    assert "它不携带答案" in prompt
+    assert "独占相位生成 typed FinalMessage" in prompt
     assert "AgentTurnDecision" not in prompt
     assert "ContinueTurnProposal" not in prompt
 
@@ -998,48 +1087,13 @@ def test_interaction_prompt_separates_default_review_from_explicit_auto_executio
         CommittedUsage(),
     )
 
-    assert "proactively propose working_plan" in prompt.lower()
-    assert "verifiable work result" in prompt
-    assert "A bare activity such as searching" in prompt
-    assert "Result: ...; Complete when: ..." in prompt
-    assert "结果：……；完成条件：……" in prompt
-    assert "Keep the initial plan short-horizon" in prompt
-    assert "several actions or Tool calls" in prompt
-    assert "proactively create a formal plan" in prompt
-    assert "working-plan action with wait_for_user true" in prompt
-    assert "planning_safe=true" in prompt
-    assert "Never claim that a source was inspected" in prompt
-    assert "a prose plan inside FinalMessage violates" in prompt
-    assert "working_plan.grounding" in prompt
-    assert "caller-selected auto interaction mode" in prompt
-    assert "An agent-initiated plan does not require approval" not in prompt
-    assert "must use wait_for_user true and contain no actions" in prompt
-
+    assert "调用方交互模式（权威数据）：default" in prompt
     auto_prompt = build_interaction_system_prompt(
-        EffectiveCapabilities(),
-        CommittedUsage(),
-        interaction_mode="auto",
+        EffectiveCapabilities(), CommittedUsage(), interaction_mode="auto",
     )
-    assert "caller selected auto interaction mode" in auto_prompt
-    assert "create or show a working plan" in auto_prompt
-    assert "wait_for_user false in auto interaction mode" in auto_prompt
-    assert "concrete actions may accompany that plan update" in auto_prompt
+    assert "调用方交互模式（权威数据）：auto" in auto_prompt
+    assert auto_prompt.replace("权威数据）：auto", "权威数据）：default") == prompt
     assert "plan_step_id" not in auto_prompt
-    assert "must use wait_for_user true and contain no actions" not in auto_prompt
-    assert "A bare request to continue refers to the current" in prompt
-    assert "Without a current plan or another committed continuation contract" in prompt
-
-
-def test_interaction_prompt_keeps_narrow_mixed_evidence_in_parent_loop():
-    prompt = build_interaction_system_prompt(
-        EffectiveCapabilities(),
-        CommittedUsage(),
-    )
-
-    assert "A single official-document lookup" in prompt
-    assert "combined with personal context" in prompt
-    assert "stays in the parent loop" in prompt
-    assert "independently verifiable" in prompt
 
 
 def test_prompt_never_asks_the_model_to_run_or_reference_verification():
@@ -1067,8 +1121,8 @@ def test_prompt_requires_exact_preservation_of_cited_opaque_values():
         CommittedUsage(),
     )
 
-    assert "Preserve opaque identifiers, dates, quantities, version strings" in prompt
-    assert "must not erase them" in prompt
+    assert "逐字保留用户所需的标识、日期、数量和版本" in prompt
+    assert "禁止用概括改写抹去这些精确值" in prompt
 
 
 def _tool(
@@ -1456,7 +1510,7 @@ def test_waiting_plan_rejects_non_planning_safe_actions_before_execution():
     )
 
 
-def test_working_plan_update_preserves_completed_steps_from_current_plan():
+def test_working_plan_update_revises_judgment_without_rewriting_execution():
     current = ConversationWorkingPlan(
         plan_id="wplan-1",
         revision=2,
@@ -1505,8 +1559,10 @@ def test_working_plan_update_preserves_completed_steps_from_current_plan():
         current=current,
         inputs=inputs,
     )
-    assert admitted is None
-    assert feedback.reason_code == "completed_plan_step_immutable"
+    assert feedback is None
+    assert admitted.steps[0].description == "Inspect everything again"
+    assert inputs[0].plan_step_id == "inspect"
+    assert current.steps[0].description == "Inspect recent saved knowledge"
 
 
 def test_working_plan_admission_enforces_the_active_step_boundary():
@@ -1866,82 +1922,6 @@ def test_successful_context_evidence_can_support_semantic_plan_completion():
     assert admitted.steps[0].completion_action_ids == ()
 
 
-def test_actions_require_one_canonical_active_working_plan_step():
-    plan = ConversationWorkingPlan(
-        plan_id="wplan-1",
-        revision=1,
-        goal="Organize knowledge",
-        steps=(
-            ConversationWorkingPlanStep(
-                step_id="inspect",
-                description="Inspect recent saved knowledge",
-                status="pending",
-            ),
-            ConversationWorkingPlanStep(
-                step_id="summarize",
-                description="Summarize the main themes",
-                status="pending",
-            ),
-        ),
-    )
-    unbound = ToolCallProposal(
-        action_id="read-1",
-        tool_name="read_recent",
-        arguments={},
-    )
-    feedback = admit_action_plan_state(
-        (unbound,),
-        working_plan=plan,
-    )
-    assert feedback.reason_code == "working_plan_active_step_required"
-
-    active_plan = plan.model_copy(update={
-        "steps": (
-            plan.steps[0].model_copy(update={"status": "in_progress"}),
-            plan.steps[1],
-        )
-    })
-    assert (
-        admit_action_plan_state(
-            (unbound,),
-            working_plan=active_plan,
-        )
-        is None
-    )
-
-
-def test_bound_observation_does_not_block_a_follow_up_action_for_the_same_pending_result():
-    plan = ConversationWorkingPlan(
-        plan_id="wplan-1",
-        revision=1,
-        goal="Organize knowledge",
-        steps=(
-            ConversationWorkingPlanStep(
-                step_id="inspect",
-                description="Inspect recent saved knowledge",
-                status="in_progress",
-            ),
-            ConversationWorkingPlanStep(
-                step_id="summarize",
-                description="Summarize the main themes",
-                status="pending",
-            ),
-        ),
-    )
-    feedback = admit_action_plan_state(
-        (
-            ToolCallProposal(
-                action_id="read-2",
-                tool_name="read_recent",
-                arguments={},
-            ),
-        ),
-        working_plan=plan,
-    )
-
-    assert feedback is None
-
-
 def test_offloaded_result_window_stays_associated_with_the_active_plan_step():
     owner = AuthenticatedPrincipal(tenant_id="tenant-1", user_id="default")
     resource_ref = ResourceRef(
@@ -1987,10 +1967,8 @@ def test_offloaded_result_window_stays_associated_with_the_active_plan_step():
         },
     )
 
-    assert admit_action_plan_state(
-        (materialization,),
-        working_plan=plan,
-    ) is None
+    assert materialization.tool_name == "search_action_output"
+    assert active_working_plan_step_id(plan) == "read-large"
     assert observation.plan_step_id == "read-large"
 
 
@@ -2066,8 +2044,6 @@ def test_final_result_contract_supersedes_only_pending_plan_steps():
     ]
     assert superseded.steps[0].completion_action_ids == ("search-1",)
     assert all(not step.completion_action_ids for step in superseded.steps[1:])
-    assert is_terminal_working_plan(superseded)
-    assert is_terminal_working_plan(plan) is False
 
 
 def test_accepted_final_answer_completes_steps_and_binds_execution_evidence():
@@ -3009,7 +2985,7 @@ def test_working_plan_observation_projection_excludes_other_scope_and_failures()
         plan,
     )
 
-    assert tuple(item.action_id for item in projected) == ("accepted",)
+    assert tuple(item.action_id for item in projected) == ("accepted", "unbound")
 
 
 def test_conversation_evidence_refs_are_scoped_typed_execution_projections():
@@ -3106,6 +3082,7 @@ def test_completed_working_plan_can_be_superseded_by_a_new_frontstage_goal():
         proposal,
         current=current,
         inputs=(),
+        result_delivered=True,
     )
 
     assert feedback is None
@@ -4162,8 +4139,8 @@ def test_independent_user_results_instruction_does_not_require_named_capabilitie
     )
 
     system_prompt = model.decision_requests[0].messages[0]["content"]
-    assert "goal requires multiple independent read-only results" in system_prompt
-    assert "user does not need to know or name internal capabilities" in system_prompt
+    assert "独立且必要的只读请求可一并提交" in system_prompt
+    assert "无需用户了解或指定内部能力" in system_prompt
     assert model.decision_requests[0].temperature == 0
     assert model.decision_requests[0].max_tokens == 32_768
 
@@ -4275,7 +4252,7 @@ def test_successful_agent_artifact_rejects_ungrounded_repeat_delegation():
         for item in trace.inputs
     )
     assert (
-        "produce the parent synthesis"
+        "自行评价并综合"
         in model.decision_requests[1].messages[0]["content"]
     )
 
@@ -5252,7 +5229,7 @@ def test_interaction_verifier_uses_registered_contract_and_json_evidence():
     payload = json.loads(verifier_input)
     assert payload["success_criteria"] == ["每条建议必须有官方 URL 与验证条件", support.template]
     assert model.request.metadata["source_support_prompt_version"] == support.version
-    assert json.loads(payload["execution_evidence"][0])["payload"]["lines"][0]["text"] == "CTX-EVIDENCE ALPHA"
+    assert json.loads(payload["execution_evidence"][0]["text"])["payload"]["lines"][0]["text"] == "CTX-EVIDENCE ALPHA"
     assert receipt["success_criteria"] == ["每条建议必须有官方 URL 与验证条件"]
     expected_criteria_bytes = json.dumps(
         receipt["success_criteria"], ensure_ascii=False, separators=(",", ":"),

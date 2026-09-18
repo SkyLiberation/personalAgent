@@ -32,7 +32,7 @@ ADR 按[中文文档结构](../chinese-writing-spec.md#6-各类文档的附加�
 - [ ] 决策、执行与完成满足[EXE](agentic-execution.md)，框架抽取满足[独立消费者或强制边界](architecture-ownership.md#4-framework-capability-准入与边界)。
 - [ ] 适用的[外部比较与遇阻复核](change-evidence.md#6-外部参考的证据分级)已执行并保留坐标；活动方案收敛，未采纳、撤回或调整部分有理由。
 - [ ] 旧字段、路径、临时状态、镜像事实、隐藏 fallback、无消费者结构、测试旁路和无期限兼容已清理；兼容例外满足第 1 节，实验代码符合[EVD 隔离要求](change-evidence.md#3-删除优先与兼容边界)。
-- [ ] 适用的 Unit、Contract、Integration、Golden Set、Real E2E、真实环境 smoke、lint、type check、dead-code 与[QLT 覆盖要求](quality-security.md#1-测试职责与覆盖)通过；Test Double 未被外推为真实接入。
+- [ ] 适用的 Real E2E、Offline Eval（含 Golden Set）、真实环境 smoke、lint、type check、dead-code 与[QLT 覆盖要求](quality-security.md#1-测试职责与覆盖)通过；未新增、维护、收集或运行 `tests/` 及等价单元测试，Test Double 未被外推为真实接入。
 - [ ] 证据按[归档规则](../../evals/AGENTS.md#5-比较身份与归档)分别封存且可还原；发布声明另满足[评测模块发布边界](../../evals/AGENTS.md#6-运行与声明)。
 - [ ] 权威文档已同步，按[DOC 检查](../AGENTS.md#5-提交前检查)确认事实、中文写作、生命周期、链接与结构。
 - [ ] 如实报告验证命令、实际结果、样本量、净复杂度和未验证风险。

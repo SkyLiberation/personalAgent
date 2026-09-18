@@ -43,11 +43,15 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 当前候选由 Conversation 原生正文段提交引用；运行系统恢复每段全部指定的可见原文，局部 Verifier 先检查本段与依据。未引正文保留空证据，引用错误或支持拒绝返回既有循环。普通审查只取得提交引用的并集，不复制 Journal 或重新暴露未读全文。候选状态及验证边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。模型逐条产生 criterion status 与 feedback，Verifier
 adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或 `insufficient_evidence` 都聚合为 `failed`。逐判据三态与 feedback 仅供智能体诊断与恢复，运行系统不再根据失败类别重新开放或隐藏工具。汇总反馈缺失时，adapter 只从未满足 criterion 已有的 feedback 派生；逐判据反馈同样缺失时仍 fail closed。该派生不增加语义事实，也不能替代 Completion。
 
+逐行引用当前通过 `CitedEvidence.source` 保留执行记录中的 `ResourceRef`、已知来源 URL、行号及起始列；来源元数据与读取覆盖共用确定性派生入口。局部核验接收原文及来源，整稿和缺项输入也保留该关联。模型仍只提交 `evidence_id`，未知 URL 为空，完整工具结果保留原有内容；来源正确不能替代原文支持。修复的局部证据及完整 E2E 限制见 [ADR 0028](../adr/0028-preserve-citation-source-binding.md)。
+
+局部支持核验使用 `interaction_verification.cited_support:v2-call-bound-unit`。模型只输出相关证据 ID 和具体支持缺口；工具以 `checked_draft` 恢复本次调用的精确段落，连同完整拒稿正文与意见交回原循环，不再要求模型抄写原句。证据 ID 仍只在当前单元校验，不作为后续成文的全局引用；空发现继续整稿核验。该候选的正式消费与证据限制见 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md)。
+
 Conversation Verifier 当前使用 Registry 中的中文 `interaction_verification.system:v4-cited-evidence`，并固定加入 `interaction_verification.source_support:v1` 标准。模型必须逐条核对声明与实际证据的主体、条件、范围及强度；仅主题相关、URL 正确或没有发现矛盾不能替代支持。两份模板由同一工具消费，版本进入请求；JSON 输入由已有 typed 参数模型序列化，外部内容明确作为数据。
 
 工具对用户标准与系统支持标准合并去重，要求报告恰好覆盖全部项。缺失或重复来源支持项不能形成有效回执，来源支持不通过就参与现有聚合并拒稿。用户原标准由 `InteractionIntent` 冻结，回执 `success_criteria` 与 `criteria_digest` 仍绑定这组原标准；系统判断在 `criterion_results` 中独立保留，不改写用户要求。失败通过现有 Conversation 循环返回模型，修订稿重新验证。既有触发范围与预算保持；原生引用候选改变输入物化和成文 Schema，不增加服务或循环。接入决定及剩余风险见 [ADR 0020](../adr/0020-require-conversation-source-support-verification.md)。
 
-对于保存并卸载的来源，当前目标代码在普通审查前使用 `interaction_verification.document_absence:v3-source-flags`，返回与 `source_reading_state` 等长同序的严格布尔数组 `absence_by_source`，识别稿件是否对每个来源作出文档级缺项声明。Conversation 从可见成功执行记录物化来源读取状态；代码校验数量与来源唯一性，按位置绑定真实来源，对命中且未完整读取的项返回独立覆盖拒绝。模型不再复制原句或来源身份，反馈中的 `unread_sources` 由代码恢复。拒绝经现有工具网关回到修订循环，不生成语义回执；普通 `satisfied` 无权覆盖。完整读取只解除覆盖门禁，原稿仍须接受上述来源支持审查。事实范围、复杂度与未完成产品门禁见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)。
+对于保存并卸载的来源，当前目标代码在普通审查前使用 `interaction_verification.document_absence:v3-source-flags`，返回与 `source_reading_state` 等长同序的严格布尔数组 `absence_by_source`，识别稿件是否对每个来源作出文档级缺项声明。Conversation 从可见成功执行记录物化来源读取状态；代码校验数量与来源唯一性，按位置绑定真实来源，对命中且未完整读取、且本稿未提交取证充分性判断的项返回覆盖反馈。模型不再复制原句或来源身份，反馈中的 `unread_sources` 由代码恢复。拒绝经现有工具网关回到修订循环，不生成语义回执；普通 `satisfied` 无权覆盖。读取完整度不构成强制阅读义务。当前候选允许模型在本次 Final 的 `evidence_sufficiency.reason` 中说明现有证据足以支持本稿的理由；原服务直接投影本次判断，不沿用历史稿声明。声明存在时继续来源支持与整稿核验，理由不进入事实证据，原正文与引用仍按同一稿件校验。该候选的用户结果尚待验收，详见 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)。事实范围、复杂度与未完成产品门禁见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)。
 
 当前验证调用的输出上限为 32,768 tokens，工具执行时限为 480 秒；工具自身不重试。两项上限分别允许 thinking 与完整报告输出、给模型请求及解析留出执行时间，仍可能因模型自身超时或协议错误失败。扩大交互总预算不会自动改变这些局部上限。旧 1,200-token / 60 秒限制已移除，同一真实首稿的预算对照取得完整绑定报告，但仍漏放无据权限归属结论；不能把报告返回与语义正确混为一谈。记录及产品验收限制见[推进记录第 54 节](../optimization/verifier-output-truncation.md#54-验证报告被局部预算截断的单边界资格检查)。
 

@@ -37,9 +37,11 @@ ConversationService 提交模型决策产生的 `DecisionFeedback` 时绑定 `de
 
 终止计划没有可执行活动项，直接提交新工具仍会被拒绝。反馈明确允许模型提出后续计划，沿已有交互模式与唯一活动项准入继续执行；不把历史已完成工作项重新标为未完成，也不把计划终止等同于用户任务完成。
 
-Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDefinition`，服务提供方通过原生工具调用返回动作名和 typed 参数。Tool/Agent 动作 Schema 不暴露 `plan_step_id`；存在 Plan 时，模型通过独立 `control_working_plan` 选择唯一 `in_progress` 步骤，执行系统把随后动作事实关联到该 canonical 步骤。`Adapter` 只把调用解码为现有 Proposal；Admission、权限、预算和执行网关仍在模型之外决定是否执行。
+Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDefinition`，服务提供方通过原生工具调用返回动作名和 typed 参数。Tool/Agent 动作 Schema 不暴露 `plan_step_id`；模型通过独立 `control_working_plan` 修订进度，最多一个 `in_progress`；执行系统有活动项时关联它，没有时记录空关联，不用进度完成禁止工具。completed 可因新证据重开，历史执行事实不可改写。`Adapter` 只把调用解码为现有 Proposal；Admission、权限、预算和执行网关仍在模型之外决定是否执行。
 
 当前原生引用候选由 `FinalMessage.segments` 唯一保存正文及引用，`message` 仅为按序拼接的只读属性；旧正文写字段已删除，外部 `ConversationMessage.content` 仍为字符串。代码检查已验证回执与该正文相同后交付。迁移与证据边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。
+
+Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answer 为边界，不能从全部步骤 completed 推导；未交付任务的修订保持 Plan 身份。跨轮恢复按同一边界保留该 Plan 的成功执行资料，包括无活动项时的结果。新计划仍遵守 default/auto 审阅规则。整体候选、证据和限制见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
 `FinalMessage` 不再是可以与普通 Tool Call 并列返回的 Provider action。模型在 action phase 通过无 payload 的 `prepare_final` 请求相位切换；兼容动作执行后，下一回合不暴露任何 action definitions，只生成 strict typed `FinalMessage`。Final Prompt 投影冻结审查条件、工作清单语义内容和剩余预算，但不暴露 Plan identity、执行绑定或动作定义。主模板和 request version 统一由 [Prompt Registry](../llm-prompts.md) 拥有。`StructuredModelResponse` 禁止同时携带 typed value 与 action invocations。普通只读工具仍可在一个 action phase 并行调用，这条互斥只约束最终交付。
 
@@ -64,6 +66,8 @@ Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDe
 5. budget materialization。
 
 Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才通过有界 `tool_result` 进入。该投影不复制 canonical facts，也不成为写入口。
+
+Conversation 的查询执行说明与可引用来源由[Context 专题](context-engineering.md#查询执行事实与来源证据)统一定义；原 Context 路径消费带查询说明的引用投影，不增加查询缓存或新循环。整体 Context 候选的撤回边界见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
 
 ## Durable execution
 

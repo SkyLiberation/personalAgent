@@ -23,7 +23,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | `interview/` | 面试材料：只组织已有事实并链接权威来源；补充规则见 `interview/00-writing-spec.md` |
 | `mermaid/` | Model / Layer 依赖类图 |
 | `future/` | 尚未闭环的准入项；状态收敛与退出见 [Future 规则](future/README.md) |
-| [`optimization/`](optimization/README.md) | 按问题集中保存验证优化过程、候选取舍、结论更正和可复用经验；不维护生产或发布状态 |
+| [`optimization/`](optimization/README.md) | 按问题维护推进记录；已解决问题固化在 [`completed/`](optimization/completed/README.md)，删除中间流水；不维护生产或发布状态 |
 | `adr/` | 已接受决策、迁移与退出条件，以及有保留价值的候选取舍记录 |
 | `evals/` | 执行结果、测量报告、评测证据与发布限制；入口见 [评测体系](evals/README.md) |
 | 顶层散文档 | API、部署、环境变量、评测、检索策略等独立主题 |
@@ -48,9 +48,9 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | Memory 与知识事实边界 | [topics/memory.md](topics/memory.md) |
 | Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md) |
 | Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
-| Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md)、[ADR 0018](adr/0018-bind-semantic-verification-to-execution-evidence.md)、[ADR 0020](adr/0020-require-conversation-source-support-verification.md)、[ADR 0021](adr/0021-separate-document-absence-from-reading-coverage.md)、[ADR 0022：引用试接入与撤回](adr/0022-conversation-owned-citations-and-support-repair.md)、[ADR 0023：原生分段引用候选](adr/0023-native-answer-segments-and-visible-citations.md) |
-| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md)、[ADR 0019](adr/0019-bind-feedback-to-decision-turn.md) |
-| 单次 Observation 的上下文边界与卸载重读 | [ADR 0013](adr/0013-bounded-observation-and-offloaded-read.md)、[ADR 0024：正文搜索读取与引用](adr/0024-plain-source-tools-and-inline-citations.md) |
+| Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md)、[ADR 0018](adr/0018-bind-semantic-verification-to-execution-evidence.md)、[ADR 0020](adr/0020-require-conversation-source-support-verification.md)、[ADR 0021](adr/0021-separate-document-absence-from-reading-coverage.md)、[ADR 0022：引用试接入与撤回](adr/0022-conversation-owned-citations-and-support-repair.md)、[ADR 0023：原生分段引用候选](adr/0023-native-answer-segments-and-visible-citations.md)、[ADR 0027：模型取证充分性](adr/0027-model-owned-evidence-sufficiency.md)、[ADR 0028：引用来源绑定](adr/0028-preserve-citation-source-binding.md)、[ADR 0029：核验单元绑定](adr/0029-bind-verifier-feedback-to-input-unit.md) |
+| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md)、[ADR 0019](adr/0019-bind-feedback-to-decision-turn.md)、[ADR 0025：可修订计划进度](adr/0025-revisable-plan-progress.md) |
+| 单次 Observation 的上下文边界与卸载重读 | [ADR 0013](adr/0013-bounded-observation-and-offloaded-read.md)、[ADR 0024：正文搜索读取与引用](adr/0024-plain-source-tools-and-inline-citations.md)、[ADR 0026：查询与来源证据分离](adr/0026-separate-query-facts-from-cited-evidence.md) |
 
 **当前架构只以上表的 canonical 文档和生产代码为事实源。**其他 topic、workflow、mermaid 与评测
 归档是专题说明或 paired evidence，不得反向定义主链、能力状态和发布资格。

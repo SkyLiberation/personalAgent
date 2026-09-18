@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup
 from fastapi import HTTPException
 
 TEXT_FILE_EXTENSIONS = {
@@ -110,6 +111,21 @@ def extract_pdf_text(file_bytes: bytes, logger: logging.Logger) -> str:
 
 
 def extract_html_text(html: str) -> str:
+    document = BeautifulSoup(html, "html.parser")
+    main_regions = [
+        region for region in document.select('main, [role="main"]')
+        if region.find_parent(["script", "style", "noscript"]) is None
+    ]
+    outer_regions = [
+        region for region in main_regions
+        if not any(parent is other for parent in region.parents for other in main_regions)
+    ]
+    # 只采用明确且唯一的主区域；不按关键词、文本长度或站点规则猜正文。
+    if len(outer_regions) == 1:
+        main_region = outer_regions[0]
+        for navigation in list(main_region.select('nav, [role="navigation"]')):
+            navigation.decompose()
+        html = str(main_region)
     parser = ReadableHtmlParser()
     parser.feed(html)
     parser.close()
