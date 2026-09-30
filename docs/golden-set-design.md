@@ -1,142 +1,44 @@
 # Golden Set 设计
 
+本文说明固定语义样本的设计方式，不维护生产能力、用例数量或发布状态。验证类别由 [QLT](devSpec/quality-security.md#1-测试职责与覆盖)拥有，机器用例与当前结果见[评测体系](evals/README.md)。旧 Task Analysis、Investigation、Executive 及单元测试矩阵不再作为现行设计要求。
+
 ## 目标
 
-工程使用多套职责互斥的 golden set 评估 Conversation 语义决策、Investigation planning、
-Capability/Tool governance、检索回答、Verifier 和多轮用户结果。
+Golden Set 用中文用户输入、代表性材料与预声明标签定位语义边界及历史回归。它可以用于真实模型 Offline Eval，也可以登记为符合完整生产入口条件的 E2E 场景；固定数据或真实模型本身不使评测自动成为 E2E。
 
-统一形状为：
-
-```text
-Case -> RunOutput -> pure scorer -> baseline -> regression gate
-```
-
-baseline 是不得下降的地板，不是质量目标。降低 baseline 必须说明原因；模型、prompt、schema 或控制策略变化必须先补能定位问题的 case。
+质量参考值与产品失败 baseline 分开：前者比较固定样本与配置下的质量，后者证明正式入口的用户缺口。数据集、标签或门槛变化须有事实依据和独立版本，不能修改期望迎合候选。
 
 ## 设计原则
 
-1. case 标注用户可观察行为和架构不变式，不锁定无意义的内部实现细节。
-2. 专项 quality scorer 只消费 thin `RunOutput`；核心 E2E 例外地读取 durable checkpoint 的 canonical state，用于证明跨边界一致性。
-3. 离线 deterministic gate 与真实模型/真实 provider gate 分开报告；只有后者可以命名为 E2E，前者属于 contract/integration test。
-4. 副作用、权限、幂等、HITL 和完成条件使用硬断言，不能被平均分掩盖。
-5. 每套 suite 只拥有一个清晰决策边界，避免同一个语义在 Conversation、Project Planner、
-   Workflow 和 E2E 重复打分。
-6. Observation 驱动的计划修订必须评估触发证据、Patch 合法性和最终效果，不能只评估初始计划。
+1. 样本有明确验收目的，覆盖正常、边界、失败、关键反事实及历史问题。标签判断用户结果或声明的语义边界，不指定内部工具、步骤或措辞。
+2. 输入、资料、参考与标签由数据集拥有，经 typed 边界显式传入；生产和评分 Prompt 保持通用。
+3. 权限、隔离、错误副作用和确定性不变量单独检查，不被平均分掩盖；无需为纯确定性检查调用模型。
+4. 模型前置决策影响后置行为时，按 [EVD 连续验证](devSpec/change-evidence.md#11-模型依赖链必须连续验证)执行同轨迹真实输出。固定历史状态只支持条件局部结论。
+5. 新样本补已证明缺口，不因模块、状态或字段增加就机械新建套件，不将停用单元测试搬入 `evals/`。
 
-## 评测矩阵
+## 样本与评分契约
 
-| Suite | 评测单元 | 负责 | 不负责 |
-| --- | --- | --- | --- |
-| Conversation decision quality | 用户消息 + committed Observation/Feedback | direct/clarification/action 选择、Tool/Agent 参数、最终回答 | 权限、执行事实 |
-| Investigation planning quality | UserRequirement + Project journal + Observation | SubGoal、依赖、repair、frozen-work 保持 | Tool 实际执行、发布资格 |
-| Workflow/Domain tests | Command + current state | 事务不变量、合法迁移、幂等、版本隔离 | 开放式语义选择 |
-| Capability quality | CapabilityRequirement + Registry/Policy | native/MCP/A2A eligibility、coverage、scope、binding、rank、拒绝原因 | 最终答案质量 |
-| Tool quality | tool definition/call | governance、schema、risk、HITL、幂等、artifact contract | 为什么选择这个工具 |
-| RAG quality | retrieval + answer run | recall、ranking、faithfulness、citation、contradiction | 顶层控制决策 |
-| Orchestration quality | 单次 entry 到 terminal | 关键事件、禁止事件、终态、不挂死、事故回归 | 跨 turn 状态继承 |
-| Conversation quality | 完整多轮轨迹 | thread 连续性、clarification/confirmation resume、状态 delta | 单点组件指标 |
-| Core E2E | 原始 EntryInput 到 durable terminal | 真实 Task Analysis、TaskContract、Goal dependency、HITL、执行、逐 Goal verification、Task completion 的跨边界闭环 | 专项统计指标和所有 provider 的穷举覆盖 |
+每条样本至少能反查中文任务、资料来源、适用前提、被评结果、成功与禁止结果、证据类别和标签依据。具体字段按已有 typed contract 组织，不预建通用样本框架。
 
-## Task Analysis 金标
+评分器使用原始被评产物及适用参考；结构合法、关键词出现或模型自评不能代替语义正确。新评分语义先用相邻正反例校准，真实模型评分器须取得对应任务范围的资格，再用于产品判断。多次调用同一轨迹不作为多个独立任务样本。
 
-位置：`evals/task_analysis_quality/`。
+## Offline Eval 与 E2E 的边界
 
-Case 口径：
-
-```text
-EntryInput
-  -> expected_outcome: ready / clarify / rejected
-  -> expected_result_contracts
-  -> optional expected relations/resource hints/clarification fields
-```
-
-这里不再标注 `route_type`、`coverage`、`matched_capabilities` 或 `missing_requirements`。Task Analyzer 不读取 Capability Registry，因此不能判断当前部署是否能完成任务。
-
-重点覆盖：
-
-- 简单请求只产生一个最小充分 Goal；
-- 复合请求拆为独立可验证 Goal；
-- 明确“先 A，再基于 A 做 B”形成 `user_explicit consumes_output/requires_completion`；
-- 只有展示或时间偏好时使用非阻塞 `ordering_preference`；
-- 独立 Goal 不因出现“然后”就自动串行；
-- 明确 provider 只形成 required/preferred ResourceHint；
-- 信息不足会改变目标或副作用边界时才澄清；
-- 模型不可用时显式 `analyzer_unavailable`，不启用关键词兜底。
-
-离线 gate 使用 deterministic structured-output fixture 验证 schema/scorer；real gate 使用真实 structured model，允许单独 baseline 和波动范围。
-
-## Goal Graph 与 Executive
-
-Goal Graph 使用单元和场景测试保护确定性不变式：
-
-- relation 端点存在、无重复、自依赖或阻塞环；
-- ordering preference 不阻塞；
-- `user_explicit` dependency 不可改；
-- inferred/runtime dependency 只能在存在触发 Observation 时修订；
-- Patch 后仍无环，且不能让开放 Goal 依赖 abandoned Goal；
-- Executive 一次只产生一个合法 ControlDecision；
-- action success 只到 candidate，必须再经过 GoalVerifier；
-- finish 必须通过 CompletionVerifier。
-
-模型 Executive 的独立 quality suite 应按“状态 -> 决策 -> 结果”评估，而不是要求每个 case 命中唯一动作。可接受动作集合、禁止动作、预期信息增益、预算和最终 criterion 达成比 exact next-action 更能衡量 Agentic 决策质量。
-
-## Procedure 编译门禁
-
-Procedure 编译由 `tests/test_agentic_planning.py` 与入口级 case 共同覆盖。Case 直接构造 `ProcedureSpec + ProcedureCall`，不经过 Task Analyzer。指标包括：
-
-- task dependency exact / edge F1；
-- step dependency exact / edge F1；
-- topology 与 namespace；
-- tool sequence 与 forbidden tool；
-- risk、confirmation 和 projection contract。
-
-开放式 answer、investigation、summarize 不属于 Procedure 编译门禁。它们由 Executive 组合 BoundedAction，并在 Executive、RAG 和少量核心 E2E 场景中评估。
-
-## Capability 与外部 Agent
-
-Capability case 应直接构造 Goal-scoped `CapabilityRequirement`，覆盖：
-
-- required provider 不得被 preferred provider 替代；
-- capability class、resource type 和 operation 全部匹配；
-- denied、unavailable、partial、satisfied 不混淆；
-- lexicographic rank 不允许低信任通过加权分抵消硬约束；
-- MCP 调用仍受 ToolGateway scope/policy/audit；
-- A2A 委派只接收最小 SubtaskSpec，artifact 默认 unverified；
-- provider 失败成为 Observation，由 Executive 决定重试、换 provider、澄清或停止。
-
-## Orchestration 与 Conversation
-
-Orchestration case 一次只执行一个 entry，重点检查事件子序列、禁止事件和 terminal。Conversation case 才负责多个 turn、同 thread checkpoint、clarification/confirmation resume 与副作用 delta。
-
-两者可以共享事件 scorer，但不能合并成一个平均分：单次事故需要精确归因，多轮成功是跨 turn 的合取条件。
-
-有状态 case 必须使用独立 user/thread，并显式 seed 所需数据；没有 seed 的“知识整理/冲突检测”只能测到空数据分支。
-
-## 真实环境分层
-
-| 层 | 依赖 | 用途 |
+| 方式 | 可支持结论 | 限制 |
 | --- | --- | --- |
-| L0 pure scorer | 无 DB/LLM | 指标数学与边界 |
-| L1 hermetic contract | fake model/provider | schema、validator、投影与事故复现 |
-| L2 real model | 真实模型，可隔离 DB/provider | prompt 与语义决策质量 |
-| L3 live E2E | 原始输入、真实 DB、模型与场景所需 provider | 用户结果、跨边界一致性、部署可用性与环境漂移 |
+| 实际输入审计或历史只读回放 | 固定状态下的构造、输入保真及失败位置 | 不证明前置决策稳定可达 |
+| 真实模型 Offline Eval | 声明样本和依赖边界内的语义表现 | 不证明完整生产交付、持久化和副作用 |
+| Real E2E | 正式用户入口、真实生产链和预声明用户结果 | 只适用于执行的代码、配置与场景 |
+| 工程静态检查 | 类型、注册、依赖、配置或文档约束 | 不作为产品效果证明 |
 
-核心 E2E 必须从原始 `EntryInput` 开始，不得固定或注入 Task Analysis。确定性模型输出只能用于 L1 contract/integration test，不能命名为 E2E。核心 E2E 使用隔离测试库和独立资源 namespace，避免污染业务数据，但模型、规划、治理、Gateway、Verification 和场景所需 provider 都使用正式装配。
+冻结模型、直接构造 Command 或注入中间结果按实际边界解释，不命名为 Product E2E。替身及历史证据限制按 QLT 处理，`tests/` 和等价单元套件继续停用。
 
-报告必须标明层级。fixture 通过不能被表述为真实 Agent 质量通过；live provider 波动也不能替代 hermetic contract gate。
+## 比较、归档与诊断
 
-## Baseline 与失败诊断
+运行前声明数据集版本、比较身份、指标、样本与重复计划、预算及停止条件。比较固定任务、初始事实、模型、Prompt、schema、服务方与评分器，声明的候选变量除外。报告分子、分母、未到达、未执行、成本及适用方差，不挑成功重跑。
 
-每次 gate 输出 aggregate 和逐 case mismatch。硬不变式单独失败，不参与宽松平均。baseline 文件只存稳定指标阈值和必要说明，不保存无法复现的临时运行结果。
+归档与代码身份按 [EVM](../evals/AGENTS.md#5-比较身份与归档)封存。原始用户结果、局部检查点和评分资格分别记录；失败按最早责任边界归因，不能从最后错误或终态反推唯一根因。涉及模型行为先审计实际输入，再决定修订输入、代码或评分器。
 
-失败按边界归因：
+## 执行与完成
 
-- Goal/Relation 错：Task Analysis；
-- relation 合法但 runtime 未调整：Executive/Patch；
-- requirement 正确但 provider 错：Capability Resolver；
-- provider 正确但调用越权：Gateway/Policy；
-- action 成功但错误完成：Verifier；
-- Protocol 内步骤错误：Protocol compilation/execution；
-- 单轮正确但 resume 丢状态：Conversation/checkpoint。
-
-这个归因表也是新增 case 选择 suite 的依据。
+执行路径和命令以[运行与发布](evals/04-running-and-release.md)为准，按影响选择最小证据；不能把现存目录或历史通过数当作当前门禁。文档整理只核对事实与引用，不为更新本指引重跑付费模型或完整发布矩阵。

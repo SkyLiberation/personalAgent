@@ -16,14 +16,14 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | [`AGENTS.md`](AGENTS.md) | `docs/**` 的目录级文档治理入口；继承根主规范并链接中文写作与权威索引 |
 | [`chinese-writing-spec.md`](chinese-writing-spec.md) | `docs/` 全目录的中文语法、术语、证据措辞和存量迁移门禁 |
 | [`devSpec/`](devSpec/README.md) | 根 `AGENTS.md` 与 `CLAUDE.md` 按任务渐进披露的开发、设计、测试、文档和发布细则 |
-| [`agentRef/`](agentRef/README.md) | 按能力组件组织的外部优秀智能体 A 级机制参考；不定义本工程现状、路线或采用结论 |
+| [`agentRef/`](agentRef/README.md) | 按组件组织的外部机制检索与分级参考；不定义本工程现状、路线或采用结论 |
 | `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
 | `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
 | `interview/` | 面试材料：只组织已有事实并链接权威来源；补充规则见 `interview/00-writing-spec.md` |
 | `mermaid/` | Model / Layer 依赖类图 |
 | `future/` | 尚未闭环的准入项；状态收敛与退出见 [Future 规则](future/README.md) |
-| [`optimization/`](optimization/README.md) | 按问题维护推进记录；已解决问题固化在 [`completed/`](optimization/completed/README.md)，删除中间流水；不维护生产或发布状态 |
+| [`optimization/`](optimization/README.md) | 按问题维护推进记录；未充分证明的方案保留在 [`to_verify/`](optimization/to_verify/README.md)；已解决问题固化在 [`completed/`](optimization/completed/README.md)，删除中间流水；不维护生产或发布状态 |
 | `adr/` | 已接受决策、迁移与退出条件，以及有保留价值的候选取舍记录 |
 | `evals/` | 执行结果、测量报告、评测证据与发布限制；入口见 [评测体系](evals/README.md) |
 | 顶层散文档 | API、部署、环境变量、评测、检索策略等独立主题 |
@@ -32,7 +32,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 
 文档治理统一遵守[文档模块规范](AGENTS.md)，中文表达遵守[中文写作规范](chinese-writing-spec.md)。新增前先确认主题的权威文档，更新时核对当前代码与已执行证据，先删除过期和重复正文。
 
-能力准入与设计证据见[开发细则](devSpec/README.md)，测试分工与新增测试条件见[测试细则](devSpec/quality-security.md)。本索引只维护目录分工和主题入口。
+能力准入与设计证据见[开发细则](devSpec/README.md)，验证分工与单元测试停用边界见[QLT](devSpec/quality-security.md)。本索引只维护目录分工和主题入口。
 
 ## 按主题找权威文档
 
@@ -46,10 +46,10 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
 | Memory 与知识事实边界 | [topics/memory.md](topics/memory.md) |
-| Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md) |
+| Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md)、[ADR 0030：文档坐标引用](adr/0030-document-line-citation-identity.md) |
 | Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
 | Verification 与 Completion | [topics/verification-and-completion.md](topics/verification-and-completion.md)、[ADR 0018](adr/0018-bind-semantic-verification-to-execution-evidence.md)、[ADR 0020](adr/0020-require-conversation-source-support-verification.md)、[ADR 0021](adr/0021-separate-document-absence-from-reading-coverage.md)、[ADR 0022：引用试接入与撤回](adr/0022-conversation-owned-citations-and-support-repair.md)、[ADR 0023：原生分段引用候选](adr/0023-native-answer-segments-and-visible-citations.md)、[ADR 0027：模型取证充分性](adr/0027-model-owned-evidence-sufficiency.md)、[ADR 0028：引用来源绑定](adr/0028-preserve-citation-source-binding.md)、[ADR 0029：核验单元绑定](adr/0029-bind-verifier-feedback-to-input-unit.md) |
-| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md)、[ADR 0019](adr/0019-bind-feedback-to-decision-turn.md)、[ADR 0025：可修订计划进度](adr/0025-revisable-plan-progress.md) |
+| Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md)、[ADR 0019](adr/0019-bind-feedback-to-decision-turn.md)、[ADR 0025：可修订计划进度](adr/0025-revisable-plan-progress.md)、[ADR 0031：完整基稿修订](adr/0031-complete-final-revisions.md) |
 | 单次 Observation 的上下文边界与卸载重读 | [ADR 0013](adr/0013-bounded-observation-and-offloaded-read.md)、[ADR 0024：正文搜索读取与引用](adr/0024-plain-source-tools-and-inline-citations.md)、[ADR 0026：查询与来源证据分离](adr/0026-separate-query-facts-from-cited-evidence.md) |
 
 **当前架构只以上表的 canonical 文档和生产代码为事实源。**其他 topic、workflow、mermaid 与评测

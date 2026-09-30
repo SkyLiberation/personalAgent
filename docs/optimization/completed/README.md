@@ -4,6 +4,8 @@
 
 | 已解决的问题 | 固化记录 |
 | --- | --- |
+| 目录拒绝抢先绕过反馈、非法 JSON 没有进入已有一次纠正 | [Conversation 动作协议恢复](conversation-action-protocol-recovery.md) |
+| 被拒稿只有正文、缺少逐段引用关系 | [完整基稿交接](complete-rejected-draft-handoff.md) |
 | 模型引句转录差异导致整份核验反馈丢失 | [核验意见绑定当前调用](verifier-finding-binding.md) |
 | 同一稿件含多个错误，能否通过逐轮核验和修订处理 | [多错误的渐进核验与修订](multi-error-verification-revision.md) |
 

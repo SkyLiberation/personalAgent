@@ -1,6 +1,6 @@
 # 设计优化队列
 
-**当前有 3 个 `A2` 实现项、1 个 `A1` 条件详细设计、4 个没有活动设计的 `A1` 诊断项和 1 个 `A0` 待基线项。** 本文件只登记尚未解决的问题、准入级别和详细设计入口；模型、E2E、消融、复杂度预算、实施步骤与退出条件只能写入对应的独立设计文档。详细设计不得建立第二份状态队列，准入状态以本文件为准。
+**本文件唯一登记尚未解决的问题、准入级别与设计入口，数量以当前队列表为准。** 候选机制正文由对应 `optimization/to_verify/` 文档拥有；Future 专题只补充产品准入与剩余门禁，不复制第二份方案或状态队列。
 
 当前生产事实由[当前核心架构](../summary/core-architecture-current-state.md)和对应专题文档拥有；当前样本、结果与证据边界由[当前评测用例盘点](../evals/02-current-case-inventory.md)拥有；评测入口与发布门禁由[评测执行与发布](../evals/04-running-and-release.md)拥有。本文只引用这些事实，不建立第二份结果台账。
 
@@ -17,26 +17,22 @@
 | `BACKGROUND-CONTINUATION-LIMITATION-001` | 明确要求响应后继续时，系统仍不能稳定保持类型化 `limitation` 与零后台执行 | `A1`：最早失败仍属于 `InteractionIntent` Semantic Decision；当前没有活动设计 | — |
 | `E2E-USER-OUTCOME-CONTRACT-001` | `ASK-001B` 尚未验收回答是否基于官方来源解释工具使用机制 | `A1`：概率性语义 grader 按约定后置；当前没有活动候选 | [E2E 用户结果契约对齐方案](e2e-user-outcome-contract-alignment.md) |
 | `CITATION-SOURCE-ATTRIBUTION-001` | 来源绑定修复后的正式交付及因果回归尚未验收 | `A2`：确定性修复已接入目标代码；局部证据与原始 E2E 分开，完整门禁未过 | [引用来源修复的剩余验收](citation-source-binding.md)、[过程记录](../optimization/citation-source-attribution.md) |
-| `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` | Verifier 会错误放行缺少官方依据或扩大保证范围的答案；标题与 Evidence 串扰仍是独立离线反例；局部未知是否被误拒及其交付边界待核对 | `A2`：来源必检、缺项与覆盖门禁、正文坐标及随文引用保留；正文提取局部机制已接入。完整研究及修订收敛未通过；整体 Context 正式候选已撤回，查询事实交接局部保留；模型取证充分性候选待正式验收 | [Conversation Draft 语义验证隔离设计](conversation-verification-false-positive.md)、[当前来源读取机制](../topics/context-engineering.md#网页来源正文保留与重读)；原用户结果未完成 |
+| `CITATION-COORDINATE-CONFUSION-001` | 新协议正式稿使用目录外编号；原文行号与临时引用号并存，同位置重读有多个引用身份 | `A2`：全部生成端引用已统一为文档行坐标并删除结果号，支持连续整行范围；仅 Offline 验证，按新代码身份累计的正常 E2E 观察仍为 0 | [统一坐标后的剩余验证](citation-coordinate-identity.md)、[问题记录](../optimization/citation-coordinate-confusion.md) |
+| `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` | 完整研究与修订仍未稳定收敛，来源支持判断及反馈落实存在独立缺口 | `A2`：claims 与独立汇总已接入生产；拆分、复合识别和独立文档缺项识别暂停，单条删除动作可用；来源 URL 已在一次正式运行中进入 typed 汇总结构及答案，研究事实覆盖现不判断 URL 呈现；最近两次中文正式 E2E 均为 `0/1`，一次独立评测器输出无效，一次前置研究循环耗尽预算且未到覆盖；该轮 62 次精确重复核验、5 组同请求判决冲突 | [Conversation Draft 语义验证隔离设计](conversation-verification-false-positive.md)、[无法收敛的子问题](../optimization/claim-revision-nonconvergence.md)、[按问题关联的待验证方案](../optimization/to_verify/README.md) |
+| `ANSWER-NORMATIVE-SCOPE-001` | 成文把规范声明附到不支持它的来源；混合主体后的概括存在强度适用范围歧义 | `A1`：历史来源错配与本轮指代歧义分开诊断，后者未证明是明确强度失真或反馈候选引入；没有活动设计，不阻塞反馈 Context 的独立验证 | —；[问题与证据](../optimization/normative-scope-attribution.md) |
 | `CONVERSATION-RESEARCH-SAVE-MISROUTE-001` | 整体 Context 候选的研究任务误转保存确认；当前保留组合是否复现及候选因果责任尚未确定 | `A0`：仅执行当前正式入口 baseline，不准入实现 | [研究任务误转保存确认的准入审计](conversation-research-save-misroute.md) |
 
-`A0` 项只能执行对应的需求或失败 baseline；不得创建接口、模型、状态、表、队列、配置或测试旁路。`A1` 项只允许继续做当前失败归因、详细设计和候选准入。`A2` 项只允许实现已获准的最小纵向切片并执行预声明门禁；门禁失败时停止扩大修改和 E2E。表中没有活动实现候选时，不得把诊断脚本、提示词草案或局部补丁投入生产。独立设计文档存在不等于实现已获准。
+`A0` 项进行基线准备、事实审计与对应 baseline，不创建生产接口、状态、表、配置或测试旁路。`A1` 项进行失败归因、设计和候选准入。`A2` 项实现已获准最小切片并执行预声明门禁；失败时按 EVD 归因，不扩大同方向补丁或运行无增益 E2E。没有活动实现候选时，不把诊断脚本或草案投入生产；文档存在不等于实现获准。
 
 ## 2. 准入顺序
 
-每个队列项必须按以下顺序推进；完整门禁由[变更证据与设计准入](../devSpec/change-evidence.md)和[迁移、ADR 与完成门禁](../devSpec/migration-release.md)拥有：
-
-1. 从正式入口执行当前最简单路径，冻结自然输入、身份、初始事实、服务提供方、预算、评测器和关键反事实。
-2. 用 `Trace`、`AgentRun`、`Artifact`、Admission feedback 和服务提供方事实定位一个最早失败阶段，明确事实 owner、决策 owner 与唯一写入口。
-3. 按机制域核对至少两个独立 A 级实现；外部实现只说明机制可行性，不能替代本工程 baseline。
-4. 提交 Complexity Justification，声明唯一变量、生产消费者、计划删除内容、target 门槛和退出条件；新设计还必须声明消融方法，缺陷修复必须声明最早确定性责任边界的反事实。未通过评审不得编码。
-5. 缺陷修复在责任边界反事实与 target 检查点成立后执行必要回归；新设计还必须执行同输入单变量消融。属于候选责任边界的反事实、target 检查点、回归或适用消融失败时删除候选；检查点之后的独立产品失败改为单独阻塞闭环与发布，不得迫使已成立机制继续停留。任何情况都不保留 flag、fallback、alias 或双轨入口。
+按 [EVD 开发流程](../devSpec/change-evidence.md#7-强制开发与设计流程)取得分类依据、定义因果边界与指标，再实施和验证；外部比较只在 EVD 指定范围适用。完成按 [REL](../devSpec/migration-release.md#3-完成检查表)判断，不在队列复制另一套执行门禁。
 
 ## 3. 队列维护
 
 - 本文件的每个队列项只能保存编号、问题、当前准入、独立设计与对应推进记录链接。禁止在表格或正文展开 Schema、对象、文件、实施步骤、测试命令、指标门槛、消融方法、外部机制比较或退出条件。
-- 进入详细设计的队列项必须使用 `docs/future/` 下的独立文档；该文档必须反向链接本清单，并把状态 owner 明确留在本文件。没有活动设计时链接列写“—”，不得在清单中用下一步说明代替设计文档。
+- 产品准入专题位于 `docs/future/`，机制候选位于 `optimization/to_verify/`；两者回链本清单并明确覆盖边界。没有活动设计时链接列写“—”，可附问题证据入口，不以队列表格代替候选正文。
 - 一个设计覆盖多个队列项时，链接文字必须标明覆盖边界；设计文档不得把局部前置条件冒充为其他队列项已经解决，也不得维护第二份优先级或状态表。
 - 问题被当前 baseline 否定、没有达到准入门槛或根因归属不成立时，直接从本文件删除；诊断结论和经验按 [optimization 记录规则](../optimization/README.md)集中保留，原始证据独立封存。
-- 机制被接受并落地后，把当前事实写入摘要、专题、固定流程或运维文档，再删除对应活动设计并从本文件移除；过程经验按 [completed 固化规则](../optimization/README.md#已解决问题的固化规则)收敛，跨模块取舍按需写入 ADR。
+- 局部机制或完整问题的关闭按 [Future 状态收敛](README.md#状态变化必须在同一变更收敛)处理。仅接入代码不能移除仍未闭环问题；已证明局部成果按 [completed 规则](../optimization/README.md#已解决问题的固化规则)固化，不把独立问题混作原机制残留。
 - 本文件只保留判断问题能否继续推进所需的最小事实。过程、命令与结果在 optimization 对应专题集中记录，活动设计与过程记录双向链接；正式评测和发布状态由评测权威文档维护。

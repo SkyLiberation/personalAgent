@@ -208,24 +208,24 @@ def _outcome(
 # 独立变更 target 的结果契约仍在此唯一登记。运行与代码身份由既有
 # ProductEvidenceRecorder 拥有；本契约不向默认 release matrix 增加重复旅程。
 RESEARCH_TOOL_PROTOCOL_OUTCOME = UserOutcomeContract(
-    outcome_id="conversation_research.tool_protocol_official_support",
-    persona="需要基于官方资料比较工具协议的中文知识工作者",
+    outcome_id="conversation_research.mcp_cooperation_official_support",
+    persona="需要理解模型通过 MCP 使用工具时责任分工的中文知识工作者",
     source_ref="docs/topics/context-engineering.md",
-    natural_goal=("实际查阅 OpenAI 官方工具文档和 MCP tools 规范，比较工具选择、权限边界和结果契约。"),
-    observable_result="交付有实质比较、官方引用支持且未扩大保证范围的中文结论。",
-    counterfactuals=("标题或仅贴 URL 不算比较", "错误保证不得被其他正确段落抵消", "不限定措辞、工具或读取顺序"),
-    baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+    natural_goal="实际查阅官方资料，解释 OpenAI 模型、宿主应用（含 MCP 客户端）与 MCP 服务器在工具选择与调用、权限检查、结果处理中的协作与责任边界。",
+    observable_result="交付区分模型能力、应用实现与协议要求、有官方引用支持且未扩大保证范围的中文说明。",
+    counterfactuals=("标题或仅贴 URL 不算责任说明", "不得将模型平台与协议当成同级替代方案要求对称比较", "错误保证不得被其他正确段落抵消", "不限定篇幅、分点数量、措辞、工具或读取顺序"),
+    baseline_kind=BaselineKind.REGRESSION_CONTRACT,
     baseline_ref="docs/evals/02-current-case-inventory.md",
     assertion_owner="evals/e2e_quality/research_answer_outcome.py",
 )
 
 
-# 同一比较结果的显式验收请求，独立 comparison identity；不加入默认发布矩阵。
+# 同一协作说明的显式验收请求，独立比较身份；不加入默认发布矩阵。
 RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME = UserOutcomeContract(
-    outcome_id="conversation_research.reviewed_tool_protocol_official_support",
+    outcome_id="conversation_research.reviewed_mcp_cooperation_official_support",
     persona=RESEARCH_TOOL_PROTOCOL_OUTCOME.persona,
     source_ref="docs/evals/02-current-case-inventory.md",
-    natural_goal="实际查阅官方资料，按明确验收要求核对后交付工具协议比较。",
+    natural_goal="实际查阅官方资料，按明确验收要求核对后交付 OpenAI 模型通过 MCP 使用工具的协作与责任说明。",
     observable_result=RESEARCH_TOOL_PROTOCOL_OUTCOME.observable_result,
     counterfactuals=RESEARCH_TOOL_PROTOCOL_OUTCOME.counterfactuals,
     baseline_kind=BaselineKind.REGRESSION_CONTRACT,

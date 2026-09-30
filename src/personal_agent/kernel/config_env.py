@@ -325,7 +325,7 @@ def settings_from_env(settings_cls: type):
             or structured_api_key,
             base_url=os.getenv("PERSONAL_AGENT_EXTRACT_BASE_URL")
             or structured_base_url
-            or "https://api.deepseek.com",
+            or "https://api.xiaomimimo.com/v1",
             model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL")
             or structured_model,
             max_char_buffer=int(

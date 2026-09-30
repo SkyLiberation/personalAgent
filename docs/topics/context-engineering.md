@@ -151,13 +151,17 @@ Admission 在同 capability 已有未读卸载结果时拒绝这种无进展 ref
 需要 segment index、滚动摘要、向量化历史或 Provider 原生 compaction，因此当前不实现这些机制。若未来同一自然
 用户目标在消息历史增长上失败，必须重新取得独立 baseline。
 
+### 拒稿后的完整基稿交接
+
+最新完整提交以 `SubmittedFinal` 保存在原交互日志中，后继请求展示其完整 `segments`、引用关系和带作用域的版本引用；旧提交保留供审计，不重复进入模型上下文。该提交是待核验数据，不是来源支持事实；完整稿及局部修订的消费边界见 [ADR 0031](../adr/0031-complete-final-revisions.md)。交接检查点及证据范围见[固化记录](../optimization/completed/complete-rejected-draft-handoff.md)，不据此声称模型修订稳定。
+
 ### 可见证据的随文引用编号
 
-目标代码在 Action 和 Final 的同一可见输入上生成 `CitableInput`。观察和原文行旁直接给出 `evidence_id`，Conversation 原样复制到正文段引用；不再展示需要组合的观察序号与行号目录。执行记录保持原值，编号是请求内派生视图；恢复只接受同一可见输入生成的编号，不读取隐藏 Artifact、不选择邻片、不代替支持判断。失败与 Verifier 输出不产生引用，正文不因漏引被丢弃。当前试接入证据见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
+Action 和 Final 在同一可见输入上生成 `CitableInput`，全部引用统一放在 `citations` 中，使用文档号与行号，如 `d1:1698`；同文档版本同位置重复返回沿用身份，连续整行可写为 `d1:1697-1700`，每行都须实际完整返回，部分长行保留实际字符范围。网页正文保留原文行，结构化工具结果以明确的结果文档分行，搜索摘要不能当作网页正文；不再提供整条结果号。Conversation 选择单行、连续整行或实际返回的字符片段，运行系统按同一目录逐行恢复内容和来源；位置一致性断言拒绝同坐标不同内容，不读取隐藏 Artifact、不选择邻片、不代替支持判断。执行记录保持原值，文档号只是当前可见集合的派生别名，不能跨交互复用。失败、Verifier 输出和卸载摘要不产生引用，正文不因漏引被丢弃。契约和 Offline 验证范围见 [ADR 0030](../adr/0030-document-line-citation-identity.md)。
 
 ### 查询执行事实与来源证据
 
-当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_ref`。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`CitableInput.executed_query` 是请求内执行说明；引用恢复只使用排除查询字段的来源投影，来源和读取窗口仍使用原编号。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
+当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_ref`。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`CitableInput.executed_query` 是请求内执行说明；引用恢复只使用排除查询字段的来源投影，位置规则由上节引用契约拥有。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
 
 查询说明随原 `materialize_citation_context` 进入既有 `Typed execution inputs` 消息，最新 Verification 的原有保留规则不变。整体 Context 行为候选已撤回；当前没有新增历史 user 消息、独立反馈分区或扩源指令。本轮局部成果见[完成文档](../optimization/completed/query-execution-handoff.md)，候选失败、保留范围及产品限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
 

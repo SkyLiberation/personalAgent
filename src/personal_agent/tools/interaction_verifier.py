@@ -11,16 +11,15 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     sealed_context_projection_ref,
 )
+from personal_agent.capabilities.contracts.research import ResearchBasis, ResearchFinalReport
 from personal_agent.capabilities.contracts.verification import (
-    DocumentAbsenceReport,
-    EvidenceSufficiencyAssessment,
+    ConversationAnswerSegment,
     CitedDraftUnit,
     CitedSupportRejection,
     OverreachReport,
     SemanticVerificationReceipt,
     SemanticVerificationReport,
     SourceReadingState,
-    reject_unread_document_absence,
 )
 from personal_agent.kernel.prompts import get_prompt
 from personal_agent.tools.base import ToolArtifact, governance_extras, tool_response, tool_success
@@ -32,10 +31,18 @@ class VerifyInteractionDraftArgs(BaseModel):
     success_criteria: tuple[str, ...] = Field(min_length=1)
     cited_units: tuple[CitedDraftUnit, ...] = ()
     source_reading_state: tuple[SourceReadingState, ...] = ()
-    evidence_sufficiency: EvidenceSufficiencyAssessment | None = None
+    research_basis: ResearchBasis | None = None
+    research_segments: tuple[ConversationAnswerSegment, ...] = ()
 
     @model_validator(mode="after")
     def check_draft_coverage(self):
+        if self.research_basis is not None:
+            if not self.research_segments or self.cited_units or self.source_reading_state:
+                raise ValueError("research final verification requires only claim-bound segments")
+            if "".join(segment.text for segment in self.research_segments) != self.draft:
+                raise ValueError("research segments must preserve the entire exact draft")
+        elif self.research_segments:
+            raise ValueError("research segments require a verified research basis")
         if self.cited_units and "".join(unit.draft for unit in self.cited_units) != self.draft:
             raise ValueError("cited units must preserve the entire exact draft in order")
         for unit in self.cited_units:
@@ -73,10 +80,13 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
         success_criteria: tuple[str, ...],
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
-        evidence_sufficiency: EvidenceSufficiencyAssessment | None = None,
+        research_basis: ResearchBasis | None = None,
+        research_segments: tuple[ConversationAnswerSegment, ...] = (),
     ):
-        prompt = get_prompt("interaction_verification.system")
-        support_prompt = get_prompt("interaction_verification.source_support")
+        prompt = get_prompt("conversation.research.final_verification" if research_basis is not None
+                            else "interaction_verification.system")
+        support_prompt = get_prompt("conversation.research.faithfulness" if research_basis is not None
+                                    else "interaction_verification.source_support")
         verification_criteria = tuple(dict.fromkeys((
             *success_criteria, support_prompt.template,
         )))
@@ -85,7 +95,8 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             success_criteria=verification_criteria,
             cited_units=cited_units,
             source_reading_state=source_reading_state,
-            evidence_sufficiency=evidence_sufficiency,
+            research_basis=research_basis,
+            research_segments=research_segments,
         )
         units = verification_input.cited_units or (CitedDraftUnit(draft=draft),)
         # Only writer-submitted evidence reaches either semantic consumer.
@@ -100,50 +111,15 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
                 state.model_dump(mode="json") for state in verification_input.source_reading_state
             ],
         }
-        if verification_input.source_reading_state:
-            classification_prompt = get_prompt("interaction_verification.document_absence")
-            classification_messages = [
-                {"role": "system", "content": classification_prompt.template},
-                {"role": "user", "content": json.dumps(verification_payload, ensure_ascii=False)},
-            ]
-            classification = model_client.generate(StructuredModelRequest(
-                operation="interaction_document_absence_classification",
-                version=classification_prompt.version,
-                messages=classification_messages,
-                output_type=DocumentAbsenceReport,
-                context_projection_ref=sealed_context_projection_ref(
-                    purpose="interaction_document_absence_classification",
-                    messages=classification_messages,
-                ),
-                max_tokens=32_768,
-                temperature=0,
-                metadata={"component": "interaction_verifier"},
-            )).value
-            rejection = reject_unread_document_absence(
-                draft, classification,
-                verification_input.source_reading_state,
-            )
-            if rejection is not None and verification_input.evidence_sufficiency is None:
-                source_prompt = get_prompt("interaction_verification.coverage_source")
-                source_reading = "\n".join(
-                    source_prompt.render(
-                        source=json.dumps(state.source_url or state.resource_ref.resource_id, ensure_ascii=False),
-                        returned=state.returned_unique_segments,
-                        total=state.total_segments if state.total_segments is not None else "未知",
-                        remaining=(state.total_segments - state.returned_unique_segments)
-                        if state.total_segments else "无法确定（来源总行数未知或来源为空）",
-                    )
-                    for state in rejection.unread_sources
-                )
-                feedback = get_prompt("interaction_verification.coverage_rejection").render(
-                    source_reading=source_reading,
-                )
-                return tool_response(ToolArtifact(
-                    ok=False, data=rejection.model_dump(mode="json"),
-                    error=feedback, error_kind="unrecoverable",
-                ))
+        if verification_input.research_basis is not None:
+            verification_payload = {
+                "draft": draft,
+                "success_criteria": list(verification_criteria),
+                "research_basis": verification_input.research_basis.model_dump(mode="json"),
+                "segments": [segment.model_dump(mode="json") for segment in verification_input.research_segments],
+            }
         cited_prompt = get_prompt("interaction_verification.cited_support")
-        for unit in units:
+        for unit in units if verification_input.research_basis is None else ():
             if not unit.draft.strip():
                 continue
             cited_messages = [
@@ -185,7 +161,7 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             operation="interaction_semantic_verification",
             version=prompt.version,
             messages=messages,
-            output_type=SemanticVerificationReport,
+            output_type=ResearchFinalReport if verification_input.research_basis is not None else SemanticVerificationReport,
             context_projection_ref=sealed_context_projection_ref(
                 purpose="interaction_semantic_verification", messages=messages,
             ),
@@ -241,6 +217,8 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             draft_digest=draft_digest,
             success_criteria=tuple(success_criteria),
             criteria_digest=sha256(criteria_payload.encode("utf-8")).hexdigest(),
+            research_ref=(verification_input.research_basis.claims.resource_ref
+                          if verification_input.research_basis is not None else None),
         )
         return tool_response(tool_success(receipt.model_dump(mode="json")))
 

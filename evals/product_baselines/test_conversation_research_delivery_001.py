@@ -18,7 +18,7 @@ import pytest
 from evals.e2e_quality.failure_diagnostics import diagnose_earliest_failure
 from evals.e2e_quality.evidence_catalog import RESEARCH_TOOL_PROTOCOL_OUTCOME, UserOutcomeContract
 from evals.e2e_quality.research_answer_outcome import (
-    GRADER_VERSION, grade_research_answer, research_answer_request,
+    GRADER_VERSION, ResearchAnswerReferenceSet, grade_research_answer, research_answer_request,
 )
 from evals.e2e_quality.test_release_user_outcomes import (
     LiveWebProcess,
@@ -46,6 +46,9 @@ _DATASET_REVISION = "conversation-research-delivery-20-v2-per-sample"
 _GRADER_VERSION = "conversation-research-delivery-user-outcome-v3-concepts"
 _REPETITIONS = 4
 _CONCEPT_SEGMENT_SPLIT = re.compile(r"[\r\n。！？；]+")
+TOOL_PROTOCOL_REFERENCE_PATH = (
+    Path(__file__).parents[1] / "e2e_quality/fixtures/research_answer_official_references.json"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,15 +59,21 @@ class _Scenario:
     official_source_groups: tuple[tuple[str, ...], ...]
     outcome_contract: UserOutcomeContract | None = None
     dataset_revision: str = _DATASET_REVISION
+    reference_path: Path | None = None
 
 
 _SCENARIOS = (
     _Scenario(
         scenario_id="tool-protocol-boundary",
+        dataset_revision="conversation-research-mcp-cooperation-zh-v3",
+        reference_path=TOOL_PROTOCOL_REFERENCE_PATH,
         outcome_contract=RESEARCH_TOOL_PROTOCOL_OUTCOME,
         request=(
-            "请实际查阅 OpenAI 官方工具文档和 MCP 官方 tools 规范，在这次回复中比较"
-            "工具选择、权限边界和结果契约，给出带官方 URL 的中文结论。"
+            "请实际查阅 OpenAI 官方工具文档和 MCP 官方 tools 规范，说明 OpenAI 模型"
+            "通过 MCP 使用工具时，模型、宿主应用（含 MCP 客户端）和 MCP 服务器怎样协作："
+            "工具由谁选择和调用，权限由谁检查，结果由谁校验、受什么约束。"
+            "请在这次回复中用中文给出有官方 URL 支持的说明，区分模型能力、应用实现"
+            "与协议要求；资料未明确的部分如实说明。"
         ),
         required_concepts=(("工具", "选择"), ("权限", "边界"), ("结果", "契约")),
         official_source_groups=(
@@ -235,9 +244,16 @@ def _execution_counts(trace: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def _config_cohort(server: LiveWebProcess, scenario: _Scenario) -> str:
+def _config_cohort(
+    server: LiveWebProcess, scenario: _Scenario,
+    reference_set: ResearchAnswerReferenceSet | None,
+) -> str:
     settings = server.settings
     return canonical_evidence_digest({
+        "grader_reference_digest": (
+            canonical_evidence_digest(reference_set.model_dump(mode="json"))
+            if reference_set is not None else None
+        ),
         "structured_model": settings.structured.model,
         "structured_provider_host": urlparse(
             settings.structured.base_url or ""
@@ -294,6 +310,12 @@ def run_research_scenario(
     scenario: _Scenario,
     repetition: int,
 ) -> None:
+    reference_set = None
+    if scenario.outcome_contract is not None:
+        assert scenario.reference_path is not None, "有独立评分契约的场景必须明确提供参考资料"
+        reference_set = ResearchAnswerReferenceSet.model_validate_json(
+            scenario.reference_path.read_text(encoding="utf-8"),
+        )
     user_id = "conversation-research-delivery-cohort"
     conversation_id = f"conversation-research-{scenario.scenario_id}-{repetition}"
     initial_state = {
@@ -319,7 +341,7 @@ def run_research_scenario(
             ),
             user_input_digest=canonical_evidence_digest(scenario.request),
             initial_state_digest=canonical_evidence_digest(initial_state),
-            config_cohort=_config_cohort(live_web_search_process, scenario),
+            config_cohort=_config_cohort(live_web_search_process, scenario, reference_set),
             grader_version=GRADER_VERSION if scenario.outcome_contract else _GRADER_VERSION,
         ),
     )
@@ -352,7 +374,10 @@ def run_research_scenario(
         if result.get("disposition") == "answer":
             settings = live_web_search_process.settings
             client = build_structured_model_client(settings.structured, settings.langsmith)
-            model_request = research_answer_request(user_request=scenario.request, answer=answer)
+            assert reference_set is not None
+            model_request = research_answer_request(
+                user_request=scenario.request, answer=answer, reference_set=reference_set,
+            )
             semantic_report.update({
                 "request_messages": model_request.messages,
                 "request_schema": model_request.output_type.model_json_schema(),
@@ -362,7 +387,9 @@ def run_research_scenario(
             try:
                 if client is None:
                     raise RuntimeError("独立研究答案评测模型未配置")
-                verdict = grade_research_answer(client, user_request=scenario.request, answer=answer)
+                verdict = grade_research_answer(
+                    client, user_request=scenario.request, answer=answer, reference_set=reference_set,
+                )
                 delivered = verdict.value.passed
                 semantic_report.update({
                     "verdict": verdict.value.model_dump(mode="json"),

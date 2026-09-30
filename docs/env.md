@@ -38,9 +38,9 @@ FEISHU_BASE_URL=https://open.feishu.cn
 当前本地 `.env` 与 `.env.example` 保留以下运行 profile，供后续启动与验证使用：
 
 ```env
-PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS=16
-PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS=24
-PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=192000
+PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS=32
+PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS=48
+PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=2000000
 ```
 
 这三项分别限制单次对话运行的模型决策轮数、工具调用次数和累计 token 用量；不是单次模型输入窗口或输出长度。
@@ -137,7 +137,7 @@ PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
 ```env
 STRUCTURED_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
 STRUCTURED_API_KEY=your_mimo_key
-STRUCTURED_MODEL=mimo-v2.5
+STRUCTURED_MODEL=mimo-v2.6-flash
 STRUCTURED_OUTPUT_TRANSPORT=json_object
 STRUCTURED_EXTRA_BODY={"thinking":{"type":"enabled"}}
 PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS=480
@@ -158,7 +158,7 @@ PERSONAL_AGENT_EXTRACT_MODEL=${STRUCTURED_MODEL}
 
 `STRUCTURED_*` 是生成式模型的 canonical 配置。直接回答、结构化决策、Graphiti 生成、
 LangExtract 在没有显式 Adapter override 时均从这里解析；当前部署统一使用
-`mimo-v2.5`。embedding 和 transcription 不属于生成式模型切换，继续使用
+`mimo-v2.6-flash`。embedding 和 transcription 不属于生成式模型切换，继续使用
 `EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
 
 主 `StructuredModelClient` 链路中的 MiMo 使用[官方 API 契约](https://mimo.mi.com/docs/en-US/api/chat/openai-api)支持的 `json_object`，并通过 `STRUCTURED_EXTRA_BODY`
@@ -167,8 +167,9 @@ instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首�
 不会自动降级到 `json_schema` 或 plain text。`json_schema` 仍作为其他明确支持原生 strict Schema
 的 Provider capability profile 保留，必须由部署显式选择。
 
-当前本地配置按用户要求使用 MiMo Token Plan 接口并开启 thinking，模型保持 `mimo-v2.5`，单请求等待时间为 480 秒。密钥只配置于本地环境，不进入文档或验证归档；历史
+2026-09-26 按用户要求统一切换到 MiMo v2.6 Flash；当前本地配置使用 MiMo Token Plan 接口并开启 thinking，模型为 `mimo-v2.6-flash`，单请求等待时间为 480 秒。密钥只配置于本地环境，不进入文档或验证归档；历史
 [DeepSeek 对照](evals/02-current-case-inventory.md#thinking-与输出额度的隔离诊断)保留原配置身份。
+截至 2026-09-29，当前使用的 [MiMo Chat Completions API](https://mimo.mi.com/docs/en-US/api/chat/openai-api) 对该模型只公布 `thinking.type=enabled|disabled`，没有思考强度档位或 `reasoning_effort` 参数。[MiMo Responses API](https://mimo.mi.com/docs/en-US/api/chat/responses) 虽接受 `reasoning.effort` 的 `none`、`minimal`、`low`、`medium`、`high` 等值，官方明确说明 `none` 关闭思考，其余有效值当前均以相同方式开启思考，不能调节实际强度；`max_completion_tokens` 只限制思考与正文的总输出量。本轮研究验证维持现有 `enabled` 配置。
 诊断输出额度独立声明，不通过 `extra_body` 覆盖调用方的 typed 输出预算。已有应用进程需
 重新加载配置才能使用切换后的模型；配置不代表所有生成式 Adapter 已通过真实集成验收。
 正式 Conversation 意图识别及其既有修订请求共用 32,768 输出上限，Action/Final 调用方也指定 32,768，额度均包含思考与正文；语义验证仍指定 1,200。这些额度修正用于避免已复现的思考截断，不代表完整链路预算或答案质量已验收。正式入口的预算诊断和独立组件请求分别记录于[连续链路证据](evals/02-current-case-inventory.md#mimo-thinking-连续链路与意图输出预算)与[MiMo thinking 组件诊断](evals/02-current-case-inventory.md#mimo-thinking-成文与对话反问诊断)，不能混算。
@@ -186,7 +187,7 @@ instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首�
 `PERSONAL_AGENT_E2E_MODEL_PROFILE=configured` 和 120 秒单请求 timeout。
 
 默认值（不设环境变量时）：
-- 所有生成式 Adapter：`deepseek-v4-flash`
+- 所有生成式 Adapter：`mimo-v2.6-flash`
 - `OPENAI_EMBEDDING_MODEL`：`BAAI/bge-m3`
 - `OPENAI_TRANSCRIPTION_MODEL`：`whisper-1`
 
@@ -607,3 +608,9 @@ Research 使用 `PERSONAL_AGENT_WEB_SEARCH_*` 配置的搜索 provider。
 ```
 
 生产环境必须保持 `PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false`，避免多个 FastAPI 实例重复扫描。应用内 scheduler 仅用于单机开发。
+
+### 2026-09-29 研究链预算配置
+
+2026-09-28 用户授权把完整 claim 主链的本地生产及示例配置提高至 32 个决策回合、48 次工具调用、768,000 tokens。该配置下的正式中文 E2E 在 17 回合、25 次工具调用及 794,181 个实际 tokens 后受累计预算限制，未交付答案。[正式失败记录](evals/02-current-case-inventory.md#研究写作者-typed-提交的正式回归)保留原结果。
+
+2026-09-29 用户授权继续扩大预算验证。本地 `.env` 与示例仅把累计 token 上限提高至 2,000,000；决策回合和工具上限仍为 32 与 48。模型核验调用计入 token 预算，最后一次请求可能使实际用量超过上限。该配置下同一正式 E2E 的停用前样本在 7,200 秒入口等待上限超时，停用拆分与复合识别后的样本在 2,148,774 已记账 tokens 后返回预算 `limitation`；用户结果均为 `0/1`。提额未证明语义问题得到修复。旧 192,000 tokens / 24 次工具配置的失败继续保留；完整比较与身份见[评测登记](evals/02-current-case-inventory.md#2026-09-29-拆分与复合识别停用对比)。

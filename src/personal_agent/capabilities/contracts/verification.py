@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic import model_validator
 
 from personal_agent.kernel.contracts.resource import ResourceRef
@@ -22,10 +22,13 @@ VerificationVerdict = Literal["passed", "failed"]
 
 
 class ConversationEvidenceReference(BaseModel):
-    """A writer's reference to a visible execution, optionally one returned line."""
+    """A writer's reference to an exact returned document coordinate."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    evidence_id: str = Field(min_length=1, description="原样复制当前可见证据旁的 evidence_id（如 e7），不生成调用标识、行号或偏移。")
+    evidence_id: str = Field(
+        pattern=r"^d[1-9][0-9]*:[1-9][0-9]*(?:-[1-9][0-9]*|:[1-9][0-9]*-[1-9][0-9]*)?$",
+        description="使用已返回的文档号:行号（d2:37）；同一文档已完整返回的连续多行可合并为 d2:37-40，含首尾且结束行大于起始行，中间不能缺行。部分行仅原样复制实际返回的字符范围（d2:37:1-80），不能扩大。非连续行或不同文档分别引用；网页正文与工具结果统一使用本格式。",
+    )
 
 
 class ConversationAnswerSegment(BaseModel):
@@ -34,24 +37,22 @@ class ConversationAnswerSegment(BaseModel):
     references: tuple[ConversationEvidenceReference, ...] = ()
 
 
-class EvidenceSufficiencyAssessment(BaseModel):
-    """Writer decision to end research for this submission, never source evidence."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
-    reason: str = Field(
-        min_length=1, max_length=2_000,
-        description="现有证据足以支持本次完整回答的理由；这是结束取证的判断，不是事实证据。",
-    )
-
-
 class CitationSource(BaseModel):
-    """Execution-owned location of a cited read window, never writer-supplied."""
+    """Execution-owned document snapshot and position, never writer-supplied."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    resource_ref: ResourceRef
+    resource_ref: ResourceRef | None = None
+    content_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    document_kind: Literal["source_text", "tool_result"] = "source_text"
     source_url: str | None
     line: int = Field(ge=1)
     start_column: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _one_document_identity(self):
+        if (self.resource_ref is None) == (self.content_digest is None):
+            raise ValueError("citation source requires exactly one resource version or inline content digest")
+        return self
 
 
 class CitedEvidence(BaseModel):
@@ -113,41 +114,6 @@ class SourceReadingState(BaseModel):
         return self
 
 
-class DocumentAbsenceReport(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    absence_by_source: tuple[StrictBool, ...] = Field(
-        description="与输入 source_reading_state 等长同序；每项表示稿件是否对该来源作出了文档级缺项声明，不判断原文是否确实缺项或应否拒绝。",
-    )
-
-
-class SourceCoverageRejection(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["source_coverage_rejection"] = "source_coverage_rejection"
-    rejected_draft: str
-    unread_sources: tuple[SourceReadingState, ...] = Field(min_length=1)
-
-
-def reject_unread_document_absence(
-    draft: str,
-    classification: DocumentAbsenceReport,
-    states: tuple[SourceReadingState, ...],
-) -> SourceCoverageRejection | None:
-    """Validate binding, then enforce coverage independently of semantic support."""
-    if len({state.resource_ref for state in states}) != len(states):
-        raise ValueError("duplicate source reading state")
-    if len(classification.absence_by_source) != len(states):
-        raise ValueError("absence_by_source must have exactly one boolean per source_reading_state entry")
-    rejected = tuple(
-        state for is_absence, state in zip(classification.absence_by_source, states, strict=True)
-        if is_absence and not state.fully_read
-    )
-    if not rejected:
-        return None
-    return SourceCoverageRejection(
-        rejected_draft=draft, unread_sources=rejected,
-    )
-
-
 class VerificationCriterionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -198,6 +164,8 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     draft_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     success_criteria: tuple[str, ...] = Field(min_length=1)
     criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    research_ref: ResourceRef | None = None
+    research_feedback: str = ""
 
 
 __all__ = [

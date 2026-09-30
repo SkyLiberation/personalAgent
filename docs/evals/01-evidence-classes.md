@@ -4,15 +4,17 @@
 
 ## 当前采用的分类
 
+类别名称解释 canonical catalog；新验证方式与停用范围由 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)拥有。以下局部分类不自动成为需要新增或运行的套件。
+
 | 分类 | 必须具备 | 可以使用的替代 | 能证明 | 不能证明 |
 | --- | --- | --- | --- | --- |
-| Product E2E | 真实目标用户、自然输入、正式用户入口、生产主路径、真实模型、用户可观察结果和关键反事实 | 只允许替代不可控第三方、付费边界或危险副作用，且 Fake 实现生产 Port | 该用户目标在该 profile 下成立 | 设计最初有必要、所有用户场景、框架优越性 |
+| Product E2E | 正式用户入口、完整生产链、真实模型、用户可观察结果和关键反事实 | 不替换结果依赖的真实决策或执行边界 | 该用户目标在该配置下成立 | 设计最初有必要、所有场景、框架优越性 |
 | Application Integration | 正式 API/CLI/Application Use Case、生产 Domain/Store/Runtime、结果契约 | 外部 Provider 可冻结 | 某个正式 Application contract 从入口到结果成立 | Agent 能从自然语言自主选择该能力；完整用户目标已经满足 |
 | Runtime Conformance | 真实 Application/Domain/Store，可精确构造 Command、Plan、故障或 Provider outcome | scripted model、frozen provider、故障注入 | 幂等、恢复、状态迁移、Admission、Completion 等机械协议 | 用户会提出该目标、模型能做出正确语义决策 |
 | Integration | 两个或多个生产组件的协议与装配 | 边界 Fake/Stub | 组件间契约可执行 | 完整用户目标 |
 | Capability Profile | 真实 MCP/A2A/外部 Provider 和生产 Gateway | 通常不使用 Provider Fake | 特定连接器/profile 可用 | 本产品需要该 Provider、完整产品完成率 |
 | Offline semantic eval | 冻结数据集、runner、scorer、统计阈值 | 模型或检索器可按 profile 替换 | 指定数据分布上的语义质量 | 正式入口、持久化、恢复和副作用正确性 |
-| Unit/Contract | 单一 owner、不变量或 Port contract | Fake/Stub 普遍允许 | 局部确定性规则 | 端到端用户结果 |
+| Unit/Contract（历史分类） | 单一责任主体、不变量或 Port contract | 按原证据解释；后续不新增或运行等价单元套件 | 历史局部确定性规则 | 当前验收或端到端用户结果 |
 
 ## 证据分类与横切验证不能混用
 
@@ -22,16 +24,7 @@
 
 ## Product E2E 判定
 
-一条 Product E2E 同时满足：
-
-1. Persona 和需求来源可以说明，不是为了命中某个内部机制而创造；
-2. 用户输入不指定 Tool、Agent、Plan、Project、内部 ID、并发方式或完成状态；
-3. 从用户实际可接触的 HTTP、CLI、消息或 UI 入口进入；
-4. 模型、Application、Domain、治理、持久化和实际 Provider 走生产装配；
-5. 断言最终答案、可读报告、实际知识变更、实际投递或明确 limitation；
-6. 同时断言关键错误结果没有发生；
-7. 如果用于准入产品变更，存在同输入、实现前失败 archive；
-8. 如果用于发布，archive 与 clean 目标 revision、profile 和 checksum 一致。
+资格由[根规范](../../AGENTS.md#21-证据先于设计)和 [EVD](../devSpec/change-evidence.md#2-产品-e2e-的最低资格)拥有。用户本来要求具体外部服务或可见计划时保留该需求；禁止的是为命中内部实现而伪造输入。预期成功用例的 `limitation` 仍是失败，合法终态不自动表示用户目标满足。发布另受 [EVM](../../evals/AGENTS.md#6-运行与声明)的目标版本与完整矩阵约束。
 
 ## Test Double 边界
 

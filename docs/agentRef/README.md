@@ -2,7 +2,7 @@
 
 **本目录按能力组件横向归纳已发布智能体与运行框架，不按厂商分别写产品介绍。** 它是外部机制检索入口，不是本工程现状、未来路线或技术选型结论；采用决策须满足[变更证据与设计准入](../devSpec/change-evidence.md)的对应类别门禁，本目录不决定是否需要新增机制。
 
-资料只采用官方产品文档、官方规范或主仓库已发布源码，统一核对于 2026-09-02。产品文档是随发布变化的坐标；GitHub 资料固定到下文提交。文档中的“共同模式”是基于多个来源的归纳，不代表这些实现具有相同语义，也不证明机制在 personalAgent 中有效。
+资料按 [EVD 证据分级](../devSpec/change-evidence.md#6-外部参考的证据分级)解释。没有单独日期的历史条目截至 2026-09-02，后续补充按各节日期；动态产品文档和分支链接只是检索坐标，采用前核对目标版本。固定提交只证明该提交的机制，不自动代表最新发布。归纳不证明各实现语义相同或机制在 personalAgent 中有效。
 
 ## 1. 按任务信号渐进读取
 
@@ -42,7 +42,7 @@
 | Gemini CLI | `google-gemini/gemini-cli@3c311beac2e78336816dd4a123db39743f9fbf85` |
 | Hermes Agent | `NousResearch/hermes-agent@9dfbde19db7b108f9e961eec367ca5b54c8ad7d6` |
 | Letta MemFS 文档 | `letta-ai/letta-docs-md@0bfd40b73de18fca8fd9c370263d2e46ac5379df` |
-| OpenAI / Codex | [GPT-5.6 Model guidance](https://developers.openai.com/api/docs/guides/latest-model)、[Codex Skills](https://developers.openai.com/codex/skills)、[Codex `AGENTS.md`](https://developers.openai.com/codex/guides/agents-md)及 ChatGPT Work/Codex 官方文档；按核对日期解释 |
+| OpenAI / Codex | [Model guidance](https://developers.openai.com/api/docs/guides/latest-model)、[Codex Skills](https://developers.openai.com/codex/skills)、[Codex `AGENTS.md`](https://learn.chatgpt.com/docs/agent-configuration/agents-md)；这些页面随产品更新，不绑定某个固定模型名称 |
 | Anthropic / Claude Code | [Prompting best practices](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/prompt-templates-and-variables)、[Features overview](https://code.claude.com/docs/en/features-overview)、[Subagents](https://code.claude.com/docs/en/subagents)、[Hooks](https://code.claude.com/docs/en/hooks)；按核对日期解释 |
 | Google Gemini | [Prompt design strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies)；按核对日期解释 |
 | OpenHands | [Skills](https://docs.openhands.dev/overview/skills)、[Runtime architecture](https://docs.openhands.dev/openhands/usage/architecture/runtime)、[Security](https://docs.openhands.dev/sdk/guides/security)；按核对日期解释 |

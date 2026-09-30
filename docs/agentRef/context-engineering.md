@@ -15,7 +15,7 @@
 
 ## 2. 突出的机制差异
 
-- GPT-5.6 的 [Model guidance](https://developers.openai.com/api/docs/guides/latest-model)强调精简重复指令、只暴露任务相关工具，并在代表性任务上逐项消融；这是 Prompt 和工具面的预算纪律，不是自动的权限过滤。
+- OpenAI 的 [Model guidance](https://developers.openai.com/api/docs/guides/latest-model#favor-leaner-prompts)建议减少重复指令与工具描述，在自身代表性任务上验证；这是输入设计建议，不是自动权限过滤，也不绑定固定模型名称。
 - Anthropic 的 [Prompting best practices](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/prompt-templates-and-variables)要求指令清楚直接，在顺序重要时使用编号步骤，并用一致标签分隔指令、Context、输入和示例；它把代表性边界示例视为稳定格式和分类的重要手段。
 - Google Gemini 的 [Prompt design strategies](https://ai.google.dev/gemini-api/docs/prompting-strategies)同样要求明确目标、约束和输出格式，并建议用一致分隔结构与多样的少样本示例缩小含混边界；结构化输出仍应由 API schema 约束，而不是只靠 Prompt 描述 JSON。
 - Gemini CLI 固定提交中的 [`prompt-suggest.toml`](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/.gemini/commands/prompt-suggest.toml)要求从已观察行为定位指令歧义，并把修复提升为可泛化边界；它明确反对为单一场景缩窄 Prompt 或在建议中写死具体样本。该源码说明失败样本用于发现行为类别，不应成为生产 Prompt 的固定答案。
@@ -46,6 +46,4 @@
 
 共同机制是已有 typed 执行事实向本轮模型消息的单向投影，没有必要为此新增第二份持久状态。窗口变化或重新执行后，说明随对应事实重新生成；权限检查仍在执行边界，格式化不扩大授权。执行失败保留失败身份，不能靠措辞变成成功；外部证据也不能因进入文字消息就获得指令权威。这些是本工程采纳时必须保留的边界，不能据上表推断两个项目的全部权限、取消、恢复或持久化语义相同。
 
-本工程在本次复核时的对应缺口是读取反馈中的 `returned_unique_segments`、`total_segments` 没有逐字段说明，且统计单位实际为行；已有中文拒绝说明仍然存在。Conversation 已复述覆盖不足却继续提交全文缺项断言，因此该轨迹不能证明字段表达是失败根因。相关事实见[第 104 节运行记录](../optimization/document-absence.md#104-按来源顺序返回缺项分类)、[`SourceReadingState`](../../src/personal_agent/capabilities/contracts/verification.py)与[覆盖统计实现](../../src/personal_agent/application/conversation/source_reading.py)。
-
-采纳项是关键反馈优先解释事实、范围与处理约束，保留精确身份和最小机器协议；拒绝项是全量 JSON 转散文、由模型重算覆盖、复述执行事实或新建通用渲染框架。规范正文统一由 [CTX 第 1.1 节](../devSpec/context-memory-retrieval.md#11-模型输入优先表达语义机器消费保持结构化)拥有。本次仅更新设计规范，生产反馈仍待独立验证；外部实现没有证明本工程修订成功率得到改善。
+本工程反馈表达规则由 [CTX 第 1.1 节](../devSpec/context-memory-retrieval.md#11-模型输入优先表达语义机器消费保持结构化)拥有；具体读取问题与历史依据见[优化记录](../optimization/document-absence.md#104-按来源顺序返回缺项分类)。参考页不维护第二份生产缺口、采用状态或修订成功率。

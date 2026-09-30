@@ -375,15 +375,11 @@ Outputs 事实正确性场景，其余两类均为 `5/5 honest_boundary`，未�
 
 ## 研究答案评测器的前置校准
 
-`RESEARCH-ANSWER-OUTCOME-001` 是 Offline Eval，不是 Product E2E。先收集 20 个独立 item，再只运行一个历史错误答案 pilot；确认判断与理由、用时和 token 正常后，才执行同版本剩余控制。历史 archive 只读，新增结果独立封印，不能改写旧 pytest outcome。
+`RESEARCH-ANSWER-OUTCOME-001` 是历史比较任务的 Offline Eval，不是 Product E2E。其固定输入与控制保留旧任务身份；即使使用当前评分器重评，也不能证明新的 MCP 接入协作任务已校准。新增结果须独立封印，不能改写旧 pytest outcome。
 
-当前评测器为 `research-answer-official-support-zh-v3`。它补齐 Tool choice 的子集控制和 MCP
-安全要求的规范强度，并区分“与依据矛盾”和“依据未覆盖”；后者仍阻止通过，但不得冒充事实错误。
-`correct-table` 控制覆盖 `allowed_tools`、服务器必须执行访问控制、应用应提供确认界面的相邻正例。
-修复该误判时可先运行此控制，再执行不重复 pilot 的剩余 19 项；样本数与全部正确门槛不变。
-事实依据来自已封存官方正文，不来自生产 Verifier 的判断；版本变化后的评分不能追溯改写旧 E2E。
-v3 已完成 20/20 校准，但真实长答案反例仍存在；该校准不能作为修复完成或产品通过证据，
-当前状态见[评测体系入口](README.md)。后续先诊断原始反例，不重复本组刷通过。
+当前评分器为 `research-answer-task-support-zh-v5`，按实际用户请求判断交付及依据，不在 Prompt 或字段里固定对象、主题或比较关系。场景显式选择参考数据，通过 `ResearchAnswerReferenceSet` 传入，参考内容摘要参与正式样本的配置身份。正式研究输入已切换为接入协作，但评分指令保持通用；未执行 v5 的语义资格验证或新输入 E2E。下一次付费执行前须声明新任务适用的参考范围和正反例，不能直接继承下列旧控制的通过门槛作为新任务资格。
+
+v3 历史上补齐 Tool choice 控制选项、MCP 规范强度，并区分事实矛盾与依据不足；曾通过 20/20 控制，但真实长答案仍有反例。旧原文、控制与失败只读保留，不能通过更换用户请求重新解释标签。以下命令与成本计划仅用于旧任务的独立诊断，不表示本次已授权或执行；当前状态见[评测体系入口](README.md)。
 
 ```powershell
 $env:PERSONAL_AGENT_RUN_RESEARCH_GRADER_CALIBRATION = "true"

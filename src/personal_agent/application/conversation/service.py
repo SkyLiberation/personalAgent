@@ -55,8 +55,16 @@ from .context_materialization import (
 )
 from .artifact_search import ArtifactSearchPort, SearchActionOutputArguments, search_artifact_text
 from .artifact_reading import ReadArtifactArguments, read_artifact_text
-from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context
+from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, materialize_reference_sources
 from .interaction_prompt import build_interaction_system_prompt
+from .final_revisions import FinalRevisionError, materialize_final_revision
+from .research import (
+    InitialResearchSubmission, ResearchSubmission, CreateClaims, ReviseClaimFragment,
+    ReplaceClaimReferences, AddClaims, DeleteClaim, RecheckClaims, ReturnToActions,
+    StopResearch, accepted_basis, admit_claim_change, current_claims, verification_steps,
+    has_research_source_text,
+)
+from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview, ResearchReopening
 from .source_reading import materialize_source_reading_state
 from .model_actions import (
     build_model_action_definitions,
@@ -87,7 +95,11 @@ from .models import (
     EffectiveCapabilities,
     EffectiveToolCapability,
     FinalMessage,
+    FinalRevision,
+    FinalSubmission,
+    SubmittedFinal,
     InteractionTrace,
+    InteractionInput,
     KnowledgeDeleteConfirmation,
     KnowledgeSaveArguments,
     ListPersonalKnowledgeArguments,
@@ -259,6 +271,7 @@ class ConversationService:
                 ),
                 working_plan=working_plan,
             )
+        inputs: list[InteractionInput]
         if prior is not None:
             inputs = list(prior.inputs)
         elif working_plan is not None and not self._journal.plan_result_delivered(
@@ -415,6 +428,56 @@ class ConversationService:
                 )
                 continue
             assert decision is not None
+            if isinstance(decision, (CreateClaims, ReviseClaimFragment, ReplaceClaimReferences,
+                                     AddClaims, DeleteClaim, RecheckClaims, ReturnToActions, StopResearch)):
+                if isinstance(decision, StopResearch):
+                    decision = FinalMessage(disposition="limitation", segments=(
+                        ConversationAnswerSegment(text=decision.reason),
+                    ))
+                else:
+                    if isinstance(decision, ReturnToActions):
+                        inputs.append(DecisionFeedback(
+                            action_id="research-return", reason_code="research_needs_evidence",
+                            message=decision.reason, required_repair="使用正式可用动作继续取证；取得可引用正文后系统返回当前研究版本。",
+                        ))
+                    else:
+                        finalization_pending = True
+                        try:
+                            claims = admit_claim_change(decision, inputs, ResourceRef(
+                                resource_id=f"{run_ref}:research", resource_type="conversation_research",
+                                owner=principal,
+                            ))
+                        except (ValueError, CitationBindingError) as error:
+                            inputs.append(DecisionFeedback(
+                                action_id="research-admission", reason_code="research_edit_invalid",
+                                message=str(error), required_repair="核对当前完整版本、精确片段和可见引用后修正参数；被拒动作未改变集合。",
+                            ))
+                        else:
+                            inputs.append(claims)
+                            checks = verification_steps(claims, tuple(inputs), messages)
+                            step = next(checks, None)
+                            while step is not None:
+                                self._commit(
+                                    run_ref, principal, messages, inputs, usage, execution_order,
+                                    concurrent_batches, context_composition,
+                                    review_criteria=review_criteria, working_plan=working_plan,
+                                )
+                                if isinstance(step, StructuredModelRequest):
+                                    if usage.total_tokens >= self._budget_policy.max_total_tokens:
+                                        checks.close()
+                                        break
+                                    response = self._generate_model(step)
+                                    usage = self._record_model_usage(usage, response)
+                                    step = checks.send(response.value)
+                                else:
+                                    inputs.append(step)
+                                    step = next(checks, None)
+                    self._commit(
+                        run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition,
+                        review_criteria=review_criteria, working_plan=working_plan,
+                    )
+                    continue
             if isinstance(decision, FinalMessage):
                 if (
                     review_criteria.plan_review_required
@@ -477,6 +540,12 @@ class ConversationService:
                         working_plan=working_plan,
                     )
                 if review_criteria.requires_review and decision.disposition == "answer":
+                    inputs.append(SubmittedFinal(
+                        action_id=f"final-{usage.model_turns}",
+                        resource_ref=ResourceRef(resource_id=f"{run_ref}:final", resource_type="conversation_final",
+                                                 owner=principal, revision=usage.model_turns),
+                        final=decision,
+                    ))
                     verified, result, usage = (
                         self._verify_before_send(
                             decision,
@@ -494,6 +563,16 @@ class ConversationService:
                     inputs.append(result.interaction_input)
                     execution_order.append(result.action_id)
                     if verified is None:
+                        research_basis = accepted_basis(inputs)
+                        receipts = observed_receipts(
+                            (result.interaction_input,), capability_names=frozenset({_VERIFICATION_CAPABILITY}),
+                        )
+                        if research_basis is not None and receipts and receipts[-1].research_feedback.strip():
+                            inputs.append(ResearchReopening(
+                                resource_ref=research_basis.claims.resource_ref,
+                                feedback=receipts[-1].research_feedback,
+                            ))
+                        finalization_pending = research_basis is not None
                         # Verifier owns acceptance, not the next action.
                         # Check the hard budget before the model chooses again.
                         self._commit(
@@ -885,7 +964,11 @@ class ConversationService:
                 concurrent_batches.append(
                     tuple(item.action_id for item in executed_results)
                 )
-            finalization_pending = decision.finalization_requested
+            finalization_pending = decision.finalization_requested or (
+                review_criteria.requires_review
+                and not review_criteria.plan_review_required
+                and has_research_source_text(inputs)
+            )
             self._commit(
                 run_ref,
                 principal,
@@ -1338,17 +1421,13 @@ class ConversationService:
                 action_id=action_id,
                 action_name="final_message",
                 reason_code=exc.reason_code,
-                message=f"{exc}\n本次被拒绝的完整提交（待修正数据）：\n{decision.model_dump_json()}",
+                message=f"{exc}\n完整被拒稿及逐段引用见最新 submitted_final。",
                 repairable_fields=("segments",),
                 required_repair="修正引用或补读后重新提交草稿和对应引用，不要编造证据。",
             )), usage
         arguments = {
             "draft": decision.message,
             "success_criteria": list(review_criteria.criteria),
-            "evidence_sufficiency": (
-                decision.evidence_sufficiency.model_dump(mode="json")
-                if decision.evidence_sufficiency is not None else None
-            ),
             "cited_units": [unit.model_dump(mode="json") for unit in cited_units],
             "source_reading_state": [
                 state.model_dump(mode="json")
@@ -1357,6 +1436,20 @@ class ConversationService:
                 )
             ],
         }
+        research_basis = accepted_basis(verification_inputs)
+        if research_basis is not None:
+            approved_ids = {source.evidence_id for source in research_basis.sources}
+            final_ids = {source.evidence_id for source in materialize_reference_sources(decision.segments, verification_inputs)}
+            if not final_ids.issubset(approved_ids):
+                return None, _ActionResult(action_id, DecisionFeedback(
+                    action_id=action_id, action_name="final_message", reason_code="final_reference_outside_research",
+                    message="汇总稿引用了当前已核验 claims 之外的来源位置。",
+                    required_repair="使用已核验研究所含的引用坐标修订完整汇总稿。",
+                )), usage
+            arguments["research_basis"] = research_basis.model_dump(mode="json")
+            arguments["research_segments"] = [segment.model_dump(mode="json") for segment in decision.segments]
+            arguments["cited_units"] = []
+            arguments["source_reading_state"] = []
         execution_scope = ExecutionScope(
             principal=principal,
             execution_id=run_ref,
@@ -1405,6 +1498,9 @@ class ConversationService:
             return None, result, usage
         if decision.message.strip() != passed.verified_draft:
             raise ValueError("verified receipt must bind the submitted answer")
+        expected_research_ref = research_basis.claims.resource_ref if research_basis is not None else None
+        if passed.research_ref != expected_research_ref:
+            raise ValueError("verified receipt must bind the current approved research revision")
         return (decision, result, usage)
 
     def _decide(
@@ -1440,6 +1536,23 @@ class ConversationService:
         action_definitions = (
             () if finalization_mode else build_model_action_definitions(capabilities)
         )
+        claims = current_claims(inputs)
+        basis = accepted_basis(inputs) if finalization_mode else None
+        research_mode = finalization_mode and basis is None and (
+            claims is not None or (review_criteria.requires_review and any(
+                isinstance(item, ActionObservation) and item.status == "succeeded"
+                and item.capability_id in {"web_search", "web_read"} for item in inputs
+            ))
+        )
+        prompt_name = (
+            "conversation.research.synthesis" if basis is not None else
+            "conversation.research.writer" if research_mode else
+            "conversation.final" if finalization_mode else "conversation.action"
+        )
+        output_type = (
+            (InitialResearchSubmission if claims is None else ResearchSubmission)
+            if research_mode else FinalSubmission
+        )
         system_content = build_interaction_system_prompt(
             capabilities,
             usage,
@@ -1450,11 +1563,15 @@ class ConversationService:
             interaction_mode=interaction_mode,
             finalization_mode=finalization_mode,
         )
+        if research_mode or basis is not None:
+            system_content = get_prompt(prompt_name).template
         visible_messages = [{"role": "system", "content": system_content}]
         conversation_content = [item.model_dump(mode="json") for item in messages]
         visible_messages.extend(conversation_content)
         typed_inputs_content = ""
         if inputs:
+            latest_submission_index = next((index for index in range(len(inputs) - 1, -1, -1)
+                                            if isinstance(inputs[index], SubmittedFinal)), None)
             latest_verification_index = next(
                 (
                     index
@@ -1468,9 +1585,13 @@ class ConversationService:
                 item
                 for index, item in enumerate(inputs)
                 if not (
-                    isinstance(item, ActionObservation)
-                    and item.capability_id == _VERIFICATION_CAPABILITY
-                    and index != latest_verification_index
+                    (isinstance(item, ActionObservation)
+                     and item.capability_id == _VERIFICATION_CAPABILITY
+                     and index != latest_verification_index)
+                    or (isinstance(item, SubmittedFinal) and index != latest_submission_index)
+                    or (isinstance(item, ResearchClaims) and item is not claims)
+                    or (isinstance(item, ResearchReview) and item is not next(
+                        (entry for entry in reversed(inputs) if isinstance(entry, ResearchReview)), None))
                 )
             )
             visible_inputs = materialize_interaction_inputs(decision_inputs)
@@ -1481,26 +1602,46 @@ class ConversationService:
                 default=str,
             )
             visible_messages.append({"role": "system", "content": typed_inputs_content})
-        response = self._generate_model(
-            StructuredModelRequest(
-                operation="agent_interaction_turn",
-                version=get_prompt(
-                    "conversation.final" if finalization_mode else "conversation.action"
-                ).version,
-                messages=visible_messages,
-                output_type=FinalMessage,
-                context_projection_ref=sealed_context_projection_ref(
-                    purpose="agent_interaction_turn",
+        if basis is not None:
+            # Independent synthesis receives no acquisition history, raw sources or researcher instructions.
+            latest_final = next((item for item in reversed(inputs) if isinstance(item, SubmittedFinal)), None)
+            final_feedback = next((item for item in reversed(inputs) if (
+                isinstance(item, ActionObservation) and item.capability_id == _VERIFICATION_CAPABILITY
+            ) or (isinstance(item, DecisionFeedback) and item.action_name == "final_message")), None)
+            typed_inputs_content = json.dumps({
+                "conversation": conversation_content,
+                "research_basis": basis.model_dump(mode="json"),
+                "success_criteria": review_criteria.criteria,
+                "latest_final": latest_final.model_dump(mode="json") if latest_final else None,
+                "final_feedback": final_feedback.model_dump(mode="json") if final_feedback else None,
+            }, ensure_ascii=False)
+            visible_messages = [{"role": "system", "content": system_content},
+                                {"role": "user", "content": typed_inputs_content}]
+        provider_protocol_error = None
+        try:
+            response = self._generate_model(
+                StructuredModelRequest(
+                    operation="agent_interaction_turn",
+                    version=get_prompt(prompt_name).version,
                     messages=visible_messages,
-                ),
-                temperature=0,
-                max_tokens=32_768,
-                kind=("structured" if finalization_mode else "tool_calling"),
-                action_definitions=action_definitions,
-                action_choice=(None if finalization_mode else "required"),
-                metadata={"component": "conversation_interaction_loop"},
+                    output_type=output_type,
+                    context_projection_ref=sealed_context_projection_ref(
+                        purpose="agent_interaction_turn",
+                        messages=visible_messages,
+                    ),
+                    temperature=0,
+                    max_tokens=32_768,
+                    kind=("structured" if finalization_mode else "tool_calling"),
+                    action_definitions=action_definitions,
+                    action_choice=(None if finalization_mode else "required"),
+                    metadata={"component": "conversation_interaction_loop", "prompt_name": prompt_name},
+                )
             )
-        )
+        except StructuredOutputFailure as error:
+            if error.response is None:
+                raise
+            response = error.response
+            provider_protocol_error = error
         action_definition_chars = len(
             json.dumps(
                 [item.model_dump(mode="json") for item in action_definitions],
@@ -1515,15 +1656,28 @@ class ConversationService:
             # By subtraction, so the two segments are disjoint by construction and
             # always sum to the prompt that was sent.
             system_prompt_other_chars=len(system_content) - len(capability_projection),
-            conversation_messages_chars=sum(
+            conversation_messages_chars=0 if basis is not None else sum(
                 len(item["content"]) for item in conversation_content
             ),
             typed_inputs_chars=len(typed_inputs_content),
             input_tokens=response.input_tokens,
         )
         try:
-            if finalization_mode and isinstance(response.value, FinalMessage):
-                decision = response.value
+            if provider_protocol_error is not None:
+                raise provider_protocol_error
+            if research_mode and isinstance(response.value, (InitialResearchSubmission, ResearchSubmission)):
+                decision = response.value.submission
+            elif finalization_mode and isinstance(response.value, FinalSubmission):
+                decision = response.value.submission
+                if isinstance(decision, FinalRevision):
+                    try:
+                        decision = materialize_final_revision(decision, inputs)
+                    except FinalRevisionError as error:
+                        return None, response, composition, DecisionFeedback(
+                            action_id="final_revision", action_name="revise_final", reason_code="final_revision_invalid",
+                            message=str(error), repairable_fields=("submission",),
+                            required_repair="核对最新基稿及可见引用后重新提交完整修订请求；不能仅提交残缺正文。",
+                        )
             elif not finalization_mode:
                 decision = decode_model_action_invocations(
                     response.action_invocations,
@@ -1535,7 +1689,7 @@ class ConversationService:
             else:
                 raise StructuredOutputFailure(
                     "agent_interaction_turn",
-                    "model returned no typed FinalMessage in finalization mode",
+                    "model returned no typed FinalSubmission in finalization mode",
                     reason_code="provider_action_missing",
                 )
         except StructuredOutputFailure as exc:
@@ -1571,7 +1725,7 @@ class ConversationService:
                 "Return a new action set that satisfies the declared schemas. "
                 "Submit only compatible control and concrete actions. Call "
                 "prepare-final when the runtime should enter the exclusive typed "
-                "FinalMessage phase."
+                "FinalSubmission phase."
             ),
         )
 
@@ -1586,6 +1740,8 @@ class ConversationService:
                 component=str(request.metadata.get("component", "conversation")),
             ) from exc
         except StructuredOutputFailure as exc:
+            if request.kind == "tool_calling" and exc.response is not None:
+                raise
             raise self._model_failure(
                 exc,
                 message="conversation model is temporarily unavailable",
@@ -1860,15 +2016,15 @@ class ConversationService:
 
     @staticmethod
     def _repeated_action_feedback(
-        inputs: tuple[DecisionFeedback | ActionObservation, ...],
+        inputs: tuple[InteractionInput, ...],
     ) -> DecisionFeedback | None:
         """Stop after one bounded repair of the same rejected model action."""
         last_progress = next(
             (
                 index
                 for index in range(len(inputs) - 1, -1, -1)
-                if isinstance(inputs[index], ActionObservation)
-                and inputs[index].status == "succeeded"
+                if isinstance(item := inputs[index], ResearchClaims)
+                or (isinstance(item, ActionObservation) and item.status == "succeeded")
             ),
             -1,
         )

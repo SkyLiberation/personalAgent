@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 from evals.e2e_quality.research_answer_outcome import (
     GRADER_VERSION,
     ResearchAnswerControl,
+    ResearchAnswerReferenceSet,
     grade_research_answer,
     research_answer_request,
 )
@@ -26,11 +27,14 @@ from personal_agent.kernel.config import Settings
 
 CASE_ID = "RESEARCH-ANSWER-OUTCOME-001"
 HISTORICAL_TRACE_SHA256 = "9ca625c24f5732d8e146e3317e77409de3849f6278a989e608aee5f05aac92b8"
-USER_REQUEST = (
+# 仅供旧任务的历史反例与控制回放，不是当前正式场景输入。
+# 使用新 grader 重评分必须独立归档，也不证明新协作任务已校准。
+HISTORICAL_USER_REQUEST = (
     "请实际查阅 OpenAI 官方工具文档和 MCP 官方 tools 规范，在这次回复中比较"
     "工具选择、权限边界和结果契约，给出带官方 URL 的中文结论。"
 )
 CONTROLS_PATH = Path(__file__).with_name("fixtures") / "research_answer_outcome_controls.json"
+REFERENCES_PATH = Path(__file__).with_name("fixtures") / "research_answer_official_references.json"
 CONTROLS = TypeAdapter(tuple[ResearchAnswerControl, ...]).validate_json(
     CONTROLS_PATH.read_text(encoding="utf-8"),
 )
@@ -54,8 +58,11 @@ def test_research_answer_outcome_calibration(
     request: pytest.FixtureRequest,
 ) -> None:
     settings = Settings.from_env()
+    reference_set = ResearchAnswerReferenceSet.model_validate_json(
+        REFERENCES_PATH.read_text(encoding="utf-8"),
+    )
     config = settings.structured
-    assert config.model == "mimo-v2.5"
+    assert config.model == "mimo-v2.6-flash"
     assert config.output_transport == "json_object"
     assert config.extra_body == {"thinking": {"type": "disabled"}}
     client = build_structured_model_client(config, settings.langsmith)
@@ -66,7 +73,7 @@ def test_research_answer_outcome_calibration(
         original = load_finalized_product_evidence(original_dir)
         trace_path, = original_dir.glob("*.trace.json")
         assert sha256(trace_path.read_bytes()).hexdigest() == HISTORICAL_TRACE_SHA256
-        assert original.report["natural_user_text"] == USER_REQUEST
+        assert original.report["natural_user_text"] == HISTORICAL_USER_REQUEST
         control = ResearchAnswerControl(
             case_id=control_id,
             answer=original.report["result"]["message"]["content"],
@@ -80,7 +87,9 @@ def test_research_answer_outcome_calibration(
         }
     else:
         control = next(item for item in CONTROLS if item.case_id == control_id)
-    model_request = research_answer_request(user_request=USER_REQUEST, answer=control.answer)
+    model_request = research_answer_request(
+        user_request=HISTORICAL_USER_REQUEST, answer=control.answer, reference_set=reference_set,
+    )
     config_identity = {
         "model": config.model,
         "provider_host": urlparse(config.base_url).hostname,
@@ -120,7 +129,8 @@ def test_research_answer_outcome_calibration(
     }
     try:
         response = grade_research_answer(
-            client, user_request=USER_REQUEST, answer=control.answer,
+            client, user_request=HISTORICAL_USER_REQUEST, answer=control.answer,
+            reference_set=reference_set,
         )
         report.update({
             "verdict": response.value.model_dump(mode="json"),

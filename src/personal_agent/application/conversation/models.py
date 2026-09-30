@@ -5,9 +5,10 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview, ResearchReopening
 from personal_agent.capabilities.contracts.verification import (
     ConversationAnswerSegment,
-    EvidenceSufficiencyAssessment,
+    ConversationEvidenceReference,
 )
 
 from personal_agent.application.knowledge_lifecycle.models import (
@@ -194,18 +195,52 @@ class FinalMessage(_StrictModel):
     kind: Literal["final_message"] = "final_message"
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
     segments: tuple[ConversationAnswerSegment, ...] = Field(min_length=1)
-    evidence_sufficiency: EvidenceSufficiencyAssessment | None = None
-
-    @model_validator(mode="after")
-    def _sufficiency_requires_answer(self):
-        if self.evidence_sufficiency is not None and self.disposition != "answer":
-            raise ValueError("evidence_sufficiency applies only to the submitted answer")
-        return self
 
     @property
     def message(self) -> str:
         """Render the sole canonical body; never serialize a writable duplicate."""
         return "".join(segment.text for segment in self.segments)
+
+
+class FinalSegmentEdit(_StrictModel):
+    segment: int = Field(ge=1, description="基稿 segments 中从 1 开始的位置。")
+    operation: Literal["add_references", "replace_references", "replace_segment"]
+    references: tuple[ConversationEvidenceReference, ...] = ()
+    text: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _edit_has_one_meaning(self):
+        if (self.operation == "replace_segment") != (self.text is not None):
+            raise ValueError("only replace_segment requires complete segment text")
+        if self.operation == "add_references" and not self.references:
+            raise ValueError("add_references requires at least one reference")
+        return self
+
+
+class FinalRevision(_StrictModel):
+    kind: Literal["revise_final"] = "revise_final"
+    base_ref: ResourceRef
+    edits: tuple[FinalSegmentEdit, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _edits_do_not_overlap(self):
+        if len({edit.segment for edit in self.edits}) != len(self.edits):
+            raise ValueError("one submission may edit each base segment only once")
+        return self
+
+
+class FinalSubmission(_StrictModel):
+    submission: FinalMessage | FinalRevision = Field(discriminator="kind")
+
+
+class SubmittedFinal(_StrictModel):
+    """Journal-owned complete submission; never a successful verification fact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["submitted_final"] = "submitted_final"
+    action_id: str
+    resource_ref: ResourceRef
+    final: FinalMessage
 
 
 class ContinueTurnProposal(_StrictModel):
@@ -338,7 +373,7 @@ class ActionObservation(_StrictModel):
     )
 
 
-InteractionInput = DecisionFeedback | ActionObservation
+InteractionInput = DecisionFeedback | ActionObservation | SubmittedFinal | ResearchClaims | ResearchReview | ResearchReopening
 
 
 class LoopBudgetPolicy(_StrictModel):

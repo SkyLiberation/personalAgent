@@ -127,6 +127,9 @@ class StructuredOutputFailure(ValueError):
         self.action_kind = action_kind
         self.field_paths = field_paths
         self.error_types = error_types
+        # A rejected provider response remains an observed, billable call.
+        # Only the adapter attaches this; it contains no admitted actions.
+        self.response: "StructuredModelResponse[Any] | None" = None
         super().__init__(f"{operation} structured parse failed: {reason}")
 
 

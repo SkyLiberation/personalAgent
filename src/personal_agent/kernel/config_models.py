@@ -15,7 +15,7 @@ from personal_agent.kernel.contracts.capability_values import (
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
-DEFAULT_GENERATIVE_MODEL = "deepseek-v4-flash"
+DEFAULT_GENERATIVE_MODEL = "mimo-v2.6-flash"
 
 
 class _StrictBase(BaseModel):
@@ -272,7 +272,7 @@ class LangExtractConfig(_StrictBase):
     """
 
     api_key: str | None = None
-    base_url: str = "https://api.deepseek.com"
+    base_url: str = "https://api.xiaomimimo.com/v1"
     model_id: str = DEFAULT_GENERATIVE_MODEL
     max_char_buffer: int = 6000
     extraction_passes: int = 1

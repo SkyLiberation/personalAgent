@@ -52,7 +52,7 @@ FinalMessage 不得通过重复枚举全部 Plan Step ID 来替代 Verifier。�
 
 是否形成 Command 按[根规范第 2.4 节](../../AGENTS.md#24-决策执行与完成不得混装)判断；禁止为形式统一持久化只读、低风险且可安全重试的 ToolCall。
 
-获准的 Command 必须不可变，只能缩权、不可覆盖；参数变化须创建 superseding command。
+获准的 Command 不可覆盖；参数变化创建替代 Command，并重新满足授权与确认契约。授权可以缩权，但不能通过修改冻结 payload 表达缩权。
 
 digest 是冻结 canonical payload 的一致性指纹，不是身份、授权或执行证明。默认使用一个 canonical `CommandDigest` 绑定 Confirmation、Journal 和 Receipt。
 
@@ -71,7 +71,7 @@ Command、Event、Receipt 不得机械成套创建：
 
 - 仅当操作需跨请求、审批、重试或恢复时创建 Command；
 - 仅当已发生事实有独立审计、订阅或重放消费者时创建 Event；
-- 仅当需要 exactly-once 证明、外部结果关联或恢复依据时创建 Receipt；
+- 仅当需要幂等执行证据、外部结果关联或恢复依据时创建 Receipt；Receipt 本身不证明跨外部系统的 exactly-once；
 - Projection 或 View 必须可从 canonical facts 重建，且禁止成为第二写入口。
 
 ## 4. 持久执行契约（Durable execution contract）

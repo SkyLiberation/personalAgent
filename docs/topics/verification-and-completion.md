@@ -40,10 +40,12 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 拥有。模型不可用时只能返回 `insufficient_evidence`、暂停或请求缺失能力，不能用 fixture、
 关键词或回答组装器生成替代“通过”。
 
-当前候选由 Conversation 原生正文段提交引用；运行系统恢复每段全部指定的可见原文，局部 Verifier 先检查本段与依据。未引正文保留空证据，引用错误或支持拒绝返回既有循环。普通审查只取得提交引用的并集，不复制 Journal 或重新暴露未读全文。候选状态及验证边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。模型逐条产生 criterion status 与 feedback，Verifier
+外部研究当前采用版本化 claims 作为中间产物：研究 Verifier 拥有来源支持与事实覆盖；复合论断识别 Verifier 已停用，不再生成结构诊断。事实覆盖只检查已引用 claims 的事实充分性，不判断来源 URL 是否存在或是否写入最终答案；来源网址无需再次出现在网页正文行或 claim 正文中。运行系统从已引用证据的执行来源确定性生成 `ResearchBasis.sources`，独立汇总接收该绑定并负责呈现用户要求的 URL；最终 Verifier 拥有对已核验事实的忠实性及用户结果判据。最终 Receipt 绑定当前 `research_ref`，Completion 同时校验研究版本和完整正文，研究通过不等于最终交付。普通非研究草稿继续直接对提交依据核验。装配和证据边界见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
+
+普通非研究候选由 Conversation 原生正文段提交引用；运行系统恢复每段全部指定的可见原文，局部 Verifier 先检查本段与依据。未引正文保留空证据，引用错误或支持拒绝返回既有循环。普通审查只取得提交引用的并集，不复制 Journal 或重新暴露未读全文。候选状态及验证边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。模型逐条产生 criterion status 与 feedback，Verifier
 adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或 `insufficient_evidence` 都聚合为 `failed`。逐判据三态与 feedback 仅供智能体诊断与恢复，运行系统不再根据失败类别重新开放或隐藏工具。汇总反馈缺失时，adapter 只从未满足 criterion 已有的 feedback 派生；逐判据反馈同样缺失时仍 fail closed。该派生不增加语义事实，也不能替代 Completion。
 
-逐行引用当前通过 `CitedEvidence.source` 保留执行记录中的 `ResourceRef`、已知来源 URL、行号及起始列；来源元数据与读取覆盖共用确定性派生入口。局部核验接收原文及来源，整稿和缺项输入也保留该关联。模型仍只提交 `evidence_id`，未知 URL 为空，完整工具结果保留原有内容；来源正确不能替代原文支持。修复的局部证据及完整 E2E 限制见 [ADR 0028](../adr/0028-preserve-citation-source-binding.md)。
+逐行引用当前通过 `CitedEvidence.source` 保留执行记录中的 `ResourceRef`、已知来源 URL、行号及起始列；来源元数据与读取覆盖共用确定性派生入口。局部核验接收原文及来源，普通整稿语义核验还接收实际读取状态。模型仍只提交 `evidence_id`，未知 URL 为空，完整工具结果保留原有内容；来源正确不能替代原文支持。修复的局部证据及完整 E2E 限制见 [ADR 0028](../adr/0028-preserve-citation-source-binding.md)。
 
 局部支持核验使用 `interaction_verification.cited_support:v2-call-bound-unit`。模型只输出相关证据 ID 和具体支持缺口；工具以 `checked_draft` 恢复本次调用的精确段落，连同完整拒稿正文与意见交回原循环，不再要求模型抄写原句。证据 ID 仍只在当前单元校验，不作为后续成文的全局引用；空发现继续整稿核验。该候选的正式消费与证据限制见 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md)。
 
@@ -51,7 +53,7 @@ Conversation Verifier 当前使用 Registry 中的中文 `interaction_verificati
 
 工具对用户标准与系统支持标准合并去重，要求报告恰好覆盖全部项。缺失或重复来源支持项不能形成有效回执，来源支持不通过就参与现有聚合并拒稿。用户原标准由 `InteractionIntent` 冻结，回执 `success_criteria` 与 `criteria_digest` 仍绑定这组原标准；系统判断在 `criterion_results` 中独立保留，不改写用户要求。失败通过现有 Conversation 循环返回模型，修订稿重新验证。既有触发范围与预算保持；原生引用候选改变输入物化和成文 Schema，不增加服务或循环。接入决定及剩余风险见 [ADR 0020](../adr/0020-require-conversation-source-support-verification.md)。
 
-对于保存并卸载的来源，当前目标代码在普通审查前使用 `interaction_verification.document_absence:v3-source-flags`，返回与 `source_reading_state` 等长同序的严格布尔数组 `absence_by_source`，识别稿件是否对每个来源作出文档级缺项声明。Conversation 从可见成功执行记录物化来源读取状态；代码校验数量与来源唯一性，按位置绑定真实来源，对命中且未完整读取、且本稿未提交取证充分性判断的项返回覆盖反馈。模型不再复制原句或来源身份，反馈中的 `unread_sources` 由代码恢复。拒绝经现有工具网关回到修订循环，不生成语义回执；普通 `satisfied` 无权覆盖。读取完整度不构成强制阅读义务。当前候选允许模型在本次 Final 的 `evidence_sufficiency.reason` 中说明现有证据足以支持本稿的理由；原服务直接投影本次判断，不沿用历史稿声明。声明存在时继续来源支持与整稿核验，理由不进入事实证据，原正文与引用仍按同一稿件校验。该候选的用户结果尚待验收，详见 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)。事实范围、复杂度与未完成产品门禁见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)。
+当前生产链暂停独立文档缺项分类及其覆盖拒绝，研究与普通 Final 均直接进入仍适用的来源支持核验。普通整稿语义核验保留实际读取状态作为数据，但不能将未读内容当成已知事实；无据全文否定仍须按来源支持与用户结果判据拒绝。`evidence_sufficiency` 原先只负责越过独立覆盖拦截，现已随该分支移除。历史覆盖拒绝与补读恢复检查点见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)，当前取舍、风险及退出条件见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
 
 当前验证调用的输出上限为 32,768 tokens，工具执行时限为 480 秒；工具自身不重试。两项上限分别允许 thinking 与完整报告输出、给模型请求及解析留出执行时间，仍可能因模型自身超时或协议错误失败。扩大交互总预算不会自动改变这些局部上限。旧 1,200-token / 60 秒限制已移除，同一真实首稿的预算对照取得完整绑定报告，但仍漏放无据权限归属结论；不能把报告返回与语义正确混为一谈。记录及产品验收限制见[推进记录第 54 节](../optimization/verifier-output-truncation.md#54-验证报告被局部预算截断的单边界资格检查)。
 
@@ -59,7 +61,7 @@ Conversation Verifier 当前使用 Registry 中的中文 `interaction_verificati
 
 ## 当前生产实例
 
-覆盖拒绝的模型可见说明现由版本化模板从真实读取状态生成，明确各来源尚未完整读取、计数单位和剩余范围，沿 `ToolArtifact.error` 进入原循环。它不替代 typed 覆盖事实，也不自动证明 Conversation 会正确修订。契约与验证边界见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)和[第 105 节记录](../optimization/document-absence.md#105-用自然语言解释未完整读取与修订边界)。
+研究写作者当前可用 `delete_claim` 撤回一个已有论断；准入层核对当前版本和身份，保留其余项后重新核验完整集合。独立缺项分类和覆盖反馈已暂停，普通来源支持和最终语义核验仍运行。现行边界见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
 
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |

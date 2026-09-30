@@ -10,6 +10,7 @@ from personal_agent.kernel.prompt_templates.interaction_verification import (
     PROMPTS as INTERACTION_VERIFICATION_PROMPTS,
 )
 from personal_agent.kernel.prompt_templates.runtime import PROMPTS as RUNTIME_PROMPTS
+from personal_agent.kernel.prompt_templates.research import PROMPTS as RESEARCH_PROMPTS
 from personal_agent.kernel.prompt_templates.web_search import PROMPTS as WEB_SEARCH_PROMPTS
 
 
@@ -19,6 +20,7 @@ _PROMPTS: dict[str, PromptSpec] = {
     **GRAPH_PROMPTS,
     **INTERACTION_VERIFICATION_PROMPTS,
     **RUNTIME_PROMPTS,
+    **RESEARCH_PROMPTS,
     **WEB_SEARCH_PROMPTS,
 }
 

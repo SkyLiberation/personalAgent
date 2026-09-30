@@ -167,7 +167,7 @@
     },
     {
       "id": "qlt_contract",
-      "task": "Port 与 Adapter 应使用 Contract 还是 Integration 测试？",
+      "task": "单元测试停用后，Port 与 Adapter 的历史 Contract、Integration 证据怎样解释，后续验证如何选择？",
       "expected": "QLT"
     },
     {
@@ -214,6 +214,36 @@
       "id": "qlt_offline_replay",
       "task": "Offline Eval 如何使用固定历史失败样本验证局部问题，并避免冒充 Real E2E？",
       "expected": "QLT"
+    },
+    {
+      "id": "evd_model_dependency_chain",
+      "task": "模型依赖链中的初稿划分和后续修订，能否分别采样后拼接为一次成功？",
+      "expected": "EVD"
+    },
+    {
+      "id": "qlt_ideal_intermediate_fixture",
+      "task": "Offline Eval 手工整理理想前稿后只验证补引用，如何限定证据范围？",
+      "expected": "QLT"
+    },
+    {
+      "id": "doc_normative_cleanup",
+      "task": "整理 AGENTS.md 及其引用的 Markdown 规范，删除重复门禁并同步文档索引。",
+      "expected": "DOC"
+    },
+    {
+      "id": "doc_normative_snapshot",
+      "task": "文档索引应否保存固定历史样本数，Markdown 标题锚点如何核对？",
+      "expected": "DOC"
+    },
+    {
+      "id": "qlt_paid_boundary_fake",
+      "task": "付费 Real E2E 可否用 Fake 替代结果依赖的执行边界，评测证据应如何分类？",
+      "expected": "QLT"
+    },
+    {
+      "id": "evd_local_fix_references",
+      "task": "恢复确定性不变量的缺陷修复是否需要无条件外部机制比较？",
+      "expected": "EVD"
     }
   ]
 }

@@ -8,7 +8,7 @@
 
 | 实现 | 突出能力 | 责任边界 |
 | --- | --- | --- |
-| GPT / Codex | GPT-5.6 [Multi-agent](https://developers.openai.com/api/docs/guides/latest-model)协调可并行子级并综合结果；[Codex Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)支持专门角色；[Git worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees)隔离并行代码状态 | 适合能拆成独立工作流的任务；父级综合仍需检查覆盖、冲突与最终答案 |
+| Codex | [Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)提供专门角色；[Git worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees)隔离并行代码状态 | 父级汇总仍需检查覆盖、冲突与最终答案；可用机制不等于必须委托 |
 | Claude Code | [Subagents](https://code.claude.com/docs/en/subagents)提供独立 Context、自定义 Prompt、工具、权限、Skill、Hook、前后台运行和 resume | 子级只返回摘要或结果；是否继承项目规则、持久记忆和权限需要显式配置 |
 | DeepSeek Harness | [Architecture](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/docs/architecture.md)允许从进程内子级到委托给其他产品的 Provider；实验性 teams 用 durable roster、task board 和 mailbox 协调可继续子级 | Provider seam 统一调用面，但不同子级的完成、取消、资源和恢复语义不能仅靠接口同名推定等价 |
 | Gemini CLI | [Plan Mode](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/docs/cli/plan-mode.md)允许只读 codebase investigator 与帮助子级协助研究 | 研究子级不能越过计划态工具策略；并行探索不等于执行批准 |

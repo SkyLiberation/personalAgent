@@ -8,7 +8,7 @@
 
 `WebReadOutput` 改为 `web-source-text-v2`，`source_text` 保存抓取服务给出的原始提取正文，来源 URL 与服务方保存在外层。Artifact 是卸载正文唯一存储，不额外保存拼接副本。`search_action_output` 使用 rg 定位同一正文的自然行；`read_artifact(resource_ref, start_line, limit)` 按同一坐标读取。超长行用可直接复用的 `next_read` 补充 `start_column`；部分返回不计作整行已读。
 
-引用物化根据本次实际可见成功执行生成 `e1` 等单一编号，并直接附在观察或正文行旁。Conversation 只复制 `evidence_id`；代码从相同目录恢复原文。编号仅在当前可见输入内有意义，不是持久资源身份。原 `FinalMessage.segments`、多证据提交、未引用段落保留、非法引用拒绝及修订循环继续使用。自由字符串仍可能生成非法编号；简化编号不是供应商原生引用保证。
+本决定最初采用的逐观察累加编号已由 [ADR 0030](0030-document-line-citation-identity.md)替换为文档版本与原文位置的引用。读取与搜索坐标、原生正文段、合法粒度和精确恢复边界保持；当前编号规则由 ADR 0030 唯一说明，下文原始运行证据仍按当时版本解释。
 
 ## 责任主体与生产路径
 

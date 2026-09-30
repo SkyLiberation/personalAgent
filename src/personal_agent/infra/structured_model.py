@@ -26,7 +26,7 @@ from typing import Any, Callable, Iterator, Protocol
 from urllib.parse import urlparse
 
 from openai import APIError, APIStatusError, OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from personal_agent.capabilities.contracts.model import (
     ModelActionInvocation,
     StreamChunk,
@@ -336,7 +336,7 @@ def _extract_action_invocations(
     message: Any,
     request: StructuredModelRequest[Any],
 ) -> tuple[ModelActionInvocation, ...]:
-    """Validate provider tool calls before they cross the model Port boundary."""
+    """Normalize call structure; the Application owns declared-action admission."""
     tool_calls = getattr(message, "tool_calls", None) or []
     if not tool_calls:
         raise StructuredOutputFailure(
@@ -344,7 +344,6 @@ def _extract_action_invocations(
             "provider returned no action call for a tool-calling request",
             reason_code="provider_action_missing",
         )
-    known_names = {definition.name for definition in request.action_definitions}
     seen_call_ids: set[str] = set()
     normalized: list[ModelActionInvocation] = []
     for call in tool_calls:
@@ -380,12 +379,6 @@ def _extract_action_invocations(
         else:
             name = str(getattr(function, "name", "") or "")
             raw_arguments = getattr(function, "arguments", "{}")
-        if name not in known_names:
-            raise StructuredOutputFailure(
-                request.operation,
-                f"provider selected unknown model action {name!r}",
-                reason_code="provider_action_unknown",
-            )
         if isinstance(raw_arguments, str):
             try:
                 arguments = json.loads(raw_arguments)
@@ -403,13 +396,19 @@ def _extract_action_invocations(
                 f"model action {name!r} arguments require an object",
                 reason_code="provider_action_arguments_not_object",
             )
-        normalized.append(
-            ModelActionInvocation(
+        try:
+            invocation = ModelActionInvocation(
                 call_id=call_id,
                 name=name,
                 arguments=arguments,
             )
-        )
+        except ValidationError as exc:
+            raise StructuredOutputFailure(
+                request.operation,
+                "provider action name does not satisfy the wire contract",
+                reason_code="provider_action_unknown",
+            ) from exc
+        normalized.append(invocation)
     return tuple(normalized)
 
 
@@ -720,64 +719,58 @@ class OpenAIModelClient:
         client = self._client()
         responses: list[Any] = []
         chat_request = request
-        response = self._create_chat_completion(
-            client,
-            request.operation,
-            self._chat_kwargs(chat_request),
-        )
-        responses.append(response)
-        message = _require_chat_choices(response)[0].message
         repair_errors: list[str] = []
-        try:
-            action_invocations = (
-                _extract_action_invocations(message, chat_request)
-                if request.kind == "tool_calling"
-                else ()
-            )
-        except StructuredOutputFailure as exc:
-            if not (
-                request.kind == "tool_calling"
-                and request.action_choice == "required"
-                and exc.reason_code == "provider_action_missing"
-            ):
-                raise
-            repair_errors.append(exc.reason_code)
-            log_event(
-                logger,
-                logging.WARNING,
-                "llm.action_protocol_repair",
-                operation=request.operation,
-                version=request.version,
-                reason_code=exc.reason_code,
-            )
-            chat_request = replace(
-                request,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Your previous response contained no provider action call. "
-                            "This request requires one or more calls from the declared "
-                            "action definitions. Return action calls only; do not answer "
-                            "with assistant prose."
-                        ),
-                    },
-                    *request.messages,
-                ],
-            )
+        protocol_failure: StructuredOutputFailure | None = None
+        action_invocations = ()
+        for attempt in range(2):
             response = self._create_chat_completion(
-                client,
-                request.operation,
-                self._chat_kwargs(chat_request),
+                client, request.operation, self._chat_kwargs(chat_request),
             )
             responses.append(response)
             message = _require_chat_choices(response)[0].message
-            action_invocations = _extract_action_invocations(message, chat_request)
+            try:
+                action_invocations = (
+                    _extract_action_invocations(message, chat_request)
+                    if request.kind == "tool_calling" else ()
+                )
+                break
+            except StructuredOutputFailure as exc:
+                if not (
+                    attempt == 0 and request.kind == "tool_calling"
+                    and request.action_choice == "required"
+                    and exc.reason_code in ("provider_action_missing", "provider_action_arguments_invalid_json")
+                ):
+                    protocol_failure = exc
+                    break
+                repair_errors.append(exc.reason_code)
+                repair_prompt = get_prompt("action.repair.system")
+                log_event(
+                    logger, logging.WARNING, "llm.action_protocol_repair",
+                    operation=request.operation, version=request.version, reason_code=exc.reason_code,
+                    repair_prompt_name=repair_prompt.name, repair_prompt_version=repair_prompt.version,
+                )
+                rejected_calls = [
+                    call if isinstance(call, dict) else call.model_dump(mode="json")
+                    for call in (getattr(message, "tool_calls", None) or [])
+                ]
+                chat_request = replace(
+                    request,
+                    metadata={**request.metadata, "action_prompt_name": repair_prompt.name,
+                              "action_prompt_version": repair_prompt.version},
+                    messages=[{"role": "system", "content": repair_prompt.render(
+                        validation_feedback=json.dumps({
+                            "reason_code": exc.reason_code, "rejected_content": message.content,
+                            "rejected_calls": rejected_calls,
+                        }, ensure_ascii=False),
+                    )}, *request.messages],
+                )
+        response = responses[-1]
+        message = _require_chat_choices(response)[0].message
         latency_ms = round((perf_counter() - start) * 1000, 2)
         content = (message.content or "").strip()
         usage = _aggregate_usage(responses)
-        return StructuredModelResponse(
-            value=(None if action_invocations else self._default_value(request)),
+        result = StructuredModelResponse(
+            value=(None if action_invocations or protocol_failure is not None else self._default_value(request)),
             model=getattr(response, "model", None) or self._resolved_model,
             latency_ms=latency_ms,
             content=content,
@@ -789,6 +782,10 @@ class OpenAIModelClient:
             retry_attempts=len(repair_errors),
             retry_errors=repair_errors,
         )
+        if protocol_failure is not None:
+            protocol_failure.response = result
+            raise protocol_failure
+        return result
 
     # -- unified streaming entrypoint ------------------------------------
 
@@ -1116,13 +1113,21 @@ class UsageRecordingStructuredModelClient:
         self,
         request: StructuredModelRequest[StructuredOutputT],
     ) -> StructuredModelResponse[StructuredOutputT]:
-        response = self._delegate.generate(request)
-        record_llm_usage(
-            latency_ms=response.latency_ms,
-            input_tokens=response.input_tokens,
-            output_tokens=response.output_tokens,
-            total_tokens=response.total_tokens,
-        )
+        response = None
+        try:
+            response = self._delegate.generate(request)
+        except StructuredOutputFailure as exc:
+            response = exc.response
+            raise
+        finally:
+            if response is not None:
+                record_llm_usage(
+                    latency_ms=response.latency_ms,
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    total_tokens=response.total_tokens,
+                )
+        assert response is not None
         return response
 
 
