@@ -2,7 +2,7 @@
 
 2026-09-28 后续接入状态：用户明确要求完整接入且不运行 Offline 测试，已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链；以下隔离实验与准入结论按原日期保留。生产可达不等于正式 E2E 通过，当前验收见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
 
-`CLAIM-PARAMETER-RECOVERY-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 的实验恢复边界。它与[调用前范围不明确](claim-argument-scope.md)分别验收；本项不判断引用是否支持论断。
+`CLAIM-PARAMETER-RECOVERY-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 的实验恢复边界。它与[调用前范围不明确](../completed/claim-argument-scope.md)分别验收；本项不判断引用是否支持论断。
 
 ## 失败事实与责任边界
 
@@ -16,7 +16,7 @@
 
 ## 证据与验收边界
 
-[历史回放](../../../.tmp/claim-constraints-recovery-20260922/replay-report.json)已用真实原始提议定位 9 处非法引用，生成可修复反馈并保持空状态；没有调用模型，不能证明实际恢复。下一步与[范围方案](claim-argument-scope.md#证据依赖与验证)在同一连续样本执行，不注入理想稿或强制错误。
+[历史回放](../../../.tmp/claim-constraints-recovery-20260922/replay-report.json)已用真实原始提议定位 9 处非法引用，生成可修复反馈并保持空状态；没有调用模型，不能证明实际恢复。下一步与[范围方案](../completed/claim-argument-scope.md#证据依赖与验证)在同一连续样本执行，不注入理想稿或强制错误。
 
 必须分别记录拒绝次数、真正进入下一请求的反馈、模型后续动作、合法恢复及未改状态。如果自然样本没有参数错误，恢复消费记为未覆盖，保留本方案；不得以本次无错计为恢复通过。若错误仍不进入下一请求、错误后发生部分写入或服务错误被错当成参数错误，直接否定对应实现。
 

@@ -23,6 +23,7 @@ ModelInvocationFailureCategory = Literal[
     "provider_timeout",
     "provider_transport",
 ]
+PROVIDER_DIAGNOSTIC_MAX_CHARS = 512
 StructuredOutputFailureCode = Literal[
     "structured_output_invalid",
     "provider_action_missing",
@@ -76,6 +77,20 @@ class ModelActionInvocation(BaseModel):
     arguments: dict[str, Any]
 
 
+class ProviderFailureDiagnostics(BaseModel):
+    """Bounded, redacted provider facts for internal failure observability."""
+
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, str_max_length=PROVIDER_DIAGNOSTIC_MAX_CHARS,
+    )
+
+    error_code: str | None = None
+    error_type: str | None = None
+    message: str | None = None
+    request_id: str | None = None
+    retry_after: str | None = None
+
+
 class ModelInvocationUnavailable(RuntimeError):
     """A model call could not produce a usable provider response.
 
@@ -94,6 +109,7 @@ class ModelInvocationUnavailable(RuntimeError):
         provider_host: str | None = None,
         status_code: int | None = None,
         retryable: bool = False,
+        diagnostics: ProviderFailureDiagnostics | None = None,
     ) -> None:
         self.operation = operation
         self.category = category
@@ -101,6 +117,9 @@ class ModelInvocationUnavailable(RuntimeError):
         self.provider_host = provider_host
         self.status_code = status_code
         self.retryable = retryable
+        self.diagnostics = diagnostics
+        # Completed responses before a later transport failure remain billable.
+        self.response: "StructuredModelResponse[Any] | None" = None
         super().__init__(f"{operation} model provider unavailable ({category})")
 
 
@@ -280,6 +299,7 @@ __all__ = [
     "ModelActionDefinition", "ModelActionInvocation", "ModelActionKind",
     "ModelCallIntent", "ModelInvocationDenial", "ModelInvocationGrant", "ModelReasoningEffort",
     "ModelInvocationFailureCategory", "ModelInvocationUnavailable",
+    "PROVIDER_DIAGNOSTIC_MAX_CHARS", "ProviderFailureDiagnostics",
     "StructuredOutputFailure", "StructuredOutputFailureCode",
     "ModelRequestKind",
     "SkillActivationDecision", "SkillContextGrant", "StreamChunk", "StreamingModelClient",

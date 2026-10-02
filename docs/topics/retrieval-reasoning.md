@@ -1,88 +1,49 @@
 # Retrieval 与证据推理
 
-本文是当前 Ask retrieval、证据归一和回答边界的 canonical 文档。它描述 Ask Application 的一个
-只读阶段，不定义顶层 Agent Router、Planner、Authorization 或 Completion。
+本文拥有检索资源与回答责任的边界。个人知识、图谱和网页读取提供证据；当前产品最终回答由 Conversation 唯一拥有，写入与生命周期由对应 Application 管理。
 
-## 生产路径
+## 当前产品路径
 
 ```text
-User question
-  -> query understanding
-  -> personal knowledge / local / graph retrieval
-  -> optional web retrieval under policy
-  -> EvidenceItem normalization
-  -> Evidence Engine fusion / rerank / budget
-  -> ContextPack
-  -> unified answer composition
-  -> Ask verification
-  -> bounded repair or fail closed
+中文用户目标
+  -> Conversation 模型选择所需资料
+  -> search_personal_knowledge 或受治理只读工具
+  -> 按身份与作用域执行读取
+  -> bounded Observation 与可引用原文
+  -> 研究任务按 claims 核验、覆盖和独立汇总
+  -> 唯一 FinalMessage
+  -> 适用的 Verification 与 Completion
 ```
 
-固定阶段由 Ask workflow 定义。模型只负责开放语义的 query understanding、证据重点、答案组织和
-verification；确定性代码负责 visibility、scope、source ref、预算、状态迁移和重试上限。
+个人资料通过 `ConversationKnowledgeReadPort.select_personal_evidence()` 进入，真实适配器复用 `KnowledgeService.select_evidence()`。它按责任主体、相关性、生命周期和支持状态选择 Claim，再恢复对应原文与冲突关系。事实与读写契约见 [Memory](memory.md)，产品链路与检查点见 [Capture 与 Conversation Grounded Answer](../workflow/capture-ask-model-flow.md)。
 
-## Retriever 契约
+外部资料由模型选择 `web_search` 发现、`web_read` 读取，长正文通过 Artifact 搜索和重读。搜索摘要、已返回正文、未读部分及查询执行条件分别物化；坐标和读取覆盖由 [Context](context-engineering.md#查询执行事实与来源证据)拥有。
 
-| Retriever | 输入 | 输出 | 禁止 |
-| --- | --- | --- | --- |
-| Personal Knowledge | question、scope、filters | EvidenceSpan、Citation、Claim support/conflict | 生成/验证 Personal Knowledge answer |
-| Local | question、scope、filters | Note/chunk candidates | 把模型回答写回 Note |
-| Graph | question、scope | fact/edge/episode/citation refs | 返回 provider candidate answer |
-| Web | question、Policy/egress scope | SourceDocument / EvidenceItem | 绕过 Gateway 或权限 |
+## 检索资源契约
 
-所有 source 最终进入同一个 `EvidenceItem` pool。`graph_result_to_evidence()` 是
-`GraphRetrievalResult` 的唯一转换入口，Ask 与 `graph_search` Tool 共用；Tool 不再复制一套
-fact/edge/hit 映射。
+| 资源 | 执行结果与消费者 |
+| --- | --- |
+| Personal Knowledge | 可回答 Claim、原文 citation、支持与冲突事实；经只读端口进入 Conversation |
+| 本地笔记与结构检索 | 当前用户可见的 Note、chunk 或章节候选；具体 Application 按自身读取契约消费 |
+| Graph | `GraphRetrievalResult` 中的实体、关系、来源和 citation 引用；`graph_search` 工具归一为 evidence |
+| Web | 搜索发现结果及指定 URL 的实际提取正文；经 Gateway 返回 Conversation |
+
+`graph_result_to_evidence()` 在 [kernel/evidence.py](../../src/personal_agent/kernel/evidence.py)定义，生产 [graph_search.py](../../src/personal_agent/tools/graph_search.py)复用它。该转换保存事实与来源绑定，不生成答案。
 
 ## Graph 边界
 
-`GraphRetrievalResult` 只包含：
+`GraphRetrievalResult` 由 [kernel/graph_results.py](../../src/personal_agent/kernel/graph_results.py)拥有，包含实体、关系、node/edge/fact 引用、episode 和 citation，以及 `enabled/error` 环境事实。自然语言合成答案不属于该契约；`relation_facts` 来自实际检索结果，不能从服务提供方答案拆句制造。
 
-- `entity_names`、`relation_facts`；
-- `node_refs`、`edge_refs`、`fact_refs`；
-- `related_episode_uuids`、`citation_hits`、`citations`；
-- `enabled/error` 环境事实。
+旧 Microsoft GraphRAG CLI Adapter 因只返回合成答案、缺少所需来源绑定而删除。决定与历史反事实见 [ADR 0012](../adr/0012-graph-retrieval-evidence-only-boundary.md)。
 
-模型或 Provider 生成的自然语言 answer 不属于该 contract，且 `extra="forbid"` 会拒绝注入。
-`relation_facts` 必须是 provider 的 retrieval fact 输出，不能通过拆分 synthesized answer 构造。
+## Evidence Engine 与离线策略
 
-生产 `graph_provider` 只接受：
+[Evidence Engine](../workflow/evidence-engine.md)提供证据归一、装配和 grounding 组件，周期 Research digest 有真实消费者。Open RAGBench、MultiHopRAG 等评测检索、融合、重排及证据选择；离线策略的 `ContextPack` 或 scorer 结果只证明其组件边界。
 
-- `graphiti`：在线 graph fact/ref retrieval；
-- `structural`：本地 parent/section 结构检索；
-- `hybrid`：组合 structural 与 Graphiti。
+当前 Conversation 不运行独立 Ask workflow，也不把多源候选自动串成第二个答案服务。历史 `current_runtime_ask` 结果保留原代码和配置身份；运行方式与证据分类见[评测索引](../evals/README.md)，不得用历史组件得分推导当前产品结果。
 
-未知配置在 Settings 加载阶段失败，不会静默回退。Microsoft GraphRAG CLI 的旧 Adapter 已删除，
-因为它只返回 synthesized answer，没有本项目要求的 source/citation binding；历史 benchmark
-不能证明 grounded retrieval 能力。
+## 失败与完成
 
-## Evidence 与回答
+服务未配置、不可达或读取失败形成明确失败事实；过滤后没有候选就是空候选。模型依据实际资料判断补证、修订、澄清或限制，有范围的未知按原用户结果契约验收。无据声明由来源支持核验处理；来源、坐标或身份越界由确定性准入拒绝。
 
-Retriever/Evidence Engine 负责候选归一、去重、融合、rerank、压缩和预算，不负责生成最终答案或判断 Goal 完成。当前产品链只有一个回答 owner：
-
-```text
-Conversation
-  -> model-selected search_personal_knowledge
-  -> scope-filtered personal evidence tool_result
-  -> optional governed read-only Tool Observations
-  -> one FinalMessage
-```
-
-`KnowledgeService` 保留 Claim/Evidence/conflict/scope 所有权；Tool success、retrieval hit 或非空 ContextPack 都不能直接完成用户目标。离线 retrieval strategy 只验证候选机制，不是产品入口。
-
-## 失败语义
-
-- Provider 未配置或不可达：返回 typed environment/capability failure；
-- metadata filter 排除全部候选：返回空候选并记录过滤事实；
-- evidence 不足：compose/verification 明确不足，不用历史回答或 fallback 文本制造结论；
-- verifier 发现 unsupported/contradicted claim：在预算内 repair 或返回 limitation；
-- source ref 不属于本次 visibility：Admission 拒绝，不能由模型补造。
-
-## 执行证据
-
-- Graph synthesized answer baseline 与删除路径见
-  [ADR 0012](../adr/0012-graph-retrieval-evidence-only-boundary.md)；
-- Personal Knowledge 内外层重复验证 baseline 与边界见
-  [ADR 0011](../adr/0011-independent-personal-knowledge-answer-verification.md)；
-- Verification 和 Completion owner 见
-  [Verification 与 Completion](verification-and-completion.md)。
+检索命中、工具成功和非空 `ContextPack` 都不表示用户目标完成。Verification、Completion 及研究阶段的当前实例见[核验专题](verification-and-completion.md)，实际用户结果由[评测盘点](../evals/02-current-case-inventory.md)维护。

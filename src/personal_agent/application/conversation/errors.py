@@ -5,6 +5,7 @@ from typing import Literal, TypeAlias
 from personal_agent.capabilities.contracts.model import (
     ModelActionKind,
     ModelInvocationFailureCategory,
+    ProviderFailureDiagnostics,
     StructuredOutputFailureCode,
 )
 
@@ -40,6 +41,7 @@ class ConversationUnavailable(RuntimeError):
         operation: str | None = None,
         provider_host: str | None = None,
         provider_status_code: int | None = None,
+        provider_diagnostics: ProviderFailureDiagnostics | None = None,
         retryable: bool = False,
         action_name: str | None = None,
         action_kind: ModelActionKind | None = None,
@@ -53,6 +55,7 @@ class ConversationUnavailable(RuntimeError):
         self.operation = operation
         self.provider_host = provider_host
         self.provider_status_code = provider_status_code
+        self.provider_diagnostics = provider_diagnostics
         self.retryable = retryable
         self.action_name = action_name
         self.action_kind = action_kind

@@ -1,6 +1,8 @@
 # ADR 0032：Conversation 研究论断与独立汇总接入
 
-日期：2026-09-28。状态：研究链已进入生产调用链；2026-09-29 按用户要求暂停拆分动作及复合论断识别，完整用户结果尚未通过。
+日期：2026-09-28。状态：研究链已进入生产调用链；2026-09-29 暂停拆分与复合识别；2026-09-30 按用户要求恢复 evidence-first，完整用户结果仍待验证。
+
+2026-10-01：用户授权修复重试用量漏计并落地未收敛问题下其他设计。版本绑定的片段 ID、无损写作视图和当前引用/身份 Schema 范围已进入唯一研究路径，旧字符串匹配协议删除；本轮正式 target 及预声明见[接入归档](../../.tmp/research-convergence-integration-20261001/plan.json)。
 
 ## 失败事实、授权与范围
 
@@ -10,11 +12,17 @@
 
 ## 唯一事实责任与路径
 
+2026-09-30 用户明确要求“恢复 evidence-first 并继续优化”。现行研究提交前，Conversation 用同一模型 Port 调用 `conversation.research.evidence_selection:v6-goal-source-feedback`，输入原始会话、冻结验收原项的只读编号、实际执行资料、当前 claims 与最新适用研究反馈。历史研究取证自述由普通动作消费，进入研究时移出当前修订视图，执行事实及适用核验报告保持。模型输出 typed 信息需求、对象引用及 `write/acquire/limit`；代码只绑定可见坐标。选择本轮消费，不写入新的持久业务事实；恢复时可由原执行记录重建。`write` 后由 `writer:v15-goal-source-feedback` 消费所选正文，创建和增补的引用及引用替换的新增坐标须属于本轮选择；正文片段修订保留目标 claim 已绑定引用，Runtime 恢复现有原文并检查绑定；纯认知限制不强制添加引用，外部事实缺证仍由来源核验判断。`acquire/limit` 沿现有取证或限制响应分支执行。全部调用计入原预算，选择不代表语义通过。删除、来源 URL 交接及停用机制保持当前契约。准入与验证限制由[选证候选](../optimization/to_verify/claim-evidence-selection.md#2026-09-30-按用户要求恢复并连续验证)拥有；下文各日期试验保留为历史证据。
+
 `AgentRuntime` 现有模型和工具 Port 装配 `ConversationService`。用户消息从正式 Conversation HTTP 入口进入，真实取证仍通过现有 Admission 和工具网关。需要核验且非计划审阅的任务在实际可引用来源正文出现后，由 Conversation 进入研究提交；模型也可用 `prepare_final` 主动请求该阶段；没有该研究产物的普通交流保持原 Final 契约。这是不同产物的责任边界，不是同一研究任务可选的新旧双轨。
 
-`ResearchClaims` 是 Interaction Journal 中唯一的不可变 claim 版本。`research.py` 是身份分配及合法编辑的唯一责任主体，创建后只允许绑定最新 `ResourceRef` 的片段替换、引用替换、补充缺失事实或重新核验。原文片段必须精确且唯一；引用仍由 canonical citation binder 解析，准入失败不写版本。模型拥有正文、取证和修订选择；代码原样保持非目标字段及其他 claims，不代写事实。
+`ResearchClaimContent` 唯一定义研究正文及引用契约，创建、增补和 canonical `ResearchClaim` 均消费它。它复用既有严格配置和引用字段，只将 text 的 Schema 描述限定为供研究来源核验与独立汇总使用的论断；最终 `ConversationAnswerSegment` 仍拥有交付正文。`writer:v11-retained-references` 已于 2026-10-01 迁移片段地址输入与输出；此前 v9 只修正研究正文职责描述。实发 Schema 冲突、固定输入比较及停止条件见[阶段契约预声明](../../.tmp/evidence-first-restored-20260930/stage-schema-plan.json)，不把类型描述修复宣称为语义收敛。
 
-合法创建、编辑或单条撤回立即进入当前完整版本的逐项来源支持和整组事实覆盖核验。事实覆盖只接收会话与当前 claims，判断可否供汇总的事实充分性；来源 URL 存在性和最终呈现不属于该模型判据，不要求 URL 重复写入网页正文或 claim。来源支持反馈仍绑定当前版本与 claim；当前链路不调用复合论断或独立文档缺项识别，也不在 `ResearchReview` 中保存结构或覆盖拒绝。每个模型请求通过已注入的 `StructuredModelClient`，使用注册 Prompt 并计入现有 token 预算；预算不足不跳过剩余必检。`ResearchReview` 保存模型判断与确切版本，研究可汇总性由最后到达的完整事实覆盖通过推导，不额外持久化通过状态。单条撤回的具体准入见 [ADR 0033](0033-claim-deletion-and-document-absence-pause.md)。
+`ResearchClaims` 是 Interaction Journal 中唯一的不可变 claim 版本。`research.py` 是身份分配及合法编辑的唯一责任主体，创建后只允许绑定最新 `ResourceRef` 的片段替换、引用替换、补充缺失事实或重新核验。片段 ID 由当前正文无损派生，动作提交首尾 ID 及 replacement；完整资源、owner、revision 与 claim 核对后，Runtime 取出连续原文范围合并，范围外字符保持原样；引用仍由 canonical citation binder 解析，准入失败不写版本。模型拥有正文、取证和修订选择；代码原样保持非目标字段及其他 claims，不代写事实。
+
+选中子集违规由准入代码对实际绑定坐标计算集合差，错误反馈列出确切未选坐标供下一轮修复；它不替模型选择证据，也不接纳被拒动作。局部修复和生产交接的限定证据由[确定性坐标反馈](../optimization/completed/research-admission-coordinate-feedback.md)拥有，完整用户结果由[评测登记](../evals/02-current-case-inventory.md#2026-09-30-evidence-first-恢复与有界修正)拥有。
+
+合法创建、编辑或单条撤回立即进入当前集合的来源支持与整组事实覆盖核验。修改项核验完整正文；同次 `respond` 的模型绑定内，正文、引用、binder 恢复的原文与来源身份及来源判据版本相同的项，消费 Journal 中最新适用报告；最新适用拒绝同样保留。新的调用边界及显式 `recheck_claims` 重新核验。逐项报告保持原绑定，不生成通过镜像或复制报告。事实覆盖接收会话、同一冻结原项、当前 claims、全部实际已返回的去重可引用读窗及执行派生读取状态，以 `ResearchCoverageReport.requirements` 逐项记录原 `criterion_id`、必要事实关系、当前 claim、相关原文坐标、状态及反馈。`covered` 表示已有事实充分，`missing` 表示已读必要事实未写入，`needs_evidence` 表示必要关系仍缺原文，`delivery_check` 将呈现或提交要求交给最终核验。Runtime 校验原项全集恰好一次、当前 claim 及已返回坐标，从全部状态推导研究充分性；`delivery_check` 的最终结果继续验收。覆盖请求不依赖当前 claim 自选的引用范围，大页抓取元数据及 retrieval 入口保持，未返回正文由原动作入口读取。明确的来源未知与当前尚未取得段落分别判断，writer 按缺项反馈补证或修订；来源 URL 存在性和最终呈现不属于该模型判据，不要求 URL 重复写入网页正文或 claim。研究来源支持由 `conversation.research.support:v1-bounded-feedback` 输出 `ResearchSupportReport`，反馈绑定原始版本、claim 和来源判据版本；片段 ID、无据声明、支持范围及缺少前提分别表达修订边界，相关证据 ID 由 Runtime 从原绑定恢复后交给 selector 与 writer。来源支持反馈仍绑定被验版本与 claim；当前链路不调用复合论断或独立文档缺项识别，`ResearchReview` 不保存独立结构或文档缺项分类报告；用户事实覆盖的逐项模型判断按实际结果保存。每个模型请求通过已注入的 `StructuredModelClient`，使用注册 Prompt 并计入现有 token 预算；预算不足不跳过剩余必检。`ResearchReview` 保存模型判断与确切版本，研究可汇总性由最后到达的完整事实覆盖通过推导，不额外持久化通过状态。单条撤回的具体准入见 [ADR 0033](0033-claim-deletion-and-document-absence-pause.md)。
 
 研究通过后，独立汇总请求只物化完整原始会话、当前已核验 claims、从引用确定性恢复的来源 URL、冻结用户标准及汇总阶段反馈。它不读取研究决策历史或来源全文。完整 `FinalSubmission` 再通过运行时调用的 `verify_interaction_draft`：此时 Verifier 判断最终稿对已核验事实的忠实性及用户交付契约，不重新竞争 claim 与原始来源的支持判断。Receipt 绑定 `research_ref`；Completion 同时检查最终正文和当前研究版本。研究通过本身不触发交付。最终核验的 `research_feedback` 仅在事实缺口时生成 `ResearchReopening`，使该确切版本返回研究写作者；纯汇总表达问题仍返回独立汇总。来源身份保留 canonical 文档行坐标，不能使用支持核验内部的 `eNNN` 局部编号；最终引用须属于当前研究已核验的来源位置。
 

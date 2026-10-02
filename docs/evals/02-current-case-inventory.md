@@ -1392,3 +1392,164 @@ c1 已取得局部支持通过；模型最终合法修改 c2 引用，但第 15 
 [事实覆盖职责 target](../../.tmp/research-coverage-fact-scope-20260929/evidence/conversation-research-delivery-001/target/20260929T162606.084974Z-18944-eb22e78f/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)继续使用同一中文请求、正式入口、真实模型、原用户结果契约与生产预算；目标代码的覆盖请求只含会话与 claims，URL 仍由执行记录投影到通过后的 `ResearchBasis.sources`。该次结果为 `0/1`：入口耗时 3,439.32 秒，在 32 个模型决策回合后返回预算 `limitation`，没有用户答案。最后保存 21 个研究版本，首版及末版均为 10 条 claims；生产用量为 120 次模型调用、11 次工具调用、1,663,679 tokens。只读捕获按服务提供方响应 ID 去重后有 90 次逐项来源支持响应，覆盖请求为 0，独立汇总和最终核验均未到达。该轨迹证明修正后的前置研究链实际运行，却未触发 URL 阶段判据或结构化汇总，不能计为本轮机制通过。失败位置在前置逐项支持与修订循环；与首次 target 的独立评分故障分别归因。两个 target 都不增加发布通过数，也不能按不同随机轨迹计算 URL 改动的调用成本收益。
 
 [逐项请求与版本的只读审计](../../.tmp/research-coverage-fact-scope-20260929/repetition-audit.json)显示，90 次来源支持响应仅有 28 个不同的完整请求，另 62 次精确重复；5 组相同请求同时出现通过和拒绝。20 次版本变更每次只修改一条 claim，数量没有膨胀；已保存的核验最多到 c8，无法稳定推进到 c10 与整组覆盖。这是与 URL 交接独立的前置收敛阻塞；输出冲突本身不裁定哪次判断正确。[一致性问题](../optimization/claim-verifier-consistency.md#已确认的事实)拥有后续归因，不在本次 URL 修复中追加缓存或跳过核验。
+
+## 2026-09-30 evidence-first 恢复与有界修正
+
+用户要求恢复从原始问题选证后写作的生产路径，并继续优化来源核验范围。[预声明](../../.tmp/evidence-first-restored-20260930/plan.json)固定既有中文自然请求、正式 HTTP 入口、生产 Composition Root、真实 `mimo-v2.6-flash`、思考开启、原独立结果评分器及 2,000,000 tokens / 32 回合 / 48 工具预算。`split_claim`、复合识别和独立文档缺项识别继续停用，单条删除仍可用；新增机制阶段检查不改变完整用户结果通过条件。
+
+环境准备先遇 Windows 保留端口 `15354–15453`，旧数据库端口 `15432` 无法绑定。四次 setup 失败均未进入正式产品场景，不计产品失败轨迹。保留同一 PostgreSQL 数据卷，将真实宿主端口改为 `16432`；共享 HTTP E2E 由 `PERSONAL_AGENT_E2E_POSTGRES_URL` 统一指定连通检查、服务进程及测试库清理端点，清理仅允许 `personal_agent_test`。没有修改评分器、模型或生产默认配置，也没有修改或执行 `tests/` 的测试；复用其只读数据库准备基础设施。端点差异与源码身份均封存，不将该环境恢复计为产品优化收益。
+
+[首轮正式 target](../../.tmp/evidence-first-restored-20260930/target-database-owner/evidence/conversation-research-delivery-001/target/20260930T064750.691471Z-24128-26ebcfb0/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)为 `0/1`，在 32 个决策回合后返回预算 `limitation`，无用户答案；入口耗时 4,534.48 秒，pytest 为 4,546.32 秒。生产总账为 115 次模型调用、20 次工具调用和 1,813,606 tokens；[按响应 ID 去重的审计](../../.tmp/evidence-first-restored-20260930/target-database-owner/audit-all-provider.json)有 121 次 Provider 完成，差额为结构修复，总 tokens 与总账一致。源码执行期间未变化。末版为第 14 版、7 条 claims，首版为 6 条；两次逐项来源支持通过后到达事实覆盖，覆盖反馈推动模型补读 output schema 条款并加入校验分工，后一次仍拒绝未回答的权限／授权主体与配置层归属。没有到达独立汇总、最终核验及完整 URL 交付。停用三机制均零调用，删除没有被模型选择。
+
+与前次来源 URL 职责 target 相比，本轮到达事实覆盖、claim 数较少；完整用户结果仍失败。模型、思考开关、预算及评分契约保持，但同时恢复选证、校准来源范围并使用不同随机轨迹，不能把调用数或耗时变化归为任何单项因果收益。固定输入范围校准为 8 样本 × 2 重复 × 2 版本，共 32 次真实调用；旧版 14/16、新版 16/16，用量 68,395 tokens，只证明这组局部判别。正式来源核验仍有 3 组相同输入的冲突，具体归因由[一致性问题](../optimization/claim-verifier-consistency.md#2026-09-30-断言范围校准)拥有。
+
+首轮还暴露两项既有契约恢复缺陷：[有界修正](../../.tmp/evidence-first-restored-20260930/bounded-fix-plan.json)删除对每项引用的无条件非空检查，保持选中子集与语义核验；选证 Prompt 明确对象引用形状并升级 `v3-reference-objects`，Adapter 不转换字符串。[实际首稿回放](../../.tmp/evidence-first-restored-20260930/bounded-admission-replay.json)接纳原 6 条集合，实际未选引用仍被拒绝；它只证明 Admission 边界，不是新 Product E2E。同一失败选证请求的两次真实模型回放均通过形状校验，均无结构修复，共 61,995 tokens；后续[坐标审计](../../.tmp/evidence-first-restored-20260930/selector-replay/audit.json)发现两份范围都包含未返回行，真实引用绑定为 `0/2`，不把形状通过记为有效选证。
+
+第二轮 target 因继续消息切换而中断，[封存记录](../../.tmp/evidence-first-restored-20260930/target-bounded-fix/interrupted-result.json)保留执行身份及校验和；源码执行期间未变化，没有正式结果、用户答案或完成的失败判决。已提交总账为 100 次模型调用、28 回合、12 次工具和 1,069,083 tokens，第 19 版为 9 条 claims，事实覆盖零次；末尾在途 Provider 用量未知，不记零用量，也不加入完成样本分母。
+
+第二轮实际研究写作请求同时含“直接交付用户正文”的 Schema 描述和“不写最终文章”的研究指令。[阶段契约预声明](../../.tmp/evidence-first-restored-20260930/stage-schema-plan.json)把创建、增补及 canonical 研究正文统一迁入 `ResearchClaimContent`；仅覆盖 text 描述，不改字段、最终答复类型或核验判据，writer 为 `v9-research-content`、指令正文不变。[同一实际输入的比较审计](../../.tmp/evidence-first-restored-20260930/schema-probe/audit.json)已完成旧、新 Schema 各两次，全部实际输出连续经过准入与来源支持。旧 Schema 与封存实发 Schema 完全相同，业务消息和写作模板保持；12 次 Provider 完成共 55,030 tokens，无结构修复。准入为 `4/4`，完整来源支持为 `0/4`；旧版 claim 数为 5、10，首个拒绝分别在 c1、c3，新版为 5、8，均在 c2 被拒。无据全文否定、加载工具的主体扩大有明确拒绝依据；否定式能力／实现分类存在语义争议，未预标全部正确或错误。未到达的后续 claims、覆盖、汇总及最终结果不计通过；此比较不证明收敛或成本收益。新的同入口 target 单独计分，完整用户结果未通过前候选不迁入 completed，不增加发布通过数。
+
+[研究正文契约 target](../../.tmp/evidence-first-restored-20260930/target-research-content/evidence/conversation-research-delivery-001/target/20260930T100257.425527Z-20616-3a33d93c/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)已完成，仍为 `0/1`，返回连续无效动作的 `limitation`，没有用户答案。入口耗时 1,002.019407 秒，25 次模型调用、13 回合、11 次工具、497,921 tokens；Provider 去重计数及已知 tokens 与生产总账一致，无结构修复、无长度截断。执行期间源码未变。第 1、2 版均为 6 条 claims；先补读授权与结果 schema 条款再创建，c2 的 401 条件及安全原则范围修复后 c1-c3 来源通过。c4 复述分工却漏引实际支持行，来源拒绝有据；随后补引和正文修订均因未选 `d4:34` 被确定性拒绝，触发既有重复反馈停止。覆盖、汇总、最终核验未到达。[审计](../../.tmp/evidence-first-restored-20260930/target-research-content/audit.json)为 6 次来源支持、5 个不同请求、1 次重复、0 个已观察冲突；小样本和提前停止不证明一致性或成本收益。Trace 自动标注的 earliest_failure 把第一条正常补证反馈列为 blocked，不能据此归因本次停止；上述归因消费了实际后续轨迹。
+
+该 target 三次准入拒绝只返回通用错误，未指出实际集合差；在当前版本进展后，c4 两次同类拒绝结束交互。[坐标反馈修正预声明](../../.tmp/evidence-first-restored-20260930/coordinate-feedback-plan.json)只把确定性未选坐标加入现有错误消息，保持拒绝判据、停止次数、Prompt、预算及评分器。原实际拒绝回放后仍拒绝，进一步用同一实际下一轮请求的准确反馈连续验证真实选证、写作及核验；完整目标单独以新的真实入口运行，不将条件局部结果计为产品通过。
+
+[坐标反馈连续验证](../../.tmp/evidence-first-restored-20260930/coordinate-probe/audit.json)为同一实际输入两次真实选择与写作：两次都绑定有效坐标并补选原缺失 `d4:34`，实际编辑都准入。第一条轨迹删除 c4，集合由 6 降为 5，复验在 c3 的 call_id 范围拒绝处结束；第二条补引 c4、保留 6 条，在 c2 的对照排他解读处结束，尚未自然核验到 c4。完整来源支持为 `0/2`，覆盖、汇总及用户结果未执行。相同 c2 实发 messages 和 Schema 与正式通过请求一致，局部重放却出现三次空 JSON 长度截断；同一请求的返回稳定性问题独立于本次反馈修正。未把删除后的覆盖或补引后的 c4 来源支持记成通过。
+
+该局部验证共 9 次 typed 操作、13 次 Provider 完成，实际已知用量 224,770 tokens，在预声明 240,000 上限内；Adapter 仅报告 200,590，相差 24,180，恰为第一次 c2 失败操作中的两条响应用量。`_generate_structured` 在聚合 usage 前直接抛出异常，外层重试仅携带最后成功操作的用量，因此该分支还存在计量缺陷。此次没有改重试或预算判据，完整计数以[原始响应审计](../../.tmp/evidence-first-restored-20260930/coordinate-probe/audit.json)为准；不得使用 Adapter 小计宣称成本降低。
+
+[坐标反馈正式 target](../../.tmp/evidence-first-restored-20260930/target-coordinate-feedback/evidence/conversation-research-delivery-001/target/20260930T111937.645981Z-24840-b70d8b46/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)已完成，仍为 `0/1`，在连续两次无效片段修订后返回 `limitation`，没有用户答案或入口异常。入口耗时 1,962.639348 秒，pytest 为 1,975.77 秒；35 次生产模型调用、14 回合、11 次工具、481,325 tokens。[去重审计](../../.tmp/evidence-first-restored-20260930/target-coordinate-feedback/audit.json)为 38 次 Provider 完成，包含结构修复，总 tokens 与生产总账一致；本次未触发前述计量缺陷分支，不证明该缺陷已修复。源码执行期间未变，归档校验和已封存。
+
+集合从第 1 至第 5 版均为 7 条 claims，无拆分或新增膨胀。真实拒绝反馈明确列出未选 `d6:32`，随后选证补齐并准入 c2 修订，第 5 版 c1-c3 来源通过，推进到 c4；这证明准确坐标已由生产修复消费者使用。c4 的 call_id 强制化和“只规定了”穷尽列举有实际来源拒绝依据，随后两次 `old_fragment` 把正文中的直引号 `"` 改成弯引号 `“”`，都不能精确匹配，未产生第 6 版。两次实发写作请求包含完整 canonical c4，输入没有丢失或改写引号；字符对照只用于诊断，没有规范化被拒动作。[责任边界审查](../../.tmp/evidence-first-restored-20260930/target-coordinate-feedback/boundary-review.json)封存同一实际选证、编辑、反馈及完整请求对照。研究事实覆盖、独立汇总、最终核验及答案评分均未到达。
+
+14 次来源支持响应对应 10 个不同完整 messages、4 次重复，有 1 组先通过后拒绝；已进一步确认该组的完整观察器请求对象相等。call_id 拒绝有据，先前判决漏放；另一项将已描述应用流程中的分工推导读成任何场景的普遍否定，存在范围误读。整项仍有前一支持缺口，不将部分误读写成整项应该通过。拆分、复合识别和独立缺项识别仍零调用，删除没有在本次正式轨迹中被选择。两次独立随机 target 的调用、耗时或 tokens 差异不是成本消融。
+
+## 2026-10-01 重试计量与研究设计接入
+
+用户授权修复失败重试用量漏计并落地未收敛问题下其他设计。本轮[预声明](../../.tmp/research-convergence-integration-20261001/plan.json)与[设计盘点](../../.tmp/research-convergence-integration-20261001/design-inventory.json)区分已接入、需补齐及按用户停用的机制。实际改动为重试计量、版本绑定片段地址及本轮引用/身份 Schema 范围；模型、thinking、transport、预算、错误停止阈值、来源 Verifier 与原用户评分保持一致，身份比较见[配置审计](../../.tmp/research-convergence-integration-20261001/target/baseline-comparison-identity.json)。
+
+局部责任回放使用真实归档响应和失败正文：[计量回放](../../.tmp/research-convergence-integration-20261001/usage-replay.json)四个边界通过，补齐 24,180 tokens；[片段回放](../../.tmp/research-convergence-integration-20261001/fragment-replay.json)两条给定 ID 动作与七类拒绝控制通过。它们是历史失败的条件局部证据，原模型自主寻址由正式入口运行验收。机制与责任分别由[重试计量](../optimization/completed/model-retry-usage.md)、[正文寻址](../optimization/completed/claim-fragment-addressing.md)及[参数范围](../optimization/completed/claim-argument-scope.md)完成记录拥有。
+
+正式 `evals/product_baselines/test_conversation_research_review_001.py` 显式收集并运行 1 项，按相同中文自然表达、空资料、真实模型和生产 Composition Root 完成 1×1 target。[原始结果](../../.tmp/research-convergence-integration-20261001/target/evidence/conversation-research-delivery-001/target/20260930T233710.680926Z-19684-2433e540/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)仍为 `0/1`：入口没有异常，在第 30 个决策回合因连续无效研究动作返回 `limitation`，无用户答案。入口耗时 3,897.462197 秒，pytest 为 3,915.18 秒；生产总账为 97 次模型调用、13 次工具调用和 1,618,551 tokens。97 次实际 Provider 完成的输入 1,418,732、输出 199,819 及 total 与 Journal 全部相等。本轨迹没有结构修复或外层重试，历史漏计分支由前述固定响应反事实验收。执行期间源码保持，完整计数见[最终审计](../../.tmp/research-convergence-integration-20261001/target/final-audit.json)。
+
+[实发视图审计](../../.tmp/research-convergence-integration-20261001/target/writer-view-audit.json)核对 20 次写作请求：视图逐字重建当前正文、无第二份完整正文或模型偏移，Schema 的当前 claim、片段和所选证据范围匹配实际输入。[生产动作消费](../../.tmp/research-convergence-integration-20261001/target/admitted-fragment-audit.json)核对模型自主提交的 12 次片段 ID 修订，范围外正文、引用和其他 claim 精确保留，12 份新完整正文均到达来源支持消费者。首版至第 15 版一直为 5 条 claims，无数量膨胀；末版 c1-c4 来源通过，c5 因所引证据未支持其 Agents API 文档存在性括注而拒绝。完整事实覆盖、独立汇总、最终核验与独立用户评分均未到达。拆分、复合识别和独立缺项识别仍零调用，删除没有被模型选择。
+
+[末端责任审计](../../.tmp/research-convergence-integration-20261001/target/terminal-boundary-audit.json)保存第 29、30 回合实际选证、写作和反馈：两份动作的当前 `base_ref` 及 `c5.f11` 首尾 ID 均合法，正文修改保留原引用，但本轮选证未覆盖所有保留引用。第 29 回合缺 11 个坐标，第 30 回合补齐其中 10 个后仍漏 `d4:1074`，两次准入拒绝均零写入，第 16 版未生成。给定全部已返回保留引用时，同一实际 ID 动作可绑定；这是确定性责任边界回放，未注入正式运行，也未计语义通过。最早未恢复边界为选证与保留引用的修订交接，既有准确坐标反馈和停止次数均保持。
+
+[来源完整请求审计](../../.tmp/research-convergence-integration-20261001/target/source-consistency-audit.json)计 46 次来源响应、19 个不同观察器请求、27 次精确重复及 3 组通过／拒绝冲突；1 份原始输出在 JSON 后附加内容，未计原始语义判决。比较包含 method、operation、version、messages、Schema 和 extra_body，不宣称全部 HTTP 字节相等。一致性归因由[对应问题](../optimization/claim-verifier-consistency.md#2026-10-01-真实接入复验)拥有。相比前次坐标反馈 target，实际 ID 修改推进到第 15 版及 c5，但调用数和耗时更高，完整用户结果同为失败；两条独立随机轨迹且本轮接入三项机制，不构成任何单项成本消融。
+
+## 2026-10-01 修订引用继承与 Verifier 审查
+
+本轮先恢复 evidence-first 修订中的已有引用契约，再只读审查 Verifier。原正式入口第 29、30 回合的两份合法 ID 动作，因保留引用没有在本轮全部重选而被拒。[原失败反事实](../../.tmp/research-retained-reference-repair-20261001/retained-replay.json)保持实际动作、选择与来源：旧检查拒绝 2/2，现行准入接受 2/2；新增未选引用、其他 claim 引用、缺行范围及不可见来源四项拒绝边界保持零写入。回放新增模型调用为 0，不计 Product E2E。机制由[引用继承完成记录](../optimization/completed/claim-retained-references.md)拥有。
+
+原 `evals/product_baselines/test_conversation_research_review_001.py` 显式收集并运行 1 项，以原中文自然表达、空资料、正式 `POST /api/conversation/turn`、生产组合根及真实模型执行 1×1 target。[预声明](../../.tmp/research-retained-reference-repair-20261001/plan.json)和[冻结身份](../../.tmp/research-retained-reference-repair-20261001/target/identity.json)固定 `mimo-v2.6-flash`、thinking 开启、JSON Object、来源模板 v3、2,000,000 tokens／32 决策回合／48 工具预算、480 秒单次模型超时、7,200 秒入口等待，以及原用户结果和独立语义评分。改动为 3 个生产文件、净增 10 行，新增持久字段、模型、Port、生产开关及投影额外模型调用均为 0；eval 代码未变，运行期间源码保持。
+
+[原始正式结果](../../.tmp/research-retained-reference-repair-20261001/target/evidence/conversation-research-delivery-001/target/20261001T023242.633029Z-15204-6de0044f/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)为 `0/1`，disposition=`None`，入口错误为 `{'message': 'timed out', 'status': None, 'type': 'TimeoutError'}`。入口耗时 7200.0403 秒，完整运行 7230.68 秒，进程退出 1；原始失败保留，不由机制检查点覆盖。研究首版 9 条、末版 9 条，共 13 版；事实覆盖请求 0 次。最终消息和独立评分是否执行、末端审核及反馈均逐字保存在[最终审计](../../.tmp/research-retained-reference-repair-20261001/target/final-audit.json)，未到达阶段不计通过。
+
+末端位置是第 13 版 c1 的来源报告恢复：第一次响应长度截止且正文为空，恢复请求尚未返回时入口等待到限；本版 c1 没有有效判决。最后已提交审核为第 12 版 c1、c2 空 findings，c3 因对“相关要求”范围的全称解读被拒，随后模型合法修改 c3 形成第 13 版。第 11 版曾推进到 c6，其服务器／宿主校验分布及原文否定被拒；本次最多核验到 c6，c7-c9、事实覆盖、独立汇总、最终核验及独立用户评分均未到达。没有把在途空正文称为语义拒稿，也没有发生继承引用重选的准入阻塞。
+
+[实际 writer 审计](../../.tmp/research-retained-reference-repair-20261001/target/writer-view-audit.json)核对 13 次请求，其中 10 次收到未重选的已绑定原文，目录与 Schema 使用相同坐标范围。[实际修订消费](../../.tmp/research-retained-reference-repair-20261001/target/admitted-fragment-audit.json)核对 11 次片段修改，范围外正文、引用和其他项保持；9 份新完整正文到达来源核验，5 次修改保留未全部重选的目标引用。第 4 版 c1 保留 2 个未重选引用而合法修订，旧检查会拒绝，是正式生产消费者的决定性反例。另有 1 次引用修改，新增坐标经过选择。
+
+最后已提交 Journal 保存 59 次 typed 操作、19 决策回合、10 工具，输入 920759、输出 256995、total 1177754 tokens。Provider 响应 ID 去重计 76 份完成响应，输入 922884、输出 265187、total 1188071；逐分项与最后 Journal 对齐为 `False`，整体对齐检查没有通过。差额 10,317 tokens 全部来自最后提交之后的 `0147` 长度截止响应：该 typed 操作正在 `0149` 格式恢复中被入口超时中断，尚未返回或提交；提交前响应合计与 Journal 三项精确相等。未完成请求的额外消耗未知，不填零用量，不将最后快照写成完整终态账。物理响应和 typed 操作的计数单位不同，内部修复及重试聚合为一次返回。[自然恢复审计](../../.tmp/research-retained-reference-repair-20261001/actual-retry-usage-audit.json)中，六份真实完成响应的 56,167 tokens 全部进入一次 typed 操作的 Journal 增量。
+
+[原始 SDK 来源审计](../../.tmp/research-retained-reference-repair-20261001/target/sdk-source-report-audit.json)含现有内部修复及重试，共 42 份完成、23 个不同完整 kwargs，另 19 次精确重复；可解析空报告 14 份、非空报告 12 份，不可解析 16 份，其中长度截止 16 份、空正文 15 份。2 组完整 SDK 输入同时出现有效通过／拒绝，5 组同时出现有效报告／不可解析输出；两类分别计数，原始结构失败没有语义判决。全部实发来源请求 thinking 开启，原始 reasoning 保留。历史三组共七份实际响应及本轮新增冲突的语义归因由[判决边界审查](../optimization/claim-verifier-consistency.md#2026-10-01-修订修复后的判决边界审查)拥有；分析额外模型调用为 0，生产 Verifier 未改。
+
+拆分、复合识别和独立文档缺项识别继续停用，单条删除保持可用；不以可调用代替自然使用证据。前次同任务为 0/1、3,897.462197 秒、1,618,551 tokens；本次为另一条随机轨迹，结果、时间和成本只作描述，不作为单项收益消融。原用户结果未通过时不增加发布分子。未运行 unit 或 `tests/`；实际命令、源码身份、文档检查及完整原始归档见[本轮报告](../../.tmp/research-retained-reference-repair-20261001/REPORT.md)。
+
+
+## 2026-10-01 来源报告复用与结构化修订反馈
+
+按[预声明](../../.tmp/research-source-reuse-repair-20261001/plan.json)只运行原 `evals/product_baselines/test_conversation_research_review_001.py` 的一个样本一次。原中文自然表达、空资料、正式 HTTP、生产 Composition Root、真实模型与工具及原独立评分保持；`mimo-v2.6-flash`、thinking 开启、JSON Object、2,000,000 tokens／32 回合／48 工具、480 秒模型超时／7200 秒入口等待与上一 baseline 一致。生产改动仅两项机制涉及的 5 文件，净增 144 行；2 个反馈契约模型、1 个瞬时投影、1 个报告版本字段，无新模块、Port、持久缓存、开关或每次编辑的额外模型轮次。运行期间源码及 eval 身份保持。
+
+[原始正式结果](../../.tmp/research-source-reuse-repair-20261001/target/evidence/conversation-research-delivery-001/target/20261001T060858.358399Z-15980-965eb4df/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)为 `0/1`，pytest `1 failed`（5246.44 秒），正式入口 5042.256882 秒返回 `answer`，无入口异常。7 条 claims 保持 13 版，19 次来源模型请求均形成合法报告，第 13 版完整研究覆盖通过；3 次独立汇总稿及 3 次最终核验后形成有效通过 receipt，Completion 接受同一稿。原独立 grader 的 6 份响应全部 `length`、空正文，每份输出额度 1200；未形成有效评分，不算答案语义拒绝，也不把内部通过改写为用户 E2E 通过。[完整审计](../../.tmp/research-source-reuse-repair-20261001/audit.json)保留原断言及原始评分失败。
+
+生产 Provider 完成 66 次，输入 1,052,518、输出 142,461、total 1,194,979 tokens；独立 grader 6 次共 32,346 tokens，总已完成用量 1,227,325。Journal 为 62 次 typed 操作、28 回合、23 工具和 1,143,604 tokens。直接模型的 63 份响应与 Journal 三项相等，3 次最终核验工具的 51,375 tokens 未交回总账，见[成本逐分项审计](../../.tmp/research-source-reuse-repair-20261001/cost-audit.json)及[独立用量问题](../optimization/tool-model-usage-handoff.md)。本次所有已发请求已完成，不把差额归为在途请求。
+
+真实修订反馈被 12 次 writer 请求消费；12 次修改均核验完整新 claim，其中 9 次正文片段修改、3 次引用修改。来源报告复用的责任边界由[固化记录](../optimization/completed/claim-source-review-reuse.md)拥有；支持范围反馈的收益、再次新增无据声明和后续设计由[候选结果](../optimization/to_verify/claim-supported-scope-repair.md#2026-10-01-真实反馈消费结果与下一设计边界)拥有。最终前两份报告的验收项转录失败由[独立问题](../optimization/final-criterion-transcription.md)拥有。拆分、复合识别和独立缺项识别继续零调用，删除未被选择。
+
+与上一封存正式轨迹相比，来源物理完成 42→19，生产完成 76→66；从未到达覆盖与最终稿，推进到返回答案。生产已知 tokens 1,188,071→1,194,979，未下降；决策回合 19→28，工具 10→23；前次入口超时7200秒，本次返回5042秒。两次独立随机轨迹且本轮两项机制一起变化，以上只是描述，不作为成本或延迟的单变量消融。原用户结果两次均 `0/1`。本轮不运行 `tests/`，实际命令、脚手架修正、全部代码身份及检查由[封存报告](../../.tmp/research-source-reuse-repair-20261001/REPORT.md)拥有。
+
+
+## 2026-10-01 独立评分器输出预算恢复
+
+用户授权“如果需要则扩大预算”。本次仅调整 `evals/e2e_quality/research_answer_outcome.py` 的请求版本和输出上限：v5／1200 → `research-answer-task-support-zh-v6-thinking-budget`／32768。Prompt、Schema、通过条件、原用户输入、原完整答案、原参考集、模型、thinking 开启、JSON Object、重试与480秒模型超时保持。src 及其他 eval 文件字节未变；改动1文件2行，无新增生产结构、字段或开关。计划与独立身份见[本轮预声明](../../.tmp/research-grader-budget-20261001/plan.json)。
+
+[真实原请求诊断](../../.tmp/research-grader-budget-20261001/diagnostic/result.json)为1样本×1次，通过正式共用评分器消费上一 E2E 真正交付的完整答案。完整 SDK 参数除 `max_completion_tokens: 1200 → 32768` 外逐字段相同。[实发审计](../../.tmp/research-grader-budget-20261001/audit.json)记录1次 Provider完成，`stop`，有合法评分，无修复和重试；40.221784秒，输入4157、输出5117、总9274tokens，其中服务方记录推理4204tokens，原始reasoning保留。报告可完成性为1/1，语义通过为0/1；两者分别计分。原v5六次`length`空正文及正式E2E 0/1不追溯改写。
+
+有效报告指出客户端结果校验、服务器安全要求等缺项，但同时对参考集中没有的 `tools-connectors-mcp` 和 MCP规范入口判缺确认依据，并把 `strict`、`allowed_tools` 等细节列为必交付项。人工审查区分用户相关缺项、参考覆盖不足、额外验收要求及句内/全页范围差异；具体判据由[资格问题](../optimization/research-grader-qualification.md)拥有。没有把这份报告的所有意见直接裁定为生产错误。
+
+按预声明及 QLT，在出现独立评分资格问题后停止新增付费样本；相邻控制0/2、新正式target 0/1，均未执行。此次是原失败评分责任边界恢复，不是第二条研究 Product E2E；没有重新运行生产研究、修改评价规则或答案。本次固定输入恢复已证明预算修复，机制见[固化记录](../optimization/completed/research-grader-output-budget.md)。实际命令、源码身份和静态检查见[本轮报告](../../.tmp/research-grader-budget-20261001/REPORT.md)，当前发布分子保持0。
+
+
+## 2026-10-01 评分资格候选的范围归类反例
+
+本轮评测层候选 `research-answer-task-support-zh-v7-goal-grounded` 尝试缺项绑定用户原话、人工事实摘要替换为五页带坐标官方原文、将评分依据缺口与已确认错误分离，并在共用 E2E 消费者记录三态。生产 src、原中文 goal、mimo-v2.6-flash、thinking 开启、32768 输出额度及生产预算保持。完整预声明、候选代码及原始输入由[本轮报告](../../.tmp/research-grader-qualification-20261001/REPORT.md)拥有。
+
+[真实模型资格结果](../../.tmp/research-grader-qualification-20261001/diagnostic/summary.json)执行 2/9：完整正例语义通过；旧真实答案被判 failed，核心缺项仍为客户端校验和服务器访问控制，但范围归类审查失败。资格正确 1/2；8 个控制执行 1/8，旧实际答案执行 1/1。两次均 stop、无重试，总 44,770 tokens；分别为 18,357／52.750807 秒与 26,413／209.301891 秒。每个实际请求只含原目标、实际答案和参考原文，人工标签与生产核验结论未入模型。
+
+报告将评分者可见整页误用于作者引用片段的范围，错误判取证声明；还为答案已经明确保留的未知列出评分缺证。预声明首个资格反例后停止：剩余 7 个控制及新正式 E2E 0/1 均未执行。未改标签、增加预算、重跑或叠加同向 Prompt 补丁。3 个 eval 源码和 2 个 fixture 已[逐字恢复本轮开始前工作树](../../.tmp/research-grader-qualification-20261001/rollback.json)，候选源码在独立归档中保留，现行评分器为 v6，资格问题继续开放。
+
+Ruff、规范、候选校准收集、正式目标单项收集、影响路由与范围文档检查分别记录，不将静态通过写成语义通过。原评分与 Product E2E 0/1 身份保持，未执行新的研究产品轨迹或停用单元测试。下一边界见[评分责任复核](../optimization/research-grader-qualification.md#本轮结果与下一责任边界)。
+
+## 2026-10-01 用户事实逐项覆盖与停止研究
+
+按[预声明](../../.tmp/research-goal-coverage-20261001/plan.json)修复既有覆盖漏放，3 个生产文件净增 16 行：逐项问题、当前 claim、状态和反馈替换平坦布尔报告，整体充分性由 Runtime 推导，writer 消费该唯一契约。未增加模块、Port、持久缓存或每次编辑的模型轮次。4 个固定局部控制各执行一次，判决正确 4/4，共 12,703 tokens、127.259119 秒；来源已通过为条件，实际请求与范围由[局部审查](../../.tmp/research-goal-coverage-20261001/offline-review.json)拥有。
+
+局部资格成立后，原 `evals/product_baselines/test_conversation_research_review_001.py` 的正式中文自然表达、空资料、HTTP 入口、生产 Composition Root、真实模型及工具连续运行一个样本一次。`mimo-v2.6-flash`、thinking 开启、JSON Object、480 秒模型超时、2,000,000 tokens／32 回合／48 工具与7200秒入口等待保持；原用户结果、v6 grader 和暂停机制未改。[正式结果](../../.tmp/research-goal-coverage-20261001/target/evidence/conversation-research-delivery-001/target/20261001T141624.219242Z-12972-25805fc1/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)为 **0/1**，pytest `1 failed`、2898.79 秒；入口无异常，2883.047997 秒返回 `limitation`，未交付 `answer`，grader 未执行。
+
+10 条 claims 保持到第 15 版。第 14、15 版各有 8 项覆盖报告，均因 OpenAI 侧自动 schema 校验行为尚未取得证据而不足。4 次 selector 与 2 次 writer 请求收到逐项反馈，补查 4 次后 c7 合法修订并取得来源支持；最后 writer 提交 `stop_research`，理由却要求交给成文。Runtime 按既有动作契约返回限制消息，未进入独立汇总和最终核验。目标细化范围、未知满足条件及停止动作的责任审查见[候选结果](../optimization/to_verify/research-goal-coverage.md#2026-10-01-实际消费与停止边界)，局部反馈消费不计为用户通过。
+
+Provider 响应 ID 去重完成 72 次，其中来源核验27、覆盖2；来源报告11份空 findings、13份非空 findings，另3份 length 空正文没有语义判决。生产输入1,046,295、输出135,551、total **1,181,846 tokens**，与最终 Journal 三项精确相等；Journal 计69个 typed 操作、26回合、12工具。运行未耗尽累计预算或入口等待；全部请求 thinking 开启，原始 reasoning 保留。与上一正式轨迹的调用、耗时和成本差异仅作描述，两条随机轨迹不构成消融。
+
+源码在运行期间保持，原 eval 未变，暂停的 split、复合识别与独立文档缺项识别均未调用。Ruff、编译、分层、规范、差异及文档检查见[本轮报告](../../.tmp/research-goal-coverage-20261001/REPORT.md)。本次影响路由要求完整矩阵；只执行原 target 迭代，完整发布矩阵未运行，工作树仍 dirty，发布分子不增加。候选继续待验证，本轮未追加模型样本、修改评分规则或运行停用单元测试。
+
+## 2026-10-02 目标绑定与原文范围的局部反例
+
+原用户目标、`mimo-v2.6-flash`、thinking、JSON Object、480 秒模型超时、原 v6 评分器及结果契约保持。两轮均预声明局部全部正确并人工核对后，才跑原 `test_conversation_research_review_001.py` 一次。
+
+仅 claims 的目标绑定候选，两个有效语义输入正确 1/2：第 15 版范围误判纠正，全量删除客户端职责后仍放行。初始只删 c6、c10 仍含同一职责的控制负标签错误，原调用保留；修正后 3 次服务拒绝没有判决，诊断恢复后取得有效反例。已完成用量 19,236 tokens。
+
+补当前引用原文的正交候选执行 4/6，布尔判决正确 3/4；必要性和原项映射人工合格 2/4，54,971 tokens。客户端删除例虽拒绝，但反馈又要求确认未必答的 API 自动 schema 校验；旧真实不完整稿仍放行。第 15 版及相邻控制原文 45 个坐标、4,500 字符，旧稿当前引用原文 23 个坐标、5,190 字符，没有客户端校验及服务器安全列表。尚未证明按目标独立选材可解决该回归。
+
+候选均按起点逐字撤回，8 个生产/eval 文件恢复，用户原有改动保留；新增闭合编号、源依据和原文输入均没有保留生产双轨。来源支持、报告复用、URL 绑定及暂停机制保持。两份 target 各 collect-only 1 个既有用例，新的 Product E2E 执行量为 0；局部门禁失败，原正式 E2E 0/1 保持，不将局部状态代入产品分子。工程 Ruff、编译、分层及规范检查通过，完整发布矩阵未执行。
+
+原始输入、输出、候选源码、撤回身份及成本见[目标绑定归档](../../.tmp/research-coverage-goal-binding-20261002/phase1-result.json)与[原文范围归档](../../.tmp/research-coverage-source-boundary-20261002/result.json)；当前设计及停止条件由[优化记录](../optimization/to_verify/research-goal-coverage.md)拥有。全部已完成响应合计 74,207 tokens；无可用 usage 的服务拒绝请求用量未知。该组为固定历史输入的 Offline Eval，不计完整自主研究成功率，不声明可发布。
+
+## 2026-10-02 研究目标对照与反馈适用性验证
+
+本组优先验证研究模型对原用户 goal 的逐项取证及修订，使用同轨迹历史来源和当前稿的固定局部输入。`mimo-v2.6-flash`、thinking 开启、JSON Object、480 秒模型超时、原评分器及所有生产核验保持。两候选分别预声明 3 个样本各一次、350,000 tokens / 2400 秒；局部全部合格后才执行原正式 E2E 一次，正式预算保持 2,000,000 tokens / 32 回合 / 48 工具 / 7200 秒。预声明及责任边界由[优化记录](../optimization/to_verify/research-goal-coverage.md#2026-10-02-研究目标对照验证预声明)拥有。
+
+第一候选为原冻结验收的只读编号、逐项 need 状态与当前 claim 绑定；执行 1/3，协议有效 1/1、语义资格 0/1，35,766 tokens / 88.42 秒。全部 11 项已返回，仍把 API 自动 schema 校验升级为原目标必须补证，writer 未执行。完整输入审计发现 4 条历史 `research_needs_evidence` 自述仍进入当前研究视图；原始反例及撤回身份保存在[第一候选结果](../../.tmp/research-goal-accounting-20261002/result.json)。
+
+第二候选在同一契约上仅移除研究视图的既往取证自述，普通动作仍消费其取证请求，最新适用 ResearchReview 保留。执行 3/3，协议有效 3/3、语义资格 2/3：已返回客户端条款的删除例实际选择原文并修订 c6，准入接纳，完整修改项来源通过；原第 15 版范围反馈控制合格。旧真实 7 条稿仍被判完整结果校验回答，没有针对尚未进入可引用窗口的客户端条款提出补读；最后一例拒绝候选资格，停止同向补丁。5 个已完成 Provider 响应，共 127,572 tokens / 250.67 秒，包括 3 次选择、1 次 writer 及 1 次来源核验。[原始结果及代码身份](../../.tmp/research-repair-context-20261002/result.json)保持原样。
+
+第二候选 3 文件净增 51 行，使用一个只读验收投影及已有 need 字段，无新增存储、模型轮次或开关；失败后 3 文件逐字恢复本组开始时源码，保留既有工作树改动。真实调用连续消费只覆盖第一个样本的选择、写作、准入及修改项来源边界，其他两例是 selector 责任边界，不计 Product E2E。原 target 只收集 1 个用例、新正式 E2E 执行 0；局部预声明门禁未过，原用户结果 0/1 保持。完整发布矩阵、停用单元测试均未执行。
+
+本组 6 个 Provider 响应按 ID 去重，已完成用量 163,338 tokens，模型阶段共 339.09 秒，thinking 全部开启。[完整 SDK 审计](../../.tmp/research-repair-context-20261002/failure-input-diagnosis.json)区分原抓取页、卸载后 retrieval 入口及实际返回坐标：旧页快照含客户端条款，实发消息没有该原文；545 条读窗记录合并为 541 个唯一坐标。该反例证明当前研究组合仍漏判必要取证，新读取机制的收益需另取反事实。静态检查、逐字恢复、文档链接及完整归档见[报告](../../.tmp/research-repair-context-20261002/REPORT.md)，无新增用户交付通过分子。
+
+## 2026-10-02 研究与覆盖联合优化的正式验证
+
+按用户要求同时保持研究模型与 Verifier 优化。原中文自然请求、空资料、HTTP、生产 Composition Root、真实模型和工具运行一个样本一次；没有中间状态注入。mimo-v2.6-flash、thinking、JSON Object、480 秒模型超时、原 source v1 / final v2 / grader v6、2,000,000 tokens / 32 回合 / 48 工具 / 7200 秒 HTTP 保持。方案及停止条件由[联合预声明](../optimization/to_verify/research-goal-coverage.md#2026-10-02-研究与覆盖联合优化预声明)拥有。
+
+三个固定历史 Offline 条件各一次，协议有效 3/3，语义资格 2/3。第 15 版充分稿通过；删除客户端职责的同源反事实经实际 coverage → selector → writer → admission → 修改项 source → coverage 复验恢复。旧未读条款稿仍被覆盖放行，后续补读消费者未到达，不追加人为 selector。共 8 个已完成 Provider 响应、224,521 tokens、238.40 秒；首个控制完整 SDK 响应采集缺失，实际生产消息、Schema、返回正文及用量保留，其余 7 个有完整实发记录。见[局部汇总](../../.tmp/research-joint-goal-20261002/offline-summary.json)。
+
+[原正式结果](../../.tmp/research-joint-goal-20261002/target/evidence/conversation-research-delivery-001/target/20261002T042128.787974Z-24260-f93db955/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)为 **0/1**，pytest `1 failed`、2883.25 秒；入口 2846.956284 秒返回 HTTP 503，没有答案。停止前是第 9 版、9 条 claims，c1、c2 来源支持通过，c3 的修订否定范围仍被拒；c4-c9、覆盖、汇总、最终核验和独立 grader 未到达。直接停止原因为下一 writer 请求及两次重试连续 Provider 429，细分拒绝原因未取得；没有耗尽累计预算、32 回合或 HTTP 等待，服务中断与未解除来源问题分别计分。
+
+Provider 按 ID 去重完成 **45** 个生产响应，输入 753,493、输出 147,696、合计 **901,189 tokens**；另外 3 个 writer 429 请求无 available usage，用量保持未知。已提交 Journal 前缀为 37 个 typed 操作、16 回合、14 工具、864,407 tokens。差额输入 32,440、输出 4,342、合计 **36,782 tokens** 精确等于末次合法选证，它已在内存计量，但 writer 失败发生在下一提交前。该既存独立缺口由[选证提交问题](../optimization/research-selection-usage-commit.md)拥有，不据 HTTP 失败 Trace 中的默认 total=0 计算真实成本。完整等式、前后源码及实发请求由[结果审计](../../.tmp/research-joint-goal-20261002/result.json)拥有。
+
+全部 45 份正式响应 thinking 开启，reasoning 原样封存。15 份来源物理响应对应 11 个绑定单元，11 份正式语义报告为 2 空 findings、9 非空 findings。4 份物理响应 length，其中来源 3 份；另有一份 source stop 响应混入异常内容、不符合 Schema，经原恢复处理。相同绑定单元未观察到有效通过/拒绝冲突；一份原始请求重复来自恢复，不是对未改通过项的重新核验。工具实际为 web_search 2、web_read 2、read_artifact 2、search_action_output 8；后 8 次是来源身份关键词检索，不按工具成功视为阅读完成。split、复合识别及独立文档缺项识别零调用，删除未被模型选择。
+
+两侧组合按[保留决定](../optimization/to_verify/research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)保持于目标代码，局部及原用户结果分开；正式覆盖消费未到达，不能宣布整链改善。四生产文件净增 99 行，运行期间源码不变，原 eval、评分器及 fixture 未修改。静态、文档及封存见[报告](../../.tmp/research-joint-goal-20261002/REPORT.md)。完整发布矩阵与停用单元测试未执行，发布分子不增加，局部及独立随机轨迹差异不作成本消融。
+
+## 2026-10-02 MiMo 诊断补齐后的正式验证
+
+本轮只扩展现行 Provider 异常与日志，四个生产文件新增 68、删除 1 行，净增 67；研究 selector v6／writer v15、覆盖 v5、source v1／final v2／grader v6、原中文自然请求、模型、thinking、预算及暂停机制保持。两个代表性 SDK 429 失败链回放各一次，本轮前源码诊断合格 0/2、候选 2/2，付费调用 0；真实 SDK、Adapter、retry 与 Conversation 连续消费同一返回，详见[诊断候选](../optimization/to_verify/model-provider-diagnostics.md)。
+
+原 `evals/product_baselines/test_conversation_research_review_001.py` 自空资料、HTTP、生产 Composition Root 及真实模型连续执行一个样本一次。[原始正式结果](../../.tmp/mimo-provider-diagnostics-20261002/target/evidence/conversation-research-delivery-001/target/20261002T063936.525977Z-27992-54174d26/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)为 **0/1**，pytest `1 failed`、4723.05 秒；入口 4709.596073 秒无异常返回 limitation，达到 32 回合，没有交付 answer，独立 grader 未执行。全部 93 次 MiMo 请求为 200，实际 Provider 错误检查点未触发，上次 429 细分原因仍未知。
+
+八条 claim 保持到第 19 版并全部取得来源支持。31 次来源物理响应对应 26 个实际绑定报告：8 份空 findings、18 份非空；另 5 份 length 空正文没有判决。覆盖第一份原始报告识别三个用户相关缺口，但字符串引用触发 38 项类型错误；结构恢复在相同业务输入上改为九项 covered、两项 delivery_check，缺口未送入研究修订。事实、实发输入和原文依据由[覆盖恢复问题](../optimization/to_verify/research-goal-coverage.md#2026-10-02-覆盖结构恢复抹除缺项反馈)拥有。
+
+五次最终报告都未形成有效回执：前四次各十二项 satisfied，但忠实性 criterion 漏了中文句号；第五次仍漏句号并改写另一项文字，还带一项原始 insufficient_evidence。Runtime 按逐字集合拒绝，详见[验收项转录问题](../optimization/final-criterion-transcription.md#2026-10-02-正式轨迹重复转录失败)。c8 新正文未同步引用、后续独立改引用的连续结果见[修订子问题](../optimization/to_verify/claim-supported-scope-repair.md#2026-10-02-新增事实未随正文绑定引用)。这些原始响应均保留，不用结构恢复或较早 satisfied 覆盖原始失败。
+
+Provider 响应 ID 去重完成 93 次：intent 1、agent turn 30、selector 24、来源 31、覆盖 2、最终核验 5。实际输入 1,767,488、输出 245,534、合计 **2,013,022 tokens**，全部请求完成且 thinking 开启、reasoning 保留。Journal 为 79 个 typed 操作、32 回合、18 工具、1,945,314 tokens；差额输入 57,431、输出 10,277、total 67,708 精确等于五次最终工具模型响应，见[工具用量交接](../optimization/tool-model-usage-handoff.md#2026-10-02-最终契约失败调用仍有漏计)。六次 length 分别为来源五次、selector 一次，单次输出上限均 8192；结构恢复响应仍计成本。
+
+工具为 web_search 4、web_read 2、read_artifact 3、search_action_output 4、verify_interaction_draft 5；拆分、复合识别、独立文档缺项识别均零调用，删除未被选择。运行期间源码与原 eval／fixture 身份保持。本次相对上一轨迹推进到覆盖与最终汇总，调用 45→93、已知 tokens 901,189→2,013,022、入口耗时 2847→4710 秒；独立随机轨迹只作描述，不归因于诊断改动。静态检查、完整请求与封存由[本轮报告](../../.tmp/mimo-provider-diagnostics-20261002/REPORT.md)拥有；原评分、完整发布矩阵与停用单元测试未运行，发布分子保持。

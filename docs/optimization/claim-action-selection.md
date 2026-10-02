@@ -10,7 +10,7 @@
 
 ## 后续边界
 
-本问题先保留为诊断事实，没有另加工具或 Prompt 候选。下一次获准连续验证应保留[当前范围约束](to_verify/claim-argument-scope.md)、[错误回传](to_verify/claim-parameter-recovery.md)和[字段独立修订](to_verify/claim-evidence-revision.md)，审查阶段说明、当前集合与核验版本在实际输入中的关系，并记录错误反馈后是否回到合法局部动作。不得用允许重建整稿绕过此拒绝，也不先清除已有正确成果。
+本问题先保留为诊断事实，没有另加工具或 Prompt 候选。下一次获准连续验证应保留[当前范围约束](completed/claim-argument-scope.md)、[错误回传](to_verify/claim-parameter-recovery.md)和[字段独立修订](to_verify/claim-evidence-revision.md)，审查阶段说明、当前集合与核验版本在实际输入中的关系，并记录错误反馈后是否回到合法局部动作。不得用允许重建整稿绕过此拒绝，也不先清除已有正确成果。
 
 这次属于隔离协议选择失败，不是旧生产完整重写入口重新出现，也不是已有引用转换或反馈绑定失效。尚无独立根因证据，不扩张为新的生产实现或产品准入项。
 

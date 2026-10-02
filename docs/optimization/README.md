@@ -29,12 +29,21 @@
 | 导航混入正文与后续取证成本 | [正文边界第 110 节](source-extraction.md#110-唯一主区域选择的保真与正式消费验证)；后续条件审计见[取证第 111 节](evidence-acquisition.md#111-重复搜索结果与目标化读取的准入审计) |
 | 计划完成后仍取证、未提交 Final | [第 108 节整体生命周期修正](revision-feedback-loop.md#108-plan-生命周期整体修正)；包含旧提示候选失败、统一设计、组合恢复与正式验收记录 |
 | 动作协议拒绝如何有界恢复 | [Conversation 动作协议恢复](completed/conversation-action-protocol-recovery.md) |
+| 研究引用未选时如何返回准确坐标 | [确定性坐标反馈](completed/research-admission-coordinate-feedback.md) |
+| 局部修订如何继承已有引用及原文 | [引用继承完成记录](completed/claim-retained-references.md) |
 | Final 结构校验失败应如何归因 | [第 112 节原始响应与结构修复输入审计](action-final-protocol.md#112-final-原始响应与结构修复输入审计)；保留原失败，区分格式交接与来源支持 |
 | 拒稿后如何复用已有检索结果 | [第 115 节完整查询交接与 Context 正式接入](evidence-acquisition.md#115-完整查询交接与-context-重组的正式接入验证)；执行事实、局部行为与最终交付分别验收 |
 | 当前能否识别示例扩大为普遍必须 | [第 114 节最小复验](answer-object-mismatch.md#114-当前局部-verifier-识别-iserror-普遍义务的最小复验)：先判断单项识别能力，不要求单轮找齐全部错误 |
 | 查询条件为何不会再丢失或混入引用 | [搜索执行参数保真交接](completed/query-execution-handoff.md) |
 | 多错误如何逐轮识别与修复 | [多错误的渐进核验与修订](completed/multi-error-verification-revision.md) |
 | 研究 claim 收到反馈后为何反复编辑却不收敛 | [反馈修订无法收敛的整体问题](claim-revision-nonconvergence.md)；具体待验证方案见[候选索引](to_verify/README.md) |
+| writer 失败前已经完成的选证成本为何未持久化 | [选证用量提交问题](research-selection-usage-commit.md)；与工具内部用量及失败重试计量分别归因 |
+| 当前研究参数范围如何进入真实 Schema | [参数范围完成记录](completed/claim-argument-scope.md) |
+| 重试失败响应用量为何丢失 | [重试计量完成记录](completed/model-retry-usage.md) |
+| MiMo 429 的具体原因为何无法定位 | [Provider 失败诊断交接](to_verify/model-provider-diagnostics.md) |
+| 独立评分器为何无输出、有效评分是否可信 | [输出预算固化记录](completed/research-grader-output-budget.md)、[评分资格审查](research-grader-qualification.md) |
+| 已有事实是否回答原用户问题、未知能否满足目标 | [逐项用户事实覆盖及停止边界](to_verify/research-goal-coverage.md) |
+| 模型重抄待编辑正文为何导致修订被拒 | [编辑目标抄写问题与 Runtime 片段寻址](completed/claim-fragment-addressing.md) |
 | 被拒稿为何需要交回完整正文与逐段引用 | [完整基稿交接](completed/complete-rejected-draft-handoff.md) |
 | Verifier 引句绑定为何丢失有效反馈 | [调用单元绑定](completed/verifier-finding-binding.md) |
 | 逐行引用为何无法被核验器归属到官方来源 | [来源归属的独立诊断](citation-source-attribution.md) |
@@ -43,7 +52,7 @@
 | 模型决定结束取证 | [取证第 116 节](evidence-acquisition.md#116-由模型决定结束取证的契约验证) |
 | 覆盖分支触发与声明消费的下一轮预声明 | [取证第 119 节](evidence-acquisition.md#119-覆盖分支触发与声明消费的下一轮预声明) |
 | 生成侧越界的责任边界 | [取证第 120 节](evidence-acquisition.md#120-生成侧越界的最早责任边界归因) |
-| 下一候选与准入条件 | [Future 活动设计](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序) |
+| 下一候选与准入条件 | [Future 活动设计](../future/conversation-verification-false-positive.md#3-下一准入边界) |
 
 历史编号只用于证据反查，不决定新记录落点。新尝试写入对应具体问题；联合实验保留完整原始身份，各问题正文只解释自己的结论，不把独立失败追加到已解决问题。
 
@@ -107,3 +116,5 @@
 ## 记录与文档检查
 
 **更新过程记录不自动授权实现或新模型调用。** 纯文档整理核对已有证据、双向链接、问题编号、标题、表格和代码块；不为文档整理重跑付费模型或产品 E2E。规范入口变更另运行 `scripts/check_dev_spec.py`。结果强度和中文写作遵守[文档规范](../AGENTS.md)。
+
+判断输入与集合版本的失效边界经验见[来源报告复用固化记录](completed/claim-source-review-reuse.md)。

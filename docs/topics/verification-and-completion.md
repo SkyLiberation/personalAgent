@@ -40,14 +40,14 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 拥有。模型不可用时只能返回 `insufficient_evidence`、暂停或请求缺失能力，不能用 fixture、
 关键词或回答组装器生成替代“通过”。
 
-外部研究当前采用版本化 claims 作为中间产物：研究 Verifier 拥有来源支持与事实覆盖；复合论断识别 Verifier 已停用，不再生成结构诊断。事实覆盖只检查已引用 claims 的事实充分性，不判断来源 URL 是否存在或是否写入最终答案；来源网址无需再次出现在网页正文行或 claim 正文中。运行系统从已引用证据的执行来源确定性生成 `ResearchBasis.sources`，独立汇总接收该绑定并负责呈现用户要求的 URL；最终 Verifier 拥有对已核验事实的忠实性及用户结果判据。最终 Receipt 绑定当前 `research_ref`，Completion 同时校验研究版本和完整正文，研究通过不等于最终交付。普通非研究草稿继续直接对提交依据核验。装配和证据边界见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
+外部研究当前采用版本化 claims 作为中间产物：研究 Verifier 拥有来源支持与事实覆盖；复合论断识别 Verifier 已停用，不再生成结构诊断。研究选证、写作和覆盖共享冻结验收项的只读编号。覆盖接收当前 claims、全部实际返回的去重可引用读窗及执行派生读取状态，独立判断原项的必要事实关系，反馈绑定原项、当前 claim 和实际坐标；未读正文经原动作入口取得。Runtime 校验原项全集、claim 身份及引用，汇总研究充分性。URL 呈现、语言与提交过程通过 `delivery_check` 交给最终核验；来源网址无需再次出现在网页正文行或 claim 正文中。运行系统从已引用证据的执行来源确定性生成 `ResearchBasis.sources`，独立汇总接收该绑定并负责呈现用户要求的 URL；最终 Verifier 拥有对已核验事实的忠实性及用户结果判据。最终 Receipt 绑定当前 `research_ref`，Completion 同时校验研究版本和完整正文，研究通过不等于最终交付。普通非研究草稿继续直接对提交依据核验。装配和证据边界见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
 
 普通非研究候选由 Conversation 原生正文段提交引用；运行系统恢复每段全部指定的可见原文，局部 Verifier 先检查本段与依据。未引正文保留空证据，引用错误或支持拒绝返回既有循环。普通审查只取得提交引用的并集，不复制 Journal 或重新暴露未读全文。候选状态及验证边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。模型逐条产生 criterion status 与 feedback，Verifier
 adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或 `insufficient_evidence` 都聚合为 `failed`。逐判据三态与 feedback 仅供智能体诊断与恢复，运行系统不再根据失败类别重新开放或隐藏工具。汇总反馈缺失时，adapter 只从未满足 criterion 已有的 feedback 派生；逐判据反馈同样缺失时仍 fail closed。该派生不增加语义事实，也不能替代 Completion。
 
 逐行引用当前通过 `CitedEvidence.source` 保留执行记录中的 `ResourceRef`、已知来源 URL、行号及起始列；来源元数据与读取覆盖共用确定性派生入口。局部核验接收原文及来源，普通整稿语义核验还接收实际读取状态。模型仍只提交 `evidence_id`，未知 URL 为空，完整工具结果保留原有内容；来源正确不能替代原文支持。修复的局部证据及完整 E2E 限制见 [ADR 0028](../adr/0028-preserve-citation-source-binding.md)。
 
-局部支持核验使用 `interaction_verification.cited_support:v2-call-bound-unit`。模型只输出相关证据 ID 和具体支持缺口；工具以 `checked_draft` 恢复本次调用的精确段落，连同完整拒稿正文与意见交回原循环，不再要求模型抄写原句。证据 ID 仍只在当前单元校验，不作为后续成文的全局引用；空发现继续整稿核验。该候选的正式消费与证据限制见 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md)。
+普通整稿的局部支持核验使用 `interaction_verification.cited_support:v3-asserted-scope`。研究来源核验使用 `conversation.research.support:v1-bounded-feedback`，两者共享来源支持判据正文；研究 typed 反馈分别表达无据声明、已有支持范围、缺少前提和当前片段 ID，相关证据 ID 从原绑定确定性恢复给选证模型及写作者。模型先确定草稿实际主体、条件、强度及范围，再逐项核对可见依据；局部句内观察不能被扩大为全文否定，一个事实有据不能替同段其他事实放行。模型仍只输出相关证据 ID 和具体支持缺口；工具以 `checked_draft` 绑定本次精确段落，连同拒稿正文与意见交回原循环。证据 ID 只在当前单元校验；空发现继续后续核验，不证明完整用户结果。调用绑定由 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md)拥有，判别效果与限制见[范围一致性记录](../optimization/claim-verifier-consistency.md)。
 
 Conversation Verifier 当前使用 Registry 中的中文 `interaction_verification.system:v4-cited-evidence`，并固定加入 `interaction_verification.source_support:v1` 标准。模型必须逐条核对声明与实际证据的主体、条件、范围及强度；仅主题相关、URL 正确或没有发现矛盾不能替代支持。两份模板由同一工具消费，版本进入请求；JSON 输入由已有 typed 参数模型序列化，外部内容明确作为数据。
 
@@ -60,6 +60,8 @@ Conversation Verifier 当前使用 Registry 中的中文 `interaction_verificati
 当前已知限制是 Verifier 可能把标题对主题的提及误判为正文已经满足详细比较要求，Draft 与 Evidence 同次输入还会放大该错误。固定反例在当前生产 Verifier 中受控重放三次，模型每次都把只存在于 Evidence 的三项比较正文与两个 URL 当成 Draft 已有内容，五项全部返回 `satisfied`。后续来源隔离与 typed segment 绑定候选虽然阻止了 Evidence 直接进入 Draft 判断，但最终仍有一次把唯一标题 segment 绑定给三项比较正文并错误通过。二态 aggregate 的路由职责不受影响；剩余问题属于 Draft 语义判别能力，不再允许通过增加来源字段、状态或同义 Prompt 修补。
 
 ## 当前生产实例
+
+研究写作者以完整 `base_ref`、claim_id 和首尾片段 ID 指定正文修订范围；Runtime 从当前 canonical 稿恢复原文并合并。临时 typed 片段视图不写入 Journal，来源 Verifier 和独立汇总继续消费完整正文。每轮 Provider Schema 从本轮已选引用目录派生文档、连续行及部分行范围，并列出当前 claim 与片段身份；合法性仍由唯一 citation binder 和研究准入确定。
 
 研究写作者当前可用 `delete_claim` 撤回一个已有论断；准入层核对当前版本和身份，保留其余项后重新核验完整集合。独立缺项分类和覆盖反馈已暂停，普通来源支持和最终语义核验仍运行。现行边界见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
 
@@ -94,3 +96,7 @@ Verification 通过只说明某个候选结果满足相应语义标准。只有 
 - `ASK-001A`：Conversation 逐项引用互斥个人资料并明确冲突，禁止 web、跨 principal 泄漏和知识写入；
 - `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；
 - `E08`：普通回答 Claim delta 为零，显式 solidify 后才发生 Knowledge 写入。
+
+2026-10-01 引用继承契约：正文片段修订由 Runtime 保留目标 claim 已绑定引用；替换引用仅对新增坐标检查本轮选择，创建和增补的引用全部经过选择。正式写作者的引用原文目录从本轮选择与当前集合绑定的可见坐标恢复，合法编辑后的完整新版仍经过来源支持和事实覆盖。版本、claim 与片段范围、来源绑定及最终结果门禁继续由原责任主体拥有；本轮证据见[引用继承记录](../optimization/completed/claim-retained-references.md)。
+
+2026-10-01 来源报告消费契约：每次合法编辑先绑定当前所有引用，修改项核验整条正文；同次 `respond` 固定模型绑定范围内，未变正文、引用、原文与来源身份和判据版本的项消费原 Journal 最新适用报告，包括拒绝。新的调用边界及显式重验重新建立来源判断。全部项有适用通过后，仍核验当前完整事实覆盖；研究反馈不作为来源事实，修订补入的否定与解释同样须受原文支持。机制与验收分别见[来源报告复用固化记录](../optimization/completed/claim-source-review-reuse.md)和[支持范围修订候选](../optimization/to_verify/claim-supported-scope-repair.md)。

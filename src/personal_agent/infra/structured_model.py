@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from queue import Empty, Queue
 from threading import Thread
 from dataclasses import replace
@@ -35,6 +36,8 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     StructuredModelResponse,
     ModelInvocationUnavailable,
+    PROVIDER_DIAGNOSTIC_MAX_CHARS,
+    ProviderFailureDiagnostics,
     StructuredOutputFailure,
     StructuredOutputT,
 )
@@ -148,14 +151,22 @@ def _usage(response: Any) -> dict[str, int]:
             if isinstance(value, int):
                 values[key] = value
                 break
+    if "total_tokens" not in values and "input_tokens" in values and "output_tokens" in values:
+        values["total_tokens"] = values["input_tokens"] + values["output_tokens"]
     return values
 
 
 def _aggregate_usage(responses: list[Any]) -> dict[str, int]:
+    return _sum_usage([_usage(response) for response in responses])
+
+
+def _sum_usage(usages: list[dict[str, int]]) -> dict[str, int]:
+    """Keep complete component totals and the known total-token lower bound."""
     totals: dict[str, int] = {}
-    for response in responses:
-        for key, value in _usage(response).items():
-            totals[key] = totals.get(key, 0) + value
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
+        values = [usage[key] for usage in usages if key in usage]
+        if values and (key == "total_tokens" or len(values) == len(usages)):
+            totals[key] = sum(values)
     return totals
 
 
@@ -553,7 +564,43 @@ class OpenAIModelClient:
             provider_host=urlparse(self._config.base_url).hostname,
             status_code=status_code,
             retryable=retryable,
+            diagnostics=self._provider_diagnostics(exc),
         )
+
+    def _provider_diagnostics(self, exc: Exception) -> ProviderFailureDiagnostics | None:
+        body = getattr(exc, "body", None)
+        envelope = body if isinstance(body, dict) else {}
+        detail = envelope.get("error", envelope)
+        detail = detail if isinstance(detail, dict) else {}
+        response = getattr(exc, "response", None)
+        headers = response.headers if response is not None else {}
+
+        def clean(value: object) -> str | None:
+            if not isinstance(value, (str, int)) or isinstance(value, bool):
+                return None
+            text = str(value)
+            if self._config.api_key:
+                text = text.replace(self._config.api_key, "[redacted]")
+            text = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "Bearer [redacted]", text)
+            text = re.sub(r"\b(?:sk|tp)-[A-Za-z0-9_-]{8,}", "[redacted]", text)
+            text = re.sub(r"https?://[^\s<>\"']+", "[url redacted]", text)
+            text = re.sub(
+                r"(?i)\b(api[_-]?key|access[_-]?token|authorization|cookie|password|secret)"
+                r"\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"']+",
+                r"\1=[redacted]", text,
+            )
+            text = re.sub(r"[\x00-\x1f\x7f]", " ", text).strip()
+            return text[:PROVIDER_DIAGNOSTIC_MAX_CHARS] or None
+
+        diagnostics = ProviderFailureDiagnostics(
+            error_code=clean(detail.get("code")),
+            error_type=clean(detail.get("type")),
+            message=clean(detail.get("message")),
+            request_id=clean(getattr(exc, "request_id", None) or envelope.get("request_id")
+                             or headers.get("x-request-id")),
+            retry_after=clean(headers.get("retry-after")),
+        )
+        return diagnostics if diagnostics.model_dump(exclude_none=True) else None
 
     def _create_chat_completion(
         self,
@@ -589,62 +636,63 @@ class OpenAIModelClient:
         client = self._client()
         schema = request.output_type.model_json_schema()
         responses: list[Any] = []
-        chat_request = self._structured_chat_request(request, schema, parse_error=None)
-        response = self._create_structured_completion(client, chat_request)
-        responses.append(response)
-        response = self._normalize_streaming_structured_response(
-            client,
-            chat_request,
-            response,
-            responses,
-        )
-        latency_ms = round((perf_counter() - start) * 1000, 2)
-        content, parsed, parse_error = self._parse_typed_response(
-            request,
-            response,
-            latency_ms=latency_ms,
-        )
-        if parse_error is not None:
-            log_event(
-                logger,
-                logging.WARNING,
-                "llm.structured_schema_repair",
-                operation=request.operation,
-                version=request.version,
-                parse_error=parse_error[:500],
-            )
-            repair_request = self._structured_chat_request(
-                request,
-                schema,
-                parse_error=parse_error,
-            )
-            response = self._create_structured_completion(client, repair_request)
-            responses.append(response)
-            response = self._normalize_streaming_structured_response(
-                client,
-                repair_request,
-                response,
-                responses,
-            )
-            latency_ms = round((perf_counter() - start) * 1000, 2)
-            content, parsed, parse_error = self._parse_typed_response(
-                request,
-                response,
-                latency_ms=latency_ms,
-            )
-            if parse_error is not None:
-                raise StructuredOutputFailure(request.operation, parse_error)
-        usage = _aggregate_usage(responses)
-        return StructuredModelResponse(
-            value=parsed,
-            model=getattr(response, "model", None) or self._resolved_model,
-            latency_ms=latency_ms,
-            content=content,
-            input_tokens=usage.get("input_tokens"),
-            output_tokens=usage.get("output_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            raw_response=response,
-        )
+        retry_errors: list[str] = []
+        try:
+            for repair in range(2):
+                chat_request = self._structured_chat_request(
+                    request, schema,
+                    parse_error=retry_errors[-1] if retry_errors else None,
+                )
+                response = self._create_structured_completion(client, chat_request)
+                responses.append(response)
+                response = self._normalize_streaming_structured_response(
+                    client, chat_request, response, responses,
+                )
+                content, parsed, parse_error = self._parse_typed_response(
+                    request, response, latency_ms=round((perf_counter() - start) * 1000, 2),
+                )
+                if parse_error is None:
+                    usage = _aggregate_usage(responses)
+                    return StructuredModelResponse(
+                        value=parsed,
+                        model=getattr(response, "model", None) or self._resolved_model,
+                        latency_ms=round((perf_counter() - start) * 1000, 2),
+                        content=content,
+                        input_tokens=usage.get("input_tokens"),
+                        output_tokens=usage.get("output_tokens"),
+                        total_tokens=usage.get("total_tokens"),
+                        raw_response=response,
+                        retry_attempts=len(responses) - 1,
+                        retry_errors=retry_errors,
+                    )
+                if repair:
+                    raise StructuredOutputFailure(request.operation, parse_error)
+                retry_errors.append(parse_error)
+                log_event(
+                    logger, logging.WARNING, "llm.structured_schema_repair",
+                    operation=request.operation, version=request.version,
+                    parse_error=parse_error[:500],
+                )
+        except (StructuredOutputFailure, ModelInvocationUnavailable) as exc:
+            if responses:
+                usage = _aggregate_usage(responses)
+                if isinstance(exc, ModelInvocationUnavailable):
+                    # The failed transport did not provide complete usage.
+                    usage.pop("input_tokens", None)
+                    usage.pop("output_tokens", None)
+                exc.response = StructuredModelResponse(
+                    value=None,
+                    model=getattr(responses[-1], "model", None) or self._resolved_model,
+                    latency_ms=round((perf_counter() - start) * 1000, 2),
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    total_tokens=usage.get("total_tokens"),
+                    raw_response=responses[-1],
+                    retry_attempts=len(responses) - 1 + int(isinstance(exc, ModelInvocationUnavailable)),
+                    retry_errors=retry_errors,
+                )
+            raise
+        raise AssertionError("structured repair loop must return or raise")
 
     def _structured_chat_request(
         self,
@@ -723,9 +771,19 @@ class OpenAIModelClient:
         protocol_failure: StructuredOutputFailure | None = None
         action_invocations = ()
         for attempt in range(2):
-            response = self._create_chat_completion(
-                client, request.operation, self._chat_kwargs(chat_request),
-            )
+            try:
+                response = self._create_chat_completion(
+                    client, request.operation, self._chat_kwargs(chat_request),
+                )
+            except ModelInvocationUnavailable as exc:
+                if responses:
+                    exc.response = StructuredModelResponse(
+                        value=None, model=getattr(responses[-1], "model", None) or self._resolved_model,
+                        latency_ms=round((perf_counter() - start) * 1000, 2),
+                        total_tokens=_aggregate_usage(responses).get("total_tokens"),
+                        retry_attempts=attempt, retry_errors=repair_errors,
+                    )
+                raise
             responses.append(response)
             message = _require_chat_choices(response)[0].message
             try:
@@ -931,16 +989,40 @@ class RetryingStructuredModelClient:
         request: StructuredModelRequest[StructuredOutputT],
     ) -> StructuredModelResponse[StructuredOutputT]:
         retry_errors: list[str] = []
+        failed_responses: list[StructuredModelResponse[Any] | None] = []
+        start = perf_counter()
+
+        def aggregate(response: StructuredModelResponse) -> StructuredModelResponse:
+            attempts = [*failed_responses, response]
+            usage = _sum_usage([
+                {key: value for key in ("input_tokens", "output_tokens", "total_tokens")
+                 if (value := getattr(item, key, None)) is not None}
+                for item in attempts
+            ])
+            return replace(
+                response,
+                latency_ms=round((perf_counter() - start) * 1000, 2),
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                retry_attempts=response.retry_attempts + len(failed_responses)
+                + sum(item.retry_attempts for item in failed_responses if item is not None),
+                retry_errors=[*retry_errors, *response.retry_errors],
+            )
+
         for attempt in range(self._max_retries + 1):
             try:
                 response = self._delegate.generate(request)
-                return replace(
-                    response,
-                    retry_attempts=response.retry_attempts + attempt,
-                    retry_errors=[*retry_errors, *response.retry_errors],
-                )
+                return aggregate(response)
             except Exception as exc:
+                observed = exc.response if isinstance(exc, (StructuredOutputFailure, ModelInvocationUnavailable)) else None
                 if attempt >= self._max_retries or not _is_retryable_model_error(exc):
+                    if isinstance(exc, (StructuredOutputFailure, ModelInvocationUnavailable)):
+                        if observed is None and any(item is not None for item in failed_responses):
+                            previous = next(item for item in reversed(failed_responses) if item is not None)
+                            observed = StructuredModelResponse(value=None, model=previous.model, latency_ms=0)
+                        if observed is not None:
+                            exc.response = aggregate(observed)
                     if retry_errors:
                         log_event(
                             logger,
@@ -950,8 +1032,13 @@ class RetryingStructuredModelClient:
                             prompt_version=request.version,
                             attempts=attempt + 1,
                             retry_errors=retry_errors + [str(exc)[:240]],
+                            provider_diagnostics=(exc.diagnostics.model_dump(exclude_none=True)
+                                if isinstance(exc, ModelInvocationUnavailable) and exc.diagnostics else None),
                         )
                     raise
+                failed_responses.append(observed)
+                if observed is not None:
+                    retry_errors.extend(observed.retry_errors)
                 retry_errors.append(str(exc)[:240])
                 delay = self._backoff_seconds * (2 ** attempt)
                 log_event(
@@ -964,6 +1051,8 @@ class RetryingStructuredModelClient:
                     max_retries=self._max_retries,
                     retry_delay_seconds=round(delay, 3),
                     retry_error=retry_errors[-1],
+                    provider_diagnostics=(exc.diagnostics.model_dump(exclude_none=True)
+                        if isinstance(exc, ModelInvocationUnavailable) and exc.diagnostics else None),
                 )
                 if delay > 0:
                     sleep(delay)
@@ -1116,7 +1205,7 @@ class UsageRecordingStructuredModelClient:
         response = None
         try:
             response = self._delegate.generate(request)
-        except StructuredOutputFailure as exc:
+        except (StructuredOutputFailure, ModelInvocationUnavailable) as exc:
             response = exc.response
             raise
         finally:

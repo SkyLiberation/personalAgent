@@ -4,15 +4,19 @@
 
 2026-09-28：用户要求完整接入且不运行 Offline 测试。claim 主链已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)装配；目录仍保留待验证身份，生产接入不等于用户结果通过。正式验收统一见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
 
+2026-10-01 固化记录：[正文片段寻址](../completed/claim-fragment-addressing.md)、[当前参数范围](../completed/claim-argument-scope.md)、[模型重试计量](../completed/model-retry-usage.md)及[局部修订引用继承](../completed/claim-retained-references.md)。其余候选与现行停用机制仍按各自问题维护。
+
 ## 按问题找方案
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
+| `MODEL-PROVIDER-DIAGNOSTICS-001`：模型服务失败的具体诊断在异常转换中丢失 | [原研究 E2E 429 与失败边界](model-provider-diagnostics.md#失败事实与最早责任) | [有界诊断交接](model-provider-diagnostics.md) |
+| `RESEARCH-GOAL-COVERAGE-001`：用户所问事实被相关格式和取证限制替代 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[实际覆盖漏放与候选](research-goal-coverage.md) | [逐项用户事实覆盖](research-goal-coverage.md) |
+| `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：把特定主体缺证改成更广否定 | 同上；应用主体缺证反馈到任意主体缺失的真实修订 | [支持范围约束缺证修订](claim-supported-scope-repair.md) |
 | `CLAIM-WRITER-TYPED-OUTPUT-001`：首次研究提交的空集合与字符串引用导致 503 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式入口失败与局部修正](claim-writer-typed-output.md) | [研究写作者 typed 提交契约](claim-writer-typed-output.md) |
 | `CLAIM-DUPLICATE-ADDITION-001`：增补后缺少单条撤回能力 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[重复增补反例](../claim-revision-nonconvergence.md#2026-09-29-暂停拆分与复合识别的正式对比) | [单条研究论断撤回候选](claim-deletion.md) |
 | `DOCUMENT-ABSENCE-PAUSE-001`：独立缺项识别反复拒稿后的剩余保护边界 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式调用与拒绝计数](../../evals/02-current-case-inventory.md#2026-09-29-拆分与复合识别停用对比) | [独立文档缺项识别暂停候选](document-absence-pause.md) |
 | `CLAIM-EVIDENCE-SELECTION-001`：研究论断先于证据适合性判断 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[当前链路及历史错引](../claim-revision-nonconvergence.md#整体失败链与已有优化) | [先选合适证据，再生成论断](claim-evidence-selection.md) |
-| `CLAIM-ARGUMENT-SCOPE-001`：研究模型提交未返回的引用坐标 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[创建失败及实发输入](../revision-feedback-loop.md#142-正文与引用分开编辑并显式提交核验) | [动态参数范围](claim-argument-scope.md) |
 | `CLAIM-PARAMETER-RECOVERY-001`：隔离实验在参数拒绝后终止，未让研究模型修复 | 同上；[参数恢复问题](claim-parameter-recovery.md#失败事实与责任边界) | [参数错误回传](claim-parameter-recovery.md) |
 | `CLAIM-EVIDENCE-REVISION-001`：真实缺证反馈后只改写正文，引用仍不支持论断 | 同上；[单项替换结果](../revision-feedback-loop.md#141-单个完整-claim-替换与工具分层评估) | [正文与引用独立修改](claim-evidence-revision.md) |
 | `CLAIM-MULTI-PROPOSITION-001`：一个论断混合数项可独立失败的判断 | 同上；[第 15 版复合论断与第 9 次拒稿](../revision-feedback-loop.md#145-宽限制下的完整研究修订循环) | [复合论断拆分候选](claim-multi-proposition.md) |
@@ -29,7 +33,7 @@
 
 用户再次扩大上限后的[能力验证](../claim-field-tool-mixup.md#优先验证合法引用编辑能力)首次观察到合法引用修改并保持正文及其他项。随后的[完整循环验证](../revision-feedback-loop.md#145-宽限制下的完整研究修订循环)已到达主动复验、c1 局部支持通过和 c2 引用修改，但第 15 版仍被拒，下一请求前预算预检停止。完整集合未通过；此前参数混用及本轮局部收益均保留，三个候选不迁入 completed。
 
-本轮新确认的[相同输入核验不一致](../claim-verifier-consistency.md)独立记录，当前没有新增候选，不混入编辑保护或参数范围的验收。
+相同输入的判决准确性由[核验一致性问题](../claim-verifier-consistency.md)拥有；报告恢复适用性见[来源报告复用固化记录](../completed/claim-source-review-reuse.md)，反馈修订见[支持范围候选](claim-supported-scope-repair.md)。三个责任边界分别验收。
 
 第 15 版拒稿后的[拆分候选连续验证](../revision-feedback-loop.md#146-复合论断拆分工具的连续验证)没有观察到模型选择 `split_claim`，第 22 版又在已修改的 c1 被拒，预算预检阻止后续请求。拆分应用及其语义收益未到达；候选按具体问题保留，不把工具可用误记为工具有效。
 

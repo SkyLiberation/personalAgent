@@ -25,7 +25,11 @@ from personal_agent.application.conversation.observation_bounds import (
     MAX_OBSERVATION_PAYLOAD_CHARS,
 )
 from personal_agent.kernel.config import Settings, StructuredConfig
-from tests.conftest import POSTGRES_URL
+from tests.conftest import POSTGRES_URL as DEFAULT_POSTGRES_URL
+
+
+# Both dependency admission and the real HTTP child use this one endpoint.
+POSTGRES_URL = os.getenv("PERSONAL_AGENT_E2E_POSTGRES_URL", DEFAULT_POSTGRES_URL)
 
 
 pytestmark = pytest.mark.integration

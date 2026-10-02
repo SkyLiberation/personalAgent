@@ -14,7 +14,7 @@ from personal_agent.capabilities.contracts.model import (
 )
 
 
-GRADER_VERSION = "research-answer-task-support-zh-v5"
+GRADER_VERSION = "research-answer-task-support-zh-v6-thinking-budget"
 
 
 class OfficialReference(BaseModel):
@@ -112,7 +112,7 @@ def research_answer_request(
         ),
         sensitivity="public",
         temperature=0,
-        max_tokens=1_200,
+        max_tokens=32_768,
         metadata={"reference_revision": reference_set.revision},
     )
 

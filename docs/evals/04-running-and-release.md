@@ -42,6 +42,8 @@ uv run pytest evals/e2e_quality --e2e-scope=release `
 
 该命令需要真实 PostgreSQL、真实 structured model，并按 case profile 需要 Web Search、Firecrawl、GitHub MCP、Notion MCP 或 GPT Researcher A2A。skip 在强制 live 模式下会转为失败。
 
+共享 HTTP E2E fixture 默认连接本地 `15432` 的 `personal_agent_test` 数据库；主机端口不可用时，可显式设置 `PERSONAL_AGENT_E2E_POSTGRES_URL` 为真实隔离评测数据库的连接串。依赖检查与正式 HTTP 子进程消费同一地址，不使用模型或数据库替身。配置差异须进入本次运行身份；只覆盖该共享 fixture 的用例，其他支持用例的独立数据库配置不据此外推。
+
 ## 执行 diagnostic selection
 
 ```powershell
@@ -375,23 +377,20 @@ Outputs 事实正确性场景，其余两类均为 `5/5 honest_boundary`，未�
 
 ## 研究答案评测器的前置校准
 
-`RESEARCH-ANSWER-OUTCOME-001` 是历史比较任务的 Offline Eval，不是 Product E2E。其固定输入与控制保留旧任务身份；即使使用当前评分器重评，也不能证明新的 MCP 接入协作任务已校准。新增结果须独立封印，不能改写旧 pytest outcome。
+`RESEARCH-ANSWER-OUTCOME-001` 是评分器的真实模型 Offline Eval。现行源码与控制恢复 v6／旧任务身份；当前协作任务的新资格仍未成立。候选控制自带目标、标签不入模型请求的 v7 设计与代码已[独立归档](../../.tmp/research-grader-qualification-20261001/candidate-code.zip)，旧任务结果不迁入新资格。
 
-当前评分器为 `research-answer-task-support-zh-v5`，按实际用户请求判断交付及依据，不在 Prompt 或字段里固定对象、主题或比较关系。场景显式选择参考数据，通过 `ResearchAnswerReferenceSet` 传入，参考内容摘要参与正式样本的配置身份。正式研究输入已切换为接入协作，但评分指令保持通用；未执行 v5 的语义资格验证或新输入 E2E。下一次付费执行前须声明新任务适用的参考范围和正反例，不能直接继承下列旧控制的通过门槛作为新任务资格。
+现行评分器为 `research-answer-task-support-zh-v6-thinking-budget`，输出额度 32768，thinking 开启。本轮 v7 用户原话绑定、官方原文与依据缺口分离见[候选记录](../optimization/research-grader-qualification.md)。预声明 8 条控制各一次、原真实答案一次，实际 2/9 后因范围归类反例停止；v7 已撤回当前接入。[本轮归档](../../.tmp/research-grader-qualification-20261001/diagnostic/summary.json)保留完整结果与未执行分母。
 
-v3 历史上补齐 Tool choice 控制选项、MCP 规范强度，并区分事实矛盾与依据不足；曾通过 20/20 控制，但真实长答案仍有反例。旧原文、控制与失败只读保留，不能通过更换用户请求重新解释标签。以下命令与成本计划仅用于旧任务的独立诊断，不表示本次已授权或执行；当前状态见[评测体系入口](README.md)。
+v3 曾通过旧任务 20/20 控制，真实长答案仍有反例；该旧资格不迁入当前协作任务。下列当前源码命令仅收集旧控制，不启动付费样本；新的运行方案先按本轮责任反例重新准入：
 
 ```powershell
 $env:PERSONAL_AGENT_RUN_RESEARCH_GRADER_CALIBRATION = "true"
-$env:PERSONAL_AGENT_RESEARCH_ORIGINAL_ARCHIVE = "<原历史样本的密封目录>"
 $env:PERSONAL_AGENT_E2E_TRACE_DIR = "<本次独立归档根目录>"
 .\.venv\Scripts\python.exe -X utf8 -m pytest --collect-only -q `
   evals/e2e_quality/test_research_answer_outcome.py
-.\.venv\Scripts\python.exe -X utf8 -m pytest -q -s `
-  'evals/e2e_quality/test_research_answer_outcome.py::test_research_answer_outcome_calibration[1-historical-sealed-answer]'
 ```
 
-固定模型为 `mimo-v2.5`、`json_object`、关闭 thinking；样本输入含完整中文回答和人工核对的官方事实，不允许以生产 Verifier 自述代替独立判定。预声明 10 类 × 2 次、`20/20` 正确，预计不超过 80,000 tokens 和 10 分钟，安全上限 120,000 tokens，货币成本不可用。一个原子样本超过 60 秒、首次错误、Provider 失败或累计超限后停止新增样本，保留全部已执行结果和未执行分母；不得重刷到通过。剩余样本用显式 node selection 与 `-x` 执行，不重复已完成的 pilot，不运行 Product 矩阵。
+本轮已执行候选模型为 `mimo-v2.6-flash`、`json_object`，thinking 开启并保留原始 reasoning。原文输入只有 goal、答案和参考，生产 Verifier 结论不参与评分。预声明门槛为全部控制和旧真实答案的语义审查成立；已知 tokens 上限 500,000、组内 1800 秒、模型 480 秒，依据与停止条件见[预声明](../../.tmp/research-grader-qualification-20261001/plan.json)。实际未达到资格门槛，新正式目标 E2E 未运行。
 
 ## Release gate
 
@@ -421,3 +420,10 @@ missing_same_revision_passing_trace
 ```
 
 当前不能引用历史完整矩阵或定向 archive 声称当前 revision release ready。
+
+
+## 研究评分器输出额度阻塞
+
+该真实输入的预算修复由[评分输出预算固化记录](../optimization/completed/research-grader-output-budget.md)拥有；v6 已将 `max_tokens=32768` 统一交给正式消费者，v7 保留该额度与 thinking。原 E2E 及 v5 六份截断、v6 预算恢复均保持原身份；历史结果由[当前盘点](02-current-case-inventory.md#2026-10-01-独立评分器输出预算恢复)拥有。
+
+当前剩余门禁是[评分者参考范围与作者取证事实的区分](../optimization/research-grader-qualification.md#本轮结果与下一责任边界)。v7 真实旧答案回放仍暴露范围错读，按预声明停止剩余样本和新目标 E2E。准入由[Future 队列](../future/design-optimization-backlog.md)拥有，产品成功分子保持。

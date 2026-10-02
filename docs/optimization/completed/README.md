@@ -8,6 +8,13 @@
 | 被拒稿只有正文、缺少逐段引用关系 | [完整基稿交接](complete-rejected-draft-handoff.md) |
 | 模型引句转录差异导致整份核验反馈丢失 | [核验意见绑定当前调用](verifier-finding-binding.md) |
 | 同一稿件含多个错误，能否通过逐轮核验和修订处理 | [多错误的渐进核验与修订](multi-error-verification-revision.md) |
+| 模型重抄旧正文导致修订目标定位失败 | [Runtime 正文片段寻址](claim-fragment-addressing.md) |
+| 研究参数范围未进入实际生产 Schema | [当前可见参数范围](claim-argument-scope.md) |
+| 修复耗尽后的外层重试漏掉失败响应用量 | [完整重试用量](model-retry-usage.md) |
+| 研究编辑拒绝未返回实际未选证据坐标 | [研究引用准入的确定性坐标反馈](research-admission-coordinate-feedback.md) |
+| 正文修订要求重新选择全部已有引用 | [局部修订的引用继承](claim-retained-references.md) |
+| 来源核验输入未变却随集合版本重复核验 | [按实际输入复用来源报告](claim-source-review-reuse.md) |
+| 研究独立评分器在开启思考时耗尽短输出额度 | [评分输出预算](research-grader-output-budget.md) |
 
 本目录之外的 optimization 文档只保留完成文档的引用，不继续跟踪成功问题。
 

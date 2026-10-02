@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 from hashlib import sha256
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import pytest
 
@@ -44,12 +44,22 @@ def server_temp_dir(request: pytest.FixtureRequest) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def clean_e2e_database(request: pytest.FixtureRequest) -> None:
+def clean_e2e_database(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Reset canonical tables per journey while application processes are reused."""
     key = (Path(str(request.node.path)).name, request.node.name.split("[")[0])
     case = EVIDENCE_BY_NODE.get(key)
     if case is not None and not case.real_postgres_required:
         return
+    from tests import conftest as postgres_infrastructure
+    from evals.e2e_quality.test_release_user_outcomes import POSTGRES_URL
+
+    database = urlsplit(POSTGRES_URL)
+    if database.path != "/personal_agent_test":
+        raise ValueError("共享 E2E 数据清理只允许 personal_agent_test 数据库")
+    # Reuse the real legacy setup fixture without editing or collecting tests/.
+    # All of its connections must target the same database as the HTTP process.
+    monkeypatch.setattr(postgres_infrastructure, "POSTGRES_URL", POSTGRES_URL)
+    monkeypatch.setattr(postgres_infrastructure, "ADMIN_POSTGRES_URL", database._replace(path="/postgres").geturl())
     request.getfixturevalue("clean_postgres_business_tables")
 
 

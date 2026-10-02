@@ -16,8 +16,10 @@
 | `graphiti.custom_extraction` | Graphiti adapter | 约束外部图谱抽取，不替代 Personal Knowledge admission |
 | `interaction_verification.system:v4-cited-evidence` | Conversation Runtime Verifier | 中文判据与 JSON 数据边界；逐项产生 typed 判断，工具校验完整性并聚合 |
 | `interaction_verification.source_support:v1` | 同一 Verifier 工具 | 固定加入的独立来源支持标准，不能由回答模型选择省略 |
-| `interaction_verification.cited_support:v2-call-bound-unit` | 同一 Verifier 工具 | 逐段识别支持缺口；代码绑定待修订段落，模型不再复制原句；拒绝回原循环 |
+| `interaction_verification.cited_support:v3-asserted-scope` | 普通整稿 Verifier 工具 | 按草稿实际主体、条件、强度及否定范围逐项核对；代码绑定待修订段落，拒绝回原循环 |
 | `conversation.action:v17-no-absence-gate` | Conversation Action 阶段 | 组装能力、预算、工作清单及任务中性的验收条件，不从条件推导任务类型 |
+| `conversation.research.support:v1-bounded-feedback` | Conversation 研究来源核验 | 整条 claim 与绑定原文逐项判断；返回片段 ID、无据声明、支持范围、缺少前提及证据 ID |
+| `conversation.research.writer:v12-bounded-feedback` | Conversation 研究写作 | 消费当前版本的无损片段视图和本轮已选原文；模型提交首尾片段 ID 及 replacement，Runtime 恢复原文合并；修改项全文复验、同输入项消费最新适用报告 |
 | `conversation.final:v20-no-absence-gate` | Conversation Final 阶段 | 生成 typed `FinalSubmission`，提交完整稿或基于最新基稿的修改；引用统一为文档行坐标，允许已完整返回的连续行范围，区分网页正文与工具结果；保留提交前自检，合成后继续完整核验 |
 | `conversation.plan_context:v1` | Action / Final Context | 按 canonical 进度生成中文计数说明与 JSON 数据，进度不代表交付 |
 | `conversation.working_plan.description:v1` / `conversation.prepare_final.description:v5-source-entry` | 原生控制动作定义 | 区分可修订进度与显式交付请求，不替代 Admission |
@@ -46,4 +48,4 @@
 
 ## Conversation 研究相位
 
-`conversation.research.writer` 为 `v7-delete-claim`，`conversation.research.coverage` 为 `v3-fact-scope`，`conversation.research.final_verification` 为 `v2-stage-feedback`，`conversation.research.synthesis/faithfulness` 为 v1。研究写作者、整组事实覆盖、最终 Verifier、独立汇总和最终忠实性标准分别消费这些模板。事实覆盖只判断 claims 的事实充分性，不判断来源 URL 是否存在或是否写入答案；运行系统将已引用来源 URL 确定性投影给独立汇总。写作者在资料不足时选择继续取证，创建论断时提交非空集合与对象引用；已有集合时可通过 `delete_claim` 撤回单条论断，准入仍要求剩余集合非空并自动重验。当前生产链不注册复合论断识别、文档缺项分类或覆盖反馈 Prompt，也不向研究写作者提供 `split_claim`。来源支持继续复用原注册模板；实际职责与验证范围见 [ADR 0032](adr/0032-conversation-research-claims.md)及 [ADR 0033](adr/0033-claim-deletion-and-document-absence-pause.md)，正式结果由[评测登记](evals/02-current-case-inventory.md)记录。
+`conversation.research.evidence_selection` 为 `v6-goal-source-feedback`，`conversation.research.writer` 为 `v15-goal-source-feedback`，`conversation.research.coverage` 为 `v5-goal-source-view`，`conversation.research.final_verification` 为 `v2-stage-feedback`，`conversation.research.synthesis/faithfulness` 为 v1。选证先按原始用户问题输出信息需求、已返回坐标及下一步，引用按对象数组提交；写作者消费同轮所选片段，准入校验创建、增补和替换引用新增坐标属于本轮选择，正文修订保留目标已有引用。纯认知限制可以无引用，外部事实是否缺证仍由来源支持核验判断。选择、写作和覆盖共享冻结验收的只读编号；覆盖独立访问全部实际已返回的去重读窗及读取状态，按原项输出必要关系、当前 claim、相关坐标、状态及反馈，整体充分性由运行系统推导，呈现及提交要求继续交给最终核验；有来源依据的未知与当前取证不足分别判断，writer 消费逐项缺项反馈。运行系统将引用来源 URL 确定性投影给独立汇总。创建仍须非空集合与对象引用；`delete_claim` 撤回单条论断后保留非空集合并完整复验。当前不注册复合识别、独立文档缺项分类及其覆盖反馈 Prompt，也不提供 `split_claim`。研究来源支持使用 `conversation.research.support:v1-bounded-feedback`；普通整稿继续使用上述 `v3-asserted-scope`；实际职责及证据限制见 [ADR 0032](adr/0032-conversation-research-claims.md)、[ADR 0033](adr/0033-claim-deletion-and-document-absence-pause.md)及[范围校准记录](optimization/claim-verifier-consistency.md)，正式结果由[评测登记](evals/02-current-case-inventory.md)记录。

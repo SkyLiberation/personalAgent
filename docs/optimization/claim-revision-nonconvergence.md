@@ -1,5 +1,17 @@
 # 研究论断反馈修订无法收敛
 
+2026-10-01：现行 [evidence-first](to_verify/claim-evidence-selection.md#2026-09-30-按用户要求恢复并连续验证)继续沿唯一生产路径运行。正文目标、动态参数范围、重试计量与引用继承分别见[片段寻址](completed/claim-fragment-addressing.md)、[参数范围](completed/claim-argument-scope.md)、[重试计量](completed/model-retry-usage.md)及[局部修订引用继承](completed/claim-retained-references.md)。用户授权优化[相同输入报告消费](completed/claim-source-review-reuse.md)和[反馈支持范围修订](to_verify/claim-supported-scope-repair.md)，来源报告复用见固化记录；支持范围反馈已接入但首次修订仍有新增无据声明，详见候选结果。按[预声明](../../.tmp/research-source-reuse-repair-20261001/plan.json)执行一个原中文 target。完整用户结果由[正式评测](../evals/02-current-case-inventory.md)拥有，下文各日期只解释对应历史轨迹。
+
+## 2026-10-02 诊断补齐后的交付阻塞
+
+[Provider 诊断交接](to_verify/model-provider-diagnostics.md)已接入现行异常与日志，固定失败反事实 2/2；原正式 E2E 再运行一次，93 个 MiMo 请求均为 200，实际服务错误检查点未触发。第 19 版八条 claim 来源通过；覆盖结构恢复把三项缺口改为 covered，见[覆盖恢复问题](to_verify/research-goal-coverage.md#2026-10-02-覆盖结构恢复抹除缺项反馈)。随后五次最终报告均因[验收项转录](final-criterion-transcription.md#2026-10-02-正式轨迹重复转录失败)未形成有效回执，达到 32 回合返回 limitation，用户结果 0/1。完整结果由[评测登记](../evals/02-current-case-inventory.md#2026-10-02-mimo-诊断补齐后的正式验证)拥有。
+
+修订仍观察到[新增事实未绑定引用](to_verify/claim-supported-scope-repair.md#2026-10-02-新增事实未随正文绑定引用)，后续独立改引用才恢复相应支持。最终工具模型的已完成用量继续存在[交接漏计](tool-model-usage-handoff.md#2026-10-02-最终契约失败调用仍有漏计)。研究与覆盖组合保持，Source、覆盖恢复、最终验收项身份及成本交接按各自责任处理。
+
+## 2026-10-02 研究与覆盖共同保持并验证
+
+本轮按用户要求恢复研究阶段的原目标对照及反馈适用性，同时将覆盖核验接入同一原项和全部实际已返回资料。已读遗漏的连续反馈修订及复验成立，旧未读条款稿仍由覆盖 Verifier 放行；局部资格 2/3。原正式 E2E 在第 9 版来源阶段被 writer 429 中断，0/1；两侧组合保持。取舍由[联合记录](to_verify/research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)拥有，完整用户结果由[评测登记](../evals/02-current-case-inventory.md#2026-10-02-研究与覆盖联合优化的正式验证)拥有。异常前末次选证用量未持久化的既存缺口，单独登记为[计量提交子问题](research-selection-usage-commit.md)，与来源判据及工具内部用量交接分别优化。
+
 ## 2026-09-30 来源 URL 交接与事实覆盖职责
 
 旧正式样本第 18 版的 7 条 claims 来源支持全部通过，整组事实覆盖却把架构页 URL 未写进 claim 当作缺失事实；被引用的 `web_read.source_url` 已持有该地址。执行观察拥有来源 URL，Conversation 从已引用证据坐标确定性生成 typed `ResearchBasis.sources`，独立汇总消费该结构并负责把用户需要的网址写入答案。研究事实覆盖只判断事实是否足以作答，URL 存在性与最终呈现不由它裁定。责任边界见 [ADR 0032](../adr/0032-conversation-research-claims.md) 和[阶段候选](to_verify/claim-verifier-stage-scope.md)。
@@ -40,6 +52,16 @@ target 中研究模型在第 5 版已有 11 条 claim 且收到文档缺项反�
 
 2026-09-24 的一条连续 Offline 轨迹中，第 40 版提交后，第 20 次核验拒绝 c7 的三处来源支持范围。研究模型随后把集合改到第 59 版，期间修改 c7 正文和引用，却没有再次提交核验。累计 179 次已完成模型调用、6,736,697 已知 tokens，完整集合通过仍为 `0/1`；第 180 次请求无响应，不计作语义失败。[第 20 次核验](../../.tmp/claim-v40-no-parameter-cap-20260924/verifier-result-r20-v40.json)和[中断记录](../../.tmp/claim-v53-no-parameter-cap-recovery2-20260924/result.json)限定了这一结论。该运行未经过正式产品入口、独立汇总和最终交付，不能称为 E2E。
 
+## 2026-10-02 目标绑定及当前引用原文候选的撤回
+
+按[目标覆盖问题](to_verify/research-goal-coverage.md#2026-10-02-实际结果与取舍)进行了两次有界验证。目标绑定纠正第 15 版额外 API 细化阻塞，但核心客户端职责删除例仍放行；补当前引用原文后能拒绝该删除例，旧真实不完整稿仍漏放，且补证反馈再次要求额外 API 细节。两候选均已按起点撤回，原生产及暂停机制保持。该轮付费调用已停止；该轮正式结果见[评测登记](../evals/02-current-case-inventory.md#2026-10-02-目标绑定与原文范围的局部反例)。
+
+后续按用户要求优化研究阶段的原目标对照与反馈适用性，实际选择、片段修改、准入及修改项完整来源核验连续消费，已返回条款的内容遗漏得到修订；原范围误判控制也合格。旧稿仍把服务器输出符合性与错误回传当成校验职责回答，未提出核心补读，三例资格 2/3。组合候选按预声明撤回，保留局部成立条件，正式 target 未执行。决定性输入区分页面已抓取与必要条款已进入可引用读窗，下一责任边界及证据只由[研究阶段结果](to_verify/research-goal-coverage.md#2026-10-02-研究阶段验证结果与停止)拥有，用户结果由[本轮评测登记](../evals/02-current-case-inventory.md#2026-10-02-研究目标对照与反馈适用性验证)拥有。
+
+## 2026-10-01 用户事实覆盖漏放的优化
+
+上一正式轨迹的覆盖核验把格式约束和错误回传接受为“结果由谁校验”的完整回答，并用当前未取得条款的限制满足用户事实问题。本轮按[逐项目标覆盖候选](to_verify/research-goal-coverage.md#2026-10-01-实际消费与停止边界)替换单一布尔报告，区分有来源依据的未知与取证不足；4 个局部控制判决正确，真实报告已被 selector、writer、合法修订及来源复验连续消费。正式用户结果仍失败，实际结果由[评测登记](../evals/02-current-case-inventory.md#2026-10-01-用户事实逐项覆盖与停止研究)拥有。下一边界先核对平台自动 schema 校验是否为原目标必答事实，以及 selector 建议成文后 writer 却选择停止的动作语义，再决定原文读取范围；本轮停止追加同向提示与付费重跑。
+
 ## 整体失败链与已有优化
 
 **当前阻塞不是没有用户 Goal，也不是 Verifier 从未反馈，而是反馈没有稳定变成有据的新稿并得到新版核验。** 用户问题确定回答范围；第 20 次 Verifier 已向研究模型报告第 40 版 c7 的具体缺证。研究模型拥有取证和论断修订决策，运行系统保存 claim 版本与实际反馈，Verifier 判断当前提交的完整集合是否得到证据支持。给每轮拒稿另建一个“Goal”而仍按原样修订、提交和核验，不会改变这条失败链。
@@ -74,10 +96,12 @@ claim 候选先执行两份独立结构判据的固定输入资格，再执行�
 
 | 子问题 | 已观察到的失败与责任边界 | 独立记录或待验证方案 |
 | --- | --- | --- |
+| `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：反馈修订扩大否定范围 | 第 5 版应用主体缺证，第 6 版 replacement 改为原文未指定配置主体；原文实际存在 You。 | [支持范围修订候选](to_verify/claim-supported-scope-repair.md) |
 | `CLAIM-WRITER-TYPED-OUTPUT-001`：首次空集合与字符串引用阻断入口 | 基线返回 503；唯一 Prompt 修正后的正式 target 建立 11 条 typed 论断并进入来源核验，用户结果仍因预算限制为 `0/1`。 | [typed 提交契约与未验证边界](to_verify/claim-writer-typed-output.md) |
-| `CLAIM-EVIDENCE-SELECTION-001`：先形成论断再为其选依据 | 正式 target 中的选证和定向修订实际执行，来源支持到达局部全通过；用户结果仍为 `0/1`，事实覆盖与预算阻塞完整交付。一次有界修正后候选已撤回，未取得因果收益或成本准入。 | [证据选择先于论断的候选及归档](to_verify/claim-evidence-selection.md)；[当前写作者指令](../../src/personal_agent/kernel/prompt_templates/research.py) |
+| `CLAIM-EVIDENCE-SELECTION-001`：先形成论断再为其选依据 | 候选曾在有界修正后撤回，2026-09-30 按用户要求恢复到唯一生产路径。整体收益按[正式评测](../evals/02-current-case-inventory.md)验收；引用继承由[完成记录](completed/claim-retained-references.md)独立拥有。 | [证据选择先于论断的候选及归档](to_verify/claim-evidence-selection.md)；[当前写作者指令](../../src/personal_agent/kernel/prompt_templates/research.py) |
 | `CLAIM-REVISION-PROGRESS-001`：未经核验的编辑持续累积 | 第 20 次反馈绑定第 40 版，之后 19 次合法编辑生成第 59 版，始终没有新的 `submit_claims`。运行系统保存版本和反馈，研究模型决定何时提交；编辑成功不能代替语义核验。 | [新版复验触发候选](to_verify/claim-revision-progress.md)；[执行记录](revision-feedback-loop.md#151-移除参数错误次数上限后的连续续接) |
-| `CLAIM-ASSERTION-REINTRODUCTION-001`：改写重新带入争议判断 | c7 曾删去 `"always"` 又写回；第 52 版把 `allowed_tools` 收窄为工具子集，第 53 版重新写入降低 token 成本和延迟。现有整项正文替换不保护同项的其他判断；第 59 版未经核验，不能直接判其失败。 | [片段级有界修订候选](to_verify/claim-fragment-revision.md)；[第 52 版](../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v52.json)、[第 53 版](../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v53.json) |
+| `CLAIM-ASSERTION-REINTRODUCTION-001`：改写重新带入争议判断 | 当轮整项替换中，c7 曾删去 `"always"` 又写回；第 52 版收窄 `allowed_tools` 后，第 53 版重新写入成本和延迟判断。后续片段合并已取得范围外内容保真证据，片段内语义及整组完成仍待验收。 | [片段级有界修订候选](to_verify/claim-fragment-revision.md)；[第 52 版](../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v52.json)、[第 53 版](../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v53.json) |
+| `CLAIM-EDIT-TARGET-TRANSCRIPTION-001`：正文编辑目标定位 | 事实、责任与成立判据由完成记录唯一维护。 | [Runtime 片段寻址](completed/claim-fragment-addressing.md) |
 | `CLAIM-MULTI-PROPOSITION-001`：一项混合多个可独立失败的判断 | c7 同时陈述连接方式、批准选项与工具选择用途；集成续接中，复合诊断与缺证反馈同轮送达后，模型先修缺证，未取得新版结构判决。待验证候选让 Verifier 先独立判断结构，结构问题解除后才运行来源支持；研究模型自主拆分或收窄，仍须防止误报和新增无据细节。 | [复合论断候选](to_verify/claim-multi-proposition.md) |
 | `CLAIM-DUPLICATE-ADDITION-001`：增补动作重复已有论断 | 停用拆分后的正式 target 在第 5 版 11 条 claim 上收到文档缺项反馈，却通过 `add_claims` 追加 11 条；其中 6 条正文和引用与原项完全相同。写作者实发输入已有完整集合及“只补事实覆盖缺口”的指令，当前 Admission 仍接受该动作。此问题与是否启用拆分及复合诊断分开归因。 | [本次实发反例与下一边界](#2026-09-29-暂停拆分与复合识别的正式对比)；[逐项审计](../../.tmp/claim-no-compound-20260929/duplicate-addition-audit.json) |
 | `CLAIM-VERIFIER-CONSISTENCY-001`：相同核验输入判断不一致 | 未改 c6 的相同实发来源支持请求一次被放行、一次被拒；反馈对象的变化不能都算作研究修订退步。暂缓单独优化，但开放最终整组 `passed` 判定前须处理一致性，不能缓存先前放行来制造通过。 | [独立核验一致性问题](claim-verifier-consistency.md) |
@@ -123,3 +147,5 @@ claim 候选先执行两份独立结构判据的固定输入资格，再执行�
 完整集合经真实 Verifier 判断通过，且该通过结果满足待处理的一致性判据，才算研究阶段达标；还须另验汇总产物、正式 E2E 与用户结果。未经核验的版本数、合法工具调用数、引用数和参数错误承受次数都不是语义进度。
 
 针对修订循环，分别记录最近被核验版本、当前版本、其间合法编辑与参数拒绝、是否重新提交、原拒稿缺口在新核验中是否仍存在，以及新出现的缺口。只有新核验能判断新稿是否仍有旧缺口；一次放行还不能证明 Verifier 稳定。正文删去某个词、增加引用或拆分 claim 均不能由确定性代码直接判为语义成功。核验一致性、复合论断和提示契约按上表独立验收，不因某一项改善就并入同一成功结论。
+
+本次后置阻塞分别见[最终验收项转录](final-criterion-transcription.md)及[工具内部模型用量交接](tool-model-usage-handoff.md)，原正式结果由评测文档拥有。

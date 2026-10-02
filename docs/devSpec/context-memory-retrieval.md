@@ -39,7 +39,7 @@
 
 发现疑点后，先区分输入缺失、表达冲突、范围误解、数据干扰和已理解但未执行等假设。记录原输入、候选差异、保留事实、责任主体、预声明判据与停止条件，再按 [EVD](change-evidence.md) 和 [QLT](quality-security.md)验证。整体重组同时改变多项输入时，只能声称整体候选的观察收益；不能把结果归因于其中一句话、某个角色或 Context 变短。冻结输入诊断不能冒充真实 E2E。
 
-禁止从一次可见理由或少量成功动作推断唯一根因、稳定正确率或产品修复。已经证明有效的读取、引用、拒绝及修订机制必须作为保留条件，除非相应反例证明应撤回；不能为简化输入静默删除必要事实或历史失败。正式接入继续由既有 Context 物化边界消费 canonical facts，不从实验日志读取事实，不新增持久镜像，也不从模型可见文案反向解析控制。
+禁止从一次可见理由或少量成功动作推断唯一根因、稳定正确率或产品修复。已经证明有效的读取、引用、拒绝及修订机制必须作为保留条件，除非相应反例证明应撤回；不能为简化输入静默删除必要事实或历史失败。正式接入继续由既有 Context 物化边界消费 canonical facts，不从实验日志读取事实，不新增权威事实镜像，也不从模型可见文案反向解析控制。
 
 审计不预设某种排版、消息角色或提示表述对所有模型有效；具体问题的运行依据保存在对应优化记录，不作为每项任务的必读依赖。生产 Prompt 的通用输出契约由 [COD](code-structure.md#6-生产-prompt-是版本化代码契约)拥有，注册与版本由 Prompt 模块规范拥有。
 
@@ -52,10 +52,12 @@
 - Long-term Memory：保存跨会话可召回的事实或经验；
 - Retrieval Index：保存检索投影，不作为事实权威源。
 
+Retrieval Index 和有实际需求的 Context 派生缓存可以持久化，统一遵守 [ARC 派生存储规则](architecture-ownership.md#61-派生缓存与投影)。缓存读取仍先做当前 Visibility，再召回、选择与物化；索引命中不证明来源仍存在、授权仍有效或内容完整。
+
 State 优先保存 `ArtifactRef`，不得复制大型 Artifact。RAG 只负责检索和证据组织，不得成为隐藏的 Router 或 Planner。检索策略必须由数据与评测驱动，禁止为单一 benchmark 硬编码；中间检索指标不能替代最终答案与证据正确性。
 
 ## 3. Capability Projection 与服务提供方绑定
 
-Capability definition 由对应 Application owner 管理。模型可见 capability、工具 schema、服务提供方可用性和检索结果都是临时只读投影，必须先经过 visibility 或 policy，再进行 materialize。投影可以帮助模型选择 Application Capability，不能替智能体完成开放语义选择，也不能反向成为定义或可用性事实源。
+Capability definition 由对应 Application owner 管理。模型可见 capability、工具 schema、服务提供方可用性和检索结果都是派生只读投影，必须先经过 visibility 或 policy，再进行 materialize。需要缓存时按 [ARC](architecture-ownership.md#61-派生缓存与投影)校验版本、作用域和适用有效性，执行绑定仍核对服务提供方的当前可用性。投影可以帮助模型选择 Application Capability，不能替智能体完成开放语义选择，也不能反向成为定义或可用性事实源。
 
 只有完整满足同一 `CapabilityEquivalenceClass` 的服务提供方才能确定性绑定。存在语义差异时，必须由模型或外部权威选择。

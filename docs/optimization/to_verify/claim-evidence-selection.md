@@ -1,6 +1,30 @@
 # 从用户问题选择证据后再生成研究论断
 
-`CLAIM-EVIDENCE-SELECTION-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 下的[研究论断无法收敛问题](../claim-revision-nonconvergence.md)。本页记录未获准接入的产品行为候选：两次正式 target 的用户结果均失败，候选生产代码已撤回；局部的选证、定向修订与来源支持检查点不能代替完整交付。当前生产事实以问题入口为准。
+`CLAIM-EVIDENCE-SELECTION-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 下的[研究论断无法收敛问题](../claim-revision-nonconvergence.md)。2026-09-28 两次正式 target 均失败后撤回；2026-09-30 用户明确要求恢复 evidence-first 并继续优化，现已按下节接回生产路径。最新完整 target 仍未交付；局部的选证、定向修订与来源支持检查点不能代替完整交付，候选仍在本目录。
+
+2026-10-01 的片段地址、当前参数范围和重试计量已分别固化，当前选证机制保持唯一生产路径。已有绑定与新增选择的修订边界见[引用继承完成记录](../completed/claim-retained-references.md)；完整结果统一由[正式评测](../../evals/02-current-case-inventory.md)拥有，选证的整体收益继续按原用户结果验收。
+
+2026-10-02 研究目标对照与历史反馈适用性组合的前轮资格为 2/3，按当时预声明撤回。本轮按用户要求恢复这一研究候选，联合接入覆盖 Verifier 的原项目标绑定与独立已返回原文视图，当前为 `selection:v6-goal-source-feedback`、`writer:v15-goal-source-feedback` 与 `coverage:v5-goal-source-view`。已读条款删除例连续经历覆盖拒绝、实际修订、来源通过及覆盖复验；旧未读条款稿仍被覆盖放行。原正式 E2E 已实际运行，来源阶段第 9 版 c3 未通过，随后 writer 429 导致入口 503，用户结果 0/1。两侧组合保留于目标代码，局部成立条件与完整结果分开；正式覆盖未到达，详见[联合保留决定](research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)。
+
+## 2026-09-30 按用户要求恢复并连续验证
+
+恢复的是先按原始用户 goal 选择信息需求及已返回证据，再由写作者形成或修订 claims 的步骤。首轮选证沿用 `v2-source-identity` 的已知 URL 与局部修订边界，有界修正后为 `v3-reference-objects`；写作者先迁移为 `v8-evidence-first`，研究正文类型修复后为 `v9-research-content`。`ResearchEvidenceSelection` 仅在当前循环内消费，写作者输入只物化所选原文；canonical citation binder 展开实际坐标，准入拒绝创建或修改项中的未选引用。选择不替代来源支持或事实覆盖，不增加持久来源事实、生产开关或另一套研究路径。
+
+保留当前 `delete_claim`、非空集合与对象引用契约，以及执行来源 URL 到 `ResearchBasis.sources` 的确定性交接。`split_claim`、复合识别及独立文档缺项识别继续停用。此次同时校准来源核验的断言范围，局部固定输入结果由[范围一致性记录](../claim-verifier-consistency.md)拥有，不把两项合并成单变量收益。
+
+[预声明](../../../.tmp/evidence-first-restored-20260930/plan.json)固定原正式中文 HTTP E2E、模型、评分契约及当前 2,000,000-token / 32 回合 / 48 工具预算。真实目标轨迹连续消费实际选证、生成、反馈、修订、汇总及最终核验；未到达的阶段单独记录。坐标准入反事实只消费本次实际选证与执行资料，不注入理想中间状态。完整用户结果未通过前不声明收敛或成本收益。
+
+首轮正式用户结果为 `0/1`、预算 `limitation`：115 次生产模型调用、32 个决策回合、20 次工具调用、1,813,606 tokens，入口耗时 4,534.48 秒。14 个版本从 6 条增到 7 条 claims；第 9、14 版来源支持通过，事实覆盖两次拒绝尚未回答的授权分工，后一次已认可新增 output schema 校验分工。没有到达独立汇总、最终核验或完整 URL 交付。[全响应审计](../../../.tmp/evidence-first-restored-20260930/target-database-owner/audit-all-provider.json)按 Provider 响应 ID 去重为 121 次，包含 6 次结构修复，已知 tokens 与生产总账一致；旧 `audit.json` 只收集结构化方法，完整计数以此次修正后的审计为准。用户结果与机制阶段分别记录在[评测盘点](../../evals/02-current-case-inventory.md#2026-09-30-evidence-first-恢复与有界修正)。
+
+首轮实际首稿的全部引用都已选，但其中一项认知限制无引用，被恢复时新增的无条件非空引用检查拒绝。按[有界修正声明](../../../.tmp/evidence-first-restored-20260930/bounded-fix-plan.json)删除该检查，恢复既有允许边界；非空集合、可见坐标、选中子集与逐项语义核验均保留。[同轨迹实际输入回放](../../../.tmp/evidence-first-restored-20260930/bounded-admission-replay.json)由拒绝变为接纳 6 条，实际未选引用反例仍被拒绝。接纳只表示可进入来源支持，不证明正文有据。另一修正仅在选证输出段明确引用对象形状并升级版本；不把字符串自动转换为合法引用。随后以原失败选择请求作两次真实模型形状诊断，再运行一个同入口独立 target；下游随机结果不能作为这两个修正的成本消融。
+
+选证固定输入两次真实调用的输出形状均有效，但[坐标审计](../../../.tmp/evidence-first-restored-20260930/selector-replay/audit.json)均发现连续范围包含未返回行，引用绑定为 `0/2`。形状通过不能作为有效选择或下游改善证据。第二轮正式 target 在用户继续消息切换时中断；[封存记录](../../../.tmp/evidence-first-restored-20260930/target-bounded-fix/interrupted-result.json)没有正式用户结果，已提交总账为 100 次模型调用、28 回合、12 次工具、1,069,083 tokens；末尾在途调用用量未知。当前为第 19 版 9 条 claims，尚未到达覆盖，不将中断记成完成失败或通过。
+
+第二轮实发写作请求的 Schema 将研究 text 描述为直接交付用户正文，而同一请求的写作指令要求研究事实、不写最终文章。[阶段契约修正](../../../.tmp/evidence-first-restored-20260930/stage-schema-plan.json)仅把创建、增补及 canonical claim 迁入 `ResearchClaimContent`，保留最终答复职责及所有核验。实际首稿含标题、URL、重复总结和无据否定，是关联现象，不足以证明该冲突是全部根因。[同一实际输入比较](../../../.tmp/evidence-first-restored-20260930/schema-probe/audit.json)旧、新 Schema 各两次，4 份都准入、完整来源支持均未通过，12 次 Provider 完成共 55,030 tokens；类型职责修复不能宣称语义收敛。按原入口、模型、预算和评分器跑新的真实 target 后封存该方向，不追加同义 Prompt 或扩大预算。
+
+研究正文契约 target 仍 `0/1`，在 13 回合、25 次模型调用、11 次工具和 497,921 tokens 后返回连续无效动作的限制，未到达覆盖；第 2 版为 6 条。来源支持仍未完整通过，不能宣称收敛。该轮独立反馈缺陷的修复由[确定性坐标反馈](../completed/research-admission-coordinate-feedback.md)拥有；局部解析重试计量缺口与原始用量由[评测登记](../../evals/02-current-case-inventory.md#2026-09-30-evidence-first-恢复与有界修正)拥有。
+
+新的同入口正式 target 已完成，[评测登记](../../evals/02-current-case-inventory.md#2026-09-30-evidence-first-恢复与有界修正)保留原始 `0/1`。c4 因有据来源拒绝而修订时，模型连续两次把原文直引号复制为弯引号，精确片段准入拒绝，停止在第 5 版、7 条。完整输入及字符责任审查由[正文目标抄写子问题](../completed/claim-fragment-addressing.md)拥有，核验漏放与范围误读由[一致性问题](../claim-verifier-consistency.md#2026-09-30-断言范围校准)拥有。本轮按停止规则封存，不追加选证同义指令、提高停止次数或预算；完整选证方案的有效性仍未成立。
 
 ## 2026-09-28 正式失败与一次有界修正
 
@@ -14,7 +38,7 @@
 
 后续事实覆盖仍判不足：其一，覆盖检查要求 claim 文本本身出现官方 URL，而来源 URL 实际绑定在引用来源身份中，最终答复尚未生成；其二，OpenAI 的 MCP 映射与 MCP Authorization 正文尚未读到。选证于是转回取证，最终预算耗尽。完整结果、原始反馈和代码身份由[封存 Trace](../../../.tmp/evidence-first-20260928/target-source-identity/evidence/conversation-research-delivery-001/target/20260928T105633.959175Z-25904-fd8267e4/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)及[运行身份](../../../.tmp/evidence-first-20260928/target-source-identity/process-result.json)保存。改动前 baseline 在研究写作者 typed 输出处失败，未到达选证消费者；两条随机前置轨迹也不能合并为单变量收益。依照一次有界修正后的停止条件，已从[封存的改动前代码](../../../.tmp/evidence-first-20260928/baseline/code.zip)逐字节恢复四个生产文件，校验见[撤回记录](../../../.tmp/evidence-first-20260928/rollback.json)。不保留选证 Prompt、Schema 或写作准入的第二套生产路径。
 
-## 失败事实与最早责任边界
+## 撤回后失败版本的事实与最早责任边界
 
 当前研究入口在有一段可引用 `source_text` 后即可打开；[研究写作者指令](../../../src/personal_agent/kernel/prompt_templates/research.py)要求“形成足以回答全部事实问题的完整研究 claim 集合”，`CreateClaims` 接收正文及引用。实发[研究请求](../../../.tmp/claim-production-integration-20260928/target-source-entry/model-calls/6296/0006-request.json)包含原始用户消息、已读来源正文和引用坐标，说明本问题不能简单归因为来源完全没有进入模型输入。该请求仍处于“从现有资料直接提交完整 claim 集合”的协议；是否会优先判断资料适合回答哪一个用户问题，没有独立、可观察的选择步骤。
 
@@ -44,7 +68,7 @@
 
 代码在这两个模型决策之间校验所选坐标确实来自当前可见观察，并在 claim 创建时校验引用属于已选且未失效的坐标；来源集合变化后旧选择失效。代码不把模型的“适合”声明当成语义证明，也不自动补业务含义。若模型无法给出合适资料，保留已有有据事实，按用户结果契约交付有限结论或说明限制；“必须搜到肯定答案”不是停止条件。涉及全文缺项的判断继续遵守 [ADR 0027](../../adr/0027-model-owned-evidence-sufficiency.md) 的模型充分性与确定性读取边界。
 
-现有逐项来源支持、研究事实覆盖、独立汇总和最终核验继续承担各自责任。来源支持应检验当前 claim 与其所选证据的真实关系，覆盖检查再判断用户问题还有哪些事实缺口；选择步骤本身不能代替两项核验。真实缺证反馈出现时，写作者先在**当前已读资料**中重评该判断：有据则改引或收窄，无据则撤回该判断；只有原始用户问题仍有未满足需求且存在合理的新来源线索时才继续取证。当前协议没有撤回单项 claim 的合法动作，因此候选若进入实现，应提供删除被否定项的原子修订，保留其他项及版本绑定，并迁移全部调用方；不得用空正文、重复引用或新 claim 覆盖旧项来伪装撤回。复合结构识别已从当前生产路径停用；历史结构先行阻断来源支持的样本不能归咎于证据选择。
+现有逐项来源支持、研究事实覆盖、独立汇总和最终核验继续承担各自责任。来源支持应检验当前 claim 与其所选证据的真实关系，覆盖检查再判断用户问题还有哪些事实缺口；选择步骤本身不能代替两项核验。真实缺证反馈出现时，写作者先在**当前已读资料**中重评该判断：有据则改引或收窄，无据则使用现行 `delete_claim` 撤回该判断；只有原始用户问题仍有未满足需求且存在合理的新来源线索时才继续取证。单项撤回仍绑定当前版本，保留其余项且集合非空，具体准入由 [ADR 0033](../../adr/0033-claim-deletion-and-document-absence-pause.md)拥有；不得用空正文、重复引用或新 claim 覆盖旧项来伪装撤回。复合结构识别已从当前生产路径停用；历史结构先行阻断来源支持的样本不能归咎于证据选择。
 
 这项设计只改变“依据什么生成 claim 以及何时回到取证”，不新增来源真相的 owner。用户会话拥有问题与约束，执行系统拥有真实检索和读取事实，研究模型拥有证据适合性及有据论断，Admission 拥有可见坐标和版本校验，Verifier 拥有语义支持与事实覆盖，Completion 拥有结果契约。
 

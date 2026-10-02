@@ -72,7 +72,7 @@ Command、Event、Receipt 不得机械成套创建：
 - 仅当操作需跨请求、审批、重试或恢复时创建 Command；
 - 仅当已发生事实有独立审计、订阅或重放消费者时创建 Event；
 - 仅当需要幂等执行证据、外部结果关联或恢复依据时创建 Receipt；Receipt 本身不证明跨外部系统的 exactly-once；
-- Projection 或 View 必须可从 canonical facts 重建，且禁止成为第二写入口。
+- Projection 或 View 必须可从 canonical facts 重建，且禁止成为第二业务写入口；有实际需求时可按 [ARC 派生存储规则](architecture-ownership.md#61-派生缓存与投影)持久化和受控刷新。
 
 ## 4. 持久执行契约（Durable execution contract）
 

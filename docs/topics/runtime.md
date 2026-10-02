@@ -85,6 +85,8 @@ Conversation 的查询执行说明与可引用来源由[Context 专题](context-
 
 当前 MiMo `StructuredModelClient` profile 为 `json_object`。Composition Root 统一选择 JSON Object Adapter；Adapter 使用版本化中文 system instruction 把调用方 Pydantic Schema 投影给模型，返回后仍由同一 Pydantic 类型校验，首次失败只允许一次完整重写。运行时不会根据失败切回 `json_schema` 或 plain text；通用 Strict Adapter 只由其他 deployment 的显式 capability profile 选择。
 
+2026-10-01：非流式 structured 修复耗尽时，Adapter 将全部已完成响应的聚合用量附在 typed 失败上；外层唯一重试累计失败与恢复响应，成功及最终耗尽均由现行用量记录器消费一次。修复阶段的后续传输失败保留先前已知消耗。输入或输出用量不完整时对应字段保持未知，total_tokens 记录已知下界；重试次数包含有界结构修复与外层重试，latency 包含整个操作及等待。真实历史响应回放从 200,590 补齐至 224,770 tokens，与 Provider 汇总一致，详见[责任边界回放](../../.tmp/research-convergence-integration-20261001/usage-replay.json)。
+
 ## Grounded answer
 
 产品没有平行 Ask runtime。Conversation 是唯一 FinalMessage owner：模型按当前目标选择 `search_personal_knowledge`，外部事实由受治理只读工具返回，模型在同一循环内综合。回答本身不写长期知识；显式保存必须另走确认写路径。
@@ -92,7 +94,7 @@ Conversation 的查询执行说明与可引用来源由[Context 专题](context-
 ## 可观测与评测
 
 - `InteractionTrace` 记录 typed inputs、usage、context composition、执行顺序和 final message；
-- `conversation.model_failure` 记录脱敏的 component、stage、operation、reason code、Provider host/status 和 retryable；不记录 Prompt、Provider 原文或 action 参数；
+- `conversation.model_failure` 记录 component、stage、operation、reason code、Provider host/status、retryable，以及同一 typed `ProviderFailureDiagnostics`；其中服务方业务错误码、错误类型、信息、请求 ID 和 `Retry-After` 在 Adapter 中按白名单提取，逐字段最多 512 字符，密钥、认证值和 URL 脱敏。现行 retry 的每次 scheduled/exhausted 日志沿用该对象；缺失仍未知，完整错误响应体、Prompt 和 action 参数不进入这些诊断日志；
 - E2E archive 记录 `MeasurementProfile` 与 `CaseMeasurement`；
 - `metrics_report` 生成同 profile 的完成率、token、调用、延迟与恢复指标；
 - `release_gate` 独立判断 archive 能否用于目标 revision 发布。

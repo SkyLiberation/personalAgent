@@ -4,6 +4,7 @@ from personal_agent.capabilities.contracts.verification import ConversationAnswe
 from personal_agent.kernel.prompts import get_prompt
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 from hashlib import sha256
@@ -55,14 +56,16 @@ from .context_materialization import (
 )
 from .artifact_search import ArtifactSearchPort, SearchActionOutputArguments, search_artifact_text
 from .artifact_reading import ReadArtifactArguments, read_artifact_text
-from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, materialize_reference_sources
+from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, materialize_reference_sources, selected_citation_ids
 from .interaction_prompt import build_interaction_system_prompt
 from .final_revisions import FinalRevisionError, materialize_final_revision
 from .research import (
     InitialResearchSubmission, ResearchSubmission, CreateClaims, ReviseClaimFragment,
     ReplaceClaimReferences, AddClaims, DeleteClaim, RecheckClaims, ReturnToActions,
     StopResearch, accepted_basis, admit_claim_change, current_claims, verification_steps,
-    has_research_source_text,
+    has_research_source_text, in_research_mode, ResearchEvidenceSelection, research_request,
+    editable_research_claims, research_submission_type, applicable_research_review,
+    research_review_context, research_goal_requirements, validate_research_selection,
 )
 from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview, ResearchReopening
 from .source_reading import materialize_source_reading_state
@@ -284,6 +287,9 @@ class ConversationService:
             ))
         else:
             inputs = []
+        # The injected model binding is stable for this invocation; resumed work
+        # establishes a new eligibility boundary without a second cache owner.
+        source_review_start_index = len(inputs)
         execution_order = list(prior.execution_order if prior else ())
         concurrent_batches = list(prior.concurrent_batches if prior else ())
         context_composition = list(prior.context_composition if prior else ())
@@ -391,27 +397,77 @@ class ConversationService:
                     review_criteria,
                     working_plan,
                 )
-            decision, model_response, composition, protocol_feedback = self._decide(
-                messages=messages,
-                capabilities=self._model_visible_capabilities_for_turn(
-                    capabilities,
-                    inputs,
-                ),
-                inputs=inputs,
-                usage=usage,
-                review_criteria=review_criteria,
-                turn_index=usage.model_turns,
-                working_plan=working_plan,
-                interaction_mode=interaction_mode,
-                finalization_mode=finalization_pending,
-            )
+            evidence_selection = None
+            selected_ids = frozenset()
+            if in_research_mode(
+                inputs, finalization_mode=finalization_pending,
+                requires_review=review_criteria.requires_review,
+            ):
+                selection_request = self._research_selection_request(
+                    messages, inputs, review_criteria, reuse_start_index=source_review_start_index,
+                )
+                selection_response = self._generate_model(selection_request)
+                assert isinstance(selection_response.value, ResearchEvidenceSelection)
+                evidence_selection = selection_response.value
+                usage = self._record_model_usage(usage, selection_response)
+                try:
+                    validate_research_selection(evidence_selection, review_criteria, current_claims(inputs))
+                    selected_ids = selected_citation_ids(evidence_selection.references, inputs)
+                except (CitationBindingError, ValueError) as error:
+                    usage = usage.model_copy(update={"model_turns": usage.model_turns + 1})
+                    inputs.append(DecisionFeedback(
+                        action_id="research-evidence-selection", reason_code="research_selection_invalid",
+                        message=str(error),
+                        required_repair="逐项沿用 requirements 的全部编号且每项恰好一次，只关联当前 claim；引用只选实际返回的 citations。本次选择未用于创建论断。",
+                    ))
+                    self._commit(
+                        run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition,
+                        review_criteria=review_criteria, working_plan=working_plan,
+                    )
+                    continue
+                if usage.total_tokens >= self._budget_policy.max_total_tokens:
+                    return self._budget_exhausted(
+                        conversation_id, run_ref, principal, messages, inputs, usage,
+                        execution_order, concurrent_batches, context_composition,
+                        review_criteria, working_plan,
+                    )
+            if evidence_selection is not None and evidence_selection.next_step != "write":
+                decision = (
+                    ReturnToActions(kind="return_to_actions", reason=evidence_selection.reason)
+                    if evidence_selection.next_step == "acquire"
+                    else StopResearch(kind="stop_research", reason=evidence_selection.reason)
+                )
+                model_response = selection_response
+                composition = TurnContextComposition(
+                    turn_index=usage.model_turns,
+                    capability_projection_chars=0,
+                    system_prompt_other_chars=len(selection_request.messages[0]["content"]),
+                    conversation_messages_chars=0,
+                    typed_inputs_chars=len(selection_request.messages[1]["content"]),
+                    input_tokens=selection_response.input_tokens,
+                )
+                protocol_feedback = None
+                # The selection response was already charged; this is the decision turn.
+                usage = usage.model_copy(update={"model_turns": usage.model_turns + 1})
+            else:
+                decision, model_response, composition, protocol_feedback = self._decide(
+                    messages=messages,
+                    capabilities=self._model_visible_capabilities_for_turn(capabilities, inputs),
+                    inputs=inputs,
+                    usage=usage,
+                    review_criteria=review_criteria,
+                    turn_index=usage.model_turns,
+                    working_plan=working_plan,
+                    interaction_mode=interaction_mode,
+                    finalization_mode=finalization_pending,
+                    evidence_selection=evidence_selection,
+                    selected_ids=selected_ids,
+                    source_review_start_index=source_review_start_index,
+                )
+                usage = self._record_model_usage(usage, model_response, model_turn=True)
             finalization_pending = False
             context_composition.append(composition)
-            usage = self._record_model_usage(
-                usage,
-                model_response,
-                model_turn=True,
-            )
             if protocol_feedback is not None:
                 inputs.append(protocol_feedback)
                 self._commit(
@@ -446,7 +502,7 @@ class ConversationService:
                             claims = admit_claim_change(decision, inputs, ResourceRef(
                                 resource_id=f"{run_ref}:research", resource_type="conversation_research",
                                 owner=principal,
-                            ))
+                            ), selected_ids)
                         except (ValueError, CitationBindingError) as error:
                             inputs.append(DecisionFeedback(
                                 action_id="research-admission", reason_code="research_edit_invalid",
@@ -454,7 +510,11 @@ class ConversationService:
                             ))
                         else:
                             inputs.append(claims)
-                            checks = verification_steps(claims, tuple(inputs), messages)
+                            checks = verification_steps(
+                                claims, tuple(inputs), messages, review_criteria,
+                                reuse_start_index=(len(inputs) if isinstance(decision, RecheckClaims)
+                                                   else source_review_start_index),
+                            )
                             step = next(checks, None)
                             while step is not None:
                                 self._commit(
@@ -1503,6 +1563,33 @@ class ConversationService:
             raise ValueError("verified receipt must bind the current approved research revision")
         return (decision, result, usage)
 
+    @staticmethod
+    def _research_selection_request(
+        messages: Sequence[ConversationMessage], inputs: Sequence[InteractionInput],
+        criteria: ReviewCriteria,
+        *, reuse_start_index: int,
+    ) -> StructuredModelRequest[ResearchEvidenceSelection]:
+        claims = current_claims(inputs)
+        review = applicable_research_review(claims, inputs, reuse_start_index=reuse_start_index)
+        decision_inputs = tuple(
+            item for item in inputs
+            if not isinstance(item, SubmittedFinal)
+            and not (isinstance(item, DecisionFeedback)
+                     and item.reason_code == "research_needs_evidence")
+            and not (isinstance(item, ActionObservation)
+                     and item.capability_id == _VERIFICATION_CAPABILITY)
+            and (not isinstance(item, ResearchClaims) or item is claims)
+            and (not isinstance(item, ResearchReview) or item is review)
+        )
+        visible = materialize_citation_context(materialize_interaction_inputs(decision_inputs))
+        source_feedback = research_review_context(review, inputs)
+        return research_request("conversation.research.evidence_selection", ResearchEvidenceSelection, {
+            "conversation": [message.model_dump(mode="json") for message in messages],
+            "requirements": [item.model_dump(mode="json") for item in research_goal_requirements(criteria)],
+            "inputs": [item.model_dump(mode="json") for item in visible],
+            "source_feedback": source_feedback.model_dump(mode="json") if source_feedback is not None else None,
+        })
+
     def _decide(
         self,
         *,
@@ -1515,6 +1602,9 @@ class ConversationService:
         working_plan,
         interaction_mode,
         finalization_mode=False,
+        evidence_selection: ResearchEvidenceSelection | None = None,
+        selected_ids: frozenset[str] = frozenset(),
+        source_review_start_index: int = 0,
     ):
         """Run one decision turn, and record what its input was made of.
 
@@ -1538,11 +1628,9 @@ class ConversationService:
         )
         claims = current_claims(inputs)
         basis = accepted_basis(inputs) if finalization_mode else None
-        research_mode = finalization_mode and basis is None and (
-            claims is not None or (review_criteria.requires_review and any(
-                isinstance(item, ActionObservation) and item.status == "succeeded"
-                and item.capability_id in {"web_search", "web_read"} for item in inputs
-            ))
+        research_mode = in_research_mode(
+            inputs, finalization_mode=finalization_mode,
+            requires_review=review_criteria.requires_review,
         )
         prompt_name = (
             "conversation.research.synthesis" if basis is not None else
@@ -1570,6 +1658,7 @@ class ConversationService:
         visible_messages.extend(conversation_content)
         typed_inputs_content = ""
         if inputs:
+            review = applicable_research_review(claims, inputs, reuse_start_index=source_review_start_index)
             latest_submission_index = next((index for index in range(len(inputs) - 1, -1, -1)
                                             if isinstance(inputs[index], SubmittedFinal)), None)
             latest_verification_index = next(
@@ -1585,19 +1674,44 @@ class ConversationService:
                 item
                 for index, item in enumerate(inputs)
                 if not (
+                    (research_mode and isinstance(item, DecisionFeedback)
+                     and item.reason_code == "research_needs_evidence")
+                    or
                     (isinstance(item, ActionObservation)
                      and item.capability_id == _VERIFICATION_CAPABILITY
                      and index != latest_verification_index)
                     or (isinstance(item, SubmittedFinal) and index != latest_submission_index)
                     or (isinstance(item, ResearchClaims) and item is not claims)
-                    or (isinstance(item, ResearchReview) and item is not next(
-                        (entry for entry in reversed(inputs) if isinstance(entry, ResearchReview)), None))
+                    or (isinstance(item, ResearchReview) and item is not review)
                 )
             )
             visible_inputs = materialize_interaction_inputs(decision_inputs)
             final_inputs = materialize_citation_context(visible_inputs)
+            if research_mode:
+                assert evidence_selection is not None and evidence_selection.next_step == "write"
+                inherited_ids = selected_citation_ids(
+                    tuple(reference for claim in claims.claims for reference in claim.references),
+                    inputs,
+                ) if claims is not None else frozenset()
+                visible_citation_ids = selected_ids | inherited_ids
+                final_inputs = tuple(item.model_copy(update={
+                    "citations": tuple(citation for citation in item.citations
+                                       if citation.evidence_id in visible_citation_ids),
+                }) for item in final_inputs)
+                output_type = research_submission_type(claims, final_inputs)
+            serialized_inputs = []
+            for item in final_inputs:
+                serialized = item.model_dump(mode="json")
+                if research_mode and isinstance(item.observation, ResearchClaims):
+                    serialized["observation"] = editable_research_claims(item.observation).model_dump(mode="json")
+                serialized_inputs.append(serialized)
+            source_feedback = research_review_context(review, inputs) if research_mode else None
             typed_inputs_content = "Typed execution inputs:\n" + json.dumps(
-                [item.model_dump(mode="json") for item in final_inputs],
+                ({"inputs": serialized_inputs,
+                  "requirements": [item.model_dump(mode="json") for item in research_goal_requirements(review_criteria)],
+                  "evidence_selection": evidence_selection.model_dump(mode="json"),
+                  "source_feedback": source_feedback.model_dump(mode="json") if source_feedback is not None else None}
+                 if research_mode else serialized_inputs),
                 ensure_ascii=False,
                 default=str,
             )
@@ -1769,6 +1883,7 @@ class ConversationService:
                 operation=error.operation,
                 provider_host=error.provider_host,
                 provider_status_code=error.status_code,
+                provider_diagnostics=error.diagnostics,
                 retryable=error.retryable,
             )
         else:
@@ -1804,6 +1919,8 @@ class ConversationService:
             reason_code=error.reason_code,
             provider_host=error.provider_host,
             provider_status_code=error.provider_status_code,
+            provider_diagnostics=(error.provider_diagnostics.model_dump(exclude_none=True)
+                                  if error.provider_diagnostics else None),
             retryable=error.retryable,
             action_name=error.action_name,
             action_kind=error.action_kind,

@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.capture.web_source import WEB_SOURCE_FORMAT, WebReadOutput, WebSearchArgs, WebSearchOutput
-from personal_agent.capabilities.contracts.verification import CitationSource, CitedDraftUnit, CitedEvidence, ConversationAnswerSegment
+from personal_agent.capabilities.contracts.verification import CitationSource, CitedDraftUnit, CitedEvidence, ConversationAnswerSegment, ConversationEvidenceReference
 from personal_agent.kernel.contracts.resource import ResourceRef
 from .context_materialization import ARTIFACT_OUTPUT_CAPABILITIES, select_visible_successful_observations
 from .models import ActionObservation, InteractionInput
@@ -181,3 +181,12 @@ def materialize_reference_sources(segments: tuple[ConversationAnswerSegment, ...
         location for segment in segments for ref in segment.references
         for location in _resolve_citation(ref.evidence_id, catalog)
     ))
+
+
+def selected_citation_ids(
+    references: tuple[ConversationEvidenceReference, ...], inputs: Iterable[InteractionInput],
+) -> frozenset[str]:
+    """Bind a selection to returned coordinates using the canonical resolver."""
+    catalog = {location.evidence_id: location for locations in _catalog(inputs).values() for location in locations}
+    return frozenset(location.evidence_id for reference in references
+                     for location in _resolve_citation(reference.evidence_id, catalog))

@@ -12,15 +12,15 @@
 
 | 入口 | 唯一主讲内容 |
 | --- | --- |
-| [EVD：变更证据与设计准入](change-evidence.md) | 基线、反事实、连续模型依赖链、失败归因、复杂度准入、外部机制比较与设计说明 |
-| [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、契约一致性与生产可达性 |
+| [EVD：变更证据与设计准入](change-evidence.md) | 基线、按实际影响选择证据与升级条件、反事实、连续模型依赖链、失败归因、复杂度准入、外部机制比较与设计说明 |
+| [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、派生缓存与投影、契约一致性与生产可达性 |
 | [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan、Admission、执行、Verification、Completion、Command 与恢复协议 |
 | [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入审计、反馈表达、存储边界、能力投影与服务方等价绑定 |
 | [COD：代码组织与实现约束](code-structure.md) | 类型、模块、编排、错误、注入、命名与通用 Prompt 契约 |
 | [QLT：测试、评估、观测与安全](quality-security.md) | 验证方式、替身边界、Golden Set、E2E 阻塞、安全与审计 |
 | [REL：迁移、ADR 与完成门禁](migration-release.md) | 兼容例外、迁移、ADR 与分类完成检查 |
 | [DOC：文档模块规范](../AGENTS.md) | 文档事实治理、生命周期与检查 |
-| [EVM：评测模块规范](../../evals/AGENTS.md) | 用例登记、比较身份、归档、运行声明与成本控制 |
+| [EVM：评测模块规范](../../evals/AGENTS.md) | 用例登记、比较身份、归档、历史证据复用、运行声明与成本控制 |
 | [生产 Prompt 模块规范](../../src/personal_agent/kernel/prompt_templates/AGENTS.md) | `PromptSpec` 注册、序列化、版本与消费检查 |
 | [REF：优秀智能体能力组件参考](../agentRef/README.md) | 外部机制检索坐标与证据范围，不拥有工程规则或采用结论 |
 

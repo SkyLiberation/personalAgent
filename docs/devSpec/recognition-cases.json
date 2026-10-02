@@ -96,6 +96,16 @@
       "expected": "ARC"
     },
     {
+      "id": "arc_derived_cache",
+      "task": "持久化派生数据的失效与重建由谁负责，能否直接修改缓存回写业务记录？",
+      "expected": "ARC"
+    },
+    {
+      "id": "arc_materialized_projection",
+      "task": "为报表保存物化投影时，如何确定一致性、来源版本和重建边界？",
+      "expected": "ARC"
+    },
+    {
       "id": "exe_command_digest",
       "task": "Approval 之后，Command、digest 与 Receipt 应如何绑定？",
       "expected": "EXE"
