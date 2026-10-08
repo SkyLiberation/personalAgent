@@ -12,7 +12,7 @@
 
 | 入口 | 唯一主讲内容 |
 | --- | --- |
-| [EVD：变更证据与设计准入](change-evidence.md) | 基线、按实际影响选择证据与升级条件、探索边界、反事实、连续模型依赖链、失败归因、复杂度准入、外部机制比较与设计说明 |
+| [EVD：变更证据与设计准入](change-evidence.md) | docs-first 与 e2e-first 的开发顺序、基线、按实际影响选择证据与升级条件、探索边界、反事实、连续模型依赖链、失败归因、复杂度准入、外部机制比较与设计说明 |
 | [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、派生缓存与投影、契约一致性与生产可达性 |
 | [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan、Admission、执行、Verification、Completion、Command 与恢复协议 |
 | [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入审计、反馈表达、存储边界、能力投影与服务方等价绑定 |

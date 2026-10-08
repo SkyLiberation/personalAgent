@@ -16,7 +16,7 @@
 
 ### 2.1 证据先于设计
 
-- 按第 4 节取得分类证据，证据不足时停止对应生产变更。设计步骤须说明已证明问题、责任主体、最小因果改动、反事实和撤回条件，具体执行 [EVD](docs/devSpec/change-evidence.md)。
+- 按第 4 节取得分类证据，证据不足时停止对应生产变更。初始设计文档先记录问题、待证假设与验收计划；生产方案准入须说明已证明问题、责任主体、最小因果改动、反事实和撤回条件，具体执行 [EVD](docs/devSpec/change-evidence.md)。
 - Product E2E 必须由目标用户的自然表达进入正式入口，经过生产 Composition Root、真实模型和 canonical 决策、执行、Verification、Completion 链路。脚本替代模型决策、直调组件或注入中间结果只能证明其实际边界，不能作为产品 E2E、baseline 或发布证据。
 - E2E 自动断言用户可观察结果与必要反事实。对象存在、工具调用、Trace、状态或局部检查通过不能替代用户结果；内部路径只有属于公开契约时才能成为通过条件。
 - 原始用户结果与预声明的局部检查点分别计分。失败按发生位置与因果关系归因；局部通过不能覆盖 E2E 失败，后续独立失败也不能否定已成立机制。候选保留、撤回和重新准入按 [EVD](docs/devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)处理。
@@ -58,13 +58,19 @@
 
 验证投入围绕用户结果、关键契约和真实失败边界组织，不以逐函数覆盖或测试通过数替代能力验收。Real E2E 验收用户结果，Offline Eval 验证真实失败或代表性样本的局部边界；确定性不变量由生产类型、断言及适用回放守住。lint、类型、依赖、配置和文档检查保留。职责与断言取舍执行 [QLT](docs/devSpec/quality-security.md#1-测试职责与覆盖)。
 
+### 2.7 docs-first 与 e2e-first
+
+- 所有设计和优化项必须执行 `docs-first`：在候选实验或实现前创建或更新唯一设计文档，明确要解决或优化的问题、事实与待证假设、目标结果、范围和责任主体。已有对应文档时修订原文，不另建重复方案；会话计划和事后补文档不能替代。流程由 [EVD](docs/devSpec/change-evidence.md#7-强制开发与设计流程)拥有。
+- 产品设计同时执行 `e2e-first`：实现前确定正式入口、自然用户请求、可自动断言的用户结果和必要反事实，建立可执行验收并取得第 4 节依据，再实施和运行真实 target E2E。验收判据未明确或无法执行时，不进入对应生产实现；工程重构和纯文档任务按第 4 节选择适用验收，不制造产品 E2E。
+- 落地过程中，每轮方案、实现或证据变化必须同步更新对应设计文档及受影响权威正文，明确已实现、已验证和剩余条件，直接删除或改写过期、冗余及冲突描述，不能只在文末追加纠偏，也不能推迟到任务结束。正文归属与生命周期执行 [DOC](docs/AGENTS.md)。
+
 ## 3. 任务路由：按识别信号读取细则
 
 识别信号帮助定位实际任务域，不缩小用户请求。涉及多域时读取所有适用细则。
 
 | 规范 | 识别信号 | 必读细则 |
 | --- | --- | --- |
-| `EVD` | 新增功能、能力优化、机制收益、缺陷修复、模型依赖链、baseline、消融、target E2E、工程重构、复杂度准入、外部机制比较 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
+| `EVD` | 新增功能、能力优化、设计项、优化项、docs-first、e2e-first、机制收益、缺陷修复、模型依赖链、baseline、消融、target E2E、工程重构、复杂度准入、外部机制比较 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
 | `REF` | 优秀智能体、外部智能体、Agent Harness 比较、Claude Code 能力参考、GPT/Codex 能力参考、OpenHands 能力参考、DeepSeek Harness 能力参考、Gemini CLI 能力参考、Hermes Agent 能力参考、Letta 能力参考、LangGraph 能力参考 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
 | `ARC` | 架构分层、业务事实、决策归属、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Product Aggregate、派生数据、缓存、物化投影、生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay、durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |

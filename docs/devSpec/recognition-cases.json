@@ -66,6 +66,16 @@
       "expected": "EVD"
     },
     {
+      "id": "evd_docs_and_e2e_first",
+      "task": "docs-first 与 e2e-first 如何约束设计项和优化项在落地前的验收准备？",
+      "expected": "EVD"
+    },
+    {
+      "id": "evd_design_optimization_entry",
+      "task": "开展设计项或优化项时，先写清什么问题和用户结果，怎样验证能够验收？",
+      "expected": "EVD"
+    },
+    {
       "id": "ref_claude_context",
       "task": "参考 Claude Code 能力参考，比较它的 Context 隔离和渐进式披露机制。",
       "expected": "REF"
@@ -168,6 +178,11 @@
     {
       "id": "doc_chinese",
       "task": "修改设计文档时需要遵守哪些中文写作规则？",
+      "expected": "DOC"
+    },
+    {
+      "id": "doc_design_lifecycle",
+      "task": "修改设计文档后如何清理过期、冗余描述并同步 Markdown 文档索引？",
       "expected": "DOC"
     },
     {
