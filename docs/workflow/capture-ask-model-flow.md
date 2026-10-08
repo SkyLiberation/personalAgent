@@ -18,7 +18,7 @@ flowchart LR
     L -->|"用户明确保存"| S["Prepare + Confirmation + Knowledge write"]
 ```
 
-Ask 不是独立 Workflow、Runtime facade 或 HTTP 路由。产品只有 Conversation answer path；paired 产品 E2E 证明它覆盖 personal-only 与 multi-source 用户目标。
+面向用户的回答由同一 Conversation 链路交付。`ASK-001A/B` 分别验收个人资料与多来源场景；实际结果及判据覆盖由[评测盘点](../evals/02-current-case-inventory.md)拥有，不能从存在这两个用例推导当前完整用户目标已通过。
 
 ## Capture 写路径
 

@@ -2,6 +2,18 @@
 
 **当前 E2E 数量以测试收集与 `evidence_catalog.py` 为准；已撤回的 Investigation Project 及其 scripted conformance 不再属于当前执行矩阵。**
 
+## 新运行的归档位置
+
+新运行按 [EVM 归档规则](../../evals/AGENTS.md#5-比较身份与归档)显式选择独立的 `.tmp/` 根目录。以下执行示例先在同一 PowerShell 会话设置变量；每次独立样本组重新生成根目录，子进程继承相同配置：
+
+```powershell
+$evaluationEvidenceRoot = ".tmp/evaluation-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "$evaluationEvidenceRoot/e2e"
+$env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "$evaluationEvidenceRoot/product"
+```
+
+读取历史证据时使用其原真实目录，不移动或改写旧归档。需要共享或发布的证据另封存到可访问位置；本节路径设置不改变证据类别、输入、评分或发布门槛。
+
 ## 收集当前矩阵
 
 ```powershell
@@ -9,14 +21,7 @@ uv run pytest evals/e2e_quality --collect-only -q --e2e-scope=release
 uv run pytest evals/e2e_quality --collect-only -q --e2e-scope=diagnostic
 ```
 
-当前实际结果：
-
-```text
-release selection: 9
-diagnostic selection: 39 pytest items (20 catalog cases)
-retired Investigation conformance: 0
-catalog total: 29
-```
+收集结果随代码版本变化；分类、数量和已有执行结果统一见[当前用例盘点](02-current-case-inventory.md)。发布时使用目标版本的实际收集结果。
 
 ## 执行机器 release selection
 
@@ -35,7 +40,7 @@ uv run python scripts/e2e_impact.py
 
 ```powershell
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
-$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "$evaluationEvidenceRoot/e2e"
 uv run pytest evals/e2e_quality --e2e-scope=release `
   --e2e-require-complete-matrix -q -s
 ```
@@ -70,11 +75,11 @@ $nodes = uv run python -m evals.e2e_quality.cross_cutting_validation `
 uv run pytest $nodes --collect-only -q
 ```
 
-需要新 live 证据时，把节点放在同一次 pytest run 中，不使用 `-x`，让整例失败仍能封存供关键检查点读取的 Trace。运行前仍须遵守单样本 `60s`、cohort `10min/200,000 tokens` 和数学早停门禁：
+需要新 live 证据时，把节点放在同一次 pytest run 中，整例失败仍封存供关键检查点读取的 Trace。迭代可按 [EVM 执行效率](../../evals/AGENTS.md#7-e2e-执行效率是评测设计门禁)定向或 fail-fast，但未执行节点不计通过；完整套件声明须有全部节点的有效证据。预算与停止条件按任务预声明，默认耗时和 token 数是成本重审信号，数学早停仍按实际晋级约束执行。
 
 ```powershell
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
-$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces/tool-calling-validation"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "$evaluationEvidenceRoot/e2e/tool-calling-validation"
 uv run pytest $nodes -q -s
 ```
 
@@ -103,7 +108,7 @@ Archive 保存执行证据；Persona、需求/contract 来源、baseline 引用�
 
 **`evals/product_baselines/` 不再写 `conv-*-baseline.json` 这类可覆盖文件；每次执行都生成独立且 checksum 封印的 archive。**
 
-目录结构为：
+未显式覆盖输出根时，机器仍使用以下历史默认结构；新运行由本节变量覆盖写入根，不据此迁移旧归档：
 
 ```text
 data/e2e_traces/product_baselines/<case-id>/<baseline|target>/<run-id>/
@@ -137,7 +142,7 @@ target 必须使用相同 seed、用户输入、principal、正式入口、初�
   --product-promotion-spec `
   evals/promotion_specs/interaction_intent_target_001.json `
   --product-promotion-output `
-  data/e2e_traces/promotion_gates/interaction-intent-target
+  "$evaluationEvidenceRoot/promotion_gates/interaction-intent-target"
 ```
 
 spec 固定 `case_id`、target role、stage、`expected_samples` 和 typed constraints。当前约束支持 boolean minimum/maximum count、numeric maximum sum、nearest-rank percentile 上限和 conditional rate 下限；`result_report_missing` 与 `test_failed` 是 recorder/pytest 产生的 boolean 执行事实。runner 还会机械拒绝：
@@ -156,7 +161,7 @@ spec 固定 `case_id`、target role、stage、`expected_samples` 和 typed const
 .\.venv\Scripts\python.exe -m evals.e2e_quality.promotion_gate `
   evals/promotion_specs/interaction_intent_target_001.json `
   <target-archive-root> `
-  --output-root data/e2e_traces/promotion_gates/replay
+  --output-root "$evaluationEvidenceRoot/promotion_gates/replay"
 ```
 
 默认一次性 `capture` 仍适用于没有 pre-capture 失败 baseline 的用例。已证明昂贵调用可能在结果报告形成前失败时，必须在调用前 enrollment，再在完整 grader report 形成后提交结果：
@@ -177,7 +182,7 @@ enrollment 只冻结可在执行前知道的 case、role、正式入口、身份
   --product-promotion-spec `
   evals/promotion_specs/agent_delegate_target_001.json `
   --product-promotion-output `
-  data/e2e_traces/promotion_gates/agent-delegate-target
+  "$evaluationEvidenceRoot/promotion_gates/agent-delegate-target"
 ```
 
 该 spec 对 `result_report_missing` 和 `test_failed` 都要求零容忍，因此任一正式样本在调用阶段失败即可停止余下 cohort。它不改变产品 target 门槛，也不把执行失败解释成用户结果失败类型。
@@ -205,7 +210,7 @@ $env:PERSONAL_AGENT_CONTEXT_PRESSURE_SEED = "<本次冻结 seed>"
   evals/product_baselines/test_conversation_context_pressure_001.py `
   --product-promotion-spec `
   evals/promotion_specs/conversation_context_pressure_baseline_001.json `
-  --product-promotion-output data/e2e_traces/pg
+  --product-promotion-output "$evaluationEvidenceRoot/pg"
 ```
 
 短控制最多允许一个失败；只有至少 `19/20` 短控制交付后才有资格执行 24 回合、48 条消息的长路径。2026-08-28 的交错正式运行在第 `7/40` 项出现第二个短控制失败，停止余下 33 项，未把短路径错误归因给 Context 增长。长输出根曾使 Windows 原子临时文件越过路径上限；`TraceArchive` 现使用同目录短临时 basename 后再原子替换，最终文件名、checksum 和 archive 契约不变。同一批密封证据已在原长输出根成功重放并写出完整门禁 archive。
@@ -217,13 +222,13 @@ $env:PERSONAL_AGENT_CONTEXT_PRESSURE_SEED = "<本次冻结 seed>"
 ```powershell
 $env:PERSONAL_AGENT_CONVERSATION_RESEARCH_DELIVERY_001_EVIDENCE_ROLE = "baseline"
 $env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = `
-  "data/e2e_traces/product_baselines/conversation-research-v3-current"
+  "$evaluationEvidenceRoot/product/conversation-research-v3-current"
 .\.venv\Scripts\python.exe -m pytest -q -s `
   evals/product_baselines/test_conversation_research_delivery_001.py `
   --product-promotion-spec `
   evals/promotion_specs/conversation_research_baseline_003.json `
   --product-promotion-output `
-  data/e2e_traces/promotion_gates/conversation-research-baseline-v3
+  "$evaluationEvidenceRoot/promotion_gates/conversation-research-baseline-v3"
 ```
 
 v3 把每个必需复合概念定义为预声明原子词集合，并要求原子词出现在同一句或同一标题；跨句散落的原子词负控制必须失败。旧 v2 archive 保持原 grader 结果，不能用 v3 离线重放事后晋级。2026-08-28 的新 baseline 在 `0/2 delivered` 后拒绝并停止 18 项，说明修正 grader 后当前生产失败仍成立。
@@ -236,7 +241,7 @@ v3 把每个必需复合概念定义为预声明原子词集合，并要求原�
   --product-promotion-spec `
   evals/promotion_specs/conversation_research_target_002.json `
   --product-promotion-output `
-  data/e2e_traces/promotion_gates/conversation-research-target-002
+  "$evaluationEvidenceRoot/promotion_gates/conversation-research-target-002"
 ```
 
 当前 per-sample 入口收集 20 个 pytest item，每项只执行一次正式 HTTP 请求并形成一份 checksum archive。历史 v1 聚合 archive 保持只读，不能与新 cohort 合并。
@@ -246,7 +251,7 @@ v3 把每个必需复合概念定义为预声明原子词集合，并要求原�
 ```powershell
 $env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
 $env:PERSONAL_AGENT_CONVERSATION_RESEARCH_DELIVERY_001_EVIDENCE_ROLE = "baseline"
-$env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "<本次独立归档根目录>"
+$env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "$evaluationEvidenceRoot/product/research-review"
 .\.venv\Scripts\python.exe -X utf8 -m pytest --collect-only -q `
   evals/product_baselines/test_conversation_research_review_001.py
 .\.venv\Scripts\python.exe -X utf8 -m pytest -q -s `
@@ -268,7 +273,7 @@ $env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "<本次独立归档根目录>"
   --product-promotion-spec `
   evals/promotion_specs/background_continuation_target_002.json `
   --product-promotion-output `
-  data/e2e_traces/promotion_gates/background-continuation-target-002
+  "$evaluationEvidenceRoot/promotion_gates/background-continuation-target-002"
 ```
 
 该命令收集 20 个 pytest item，而不是在一个 item 内循环 20 次。每项只执行一个正式 HTTP 请求并生成一个 archive，因此零容忍失败可以在样本边界立即停止。历史 `grader-v1` 聚合 archive 只服务已经关闭的 ADR 0015 证据；不能与 `v2-per-sample` 合并计算稳定性或晋级结果。
@@ -377,26 +382,24 @@ Outputs 事实正确性场景，其余两类均为 `5/5 honest_boundary`，未�
 
 ## 研究答案评测器的前置校准
 
-`RESEARCH-ANSWER-OUTCOME-001` 是评分器的真实模型 Offline Eval。现行源码与控制恢复 v6／旧任务身份；当前协作任务的新资格仍未成立。候选控制自带目标、标签不入模型请求的 v7 设计与代码已[独立归档](../../.tmp/research-grader-qualification-20261001/candidate-code.zip)，旧任务结果不迁入新资格。
+`RESEARCH-ANSWER-OUTCOME-001` 是真实模型 Offline Eval。共用评分器接收完整用户请求、实际答案及带来源的官方原文，输出引用由 Runtime 恢复，正式消费者只接受 passed。评分契约与版本由[评分固化记录](../optimization/completed/research-grader-qualification.md)拥有；各轮控制集、成本和资格结果见[当前登记](02-current-case-inventory.md#2026-10-02-独立评分的必要性与来源归属校准)，旧任务结果不迁入新任务资格。
 
-现行评分器为 `research-answer-task-support-zh-v6-thinking-budget`，输出额度 32768，thinking 开启。本轮 v7 用户原话绑定、官方原文与依据缺口分离见[候选记录](../optimization/research-grader-qualification.md)。预声明 8 条控制各一次、原真实答案一次，实际 2/9 后因范围归类反例停止；v7 已撤回当前接入。[本轮归档](../../.tmp/research-grader-qualification-20261001/diagnostic/summary.json)保留完整结果与未执行分母。
-
-v3 曾通过旧任务 20/20 控制，真实长答案仍有反例；该旧资格不迁入当前协作任务。下列当前源码命令仅收集旧控制，不启动付费样本；新的运行方案先按本轮责任反例重新准入：
+运行前按受影响任务声明样本计划、模型配置、成本预算与停止线，设置独立归档根目录。控制集自带自然请求，预期标签不入模型请求；首个资格反例后停止新增样本。历史预算和耗用保留在原运行登记，新运行依据实际输入与历史成本重新声明。
 
 ```powershell
 $env:PERSONAL_AGENT_RUN_RESEARCH_GRADER_CALIBRATION = "true"
-$env:PERSONAL_AGENT_E2E_TRACE_DIR = "<本次独立归档根目录>"
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "$evaluationEvidenceRoot/e2e/research-grader"
 .\.venv\Scripts\python.exe -X utf8 -m pytest --collect-only -q `
   evals/e2e_quality/test_research_answer_outcome.py
 ```
 
-本轮已执行候选模型为 `mimo-v2.6-flash`、`json_object`，thinking 开启并保留原始 reasoning。原文输入只有 goal、答案和参考，生产 Verifier 结论不参与评分。预声明门槛为全部控制和旧真实答案的语义审查成立；已知 tokens 上限 500,000、组内 1800 秒、模型 480 秒，依据与停止条件见[预声明](../../.tmp/research-grader-qualification-20261001/plan.json)。实际未达到资格门槛，新正式目标 E2E 未运行。
+只收集不会启动模型；实际运行需按预声明顺序和停止条件，不能把收集数写成模型通过数。评测器修改可消费封存真实答案，原E2E身份不改写；产品行为改变再执行受影响正式E2E。
 
 ## Release gate
 
 ```powershell
 uv run python -m evals.e2e_quality.release_gate `
-  --trace-root data/e2e_traces
+  --trace-root "$evaluationEvidenceRoot/e2e"
 ```
 
 gate 当前检查：
@@ -412,18 +415,16 @@ gate 还会 fail closed 拒绝缺少 `UserOutcomeContract`、错层或使用 tes
 
 ## 当前发布状态
 
-实际运行 release gate 后：目标 revision dirty，所有 native/loop capability 均为 `unverified`，原因均包含：
+已有发布门禁记录曾因目标代码未提交、缺少同版本通过证据而拒绝，保留的原因包括：
 
 ```text
 target_revision_dirty
 missing_same_revision_passing_trace
 ```
 
-当前不能引用历史完整矩阵或定向 archive 声称当前 revision release ready。
+现有定向归档尚未提供目标 clean revision 的完整发布矩阵。提交代码后仍须取得同版本完整证据，才能声明发布资格；历史完整矩阵或定向 archive 不替代该证据。
 
 
-## 研究评分器输出额度阻塞
+## 研究评分器输出额度
 
-该真实输入的预算修复由[评分输出预算固化记录](../optimization/completed/research-grader-output-budget.md)拥有；v6 已将 `max_tokens=32768` 统一交给正式消费者，v7 保留该额度与 thinking。原 E2E 及 v5 六份截断、v6 预算恢复均保持原身份；历史结果由[当前盘点](02-current-case-inventory.md#2026-10-01-独立评分器输出预算恢复)拥有。
-
-当前剩余门禁是[评分者参考范围与作者取证事实的区分](../optimization/research-grader-qualification.md#本轮结果与下一责任边界)。v7 真实旧答案回放仍暴露范围错读，按预声明停止剩余样本和新目标 E2E。准入由[Future 队列](../future/design-optimization-backlog.md)拥有，产品成功分子保持。
+输出额度的修复机制与正式消费者配置由[评分输出预算固化记录](../optimization/completed/research-grader-output-budget.md)拥有，历史截断和预算恢复结果见[当前盘点](02-current-case-inventory.md#2026-10-01-独立评分器输出预算恢复)。原 E2E、评分反例和产品成功分子保持原身份；预算恢复与定向评分资格分别报告，不替代完整产品交付或发布证据。

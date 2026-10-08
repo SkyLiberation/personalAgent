@@ -1,6 +1,6 @@
 # 研究独立评分器的思考与输出预算
 
-**已修复 `RESEARCH-ANSWER-GRADER-OUTPUT-001` 的真实输入截断：正式 E2E 共用的评分请求将输出额度由 1200 提高到 32768，保留 thinking 及原评分语义。** 当前版本为 `research-answer-task-support-zh-v6-thinking-budget`，原 Prompt、Schema 与 `passed` 合并条件保持。
+**已修复 `RESEARCH-ANSWER-GRADER-OUTPUT-001` 的真实输入截断：正式 E2E 共用的评分请求将输出额度由 1200 提高到 32768，保留 thinking。** 该预算修复版本为 `research-answer-task-support-zh-v6-thinking-budget`，当时 Prompt、Schema 与 `passed` 合并条件保持；现行 v8 继续使用相同输出额度，评分机制由[目标映射与依据归属](research-grader-qualification.md)拥有。
 
 ## 问题与生产消费者
 
@@ -12,7 +12,7 @@
 
 2026-10-01 [真实原请求恢复](../../../.tmp/research-grader-budget-20261001/audit.json)确认完整 SDK 参数只有 `max_completion_tokens: 1200 → 32768` 不同。原用户、原答案、原参考集、Schema、通用 Prompt、Adapter 前缀及其他 kwargs 相同。一次实际 Provider 请求正常 `stop`，形成合法 typed 判决，无重试；原始 reasoning 保留。该样本证明给定真实输入的预算恢复，属于评分责任边界诊断，不计新的 Product E2E。
 
-此次有效判决为未通过；判据审查及评分器资格由[独立问题](../research-grader-qualification.md)拥有，正式原 E2E 仍为 `0/1`。成本与实际命令由[评测记录](../../evals/02-current-case-inventory.md#2026-10-01-独立评分器输出预算恢复)拥有。
+此次有效判决为未通过；判据审查及评分器资格由[固化记录](research-grader-qualification.md)拥有，正式原 E2E 仍为 `0/1`。成本与实际命令由[评测记录](../../evals/02-current-case-inventory.md#2026-10-01-独立评分器输出预算恢复)拥有。
 
 ## 失败尝试与重新打开条件
 

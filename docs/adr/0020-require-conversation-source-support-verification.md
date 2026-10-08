@@ -10,6 +10,8 @@
 
 用户标准继续由 `InteractionIntent` 唯一派生。回执的 `success_criteria` 和 `criteria_digest` 继续绑定原用户标准；模型报告的 `criterion_results` 还包含验证器固定提供的来源支持项。系统检查不伪装成用户原文要求，不回写用户标准。语义状态属于模型，标准完整性、聚合与文本绑定属于工具；工具版本和来源标准版本进入真实模型请求。
 
+2026-10-02 身份交接修正：本次验收原文由 Runtime 派生只读 `criterion_id`，模型只引用 ID 并返回原三态和反馈；工具检查当前完整身份集合，从同次输入恢复原文后形成回执。普通与研究最终核验同步替换全文复制契约，原用户标准、系统支持标准、原稿及研究版本绑定保持。实际接口由[核验专题](../topics/verification-and-completion.md)拥有，设计与验证由[验收项转录问题](../optimization/completed/final-criterion-transcription.md)拥有；以下复杂度及 Contract 记录描述原首次来源标准接入身份。
+
 失败回执由现有 Conversation 循环消费，模型决定补证或改稿，修订稿再次验证。Verifier 只定位原句与证据缺口，不代写答案、不改变事实或权限、不代替 Completion。普通无验收要求的请求仍走原路径，本次不扩大 Verifier 的触发范围。
 
 ## Complexity Justification

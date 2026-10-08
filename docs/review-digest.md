@@ -21,104 +21,29 @@ Review Digest 被拆在几个层次里：
 
 | 层次 | 代码位置 | 职责 |
 | --- | --- | --- |
-| Review Domain | `src/personal_agent/review/` | Digest 生成、格式化、job、scheduler、feedback use case |
+| Review Domain | `src/personal_agent/application/review/` | Digest 生成、格式化、job、scheduler、feedback use case |
 | Memory / Review State | `MemoryFacade`、`PostgresMemoryStore` | `ReviewCard` 真源、到期查询、复习卡更新 |
-| Delivery | `review.delivery`、`FeishuDeliveryProvider` | 把消息投递到目标 channel |
+| Delivery | `application.review.delivery`、`FeishuDeliveryProvider` | 把消息投递到目标 channel |
 | Delivery Ledger | `PostgresReviewDigestStore` | 订阅、投递幂等、投递 item 映射、反馈事件 |
 | Feishu Inbound | `FeishuService` | 飞书命令、订阅命令、反馈命令优先分流 |
-| Web API | `web/routes/review.py` | 管理订阅、手动发送、查询记录、提交 Web 反馈 |
+| Web API | `adapters/web/routes/review.py` | 管理订阅、手动发送、查询记录、提交 Web 反馈 |
 | Frontend | `frontend/src/App.tsx` | Digest 页展示与辅助反馈操作 |
 
 前端是配置和辅助入口，不是复习触达主路径。主路径应优先走飞书或其他主动推送渠道。
 
 ## 数据模型
 
-### `review_cards`
+运行结构由 [Review 契约](../src/personal_agent/kernel/contracts/review.py)定义，`ReviewCard` 由 [kernel/models.py](../src/personal_agent/kernel/models.py)拥有。持久化记录按职责分工：
 
-复习卡仍属于长期记忆的一部分。当前 `ReviewCard` 包含：
+| 记录 | 责任 |
+| --- | --- |
+| `review_cards` | 保存复习题目、提示、间隔与到期时间；反馈更新复习状态 |
+| `digest_subscriptions` | 保存用户、投递目标、日程和启用状态 |
+| `digest_deliveries` | 保存投递状态与外部消息身份；按 `digest:{subscription_id}:{digest_date}` 预留同日投递 |
+| `digest_delivery_items` | 将本次简报中的 `R1/R2` 绑定到真实 `review_card_id` 及题目快照 |
+| `review_feedback_events` | 保存用户、复习卡、投递和反馈来源关联 |
 
-- `id`
-- `note_id`
-- `prompt`
-- `answer_hint`
-- `interval_days`
-- `due_at`
-- `last_reviewed_at`
-
-反馈会更新 `interval_days`、`due_at` 和 `last_reviewed_at`。
-
-### `digest_subscriptions`
-
-保存触达订阅。
-
-关键字段：
-
-- `id`
-- `user_id`
-- `channel`
-- `target_type`
-- `target_id`
-- `schedule_time`
-- `timezone`
-- `enabled`
-- `payload`
-
-飞书会话订阅默认使用 `target_type=chat_id`。
-
-### `digest_deliveries`
-
-保存每次 Digest 投递记录，并承担幂等账本职责。
-
-关键字段：
-
-- `id`
-- `subscription_id`
-- `user_id`
-- `channel`
-- `target_id`
-- `digest_date`
-- `idempotency_key`
-- `status`
-- `provider_message_id`
-- `error`
-- `created_at`
-- `sent_at`
-
-`idempotency_key` 当前按 `digest:{subscription_id}:{digest_date}` 生成，避免同一天同一订阅重复发送。
-
-### `digest_delivery_items`
-
-保存飞书简报中的短编号映射，例如 `R1`、`R2`。
-
-关键字段：
-
-- `delivery_id`
-- `short_id`
-- `review_card_id`
-- `note_id`
-- `prompt_snapshot`
-
-飞书里用户回复 `R1 记得` 时，系统会用该表映射回真实 `review_card_id`。
-
-### `review_feedback_events`
-
-保存复习反馈历史。
-
-关键字段：
-
-- `review_card_id`
-- `user_id`
-- `delivery_id`
-- `outcome`
-- `source_channel`
-- `source_message_id`
-- `created_at`
-
-`outcome` 当前支持：
-
-- `remembered`
-- `forgotten`
-- `later`
+用户回复短编号时，反馈用例从本次投递映射恢复复习卡，不靠题目文本猜测目标。接口字段与鉴权由 [Review API](api.md#review-digest-管理接口)维护。
 
 ## 生成与投递
 
@@ -181,27 +106,15 @@ PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED=true
 PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_TICK_SECONDS=60
 ```
 
-应用内 runner 使用 `ReviewDigestScheduler` 定期扫描订阅，并调用同一个 `ReviewDigestJob`。默认关闭，避免多实例部署时意外重复 tick；生产多实例场景下仍依赖数据库幂等兜底，后续可增强为显式 distributed lock。
+应用内 runner 使用 `ReviewDigestScheduler` 定期扫描订阅，并调用同一个 `ReviewDigestJob`。默认关闭；多实例重复 tick 由数据库投递幂等约束兜底。
 
 ## 配置
 
-环境变量见 `docs/env.md`。核心配置：
-
-```env
-PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=false
-PERSONAL_AGENT_REVIEW_DIGEST_USER_ID=default
-PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS=oc_xxx,oc_yyy
-PERSONAL_AGENT_REVIEW_DIGEST_TIME=09:00
-PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE=Asia/Shanghai
-PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED=false
-PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_TICK_SECONDS=60
-```
-
-`PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=true` 时，CLI job 或 FastAPI startup 会把配置型飞书 chat id bootstrap 成数据库订阅。
+启用、目标、时区、日程及应用内 runner 参数统一见 [Review Digest 配置](env.md#review-digest-飞书触达配置)。`PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=true` 时，CLI job 或 FastAPI startup 将配置中的飞书 chat id 初始化为数据库订阅；实际投递仍由同一 job 与账本执行。
 
 ## 飞书入口
 
-飞书文本消息会先识别 Review Digest 相关命令，命中后不进入普通 `AgentService.entry()`。
+飞书文本消息会先识别 Review Digest 相关命令，命中后不进入普通 `AgentService.converse()`。
 
 ### 查看 Digest
 
@@ -250,26 +163,7 @@ R1 稍后
 
 ## Web API
 
-管理 API 位于 `src/personal_agent/web/routes/review.py`，Web 运行期依赖由 `src/personal_agent/web/context.py` 装配。
-
-订阅管理：
-
-```text
-GET  /api/review/digest/subscriptions
-POST /api/review/digest/subscriptions
-PATCH /api/review/digest/subscriptions/{subscription_id}
-POST /api/review/digest/subscriptions/{subscription_id}/send-now
-GET  /api/review/digest/deliveries
-```
-
-复习卡和反馈：
-
-```text
-GET  /api/review/cards
-POST /api/review/cards/{review_card_id}/feedback
-```
-
-普通 API key 只能管理自身用户的数据；admin key 可以指定 `user_id`。
+订阅管理、手动投递、记录查询和反馈接口由 [API 文档](api.md#review-digest-管理接口)唯一维护。实现见 [review.py](../src/personal_agent/adapters/web/routes/review.py)，装配见 [context.py](../src/personal_agent/adapters/web/context.py)。普通 API key 管理自身数据，admin key 可指定 `user_id`。
 
 ## 前端辅助入口
 
@@ -287,36 +181,15 @@ POST /api/review/cards/{review_card_id}/feedback
 
 提交成功后刷新 Digest。这个入口用于补充管理和桌面使用场景，飞书仍是主触达渠道。
 
-## 验证
+## 验证与证据
 
-当前相关测试覆盖：
+生成、投递幂等和反馈更新需要按真实用户结果及适用失败反事实验收，当前证据由[评测盘点](evals/02-current-case-inventory.md)拥有。自 2026-09-18 起，历史 `tests/` 只读保留；验证分工统一见 [QLT](devSpec/quality-security.md#1-测试职责与覆盖)。
 
-- Digest job 和投递幂等
-- Postgres subscription / delivery / delivery item / feedback event
-- scheduler 到期判断
-- feedback use case 更新 review card
-- 飞书 digest 命令、订阅命令、反馈命令
-- Web API 管理接口
-- 前端 TypeScript/Vite build
-
-常用验证命令：
-
-```bash
-uv run pytest tests/test_review_digest_scheduler.py tests/test_review_digest_job.py tests/test_review_digest_store.py tests/test_review_feedback.py tests/test_feishu.py tests/test_agent_flows.py::TestDigestFlow tests/test_api.py::TestDigestEndpoint::test_digest_returns_data tests/test_api.py::TestReviewDigestManagementEndpoints -q
-```
-
-```bash
-cd frontend
-npm run build
-```
-
-```bash
-uv run personal-agent review-digest --help
-```
+前端构建和 CLI 参数检查仍可使用 `npm run build`（在 `frontend/` 中）与 `uv run personal-agent review-digest --help`。它们只证明构建或命令入口，不证明投递成功。
 
 ## 已知边界
 
 - 多实例部署当前主要依赖 `digest_deliveries.idempotency_key` 做同日幂等兜底，还没有显式 distributed lock / lease。
-- Digest 文案当前是规则格式化，后续可加入用户偏好、数量限制和答案提示策略。
-- 飞书是第一 delivery provider，`DeliveryRouter` 已留出其他 channel 扩展点。
+- Digest 文案由 `DigestFormatter` 规则格式化。
+- 当前主动投递使用飞书；投递结果由 `DeliveryRouter` 和 Provider 返回。
 - 前端没有完整订阅管理台，只提供 Digest 查看和反馈辅助操作。

@@ -14,7 +14,7 @@
 
 - 设计评审须列出该职责实际覆盖的输入形态、入口、标识与输出方式，核对类型、模型实际输入、工具返回、绑定或解析、反馈、恢复与权威文档是否遵循同一契约。对不适用项说明边界，不预建清单之外的能力。
 - 同一职责的来源差异由既有边界转换为统一契约，不能把多个替代协议同时交给模型或调用方选择。具体资源编号与引用格式由对应契约拥有，不在架构规范写死某个业务场景。原始来源事实及外部协议按其责任主体保留，不为表面格式一致而篡改。
-- 同一契约可以包含语义明确的不同操作或字段，也可以有实现同一 Port 的不同外部适配器；它们必须承担明确的差异职责，不能作为同一行为的重复入口或备用方案。不得借统一设计合并本来不同的权限、事实或决策归属，也不得为统一形式预建通用框架。
+- 同一契约可以包含语义明确的不同操作或字段，也可以有实现同一 Port 的不同外部适配器。适配器有真实服务方或环境消费者，复用唯一业务入口与结果契约；等价绑定按 [CTX](context-memory-retrieval.md#3-capability-projection-与服务提供方绑定)，重试与恢复按 [EXE](agentic-execution.md#1-proposaladmission-与降级边界)执行，不能借此保留已替代协议或改变业务语义。不得借统一设计合并本来不同的权限、事实或决策归属，也不得为统一形式预建通用框架。
 - 新方案接入时，必须在同一变更迁移全部受影响的生产者、消费者、说明和当前评测输入，删除被替代的字段、编号、解析、分支及指引。依据真实输入检查新契约可消费、旧契约不再接受，以及原始内容、来源与权限边界保持；验证类别遵守根规范，不新增单元测试。
 - 候选比较只能在隔离代码身份或归档中进行，不能成为生产开关、别名、降级路径或模型可选的第二套方案。历史原始证据只读保留，不因迁移改写。真实兼容需求仅按[迁移边界](migration-release.md#1-迁移与兼容边界)处理，不能用“逐步统一”解释无期限并行。
 
@@ -35,7 +35,7 @@
 | **Framework Protocol** | 跨业务成立的交互与权力不变量；不拥有业务事实 | Proposal/DecisionFeedback/Observation 契约，Execution/Verification/Completion 分离 |
 | **Runtime Mechanism** | 实现 Port 并拥有必要技术执行事实；不决定业务目标或生命周期 | Model/Tool/Agent Adapter、Gateway、Queue/Lease、checkpoint/journal substrate、ArtifactRef、Trace |
 | **Application Capability** | 用户可理解、可验收的业务动作；由唯一 Application Use Case 拥有语义、入口和结果契约 | grounded answer、删除知识、创建订阅、启动调查 |
-| **Product Aggregate** | 拥有需要独立一致性和持久生命周期的 canonical business facts | Knowledge Item、ResearchSubscription、InvestigationProject |
+| **Product Aggregate** | 拥有需要独立一致性和持久生命周期的 canonical business facts | Knowledge Item、ResearchSubscription |
 | **Interface / Projection** | 转换协议或展示 canonical facts；禁止成为第二业务写入口 | API/CLI/消息 DTO、进度 View、Capability projection |
 
 架构文档中未加限定的 `Capability` 一律指 **Application Capability**。Tool、MCP endpoint、Agent profile、Provider、Workflow 和 Project 都不得与其并列为同类能力：前四者是执行资源或机制，Workflow 是能力内部的固定编排，Project 是业务 Aggregate。`EffectiveCapabilities`、inventory 或模型可见 schema 只是按 identity、scope 和 policy 生成的只读投影，不拥有 capability definition、可用性或业务事实。
@@ -54,7 +54,7 @@
 
 框架可以统一 identity/scope 传播、Proposal/Feedback/Observation envelope、Policy/Admission/Gateway 协议、digest/幂等/审计原语、Queue/Lease、资源引用、Trace 以及 Verification/Completion 的阶段协议。具体 Application 或 Aggregate 必须继续拥有 Command payload、等待原因、审批后的合法迁移、补偿、Receipt 业务含义和 required result contract。
 
-审批是边界范例：框架可规定认证、授权决策、确认绑定、digest 校验、审计和 typed outcome；Delete Workflow 或 InvestigationProject 分别拥有待确认 Command、confirm/reject 后迁移和恢复行为。禁止创建通用 Approval、Task 或 Workflow 表成为第二事实 owner，也禁止要求所有业务机械实现 pause、resume 和 cancel 全套控制。
+审批是边界范例：框架可规定认证、授权决策、确认绑定、digest 校验、审计和 typed outcome；Knowledge Lifecycle 拥有知识删除与恢复的待确认 Command、confirm/reject 后迁移和恢复行为。禁止创建通用 Approval、Task 或 Workflow 表成为第二事实 owner，也禁止要求所有业务机械实现 pause、resume 和 cancel 全套控制。
 
 同一名称或结构若同时出现在 framework 与 domain，必须证明语义完全相同并由 framework contract 单一拥有；否则使用领域限定名称并保持独立。禁止用 converter 在两个独立可写的 `Decision`、`State`、`Receipt` 或 `Evidence` 模型间同步同一事实；来源事实与派生投影须区分契约和写入职责。
 
@@ -73,13 +73,15 @@
 
 ## 6. Canonical Model 与状态
 
-禁止在同一 Model 混装：
+以下角色必须区分权力、写入者与生命周期，禁止同一 Model 混装它们的事实归属或写入职责：
 
 - Definition：不可变定义；
 - Proposal/Command：建议或请求发生什么；
 - Event/Receipt：已经发生什么；
 - Runtime Projection：当前执行视图；
 - View/DTO：展示结构。
+
+组合返回值、恢复快照和展示视图可引用这些角色的 typed 数据，并保留各自来源与写入边界；承载多类数据本身不要求拆成多个持久化模型。
 
 权威事实的持久化须有恢复、审计、重放、授权或审批边界、长生命周期一致性等真实需求。派生值的持久化可以服务已确认的读取成本、延迟或索引查询需求，按第 6.1 节准入。“以后可能有用”不是理由。
 

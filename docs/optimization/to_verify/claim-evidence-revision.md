@@ -1,6 +1,6 @@
 # 缺证反馈后的正文与引用独立修订
 
-2026-09-28 后续接入状态：用户明确要求完整接入且不运行 Offline 测试，已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链；以下隔离实验与准入结论按原日期保留。生产可达不等于正式 E2E 通过，当前验收见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
+2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-EVIDENCE-REVISION-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`，针对模型收到缺证反馈后改写正文却沿用不支持的引用。失败输入及已成立局部事实见[单项替换实验](../revision-feedback-loop.md#141-单个完整-claim-替换与工具分层评估)。本方案没有被第 142 节的创建失败证伪，必须保留。
 

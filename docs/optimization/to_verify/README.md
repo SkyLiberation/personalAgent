@@ -2,9 +2,20 @@
 
 本目录按具体优化问题保留尚未充分证明、尚未覆盖或仅取得局部证据的方案，防止方案随会话与失败实验丢失。它不是第二份产品准入队列；产品准入仍由 [Future 队列](../../future/design-optimization-backlog.md)拥有，记录生命周期由[优化规则](../README.md#待验证方案与失效方案的保留规则)拥有。
 
-2026-09-28：用户要求完整接入且不运行 Offline 测试。claim 主链已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)装配；目录仍保留待验证身份，生产接入不等于用户结果通过。正式验收统一见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
+本目录同时保存生产候选与尚有证据价值的历史方案。生产接入不等于用户结果通过；历史章节的“当前”只对应其代码身份，不能据此恢复已停用机制。当前行为见 [ADR 0032](../../adr/0032-conversation-research-claims.md)及[验证专题](../../topics/verification-and-completion.md)，拆分、复合识别和独立文档缺项识别按 [ADR 0033](../../adr/0033-claim-deletion-and-document-absence-pause.md)停用。
 
-2026-10-01 固化记录：[正文片段寻址](../completed/claim-fragment-addressing.md)、[当前参数范围](../completed/claim-argument-scope.md)、[模型重试计量](../completed/model-retry-usage.md)及[局部修订引用继承](../completed/claim-retained-references.md)。其余候选与现行停用机制仍按各自问题维护。
+已解决问题统一见 [completed 索引](../completed/README.md)，本目录只维护仍待验证的方案入口。
+
+## 近期候选入口
+
+2026-10-02 接入的下列候选保留各自失败边界。2026-10-07 修订比较的核验校准未成立，停止扩大循环；预声明、真实输入、实际结果与责任反事实由[同一问题记录](../claim-revision-nonconvergence.md#2026-10-07-修订比较的验证预声明)拥有。选证输出与计量是独立前置边界，不用它们的失败否定尚未到达的最终语义候选。
+
+| 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
+| --- | --- | --- |
+| `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [最终稿修订比较与范围保真](final-revision-comparison.md) |
+| `RESEARCH-SELECTION-USAGE-COMMIT-001`：后置写作或选证输出失败造成已完成用量漏计 | [正式用量差额](../research-selection-usage-commit.md) | [已完成选证用量的及时提交](research-selection-usage-commit.md) |
+| `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：单次输出截断阻断正式研究 | [正式选证失败](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [研究请求采用服务方默认输出额度](research-provider-output-default.md) |
+| `ANSWER-NORMATIVE-SCOPE-001`：多来源稿的指代导致具体页面归属错误 | [真实来源错配](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | [最终稿具体来源归属](answer-source-attribution.md) |
 
 ## 按问题找方案
 
@@ -19,31 +30,15 @@
 | `CLAIM-EVIDENCE-SELECTION-001`：研究论断先于证据适合性判断 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[当前链路及历史错引](../claim-revision-nonconvergence.md#整体失败链与已有优化) | [先选合适证据，再生成论断](claim-evidence-selection.md) |
 | `CLAIM-PARAMETER-RECOVERY-001`：隔离实验在参数拒绝后终止，未让研究模型修复 | 同上；[参数恢复问题](claim-parameter-recovery.md#失败事实与责任边界) | [参数错误回传](claim-parameter-recovery.md) |
 | `CLAIM-EVIDENCE-REVISION-001`：真实缺证反馈后只改写正文，引用仍不支持论断 | 同上；[单项替换结果](../revision-feedback-loop.md#141-单个完整-claim-替换与工具分层评估) | [正文与引用独立修改](claim-evidence-revision.md) |
-| `CLAIM-MULTI-PROPOSITION-001`：一个论断混合数项可独立失败的判断 | 同上；[第 15 版复合论断与第 9 次拒稿](../revision-feedback-loop.md#145-宽限制下的完整研究修订循环) | [复合论断拆分候选](claim-multi-proposition.md) |
+| `CLAIM-MULTI-PROPOSITION-001`：一个论断混合数项可独立失败的判断 | 同上；[停用决定及正式对比](../claim-revision-nonconvergence.md#2026-09-29-暂停拆分与复合识别的正式对比) | [历史拆分方案与证据](claim-multi-proposition.md)，当前不接入生产 |
 | `CLAIM-ASSERTION-REINTRODUCTION-001`：整项改写重新带入其他无据判断 | 同上；[无法收敛的整体问题](../claim-revision-nonconvergence.md) | [论断内片段有界修订候选](claim-fragment-revision.md) |
 | `CLAIM-REVISION-PROGRESS-001`：反馈后多次编辑而不重新核验 | 同上；[无法收敛的整体问题](../claim-revision-nonconvergence.md) | [协调层新版复验触发候选](claim-revision-progress.md) |
 | `CLAIM-LOOP-PROMPT-CONTRACT-001`：研究输入混入运行控制 | 同上；[第 173 次实发输入](../../../.tmp/claim-v53-no-parameter-cap-recovery2-20260924/call-173-request.json) | [研究输入职责收窄候选](claim-research-context-scope.md) |
 | `CLAIM-VERIFIER-STAGE-SCOPE-001`：研究论断按最终答复要求被拒 | 同上；[第 18 版来源支持与固定语义诊断](../claim-revision-nonconvergence.md#2026-09-26-连续续接结果) | [研究与最终交付验收边界候选](claim-verifier-stage-scope.md) |
 
-上述编号标识同一产品问题内可独立判断的失败边界，不创建新的产品能力或重复 Future 状态。证据选择候选处理首次论断生成及缺证后的取证方向；引用独立修订候选处理已存在论断的字段编辑，两者不能互相充当验证结果。参数与修订方案仍需在同一真实依赖链验证；复合论断候选依赖该链的完整集合与反馈，各自判据不能混用。统一文档行身份及长期观察仍由[独立坐标问题](../citation-coordinate-confusion.md)拥有，不把未返回文档号直接归因为旧编号混用。
+上述编号标识同一产品问题内可独立判断的失败边界，不创建新的产品能力或重复 Future 状态。连续验证及失败过程由[研究论断问题](../claim-revision-nonconvergence.md)和[反馈修订记录](../revision-feedback-loop.md)拥有，各候选记录自己的已证边界、依赖和剩余判据。
 
-本轮另记录[已有集合仍选择首次创建](../claim-action-selection.md)，目前只有失败事实，没有新优化候选；不能为填满本目录而预建方案。
-
-续接验证还记录了[正文工具夹带引用参数](../claim-field-tool-mixup.md)。它是字段分工的具体消费反例，仍关联原独立修订候选；不以新增一个问题名复制另一套方案。该轮涉及的三个候选均继续保留，完整续接结果见[第 144 节](../revision-feedback-loop.md#144-保留三个候选并接续未消费的参数错误)。
-
-用户再次扩大上限后的[能力验证](../claim-field-tool-mixup.md#优先验证合法引用编辑能力)首次观察到合法引用修改并保持正文及其他项。随后的[完整循环验证](../revision-feedback-loop.md#145-宽限制下的完整研究修订循环)已到达主动复验、c1 局部支持通过和 c2 引用修改，但第 15 版仍被拒，下一请求前预算预检停止。完整集合未通过；此前参数混用及本轮局部收益均保留，三个候选不迁入 completed。
-
-相同输入的判决准确性由[核验一致性问题](../claim-verifier-consistency.md)拥有；报告恢复适用性见[来源报告复用固化记录](../completed/claim-source-review-reuse.md)，反馈修订见[支持范围候选](claim-supported-scope-repair.md)。三个责任边界分别验收。
-
-第 15 版拒稿后的[拆分候选连续验证](../revision-feedback-loop.md#146-复合论断拆分工具的连续验证)没有观察到模型选择 `split_claim`，第 22 版又在已修改的 c1 被拒，预算预检阻止后续请求。拆分应用及其语义收益未到达；候选按具体问题保留，不把工具可用误记为工具有效。
-
-[Verifier 粒度反馈验证](../revision-feedback-loop.md#147-verifier-粒度反馈的识别与连续消费)在同一第 15 版 c2 中识别三项独立职责；真实反馈续接出现一次 `split_claim(c1)`，未改项保持，但拆分稿新增无据细节并被拒。反馈识别、动作消费、拆后来源支持和整个集合通过分别计分；具体未证边界仍由[复合论断候选](claim-multi-proposition.md)拥有。
-
-[逐项缺证定位续接](../revision-feedback-loop.md#148-缺证意见逐项定位后的研究修订)已把真实 `finding` 对应到原 claim 片段并送达研究模型；模型四次改写 c2、补读一次来源，未拆分或更新引用，第 19 版未重新核验即遇预算预检。该结果仅证明定位交接，不证明缺证解除；候选及下一责任边界仍见[复合论断方案](claim-multi-proposition.md)。
-
-[延长至第 40 版的同轨迹验证](../revision-feedback-loop.md#150-扩大预算后仍未取得完整研究集合通过)继续观察到自主拆分、逐项反馈消费和独立引用修改，也再次观察到新增无据细节与参数误用。第 17、18 次核验对未改 c6 的相同实发请求给出相反支持判断；第 19 次拒绝已改写 c6，新版第 40 版未提交。完整集合仍未通过，复合论断、证据修订、参数混用和核验一致性分别按各自问题记录推进；一条轨迹的局部动作不迁入 completed，也不计正式 E2E。
-
-[移除参数错误次数上限的续接](../revision-feedback-loop.md#151-移除参数错误次数上限后的连续续接)使第 40 版得到提交与第 20 次真实核验，后者仍拒绝 c7。模型随后改到第 59 版而未提交；第 180 次服务请求没有响应。参数错误累计数不再触发停止的局部结果属于[恢复候选](claim-parameter-recovery.md)，不能扩大成完整研究集合通过或工具动作稳定正确；引用与论断匹配仍由[引用修订候选](claim-evidence-revision.md)验收，同项改写范围和新版复验分别见[片段修订候选](claim-fragment-revision.md)与[触发候选](claim-revision-progress.md)。
+尚无新候选的失败事实保留在[阶段动作选择](../claim-action-selection.md)、[字段参数混用](../claim-field-tool-mixup.md)与[核验一致性](../claim-verifier-consistency.md)中；索引不复制各轮实验结果或已固化结论。
 
 ## 每项必须保留的内容
 

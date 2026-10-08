@@ -1,24 +1,26 @@
 # 论断内部片段的有界修订
 
-2026-10-01：当前片段修订采用[Runtime 片段地址](../completed/claim-fragment-addressing.md)，模型提交当前版本的首尾片段 ID；原 `old_fragment` 搜索协议已删除。范围外正文、引用及其他项保持不变，合法编辑后仍完整复验新版。下文旧字符串机制与试验解释对应历史代码身份。
+正文目标的寻址契约与证据由[Runtime 片段地址完成记录](../completed/claim-fragment-addressing.md)拥有。本页独立拥有选中范围外内容保真与编辑后的语义验收；下文旧字符串机制与试验解释只对应历史代码身份。
 
-2026-09-28 后续接入状态：用户明确要求完整接入且不运行 Offline 测试，已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链；以下隔离实验与准入结论按原日期保留。生产可达不等于正式 E2E 通过，当前验收见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
+2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
-`CLAIM-ASSERTION-REINTRODUCTION-001` 属于[研究论断反馈修订无法收敛](../claim-revision-nonconvergence.md)。本页只记录“修一处时重新带入同项内其他无据判断”的待验证方案；[复合论断拆分](claim-multi-proposition.md)、[正文与引用独立修订](claim-evidence-revision.md)、[修订后长期不核验](claim-revision-progress.md)及[核验不一致](../claim-verifier-consistency.md)分别负责其他边界。[集成隔离候选](../../../.tmp/claim-integrated-20260926/run.py)已把整项正文替换改为按当前版本和唯一原文片段合并；[首轮](../../../.tmp/claim-integrated-20260926/result.json)在创建前停止，片段修订尚未到达，没有生产代码或该机制的模型验证结果。
+`CLAIM-ASSERTION-REINTRODUCTION-001` 属于[研究论断反馈修订无法收敛](../claim-revision-nonconvergence.md)。本页只记录“修一处时重新带入同项内其他无据判断”的待验证方案；[复合论断拆分](claim-multi-proposition.md)、[正文与引用独立修订](claim-evidence-revision.md)、[修订后长期不核验](claim-revision-progress.md)及[核验不一致](../claim-verifier-consistency.md)分别负责其他边界。[集成隔离候选](../../../.tmp/claim-integrated-20260926/run.py)已把整项正文替换改为按当前版本和唯一原文片段合并；[首轮](../../../.tmp/claim-integrated-20260926/result.json)在创建前停止，片段修订尚未到达，当轮没有生产代码或该机制的模型验证结果；该结论不覆盖后续接入。
 
 [后续连续续接](../claim-revision-nonconvergence.md#2026-09-26-连续续接结果)中，研究模型多次选择 `revise_claim_fragment`；代码检查证实替换片段以外的正文、当前引用和其他 claim 逐字保持，旧缺口也有被解除的实例。这只证明修改范围受控，不证明替换片段有据或不会在片段内部引入新的强度错误：c12 的 `should implement` 曾被写成“要求”，整组最终未通过。本候选继续保留在 `to_verify`，不按字段保真宣称语义完成。
 
 ## 编辑目标寻址的独立子问题
 
-2026-09-30 正式轨迹中的原文抄写失败及其完整请求审查，已归入 `CLAIM-EDIT-TARGET-TRANSCRIPTION-001` 的[Runtime 片段寻址候选](../completed/claim-fragment-addressing.md)。该候选负责生成与解析版本绑定的正文地址；本页继续负责选中范围外内容保真及编辑后的语义验收，两者共同消费当前 canonical 正文。
+2026-09-30 正式轨迹中的原文抄写失败及其完整请求审查，已归入 `CLAIM-EDIT-TARGET-TRANSCRIPTION-001` 的[Runtime 片段寻址完成记录](../completed/claim-fragment-addressing.md)。本页继续负责选中范围外内容保真及编辑后的语义验收，两者共同消费当前 canonical 正文。
 
 ## 失败事实与已有机制
 
 第 20 次 Verifier 对第 40 版 c7 指出连接适用范围、`always` 取值和 `allowed_tools` 用途三处支持缺口。后续同一轨迹中，c7 曾删去 `"always"` 又写回；[第 52 版](../../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v52.json)把 `allowed_tools` 收窄为工具子集，[第 53 版](../../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v53.json)又写入降低 token 成本和延迟。第 59 版未经重新核验，不能判断这些新表述最终是否受证据支持；反复改写本身已经表明修改范围与反馈范围不一致。
 
-现有 `revise_claim_text(claim_id, text)` 要求研究模型重新给出指定 claim 的完整正文。运行系统能保留其他 claim 和本项未修改的引用字段，却无法保留本项正文中未被反馈指出的判断。`split_claim` 和逐项缺证定位已经在隔离链中出现过，但一次拆分引入原论断没有的细节，逐项定位之后仍观察到整项正文反复改写。因此，增加同类提示或再提供一份命题清单不能算新的编辑范围约束；决定性记录见[复合论断候选](claim-multi-proposition.md)。
+当轮 `revise_claim_text(claim_id, text)` 要求研究模型重新给出指定 claim 的完整正文。运行系统能保留其他 claim 和本项未修改的引用字段，却无法保留本项正文中未被反馈指出的判断。`split_claim` 和逐项缺证定位已经在隔离链中出现过，但一次拆分引入原论断没有的细节，逐项定位之后仍观察到整项正文反复改写。因此，增加同类提示或再提供一份命题清单不能算新的编辑范围约束；决定性记录见[复合论断候选](claim-multi-proposition.md)。
 
 ## 条件候选与责任边界
+
+以下为 2026-09-26 的历史字符串匹配方案；当前生产寻址见[完成记录](../completed/claim-fragment-addressing.md)，不能从本节恢复旧入口。范围保护和编辑后语义仍分别验收。
 
 候选把**指定 claim 的整段正文替换**收窄为**绑定当前版本、只改一个已定位原文片段的补丁**。研究模型选择需要处理的当前缺证片段，并给出该片段的替换文本或删除意图；运行系统要求目标在当前正文中唯一匹配、版本仍有效，才合并变更。未命中的、重复命中的或过期的目标明确拒绝并返回当前稿，不猜测相似位置，也不退回整项重写。未触及的正文、引用和其他 claim 由代码原样保留。引用选择仍由研究模型负责，沿用现有文档号与行号坐标和独立引用修订入口；本候选不同时改变引用协议。
 

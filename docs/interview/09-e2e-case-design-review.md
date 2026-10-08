@@ -1,10 +1,10 @@
-# 28 条评测用例分别验证什么
+# 评测用例分别验证什么
 
-> **本文件用于在面试中解释当前 28 条 canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
+> **本文件用于在面试中解释canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
 
-## 1. 四类用例回答不同问题
+## 1. 不同分类回答不同问题
 
-**Product E2E、Application Integration、Runtime Conformance 和 Capability Profile 分别验收用户结果、业务入口、运行不变量和外部能力组合。** 当前目录包含 9 条 Product E2E、8 条 Application Integration、7 条 Runtime Conformance 和 4 条 Capability Profile。
+Product E2E、Application Integration、Runtime Conformance、Capability Profile 和 Boundary Evaluation 分别验收用户结果、业务入口、运行不变量、外部能力组合和局部判断。数量以 catalog 为准，本文按现行分类解释各用例目的，执行结果仍由评测盘点拥有。
 
 | 类型 | 验证的问题 | 关键判据 |
 | --- | --- | --- |
@@ -12,6 +12,7 @@
 | Application Integration | 一个正式业务入口能否完成自己的事实链 | 状态迁移、持久事实和结果契约成立；不能证明 Agent 自主完成用户目标 |
 | Runtime Conformance | 运行系统是否遵守指定机械不变量 | 工具、预算、并发、恢复、权限或诊断事实成立 |
 | Capability Profile | 指定外部连接器与配置能否完成目标读取 | 外部资源到达、来源绑定和失败语义成立 |
+| Boundary Evaluation | 局部模型或责任边界能否通过代表性反例 | 固定任务和输入范围内的判断成立，不证明完整 Agent 交付 |
 
 ## 2. Product E2E 验收用户结果
 
@@ -68,5 +69,11 @@
 | `E18` | 验证真实 Notion MCP 页面读取进入 Conversation | Notion 工具至少一次成功；结果带 MCP/Notion 来源；页面 marker 进入工具结果和最终回答；只使用 Notion 读取与有界重读工具 |
 | `E19` | 验证外部能力未配置时明确失败 | `disposition` 为 `limitation`；工具调用为 0；没有伪造工具结果；响应不暴露内部运行对象 |
 | `E21` | 验证超大 GitHub 文件可以在上下文预算内精确读取 | 最终回答包含本次读取的邮箱与真实行号；最大 `Observation` 有界；超出门槛的令牌不超过一个普通回合；行号来自重读窗口 |
+
+## 6. Boundary Evaluation 校准独立评分
+
+`RESEARCH-ANSWER-OUTCOME-001` 直接将中文用户请求、实际答案和带来源的参考交给真实模型，检查评分器能否拒绝真实错误及相邻负例、接受满足同一契约的合法表达。它不启动目标 Agent 或数据库，也不证明生产研究回答已修复。
+
+当前评分契约与资格边界见[评分固化记录](../optimization/completed/research-grader-qualification.md)，实际样本与历史评分差异见[评测盘点](../evals/02-current-case-inventory.md)。
 
 详细的证据等级、历史结果与发布资格见[证据、指标与发布资格](06-evidence-and-release.md)。

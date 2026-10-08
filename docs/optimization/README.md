@@ -10,10 +10,13 @@
 
 | 问题编号与范围 | 推进记录 | 活动设计 |
 | --- | --- | --- |
-| `CONVERSATION-RESEARCH-STOP-001`：来源支持修正及其取证前置条件 | [问题总览与经验索引](conversation-source-support.md)、[正文搜索读取第 103 节](evidence-acquisition.md#103-正文行坐标统一与预编号引用联动) | [来源支持设计](../future/conversation-source-support.md) |
+| `CONVERSATION-RESEARCH-STOP-001`：来源支持修正及其取证前置条件 | [问题总览与经验索引](conversation-source-support.md)、[正文搜索读取第 103 节](evidence-acquisition.md#103-正文行坐标统一与预编号引用联动) | [来源语义与修订设计](../future/conversation-verification-false-positive.md) |
 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`：验证漏放与循环修订 | [对象错位](answer-object-mismatch.md)、[文档缺项](document-absence.md)、[反馈修订](revision-feedback-loop.md)、[研究论断无法收敛及子问题](claim-revision-nonconvergence.md)、[按问题关联的待验证方案](to_verify/README.md)、[阶段动作选择](claim-action-selection.md)、[相同输入核验不一致](claim-verifier-consistency.md) | [Verifier 设计](../future/conversation-verification-false-positive.md) |
 | `CITATION-COORDINATE-CONFUSION-001`：原文行号与临时引用编号混用 | [失败事实与记录](citation-coordinate-confusion.md) | [统一文档坐标与后续观察条件](../future/citation-coordinate-identity.md) |
-| `ANSWER-NORMATIVE-SCOPE-001`：规范主体、来源与义务强度对应 | [独立问题与反馈验收边界](normative-scope-attribution.md) | 无活动实现候选；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有 |
+| `ANSWER-NORMATIVE-SCOPE-001`：规范主体、来源与义务强度对应 | [独立问题与反馈验收边界](normative-scope-attribution.md) | [最终稿具体来源归属候选](to_verify/answer-source-attribution.md)；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有 |
+| `ANSWER-ENUMERATION-SCOPE-001`：真实反馈修订扩大列举范围 | [实际修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [最终稿修订比较候选](to_verify/final-revision-comparison.md) |
+| `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：选证输出截断 | [正式入口失败](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [服务方默认输出额度候选](to_verify/research-provider-output-default.md) |
+| `RESEARCH-SELECTION-USAGE-COMMIT-001`：失败前已完成选证用量漏计 | [计量提交问题](research-selection-usage-commit.md) | [及时提交候选](to_verify/research-selection-usage-commit.md) |
 
 同一队列项可以有不同机制域的设计；记录必须写清覆盖范围。本表不代表同编号的网页搜索/抓取分离、来源生成或评测工作已经全部完成，也不维护第二份准入状态。
 
@@ -23,6 +26,7 @@
 
 | 阅读目的 | 入口 |
 | --- | --- |
+| 近期已接入候选如何开始验证 | [近期候选入口](to_verify/README.md#近期候选入口)；实际输入输出链见[修订比较验证](claim-revision-nonconvergence.md#2026-10-07-修订比较的验证预声明) |
 | 当前还缺什么、哪些修复已有收益 | [问题总览](conversation-source-support.md#当前核心问题与责任边界) |
 | 同一问题试过什么、为何停止或接入 | [十个问题入口与历史编号](conversation-source-support.md#阅读顺序与完整记录) |
 | 文档缺项的优化与当前边界 | [文档缺项](document-absence.md)，最新为[第 109 节原文核查与扩源边界](document-absence.md#109-原文缺项核查与扩源反馈的边界验证) |
@@ -41,8 +45,9 @@
 | 当前研究参数范围如何进入真实 Schema | [参数范围完成记录](completed/claim-argument-scope.md) |
 | 重试失败响应用量为何丢失 | [重试计量完成记录](completed/model-retry-usage.md) |
 | MiMo 429 的具体原因为何无法定位 | [Provider 失败诊断交接](to_verify/model-provider-diagnostics.md) |
-| 独立评分器为何无输出、有效评分是否可信 | [输出预算固化记录](completed/research-grader-output-budget.md)、[评分资格审查](research-grader-qualification.md) |
+| 独立评分器为何无输出、有效评分是否可信 | [输出预算固化记录](completed/research-grader-output-budget.md)、[评分目标映射与依据归属](completed/research-grader-qualification.md) |
 | 已有事实是否回答原用户问题、未知能否满足目标 | [逐项用户事实覆盖及停止边界](to_verify/research-goal-coverage.md) |
+| 最终验收项重抄为何让合法报告失效 | [验收项引用恢复完成记录](completed/final-criterion-transcription.md) |
 | 模型重抄待编辑正文为何导致修订被拒 | [编辑目标抄写问题与 Runtime 片段寻址](completed/claim-fragment-addressing.md) |
 | 被拒稿为何需要交回完整正文与逐段引用 | [完整基稿交接](completed/complete-rejected-draft-handoff.md) |
 | Verifier 引句绑定为何丢失有效反馈 | [调用单元绑定](completed/verifier-finding-binding.md) |
@@ -106,6 +111,8 @@
 | --- | --- |
 | 身份与目标 | 日期、问题编号、输入或归档身份、待区分的假设、所属责任边界 |
 | 固定与改变 | 用户任务、来源、模型与 thinking、预算、读取摘要及位置、Plan、改动变量；不适用项说明原因 |
+| 输入输出来源 | 区分原始轨迹、条件回放和人工相邻控制；记录每个局部输入的上游实际输出、版本、引用和校验和，以及下游实际消费坐标。连续验证按 [EVD](../devSpec/change-evidence.md#11-模型依赖链必须连续验证)执行 |
+| 模型输入审计 | 记录生产构造链、最终实际请求、Schema 和服务方参数；预期标签由评测持有，不写入被评模型输入。输入范围不同的 Verifier 与评分器分别判断 |
 | 预声明 | 用户结果与局部判据、成功和反事实控制、调用或成本预算、停止条件 |
 | 实际结果 | 已执行和未执行样本、原始结果、人工或自动判断、用量与耗时、错误及脚手架修正 |
 | 结论与取舍 | 被否定的主张、仍成立的经验、能否进入生产、下一条有依据的验证边界 |

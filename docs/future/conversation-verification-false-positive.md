@@ -1,12 +1,14 @@
 # Conversation Draft 语义验证隔离设计
 
-本页是[设计优化队列](design-optimization-backlog.md)中 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 的条件设计，只保存尚未闭环的决策、剩余门禁和退出条件。机制候选由[问题总览](../optimization/claim-revision-nonconvergence.md)及其子问题拥有，最新正式结果由[评测文档](../evals/02-current-case-inventory.md#2026-10-02-mimo-诊断补齐后的正式验证)拥有。
+本页是[设计优化队列](design-optimization-backlog.md)中 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 的条件设计，只保存尚未闭环的决策、剩余门禁和退出条件。机制候选由[问题总览](../optimization/claim-revision-nonconvergence.md)及其子问题拥有，最新正式结果由[评测文档](../evals/02-current-case-inventory.md#2026-10-02-验收项引用恢复的正式验证)拥有，后续条件局部反例见[来源归属与枚举范围验证](../evals/02-current-case-inventory.md#2026-10-02-具体来源归属与实际反馈修订验证)。
 
 ## 1. 尚未解决的问题
 
 **恢复 evidence-first 后，研究与修订仍未稳定交付。** [选证候选](../optimization/to_verify/claim-evidence-selection.md)已按用户要求接回真实生产路径，完整用户结果仍缺通过证据；不能把选中引用、合法编辑、来源支持局部通过或预算内停止当作用户完成。
 
-剩余准入聚焦[来源核验一致性](../optimization/claim-verifier-consistency.md)。正文目标与参数范围分别见[片段寻址完成记录](../optimization/completed/claim-fragment-addressing.md)和[参数范围完成记录](../optimization/completed/claim-argument-scope.md)。上一连续轨迹已到达完整覆盖、独立汇总与有效最终核验；原答案在预算修复后取得独立评分拒绝，实际判据仍需审查参考覆盖与用户目标映射。当前产品门禁保持未通过，详见最新评测记录。
+剩余准入涉及[来源核验一致性](../optimization/claim-verifier-consistency.md)、[具体来源归属候选](../optimization/to_verify/answer-source-attribution.md)及[枚举范围交接](../optimization/claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)。正文目标与参数范围分别见[片段寻址完成记录](../optimization/completed/claim-fragment-addressing.md)和[参数范围完成记录](../optimization/completed/claim-argument-scope.md)。上一正式轨迹已到达完整覆盖、独立汇总与有效最终核验，仍有来源归属错误；后续条件局部反馈修订恢复出处，却把部分列举改为完整四步流程。原正式用户结果和新局部失败分别保留，当前产品门禁未通过。
+
+随后单独执行的正式target在选证两次截断且缺必填reason处返回503，claims及归属核验未到达。默认额度和用量及时提交已按用户要求接入，真实恢复效果待统一测试；失败事实见[选证输出边界](../optimization/claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)，保留原thinking、模型、评分及来源归属候选；原局部及正式失败分别计分，实际结果由[最新登记](../evals/02-current-case-inventory.md#2026-10-02-具体来源归属候选的正式入口验证)拥有。
 
 ## 2. 责任与保留条件
 
@@ -20,7 +22,11 @@
 
 ### 用户事实要求的逐项覆盖
 
-当前保留[研究与覆盖联合候选](../optimization/to_verify/research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)，剩余门禁是未读必要关系识别、来源反馈与修订范围判别、覆盖结构恢复及完整用户结果。已读条款反事实的局部修订成立，旧未读条款稿仍误放行；最新正式轨迹到达来源全部通过和覆盖，但结构恢复把三个真实缺口改为 covered，见[恢复边界](../optimization/to_verify/research-goal-coverage.md#2026-10-02-覆盖结构恢复抹除缺项反馈)。下一准入同时守住引用形状、真实缺口和恢复前后语义，最终验收项身份由[转录问题](../optimization/final-criterion-transcription.md)独立处理。原评分及暂停机制保持，停止同向补丁及新增付费样本。正式用户结果由[最新评测登记](../evals/02-current-case-inventory.md#2026-10-02-mimo-诊断补齐后的正式验证)拥有。
+当前保留[研究与覆盖联合候选](../optimization/to_verify/research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)。剩余门禁为未读必要关系识别、来源反馈与修订范围判别、覆盖恢复的语义保真，以及按原用户目标判断必要性、保持真实声明的来源归属。最新正式轨迹发现客户端结果校验缺项并消费真实修订，后续独立评分复核确认流程步骤被错归到MCP架构页；未展开字段或安全条款不自动成为必答缺项，见[覆盖消费记录](../optimization/to_verify/research-goal-coverage.md#2026-10-02-引用身份修复后的覆盖消费)。原评分及暂停机制保持，停止同向补丁及新增付费样本；原用户结果由[最新评测登记](../evals/02-current-case-inventory.md#2026-10-02-验收项引用恢复的正式验证)拥有。
+
+### 最终修订与计量验收
+
+[修订比较候选](../optimization/to_verify/final-revision-comparison.md)已接入现有最终核验；[计量候选](../optimization/to_verify/research-selection-usage-commit.md)已接入成功及异常提交边界。2026-10-02 接入时尚未调用模型；2026-10-07 [核心校准未成立](../optimization/claim-revision-nonconvergence.md#核验校准的实际结果)，停止同向 Prompt 追加，未进入连续修订及新正式 E2E。下一判断责任重审仍保持实际稿件、真实反馈与原验收项；语义门禁通过后再扩大循环。计量按完成响应与 Journal 等式及恢复去重独立验收，不随本次最终语义失败推断成败。
 
 ### 有范围的未知与正常交付
 
@@ -32,7 +38,7 @@
 
 [一次有界范围校准](../optimization/claim-verifier-consistency.md#2026-09-30-断言范围校准)已经执行，下一次来源变更须重新区分真实缺证、语境范围误读和生成稿范围扩张，不能继续叠加同义判据。相同输入通过与拒绝不自动裁定哪次正确；不得选择较早通过覆盖最新适用拒绝。按实际输入消费最新已完成判断与判决本身的准确性分别验收。
 
-局部修订的已有引用交接由[引用继承完成记录](../optimization/completed/claim-retained-references.md)拥有。来源语义的进一步校准先按[完整实发输入审查](../optimization/claim-verifier-consistency.md#2026-10-01-修订修复后的判决边界审查)区分主体歧义、模态扩大、有效推导与上下文义务强度，固定清晰相邻对照后再进入连续验证。保留 thinking、原模型参数及原始推理。来源报告复用由[固化记录](../optimization/completed/claim-source-review-reuse.md)拥有；[支持范围修订](../optimization/to_verify/claim-supported-scope-repair.md)已真实消费反馈，但仍有范围扩大及正文新增事实未绑定新引用的失败，下一设计聚焦同一修订提交的引用绑定。最终核验新增[验收项转录失败](../optimization/final-criterion-transcription.md)，先修正身份责任再验证；保留原评分标准和 thinking。
+局部修订的已有引用交接由[引用继承完成记录](../optimization/completed/claim-retained-references.md)拥有。来源语义的进一步校准先按[完整实发输入审查](../optimization/claim-verifier-consistency.md#2026-10-01-修订修复后的判决边界审查)区分主体歧义、模态扩大、有效推导与上下文义务强度，固定清晰相邻对照后再进入连续验证。保留 thinking、原模型参数及原始推理。来源报告复用由[固化记录](../optimization/completed/claim-source-review-reuse.md)拥有；[支持范围修订](../optimization/to_verify/claim-supported-scope-repair.md)已真实消费反馈，但仍有范围扩大及正文新增事实未绑定新引用的失败，下一设计聚焦同一修订提交的引用绑定。最终验收项身份由[引用恢复完成记录](../optimization/completed/final-criterion-transcription.md)拥有；保留原评分标准和 thinking。
 
 实际同 SDK 输入还出现有效报告与输出额度耗尽的结构差异。下一验证分别计语义判决、报告可完成性及全部已完成响应的成本；原始空正文没有判决，不计为来源拒绝或通过。
 
@@ -46,4 +52,4 @@
 
 后续候选仅在具备责任边界依据和预声明后进入实现。已撤回的整体 Context、固定搜索流程或孤立同义提示不恢复为并行路径；已成立局部机制也不因独立下游失败被撤销。临时接入的移除日期与退出决定由 [ADR 0032](../adr/0032-conversation-research-claims.md#验证风险与退出)拥有；完整用户结果未通过前，不移除本产品问题或声明可发布。
 
-评分输出预算机制见[固化记录](../optimization/completed/research-grader-output-budget.md)，当前剩余评分门禁由[资格审查](../optimization/research-grader-qualification.md)及[评测执行](../evals/04-running-and-release.md#研究评分器输出额度阻塞)拥有。工具内部模型用量交接由[独立问题](../optimization/tool-model-usage-handoff.md)拥有，成本不得只报直接调用总账。
+评分输出预算机制见[固化记录](../optimization/completed/research-grader-output-budget.md)，评分资格契约见[固化记录](../optimization/completed/research-grader-qualification.md)，运行步骤见[评测执行](../evals/04-running-and-release.md#研究评分器输出额度)。工具内部模型用量交接由[独立问题](../optimization/tool-model-usage-handoff.md)拥有，成本不得只报直接调用总账。

@@ -6,6 +6,8 @@
 | --- | --- |
 | 目录拒绝抢先绕过反馈、非法 JSON 没有进入已有一次纠正 | [Conversation 动作协议恢复](conversation-action-protocol-recovery.md) |
 | 被拒稿只有正文、缺少逐段引用关系 | [完整基稿交接](complete-rejected-draft-handoff.md) |
+| 搜索返回结果时丢失实际查询参数，查询与来源证据混用 | [搜索执行参数的保真交接](query-execution-handoff.md) |
+| 验收项重抄漏标点或同义改写导致最终回执被拒 | [最终验收项引用恢复](final-criterion-transcription.md) |
 | 模型引句转录差异导致整份核验反馈丢失 | [核验意见绑定当前调用](verifier-finding-binding.md) |
 | 同一稿件含多个错误，能否通过逐轮核验和修订处理 | [多错误的渐进核验与修订](multi-error-verification-revision.md) |
 | 模型重抄旧正文导致修订目标定位失败 | [Runtime 正文片段寻址](claim-fragment-addressing.md) |
@@ -14,6 +16,7 @@
 | 研究编辑拒绝未返回实际未选证据坐标 | [研究引用准入的确定性坐标反馈](research-admission-coordinate-feedback.md) |
 | 正文修订要求重新选择全部已有引用 | [局部修订的引用继承](claim-retained-references.md) |
 | 来源核验输入未变却随集合版本重复核验 | [按实际输入复用来源报告](claim-source-review-reuse.md) |
+| 独立评分把参考内容升级为必答项、混用局部范围与全域事实 | [评分目标映射与依据归属](research-grader-qualification.md) |
 | 研究独立评分器在开启思考时耗尽短输出额度 | [评分输出预算](research-grader-output-budget.md) |
 
 本目录之外的 optimization 文档只保留完成文档的引用，不继续跟踪成功问题。

@@ -17,16 +17,16 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | [`chinese-writing-spec.md`](chinese-writing-spec.md) | `docs/` 全目录的中文语法、术语、证据措辞和存量迁移门禁 |
 | [`devSpec/`](devSpec/README.md) | 根 `AGENTS.md` 与 `CLAUDE.md` 按任务渐进披露的开发、设计、测试、文档和发布细则 |
 | [`agentRef/`](agentRef/README.md) | 按组件组织的外部机制检索与分级参考；不定义本工程现状、路线或采用结论 |
-| `topics/` | 分层设计文档（按能力域拆分：任务分析、工具、记忆、检索、可观测/治理等） |
+| `topics/` | 当前入口、运行系统、工具、记忆、上下文、检索与验收的权威专题 |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |
-| `summary/` | 系统级综述（LLM 决策 vs 确定性流程的全局视角） |
+| `summary/` | 当前系统综述及明确标注身份的历史架构审计；指标报告进入 `evals/` |
 | `interview/` | 面试材料：只组织已有事实并链接权威来源；补充规则见 `interview/00-writing-spec.md` |
-| `mermaid/` | Model / Layer 依赖类图 |
+| `mermaid/` | 工具与记忆的依赖图；正文契约由对应专题拥有 |
 | `future/` | 尚未闭环的准入项；状态收敛与退出见 [Future 规则](future/README.md) |
 | [`optimization/`](optimization/README.md) | 按问题维护推进记录；未充分证明的方案保留在 [`to_verify/`](optimization/to_verify/README.md)；已解决问题固化在 [`completed/`](optimization/completed/README.md)，删除中间流水；不维护生产或发布状态 |
 | `adr/` | 已接受决策、迁移与退出条件，以及有保留价值的候选取舍记录 |
 | `evals/` | 执行结果、测量报告、评测证据与发布限制；入口见 [评测体系](evals/README.md) |
-| 顶层散文档 | API、部署、环境变量、评测、检索策略等独立主题 |
+| 顶层文档 | API、部署、环境变量、提示词和主动知识能力等独立主题 |
 
 ## 文档书写原则
 
@@ -42,9 +42,9 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | 当前未解决问题与优化准入 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 | 优化推进过程与经验 | [optimization/README.md](optimization/README.md)；[研究回答来源支持记录](optimization/conversation-source-support.md) |
 | 当前用例、机制证据与发布限制 | [当前评测用例盘点](evals/02-current-case-inventory.md) |
-| Phase 0 历史边界与当前证据入口 | [summary/phase0-capability-release-baseline.md](summary/phase0-capability-release-baseline.md) |
 | Structured output Provider capability 隔离 | [adr/0007-structured-output-transport-capability.md](adr/0007-structured-output-transport-capability.md) |
 | 入口/传输层（Web / CLI / Feishu） | [topics/entry.md](topics/entry.md) |
+| 工具声明、曝光与执行结果 | [topics/tools.md](topics/tools.md) |
 | Memory 与知识事实边界 | [topics/memory.md](topics/memory.md) |
 | Context 收集、过滤与物化 | [topics/context-engineering.md](topics/context-engineering.md)、[ADR 0030：文档坐标引用](adr/0030-document-line-citation-identity.md) |
 | Retrieval 与证据推理 | [topics/retrieval-reasoning.md](topics/retrieval-reasoning.md) |
@@ -52,25 +52,17 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | Conversation 动作、Final 与运行时重试边界 | [topics/runtime.md](topics/runtime.md)、[ADR 0017](adr/0017-separate-action-selection-from-final-delivery.md)、[ADR 0019](adr/0019-bind-feedback-to-decision-turn.md)、[ADR 0025：可修订计划进度](adr/0025-revisable-plan-progress.md)、[ADR 0031：完整基稿修订](adr/0031-complete-final-revisions.md) |
 | 单次 Observation 的上下文边界与卸载重读 | [ADR 0013](adr/0013-bounded-observation-and-offloaded-read.md)、[ADR 0024：正文搜索读取与引用](adr/0024-plain-source-tools-and-inline-citations.md)、[ADR 0026：查询与来源证据分离](adr/0026-separate-query-facts-from-cited-evidence.md) |
 
-**当前架构只以上表的 canonical 文档和生产代码为事实源。**其他 topic、workflow、mermaid 与评测
-归档是专题说明或 paired evidence，不得反向定义主链、能力状态和发布资格。
+当前行为由生产代码及上表对应的权威正文核对：系统摘要说明全局责任，专题拥有详细契约，workflow 说明具体用例的信息流，Mermaid 只投影这些事实。候选、历史审计和评测归档按各自身份解释；能力结果与发布资格由评测文档拥有。
 
-## 关键业务 Procedure
+## 业务与委派链路
 
-| Procedure / 链路 | 文档 |
+| 阅读目标 | 文档 |
 | --- | --- |
 | delete_knowledge（高风险删除 + HITL） | [workflow/delete-knowledge-workflow.md](workflow/delete-knowledge-workflow.md) |
 | Conversation 内确认后保存知识 | [adr/0006-conversation-governed-knowledge-save.md](adr/0006-conversation-governed-knowledge-save.md) |
-| research_once（evidence-driven research loop） | [workflow/research-once-workflow.md](workflow/research-once-workflow.md) |
-| gpt_researcher_a2a（GPT Researcher A2A 外部研究 Agent） | [workflow/gpt-researcher-a2a-workflow.md](workflow/gpt-researcher-a2a-workflow.md) |
+| 一次性及订阅 Research 的业务执行 | [workflow/research-once-workflow.md](workflow/research-once-workflow.md) |
+| Conversation 委派外部 GPT Researcher | [workflow/gpt-researcher-a2a-workflow.md](workflow/gpt-researcher-a2a-workflow.md) |
 | 主动知识闭环（gap 提问 / 巩固 / 简报） | [proactive-knowledge-loop.md](proactive-knowledge-loop.md) |
-
-## Future 设计
-
-| 主题 | 文档 |
-| --- | --- |
-| Future 范围、状态收敛与退出规则 | [future/README.md](future/README.md) |
-| 当前未解决问题、准入状态与架构评审入口 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 
 ## 运维与参考
 
@@ -79,11 +71,10 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | HTTP API | [api.md](api.md) |
 | 部署 | [deploy.md](deploy.md) |
 | 环境变量 | [env.md](env.md) |
-| LLM 提示词清单 | [llm-prompts.md](llm-prompts.md) |
+| LLM 提示词职责与源码入口 | [llm-prompts.md](llm-prompts.md) |
 | 评测分层、E2E 与发布证据 | [evals/README.md](evals/README.md) |
 | Golden Set 设计 | [golden-set-design.md](golden-set-design.md) |
 | 优秀智能体能力组件参考 | [agentRef/README.md](agentRef/README.md) |
-| 生产风险与优化准入 | [production-risk-optimization-plan.md](production-risk-optimization-plan.md) |
 | Review digest | [review-digest.md](review-digest.md) |
 
 > 各子目录另有更细的索引：[workflow/README.md](workflow/README.md)、[interview/INDEX.md](interview/INDEX.md)。

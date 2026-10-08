@@ -1,8 +1,6 @@
 # Memory 与知识事实边界
 
-本文是当前 Memory 事实、生命周期和读写边界的 canonical 文档。Conversation、Personal Knowledge、
-Investigation Project、Artifact 和 Retrieval Index 不共享一个 God Memory；它们按事实 owner
-分别持久化，只在 Application Use Case 中通过 typed ref 协作。
+本文是当前 Memory 事实、生命周期和读写边界的 canonical 文档。Conversation、个人知识、周期研究、Artifact 和检索投影按各自事实责任主体保存数据，在 Application 用例中通过 typed ref 协作。
 
 ## 事实分类
 
@@ -11,13 +9,11 @@ Investigation Project、Artifact 和 Retrieval Index 不共享一个 God Memory�
 | Conversation message / committed observation | Interaction journal | 单次或连续 Conversation | 只能理解指代，不直接证明外部事实 |
 | Personal Knowledge Artifact / EvidenceSpan / Claim / Relation | Personal Knowledge Store | 长期知识生命周期 | 经过 visibility 和 retrieval 后可以 |
 | 大文本、文件和生成产物 | Artifact Store | 由 ArtifactRef 生命周期管理 | 只有可见且有 source binding 时可以 |
-| Investigation definition / plan / journal / artifact | Investigation Project aggregate | durable project | admitted evidence 或 verified artifact 可以 |
 | Graphiti node / edge / episode | Graph retrieval projection | 可从 Personal Knowledge/Note 重建 | 只作为 retrieval fact/ref，不是权威写源 |
 | Embedding / search index | Retrieval projection | 可失效并重建 | 只能定位 canonical source |
 | 当前 LLM Context | Model invocation input | 单次调用 | 不是持久化事实 |
 
-历史 LangGraph checkpoint 表可能仍存在于数据库或运维清理范围，但不再是当前 Conversation、
-Personal Knowledge 或 Investigation 的共同事实 owner。
+历史 LangGraph checkpoint 表可能仍存在于数据库或运维清理范围；当前 Conversation 由 Interaction Journal 恢复，个人知识由其业务存储维护。已撤回后台调查的边界见 [ADR 0015](../adr/0015-withdraw-investigation-project.md)。
 
 ## 唯一写入口
 
@@ -106,7 +102,6 @@ Conversation turn
 | Conversation | Interaction journal | committed messages、Observation、Feedback、usage、action order |
 | Governed save | Interaction journal + Personal Knowledge | frozen Command、confirmation、Receipt |
 | Knowledge lifecycle | Knowledge lifecycle store | Command、Operation、Receipt、Personal Knowledge state events |
-| Investigation Project | Project aggregate/journal | definition、accepted plan、step journal、artifact refs |
 | Research | Research store + worker queue | ResearchRun、event、delivery/limitation |
 
 恢复只能重放已冻结事实或继续合法状态迁移，不能重新调用模型生成 Command，也不能重复外部副作用。

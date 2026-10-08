@@ -46,6 +46,7 @@
 ### 2.5 类型、文档与外部依据都是门禁
 
 - 内部自写自读字段及跨层 identity、scope、digest、资源引用必须 typed。raw dict/JSON 只承载外部拥有的内容，在读取边界校验；结构性不变量有唯一命名责任主体和确定性失败判据。
+- 模型复述、引用或转交已有具体文字时，通过当前有效的 typed 引用交回，由 Runtime 从唯一责任主体恢复原文；身份、定位与保真不得依赖模型重抄。执行 [COD 文本引用规则](docs/devSpec/code-structure.md#21-已有文字通过引用传递)。
 - 生产、核验和评测 Prompt 在职责内通用；具体任务、资料、验收项和答案来自有归属的当前输入。新增或实质修改的 Prompt 是结果优先、最小充分的版本化代码契约，typed 输出只能保证形状。具体执行 [COD](docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)。
 - 同一事实只有一份权威文档；当前行为、历史诊断、候选和评测证据分开保存，契约变更同步权威文档。优化候选、失效清理及已解决问题固化由[优化记录规则](docs/optimization/README.md)统一拥有。
 - 设计文档写清要解决的问题、解决机制与防护设计。设计时考虑方案引入的问题，并通过责任、契约、执行约束和验证条件避免；正文不列“方案不能做什么”或潜在问题清单。具体写法见[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)。
@@ -55,7 +56,7 @@
 
 自 2026-09-18 起，不新增、维护、修复、收集或运行 `tests/` 下的测试及其他目录的等价单元测试。现有文件和历史证据只读保留，不因其失效阻塞交付，不将旧通过数用于当前验收，也不得迁到 `evals/` 规避规则。
 
-Real E2E 验收用户结果，Offline Eval 验证真实失败或代表性样本的局部边界；确定性不变量由生产类型、断言及适用回放守住。lint、类型、依赖、配置和文档检查保留。具体边界执行 [QLT](docs/devSpec/quality-security.md#1-测试职责与覆盖)。
+验证投入围绕用户结果、关键契约和真实失败边界组织，不以逐函数覆盖或测试通过数替代能力验收。Real E2E 验收用户结果，Offline Eval 验证真实失败或代表性样本的局部边界；确定性不变量由生产类型、断言及适用回放守住。lint、类型、依赖、配置和文档检查保留。职责与断言取舍执行 [QLT](docs/devSpec/quality-security.md#1-测试职责与覆盖)。
 
 ## 3. 任务路由：按识别信号读取细则
 
@@ -68,7 +69,7 @@ Real E2E 验收用户结果，Offline Eval 验证真实失败或代表性样本�
 | `ARC` | 架构分层、业务事实、决策归属、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Product Aggregate、派生数据、缓存、物化投影、生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay、durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
 | `CTX` | Context、System Prompt、模型输入、反馈执行异常、Memory、RAG、Artifact、检索、权限过滤、预算物化、Capability Projection、服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
-| `COD` | 类或模块拆分、内部类型、payload、依赖注入、生产 Prompt、指令模板、LangGraph、Router、Planner、Workflow、错误分类、命名、编码智能体行为 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
+| `COD` | 类或模块拆分、内部类型、payload、依赖注入、生产 Prompt、指令模板、文本引用、文字复述、LangGraph、Router、Planner、Workflow、错误分类、命名、编码智能体行为 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
 | `DOC` | 新增、修改、移动或评审 Markdown、Mermaid、ADR、评测归档、架构说明、中文写作、文档索引 | [文档模块规范](docs/AGENTS.md) |
 | `QLT` | 单元测试、tests/、Offline Eval、Unit、Contract、Integration、Golden Set、Real E2E、真实环境 smoke、Trace、安全、权限、审计、评测 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | Schema 迁移、协议迁移、兼容窗口、ADR、发布评审、合并验收、完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |
@@ -78,6 +79,8 @@ Real E2E 验收用户结果，Offline Eval 验证真实失败或代表性样本�
 ## 4. 变更准入速查
 
 按消费者、契约、实际模型输入、权限、状态、副作用及恢复行为判断影响；代码行数和文件数量只帮助界定审查范围。混合改动取适用要求的并集。
+
+问题尚未定位时，可按 [EVD 探索边界](docs/devSpec/change-evidence.md#13-探索与生产准入边界)开展基线准备和隔离诊断；探索证据不能替代生产准入。
 
 | 变更类型 | 实现前的必要依据 | 实现后的必要证据 |
 | --- | --- | --- |
@@ -96,7 +99,7 @@ Real E2E 验收用户结果，Offline Eval 验证真实失败或代表性样本�
 ## 5. 实现与评审行为
 
 - 改公共模型、Schema、状态或入口前搜索全部调用方和权威文档。保留工作树用户改动，禁止破坏性 Git 操作覆盖。
-- 先清理被替代或冲突的内容，再做最小修改。外部依赖与非确定性输入通过 Port 注入，错误分类按 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止空结果、默认成功和模糊 fallback。
+- 先清理被替代或冲突的内容，再做最小修改。外部依赖与非确定性输入通过 Port 注入，错误分类按 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止用空结果、默认成功或模糊 fallback 掩盖失败。
 - E2E 失败先封存结果、审查断言，定位最早责任主体；一次有界修正后先回跑原失败边界。复现时停止追加局部补丁，重新审查根因和正交方案；独立工作继续。执行 [QLT 阻塞处理](docs/devSpec/quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)。
 - 评审只报告可定位、可复现且影响正确性、安全性、性能或维护门禁的问题。结论不超过已执行证据，未执行的适用检查不得写成通过。
 

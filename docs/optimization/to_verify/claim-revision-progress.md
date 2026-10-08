@@ -1,6 +1,6 @@
 # 未经核验的研究修订持续累积
 
-2026-09-28 后续接入状态：用户明确要求完整接入且不运行 Offline 测试，已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链；以下隔离实验与准入结论按原日期保留。生产可达不等于正式 E2E 通过，当前验收见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
+2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-REVISION-PROGRESS-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`，只处理[修订无法收敛总览](../claim-revision-nonconvergence.md#子问题分别归因)中的“多次编辑却不重新核验”。复合论断、正文重新带入争议判断和相同输入核验不一致仍是独立子问题。[集成隔离候选](../../../.tmp/claim-integrated-20260926/run.py)已把合法创建或编辑后的复验触发交给协调运行系统；[首轮](../../../.tmp/claim-integrated-20260926/result.json)在创建前因输出截断停止，未到达复验检查点，也未进入生产。
 

@@ -1,7 +1,6 @@
 # Context 工程
 
-本文是当前模型上下文收集、过滤和物化规则的 canonical 文档。Context 是一次模型调用的受控输入，
-不是新的事实库，也不是覆盖 Conversation、个人长期知识和 Project 的共享状态对象。
+本文拥有当前模型上下文收集、过滤和物化规则。Context 是一次模型调用的受控输入；Conversation、个人长期知识和周期研究继续由各自事实责任主体维护。
 
 ## Visibility 的定义与分层
 
@@ -66,7 +65,6 @@ Application 根据当前用户目标调用明确能力：
 - 个人长期知识/local：检索当前 principal 拥有的 Artifact、EvidenceSpan、Claim 或 Note；
 - Graph：检索 fact、edge、episode 和 citation ref；
 - Web/Tool：只经过 Policy/Gateway 获取当前执行结果；
-- Investigation：读取 Project definition、accepted plan、journal 和 ArtifactRef。
 
 该阶段只产生候选和执行事实，不生成业务答案。
 
@@ -181,28 +179,11 @@ capability 投影、system prompt 其余部分、committed messages、typed inpu
 它可由 committed inputs 确定性重算，不构成第二写入口。逐轮构成属于 Observability 事实，不进入
 Context 选择、预算、Admission 或终止分支。
 
-普通 Conversation 不创建 `TaskContract`、`GoalGraph` 或通用 checkpoint。需要跨进程维护动态
-交付义务的 Investigation Project 使用自己的 aggregate 和 journal，不把 Project state 镜像回
-Conversation。
+Conversation 从原 Interaction Journal 恢复消息、工作清单和已提交执行资料。周期 Research 从自己的业务存储及 worker queue 恢复，具体生命周期见 [Memory](memory.md#恢复边界)。
 
-## Ask 上下文
+## 有证据的对话上下文
 
-Ask 的 retrieval stage 将 personal knowledge、local、graph 和 web 候选归一为 `EvidenceItem`。Evidence
-Engine 负责 canonical 去重、融合、rerank 和 ContextPack；compose 只读取物化后的证据，Ask
-Verifier 再判断候选答案是否被证据支持。
-
-```text
-Question + visible conversation hints
-  -> Query understanding
-  -> source retrievers
-  -> EvidenceItem pool
-  -> ContextPack
-  -> candidate answer
-  -> verification / bounded repair
-```
-
-`KnowledgeRetriever` 只调用 evidence selection；Graph provider 只返回
-`GraphRetrievalResult`。任何 retriever 都不能在内部生成一个候选答案再伪装成 evidence。
+个人知识由模型按需选择 `search_personal_knowledge` 后，以只读证据进入同一 Conversation；外部工具返回实际执行结果和可见来源。普通交付、研究 claims 与独立汇总按各自相位消费这些事实，不运行第二条 Ask 成文链。检索资源和组件评测的边界见[检索专题](retrieval-reasoning.md)，产品检查点见[Grounded Answer 链路](../workflow/capture-ask-model-flow.md)。
 
 ## 上下文腐化防护
 
@@ -223,7 +204,7 @@ Question + visible conversation hints
 | --- | --- | --- |
 | Interaction committed input | 是 | Conversation 恢复与审计 |
 | Personal Knowledge Claim/EvidenceSpan | 是 | 长期知识事实 |
-| Project journal/ArtifactRef | 是 | durable execution |
+| ResearchRun 与执行引用 | 是 | 周期研究恢复、审计与投递关联 |
 | 被卸载的 Observation 正文 | 是，作为 Artifact | 本次交互内需可重读；`producer_key` 幂等，身份是 `ResourceRef` |
 | Artifact-backed Observation 的紧凑模型投影 | 否 | 可从 committed Observation 确定性重建；只用于本次调用 |
 | `TurnContextComposition` | 是，随 `InteractionTrace` | 与 committed inputs 同生命周期，可由其重算 |

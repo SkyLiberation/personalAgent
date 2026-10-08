@@ -1,11 +1,12 @@
 """Stable application errors exposed by Conversation use cases."""
 
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 from personal_agent.capabilities.contracts.model import (
     ModelActionKind,
     ModelInvocationFailureCategory,
     ProviderFailureDiagnostics,
+    StructuredModelResponse,
     StructuredOutputFailureCode,
 )
 
@@ -30,7 +31,7 @@ ConversationFailureStage = Literal[
 
 
 class ConversationUnavailable(RuntimeError):
-    """Stable public failure plus typed, non-sensitive diagnostic facts."""
+    """Stable public failure, bounded diagnostics and an internal billable response."""
 
     def __init__(
         self,
@@ -47,6 +48,7 @@ class ConversationUnavailable(RuntimeError):
         action_kind: ModelActionKind | None = None,
         field_paths: tuple[str, ...] = (),
         error_types: tuple[str, ...] = (),
+        response: StructuredModelResponse[Any] | None = None,
     ) -> None:
         if len(field_paths) != len(error_types):
             raise ValueError("conversation diagnostic fields must align")
@@ -61,6 +63,8 @@ class ConversationUnavailable(RuntimeError):
         self.action_kind = action_kind
         self.field_paths = field_paths
         self.error_types = error_types
+        # Internal billable response; public diagnostics never serialize it.
+        self.response = response
         super().__init__(message)
 
 

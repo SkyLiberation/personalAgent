@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-> 本文只记录 2026-08-26 生产代码中仍成立的责任边界和主链。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未准入的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。本文不复制历史归档、候选方案或发布结论。
+> 本文按 2026-10-02 工作树中的生产代码核对责任边界和主链。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。代码已接入与产品验收分别判断。
 
 ## 1. 核心判断
 
@@ -27,7 +27,7 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 | Application Capability | 接收 Use Case，协调领域、模型、治理和执行 Port | 复制领域迁移、伪造执行成功 |
 | Domain / Product Aggregate | 拥有 canonical business facts、合法迁移和核心不变量 | 依赖 ORM、LangGraph、网络或模型 SDK |
 | Runtime Mechanism | 执行 Tool/Agent、管理 queue/lease、checkpoint、Artifact 与 Trace | 决定用户意图、业务计划或完成结论 |
-| Projection / DTO | 按身份和 Policy 物化临时可见能力与读取视图 | 成为定义或可用性的第二写入口 |
+| Projection / DTO | 从定义、可用性、曝光或资源可见性物化只读视图 | 成为定义或可用性的第二写入口 |
 
 `AgentService` 是外部入口使用的统一外观；`AgentRuntime` 是组合根，二者都不拥有业务事实。
 
@@ -38,12 +38,14 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 `ConversationService` 的每轮运行依次完成：
 
 1. 恢复已提交消息、当前工作项清单和可重读执行结果。
-2. 按身份、权限范围和 Policy 生成 `EffectiveCapabilities`。
-3. 将用户目标、已提交 `Observation` 和当前预算物化到 LLM Context。
-4. 模型产生 `FinalMessage` 或 `ContinueTurnProposal`。
-5. Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
-6. 已准入的 Tool/Agent/Application action 经对应执行网关产生 `Observation`。
-7. 最终回答在 Verification 和 Completion 门禁后才能发送。
+2. 从注册定义、服务可用性和曝光规则生成 `EffectiveCapabilities`；能力投影与调用授权的区别见 [Context](../topics/context-engineering.md#visibility-的定义与分层)。
+3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
+4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
+5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
+6. 外部研究在适用条件下提交版本化 claims，经来源支持与事实覆盖后进入独立汇总；普通交付直接生成 typed `FinalSubmission`。
+7. 运行系统还原完整 `FinalMessage`，经过适用的 Verification 和 Completion 后才交付。
+
+当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
 
 `ConversationWorkingPlan` 只协调当前对话的可验收工作项。模型可以根据用户调整提出新版本，Application 保护已完成事实和新旧版本边界。工作项清单不拥有 queue、lease、审批或 Agent 运行事实。
 
@@ -51,7 +53,7 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 
 当前 Conversation 只在请求内执行 Tool 或委托 Agent；GPT Researcher 是 `AgentGateway` 后的执行资源，不拥有第二套业务 Plan、Completion 或研究循环。明确要求响应结束后继续运行、稍后查询、暂停或调整的输入，会在交互意图派生后返回 typed limitation，并记录 `capability_missing`，不会静默降级为前台成功。
 
-旧后台调查路径在正式样本中虽然能够被选择，却没有交付任何最终报告；同时缺少证明独立 Project 生命周期不可替代的需求 baseline。因此其 Application、Aggregate、持久化、API 和 worker 已破坏式删除。普通研究路径当前也存在独立的 `0/20 delivered` 缺口，删除旧路径不等于修复研究质量。
+旧后台调查的 Application、Aggregate、持久化、API 和 worker 已按 [ADR 0015](../adr/0015-withdraw-investigation-project.md)删除。普通 Conversation 研究仍有独立质量缺口；最新执行结果和失败边界只由[评测盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 5. Context、Memory 与检索
 
@@ -70,7 +72,7 @@ Context 按 `Visibility -> Requirement Retrieval -> Semantic Selection -> Budget
 
 ## 6. 工具、MCP 与智能体
 
-工具执行主链是“临时能力投影 -> Proposal -> Schema/曝光校验 -> Policy/Admission -> 执行网关 -> Observation -> Verification/Completion”。模型看到的 Tool Schema 是按当前身份生成的只读投影，不是工具注册真源。
+工具执行主链是“临时能力投影 -> Proposal -> Schema/曝光校验 -> Policy/Admission -> 执行网关 -> Observation -> Verification/Completion”。模型看到的 Tool Schema 从注册定义与当前能力集合物化；资源读取按身份过滤，工具调用由 Admission/Gateway 授权，投影不代表获准执行。
 
 MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝光名称、风险、权限范围和结果契约。只有已受治理的 mapping 才能进入 `EffectiveCapabilities`。
 
@@ -98,15 +100,15 @@ Trace、event、receipt 和评测归档记录事实，不改变生产决策。�
 2. 身份、作用域、digest 和资源引用跨层时使用 typed contract。
 3. Admission 只接受或拒绝 Proposal，不补业务字段或生成替代目标。
 4. 最终回答不能由工具成功、子智能体终态或 Verifier 自述直接推导。
-5. Application 能力定义归对应 Application Use Case；模型可见菜单只是按当前身份生成的投影。
+5. Application 能力定义归对应 Application Use Case；模型可见菜单由定义、可用性和曝光生成，授权在实际调用边界检查。
 6. 固定事务不为形式统一包装为 Planner、Workflow、Command、Event 或 Project。
 7. 产品能力只能由正式入口的用户结果证明；内部对象和 Trace 只能用于定位。
 
 ## 10. 当前证据边界
 
 - Conversation、Memory、Tool 和多种治理机制已有各自限定范围的实际证据，不能拼成“所有智能体能力都已交付”。
-- 后台持续调查当前不是产品能力；普通 Conversation 的研究质量仍有失败 baseline，尚未进入本次修复范围。
-- 当前工作树的全量单元/集成回归通过不等于 clean-revision 发布资格。
+- 后台持续调查当前不是产品能力；普通 Conversation 的研究改动已进入工作树，完整用户结果仍须按对应证据验收。
+- 定向 E2E、Offline Eval 和历史回归只支持已声明范围；当前发布资格须绑定目标代码与完整产品矩阵。单元测试按 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)停用。
 
 证据结论、命令和归档坐标不在本文重复维护，统一见：
 

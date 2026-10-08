@@ -26,7 +26,7 @@ FEISHU_BASE_URL=https://open.feishu.cn
 说明：
 
 - `PERSONAL_AGENT_POSTGRES_URL` 为必填项。Personal Knowledge/知识、Review、受治理执行、
-  Investigation journal、worker queue 等各自通过生产 Store 使用 Postgres。普通 Conversation
+  Research、worker queue 等各自通过生产 Store 使用 Postgres。普通 Conversation
   的 Interaction trace 当前由 `PERSONAL_AGENT_DATA_DIR/interaction_runs` 下的
   `FileInteractionJournal` 保存；历史 LangGraph checkpoint 表不是当前普通对话真源。
 - `uploads/` 仍用于保存原始上传文件；数据库保存其引用及提取后的知识内容。
@@ -45,7 +45,6 @@ PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=2000000
 
 这三项分别限制单次对话运行的模型决策轮数、工具调用次数和累计 token 用量；不是单次模型输入窗口或输出长度。
 token 边界按已提交用量检查，最后一次模型请求可能使实际累计量超过上限。
-本次仅持久化用户选定的配置，不修改预算终止机制，也不恢复预算触发的工具隐藏。
 已有应用进程需要重启以重新加载配置；未配置上述环境变量时，代码默认仍为 8 轮、12 次工具和 32,000 tokens。
 历史评测继续保留原配置身份，新 profile 不等同于答案质量已验收。
 
@@ -69,7 +68,7 @@ FEISHU_APP_SECRET=xxx
 
 ## Review Digest 飞书触达配置
 
-Review Digest 是应用内 job 能力，环境变量只作为当前阶段的配置型订阅来源；后续可替换为数据库订阅表。
+Review Digest 使用数据库订阅表；环境变量用于 CLI 或 FastAPI startup 将配置型目标初始化为订阅。字段与投递行为见 [Review Digest](review-digest.md)。
 
 ```env
 PERSONAL_AGENT_REVIEW_DIGEST_ENABLED=false
@@ -172,7 +171,9 @@ instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首�
 截至 2026-09-29，当前使用的 [MiMo Chat Completions API](https://mimo.mi.com/docs/en-US/api/chat/openai-api) 对该模型只公布 `thinking.type=enabled|disabled`，没有思考强度档位或 `reasoning_effort` 参数。[MiMo Responses API](https://mimo.mi.com/docs/en-US/api/chat/responses) 虽接受 `reasoning.effort` 的 `none`、`minimal`、`low`、`medium`、`high` 等值，官方明确说明 `none` 关闭思考，其余有效值当前均以相同方式开启思考，不能调节实际强度；`max_completion_tokens` 只限制思考与正文的总输出量。本轮研究验证维持现有 `enabled` 配置。
 诊断输出额度独立声明，不通过 `extra_body` 覆盖调用方的 typed 输出预算。已有应用进程需
 重新加载配置才能使用切换后的模型；配置不代表所有生成式 Adapter 已通过真实集成验收。
-正式 Conversation 意图识别及其既有修订请求共用 32,768 输出上限，Action/Final 调用方也指定 32,768，额度均包含思考与正文；语义验证仍指定 1,200。这些额度修正用于避免已复现的思考截断，不代表完整链路预算或答案质量已验收。正式入口的预算诊断和独立组件请求分别记录于[连续链路证据](evals/02-current-case-inventory.md#mimo-thinking-连续链路与意图输出预算)与[MiMo thinking 组件诊断](evals/02-current-case-inventory.md#mimo-thinking-成文与对话反问诊断)，不能混算。
+正式 Conversation 意图识别及其既有修订请求共用 32,768 输出上限，Action/Final 调用方也指定 32,768，额度均包含思考与正文；Conversation 语义核验调用也指定 32,768；具体构造和职责见[核验专题](topics/verification-and-completion.md)。这些额度修正用于避免已复现的思考截断，不代表完整链路预算或答案质量已验收。正式入口的预算诊断和独立组件请求分别记录于[连续链路证据](evals/02-current-case-inventory.md#mimo-thinking-连续链路与意图输出预算)与[MiMo thinking 组件诊断](evals/02-current-case-inventory.md#mimo-thinking-成文与对话反问诊断)，不能混算。
+
+2026-10-02 按用户要求，Conversation 研究选证、来源支持与覆盖核验改用服务方默认输出额度。`StructuredModelRequest.max_tokens=None` 表示采用服务方默认值；调用意图与准入授权保留同一空值，Adapter 省略 `max_completion_tokens` 和 `max_tokens`，结构修复继续沿用原请求的额度选择。显式整数额度仍由既有准入上限校验。MiMo [官方 API 文档](https://mimo.mi.com/docs/en-US/api/chat/openai-api)标注 `mimo-v2.6-flash` 默认额度为 131,072 tokens，包含思考与正文；代码通过省略参数采用默认值。thinking、请求超时与累计运行预算继续由既有配置控制。本次按用户要求暂不运行测试，实际服务方默认额度及截断恢复效果待验证，见[对应候选](optimization/to_verify/research-provider-output-default.md)。
 
 旧后台调查路径在正式 20 样本中为 `0/20 delivered`，且没有证明独立生命周期不可替代的
 需求 baseline，因此相关服务、队列和配置已经撤回。当前 Conversation 同类研究请求重跑也为
@@ -199,7 +200,9 @@ PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS=30
 PERSONAL_AGENT_OPENAI_MAX_RETRIES=2
 ```
 
-## Ask 组件配置
+## Offline Eval 的遗留 Ask 组件配置
+
+下列配置用于仍消费 `Settings.ask` 的独立检索组件与离线 runner。它们不控制当前 Conversation 的最终回答链；实际消费边界见[检索专题](topics/retrieval-reasoning.md)与 [RAG 评测](evals/README.md)。
 
 ```env
 PERSONAL_AGENT_ASK_RERANKER=heuristic
@@ -223,7 +226,7 @@ PERSONAL_AGENT_ASK_LLM_RERANK_MODEL=
   `hybrid` 组合 structural + Graphiti。未知值在配置加载阶段 fail closed，不会静默改绑 Provider。
 - `PERSONAL_AGENT_ASK_CANDIDATE_ENRICHER` 当前可选 `parent_child` / `none`。默认 `parent_child` 会在 rerank 前补齐 parent 命中的高相关 child sections，以及 child 命中的 parent。邻近 chunk 默认不补，避免给 LLM rerank 注入过多相邻但不直接回答的候选。
 - `PERSONAL_AGENT_ASK_GRAPH_NOTE_EVIDENCE_MODE` 当前可选 `all` / `cited_overlap` / `none`。`all` 会把 Graphiti 映射回来的 notes 作为 evidence 交给 ContextPack；`cited_overlap` 只放入 citation 命中或 query overlap 足够的 notes；`none` 关闭该桥接。
-- LLM rerank 优先复用 `PERSONAL_AGENT_EXTRACT_*` 的 DashScope/qwen 配置；未配置 extract key 时回退到 `OPENAI_*`。
+- LLM rerank 使用 `PERSONAL_AGENT_EXTRACT_*` 指定的模型配置；未配置 extract key 时复用 `OPENAI_*`。
 - `PERSONAL_AGENT_ASK_CONTEXT_MAX_ITEMS` 和 `PERSONAL_AGENT_ASK_CONTEXT_CHAR_BUDGET` 控制进入 prompt 的 evidence 数量和字符预算。
 
 ## Embedding 配置
@@ -356,7 +359,7 @@ PERSONAL_AGENT_E2E_NOTION_EXPECTED_TEXT=PERSONAL_AGENT_NOTION_E18_MARKER
 - `attestation_status`：`verified`、`pinned`、`self_claimed`、`unknown`。
 - `freshness_profile`：`realtime`、`near_realtime`、`static`、`unknown`。
 
-这些字段会写入 tool 的 `extras["mcp_capability"]`，启动时转换为 canonical `MCPCapability` 并进入 `CapabilityPortfolio`。Portfolio 将静态定义与实时 `ExecutionCapabilityAvailability` 分开；`CapabilityResolver` 按 Goal requirement、资源范围、Policy 和 provider binding 生成精确 Grant。远程能力没有可用性观测或 credential 未就绪时 fail closed，`tool_quality` 同时校验 capability metadata、治理字段和安全边界。
+这些字段写入 tool 的 `extras["mcp_capability"]`，启动时转换为 `MCPCapability` 并进入 `CapabilityPortfolio`。Portfolio 保存静态定义与 `ExecutionCapabilityAvailability`；Conversation 按定义、可用性和曝光物化能力，调用阶段再由 Admission/Gateway 检查参数、作用域与 Policy。投影和授权的实际边界见 [Context](topics/context-engineering.md#visibility-的定义与分层)。
 
 当前支持两类 transport：
 
@@ -467,7 +470,7 @@ PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS=1
 PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_CONCURRENT_RUNS=4
 ```
 
-启用后，GPT Researcher 作为 Agent capability 注册。用户明确点名时，Task Analyzer 形成 required provider binding，Executive 产生 delegate，CapabilityResolver 选择 `gpt_researcher` 并通过 AgentGateway 调用。普通研究任务可由 Executive 选择本地研究动作或 `research_once` Protocol。
+启用后，GPT Researcher 作为 Agent capability 注册并进入 Conversation 的能力投影。模型提出委派动作，Application 校验参数与预算，AgentGateway 执行授权和外部调用；父级消费子级 Artifact 后按自身交付契约综合。当前链路见 [GPT Researcher A2A](workflow/gpt-researcher-a2a-workflow.md)。
 
 父级对话使用[对话运行预算](#对话运行预算)，与外部研究服务的单次请求 timeout 分开配置；提高父级预算不保证子级成功或最终答案正确。
 
@@ -487,7 +490,7 @@ PERSONAL_AGENT_URL_CAPTURE_PROVIDER=firecrawl
 ```
 
 生产配置使用 `PERSONAL_AGENT_URL_CAPTURE_PROVIDER=builtin`；若显式选择 Firecrawl，
-它只改变 URL 正文读取，不改变 Tavily Web Search，也不是运行时 fallback。
+它只改变 URL 正文读取；`web_search` 由独立的 `PERSONAL_AGENT_WEB_SEARCH_*` 绑定。
 
 ## 图谱同步调参
 
@@ -563,8 +566,7 @@ LANGSMITH_WORKSPACE_ID=
 `PERSONAL_AGENT_LANGSMITH_ENABLED` 决定，采样比例由 `PERSONAL_AGENT_TRACE_SAMPLE_RATE` 决定。
 生产环境建议保持 `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false`。
 
-结构化模型调用通过 composition root 注入观测装饰器，Conversation、Personal Knowledge、Research 和
-Investigation Application 组件不读取该开关。该策略不能保证覆盖第三方库自动产生的全部 trace，
+结构化模型调用通过 composition root 注入观测装饰器，Conversation、Personal Knowledge 与 Research Application 组件不读取该开关。该策略不能保证覆盖第三方库自动产生的全部 trace，
 也不能覆盖尚未迁移到统一 Model Client 的旧 LLM 路径。其他 trace metadata 中不要放用户正文、长期记忆内容、URL token、
 文件内容或密钥。
 完整边界见 [可观测与治理边界](topics/observability-governance.md#2-llm-trace-脱敏策略)。
@@ -577,8 +579,7 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:15432/perso
 
 说明：
 
-- Personal Knowledge、Research、Knowledge Lifecycle、Tool governance、Agent run、worker queue 和
-  Investigation journal 共享该 PostgreSQL 连接，但各自拥有事实表和恢复语义；
+- Personal Knowledge、Research、Knowledge Lifecycle、Tool governance、Agent run 与 worker queue 共享该 PostgreSQL 连接，但各自拥有事实表和恢复语义；
 - 普通 Conversation 使用 `data/interaction_runs` 下的 `FileInteractionJournal`，不是 LangGraph
   checkpoint；
 - 数据库仍可能包含历史 LangGraph checkpoint/迁移表；它们用于旧数据与运维兼容，不定义当前
@@ -609,8 +610,4 @@ Research 使用 `PERSONAL_AGENT_WEB_SEARCH_*` 配置的搜索 provider。
 
 生产环境必须保持 `PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false`，避免多个 FastAPI 实例重复扫描。应用内 scheduler 仅用于单机开发。
 
-### 2026-09-29 研究链预算配置
-
-2026-09-28 用户授权把完整 claim 主链的本地生产及示例配置提高至 32 个决策回合、48 次工具调用、768,000 tokens。该配置下的正式中文 E2E 在 17 回合、25 次工具调用及 794,181 个实际 tokens 后受累计预算限制，未交付答案。[正式失败记录](evals/02-current-case-inventory.md#研究写作者-typed-提交的正式回归)保留原结果。
-
-2026-09-29 用户授权继续扩大预算验证。本地 `.env` 与示例仅把累计 token 上限提高至 2,000,000；决策回合和工具上限仍为 32 与 48。模型核验调用计入 token 预算，最后一次请求可能使实际用量超过上限。该配置下同一正式 E2E 的停用前样本在 7,200 秒入口等待上限超时，停用拆分与复合识别后的样本在 2,148,774 已记账 tokens 后返回预算 `limitation`；用户结果均为 `0/1`。提额未证明语义问题得到修复。旧 192,000 tokens / 24 次工具配置的失败继续保留；完整比较与身份见[评测登记](evals/02-current-case-inventory.md#2026-09-29-拆分与复合识别停用对比)。
+预算配置统一见[对话运行预算](#对话运行预算)。各轮预算身份、超时、实际用量和原始失败由[评测盘点](evals/02-current-case-inventory.md#2026-09-29-拆分与复合识别停用对比)拥有，不从提额推导质量改善。

@@ -51,7 +51,10 @@ class ModelInvocationAdmission:
                 reason_code="context_projection_missing",
                 message="model invocation requires a context projection reference",
             ))
-        if intent.max_output_tokens > self.max_output_tokens:
+        if (
+            intent.max_output_tokens is not None
+            and intent.max_output_tokens > self.max_output_tokens
+        ):
             raise ModelInvocationDenied(ModelInvocationDenial(
                 call_id=intent.call_id,
                 reason_code="output_budget_exceeded",

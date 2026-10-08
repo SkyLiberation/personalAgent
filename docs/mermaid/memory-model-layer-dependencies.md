@@ -6,14 +6,13 @@ flowchart LR
 
     subgraph RuntimeFacts["运行事实 owner"]
         Conversation["Interaction journal<br/>messages / observations / feedback"]
-        Project["Investigation journal<br/>definition / plan / step facts"]
         Research["Research store<br/>run / event / delivery"]
         Lifecycle["Knowledge lifecycle store<br/>command / operation / receipt"]
     end
 
     subgraph KnowledgeFacts["长期知识 owner"]
         Artifact["Artifact Store<br/>large content"]
-        Personal Knowledge["Personal Knowledge Store<br/>EvidenceSpan / Claim / Relation"]
+        Knowledge["Personal Knowledge Store<br/>EvidenceSpan / Claim / Relation"]
     end
 
     subgraph Projections["可重建检索投影"]
@@ -31,12 +30,11 @@ flowchart LR
 
     User --> Conversation
     User --> Artifact
-    Artifact --> Personal Knowledge
-    Personal Knowledge --> Embedding
-    Personal Knowledge --> Graph
-    Personal Knowledge --> Visibility
+    Artifact --> Knowledge
+    Knowledge --> Embedding
+    Knowledge --> Graph
+    Knowledge --> Visibility
     Conversation --> Visibility
-    Project --> Visibility
     Research --> Visibility
     Lifecycle --> Visibility
     Visibility --> Retrieval

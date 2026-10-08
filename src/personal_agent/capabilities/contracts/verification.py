@@ -114,19 +114,37 @@ class SourceReadingState(BaseModel):
         return self
 
 
-class VerificationCriterionResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class VerificationCriterion(BaseModel):
+    """Request-local reference to an unchanged runtime-owned criterion."""
 
-    criterion: str
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criterion_id: str = Field(pattern=r"^r[1-9][0-9]*$")
+    criterion: str = Field(min_length=1)
+
+
+class VerificationCriterionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criterion_id: str = Field(
+        pattern=r"^r[1-9][0-9]*$",
+        description="引用本次 success_criteria 中的 criterion_id；原文由 Runtime 恢复，不返回 criterion 正文。",
+    )
     status: Literal["satisfied", "not_satisfied", "insufficient_evidence"]
     feedback: str = ""
+
+
+class BoundVerificationCriterionResult(VerificationCriterionResult):
+    """A judgment with the exact criterion restored by its runtime owner."""
+
+    criterion: str = Field(min_length=1)
 
 
 class SemanticVerificationReport(BaseModel):
     """Judgments for user criteria and the verifier-owned source-support criterion.
 
     This is the verifier's ``output_type``, so the model owns all of it. It
-    deliberately carries no aggregate verdict, identity, or digest: anything a
+    deliberately carries no aggregate verdict, receipt identity, or digest: anything a
     later admission decision can derive from these judgments is computed by the
     tool, never proposed redundantly by the model.
     """
@@ -158,6 +176,7 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    criterion_results: tuple[BoundVerificationCriterionResult, ...] = Field(min_length=1)
     verdict: VerificationVerdict
     receipt_id: str = Field(pattern=r"^svr_[0-9a-f]{20}$")
     verified_draft: str = Field(min_length=1, max_length=20_000)
@@ -169,8 +188,10 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
 
 
 __all__ = [
+    "BoundVerificationCriterionResult",
     "SemanticVerificationReceipt",
     "SemanticVerificationReport",
     "VerificationCriterionResult",
+    "VerificationCriterion",
     "VerificationVerdict",
 ]

@@ -362,7 +362,7 @@ Schema 第一次反馈只指出首句没有限定 strict，却建议改成“参
 
 MCP 第二份最终反馈把结构化结果的兼容性文本副本视为要求，进一步推得所有结果始终包含于 content；返回解释中已经看到 SHOULD 与独立 structuredContent，仍采用更强结论。第一份则在最终反馈中区分结构化与非结构化内容，拒绝全称强制要求，保留为局部识别线索。但它又把问题扩展到 content 字段是否必需，并建议用“通常”或“建议”改稿。**本轮判断对象是所有结构化内容是否必须放进 content，不是字段本身能否省略。** 不能从这份拒稿推导字段可省略，也不能把它计为反馈完全忠实或可直接消费的成功样本。协议失败、语义方向与反馈质量继续分开保存。
 
-此次没有取得单声明方案的接入资格：文档否定已出现两次有效误判，MCP 协议与语义也不稳定，正例控制又未执行。停止的是这个未证实的聚焦方案，不是第 56 节必检或[已固化的修订机制](completed/multi-error-verification-revision.md)；本轮未改生产 Prompt、状态或调用链，不撤回已有收益，也没有把遗留错误归为循环新引入的回归。下一条有据边界是：Verifier 如何识别否定声明依赖了未证实的覆盖前提，并保护真正有据的否定与诚实未知；不能用一律拒绝否定句、追加同义提醒或无限复核代替支持判断。活动取舍由 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)维护，尚无新生产机制获准。
+此次没有取得单声明方案的接入资格：文档否定已出现两次有效误判，MCP 协议与语义也不稳定，正例控制又未执行。停止的是这个未证实的聚焦方案，不是第 56 节必检或[已固化的修订机制](completed/multi-error-verification-revision.md)；本轮未改生产 Prompt、状态或调用链，不撤回已有收益，也没有把遗留错误归为循环新引入的回归。下一条有据边界是：Verifier 如何识别否定声明依赖了未证实的覆盖前提，并保护真正有据的否定与诚实未知；不能用一律拒绝否定句、追加同义提醒或无限复核代替支持判断。活动取舍由 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)维护，尚无新生产机制获准。
 
 六次已知总用量 **273,172 tokens**，其中输入 255,176、输出 17,996；reasoning 15,712 已包含于输出。逐次耗时 29.163 至 86.497 秒，没有扩大预算。实际 wire 由生产 Adapter 生成且各组除用户输入外逐值相等；Adapter 没有发送 temperature 字段，不把内部请求值当作服务方实际采样温度。当前生产 system v3-source-support 和 Schema 保持，完整 Draft、引用及实际证据逐值保持；三份批次原始请求、响应、模型返回解释均有校验和，不再沿用第 65 节原始推理缺失的取证条件。
 
@@ -402,7 +402,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 本轮按预声明停止当前版本，没有调用新的成文或 Verifier，没有将人工错误意见伪装成生产反馈。下一边界是证据的适用 API、场景和条件在选材及交接中如何保留；先固定反例与消费者，再决定最小修改，不继续追加泛泛的“注意范围”提醒，也不预建通用取证框架。原问题的自动对象澄清、客观无法取证控制、正式 target 和适用消融仍未验证。现有读取状态、来源必检与修订机制继续保持。
 
-三条轨迹合计 **7 次模型调用、354,369 tokens、281.278 秒模型调用时间**，没有服务、协议或预算失败。481 份生产及测试 Python 与 `.env` 身份未变；所有脚本、原始请求、可见解释、响应和用量保存在[本轮归档](../../.tmp/retrieval-object-20260912)，实际载荷差异与分项复核见[复核记录](../../.tmp/retrieval-object-20260912/review.json)。本轮为 Offline Eval，不新增 Product E2E 结果，活动边界同步 [Future](../future/conversation-source-support.md#33-独立信息获取循环的条件诊断)。
+三条轨迹合计 **7 次模型调用、354,369 tokens、281.278 秒模型调用时间**，没有服务、协议或预算失败。481 份生产及测试 Python 与 `.env` 身份未变；所有脚本、原始请求、可见解释、响应和用量保存在[本轮归档](../../.tmp/retrieval-object-20260912)，实际载荷差异与分项复核见[复核记录](../../.tmp/retrieval-object-20260912/review.json)。本轮为 Offline Eval，不新增 Product E2E 结果，活动边界同步 [当轮独立获取诊断](evidence-acquisition.md#72-暂停-gpt-researcher-后的独立获取与原文交接验证)。
 
 
 ## 86. 区分所问对象与证据对象的完整稿 Prompt 验证
@@ -447,7 +447,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 固定最多十次 Offline Eval：归一化全量验证两次、模型选择两次、各交接后验证一次，另加四项中文正确、答非所问、错引和诚实未知控制。核心检查点要求两次交接都无损且明确识别参数说明没有回答执行结果；其他错误拒稿不能替代。四项控制须正确；示例字段强制化和反馈忠实单独报告。上限为每次 32,768 输出、480 秒、零重试或结构修复，最多三并发，总预算 1.2M tokens。预计 200k 至 400k tokens、5 至 12 分钟，完整条件与停止规则已在[预声明](../../.tmp/verifier-evidence-handoff-20260914/plan.md)冻结。
 
-事实由原执行记录拥有，模型拥有证据选择和语义验收，代码只校验位置、原文和标准完整性。临时实验没有生产消费者，生产净复杂度为 0。已有覆盖拒绝、来源支持必检及修订循环保持，本轮仅测覆盖门禁后的语义边界。外部职责参考复核 RAGAS 与 FActScore 固定源码，采用与拒绝项见预声明；它们不替代本工程收益。活动边界由 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)维护。
+事实由原执行记录拥有，模型拥有证据选择和语义验收，代码只校验位置、原文和标准完整性。临时实验没有生产消费者，生产净复杂度为 0。已有覆盖拒绝、来源支持必检及修订循环保持，本轮仅测覆盖门禁后的语义边界。外部职责参考复核 RAGAS 与 FActScore 固定源码，采用与拒绝项见预声明；它们不替代本工程收益。活动边界由 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)维护。
 
 ### 实际选择与判别结果
 
@@ -510,7 +510,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 本轮只有参数类别通过，MCP 最小输入未稳定，因而不满足将其失败完全归因复杂 Context 的前提。下一步先以最小 MCP 反例和配对正例验证示例与规范义务的支持判别；不继续扩大取证交接，不新增循环，不以替换模型或增加预算代替归因。该最小边界取得可靠收益后，才恢复真实完整稿的迁移与 Context 对照。
 
-十次累计 **38,196 tokens**，请求耗时合计 **404.176 秒**，批次墙钟 **153.348 秒**。实际命令为本目录 `prepare.py`、`run.py`、`audit.py`。完整证据见[本轮目录](../../.tmp/verifier-minimal-pair-20260914)，逐份语义复核见[review.json](../../.tmp/verifier-minimal-pair-20260914/review.json)。检查确认用户输入只有两个字段、正负例证据逐字相同、传输与 Schema 一致，482 份生产及测试 Python 和 `.env` 未变。没有生产改动或 E2E，不声明本轮修复完成；过程联动 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)。
+十次累计 **38,196 tokens**，请求耗时合计 **404.176 秒**，批次墙钟 **153.348 秒**。实际命令为本目录 `prepare.py`、`run.py`、`audit.py`。完整证据见[本轮目录](../../.tmp/verifier-minimal-pair-20260914)，逐份语义复核见[review.json](../../.tmp/verifier-minimal-pair-20260914/review.json)。检查确认用户输入只有两个字段、正负例证据逐字相同、传输与 Schema 一致，482 份生产及测试 Python 和 `.env` 未变。没有生产改动或 E2E，不声明本轮修复完成；过程联动 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)。
 
 ## 89. 过度判断的证据范围与义务强度对照
 
@@ -520,7 +520,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 每次 32,768 输出、480 秒、零重试与结构修复，最多三并发，总预算 300k tokens，预计 50k 至 100k、3 至 6 分钟。最小检查点全部成立才在最新真实完整输入执行两次候选复核；该阶段最大追加 180k tokens，仍须具体拦截示例字段强制化，其他独立错误单列。失败即停止该候选，不追加规则或 E2E。具体身份、反事实与退出条件见[预声明](../../.tmp/verifier-overreach-20260914/plan.md)。
 
-事实由原文拥有，支持关系由 Verifier 判断，代码只校验报告绑定。本轮仍为 Offline Eval，没有新 Agent、循环或生产消费者，现有覆盖门禁和修订恢复保持。只有取得条件证据才准备现有 Prompt 的最小生产替换；未取得前净生产复杂度为 0。外部判别机制沿用已核对的 RAGAS 与 OpenEvals 固定源码，不采用外部均分或关键词验收，不能据其存在证明本工程收益。活动条件与 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)联动。
+事实由原文拥有，支持关系由 Verifier 判断，代码只校验报告绑定。本轮仍为 Offline Eval，没有新 Agent、循环或生产消费者，现有覆盖门禁和修订恢复保持。只有取得条件证据才准备现有 Prompt 的最小生产替换；未取得前净生产复杂度为 0。外部判别机制沿用已核对的 RAGAS 与 OpenEvals 固定源码，不采用外部均分或关键词验收，不能据其存在证明本工程收益。活动条件与 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)联动。
 
 ### 实际结果与控制歧义
 
@@ -547,7 +547,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 固定八次最小 Offline Eval：同一 MCP 负例两次，其余六个正反控制各一次。原文与五个案例保持第 89 节；参数正负对在首次调用前共同明确为“当前调用严格模式实际生效，且不属于原文所述会禁用严格模式的情形”。第 89 节候选发现微调并行调用的例外，原“启用 strict=true”存在设置与实际生效歧义，因此不能直接把该拒绝算作回归；旧输入与标签原样保留，新参数对不能与旧版合成单变量收益。
 
-每次 32,768 输出、480 秒、零重试或结构修复，最多三并发，最小阶段总预算 180k tokens，预计 20k 至 60k、2 至 5 分钟。全部位置合法、负例目标识别与正例无误报成立后，才在最新真实完整稿和原执行证据上做两次同分类任务，最多追加 180k；必须具体识别 MCP 强制化且原文绑定合法。任务 Prompt 与 Schema 同时改变，属于职责契约比较，不能声称单句提示的因果消融。具体条件见[预声明](../../.tmp/verifier-overreach-classification-20260914/plan.md)。没有生产消费者或新 Agent、循环、状态，已接入覆盖和修订机制保持，活动方案由 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)拥有。
+每次 32,768 输出、480 秒、零重试或结构修复，最多三并发，最小阶段总预算 180k tokens，预计 20k 至 60k、2 至 5 分钟。全部位置合法、负例目标识别与正例无误报成立后，才在最新真实完整稿和原执行证据上做两次同分类任务，最多追加 180k；必须具体识别 MCP 强制化且原文绑定合法。任务 Prompt 与 Schema 同时改变，属于职责契约比较，不能声称单句提示的因果消融。具体条件见[预声明](../../.tmp/verifier-overreach-classification-20260914/plan.md)。没有生产消费者或新 Agent、循环、状态，已接入覆盖和修订机制保持，活动方案由 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)拥有。
 
 ### 识别收益与报告缺口分开验收
 
@@ -606,7 +606,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 累计 **119,567 tokens**，输入 105,899、输出 13,668；请求耗时合计 **263.573 秒**，批次墙钟 **106.661 秒**。两条完整请求各输入 49,096 tokens，没有截断、服务错误、重试、响应修补或预算扩展。输出绑定失败单列为本地协议检查，不冒充语义失败或 Provider 失败。
 
-实际执行本轮 `prepare.py`、`run.py`、`start_docs.py`、`finish.py`、`audit.py`。输入、报告、绑定恢复、用量和分项结论见[本轮目录](../../.tmp/verifier-overreach-references-20260914)及[复核](../../.tmp/verifier-overreach-references-20260914/review.json)。本次只修改实验与问题文档，生产复杂度变化为 0，产品测试不适用，不借用旧通过数声明产品完成。活动边界同步 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)。
+实际执行本轮 `prepare.py`、`run.py`、`start_docs.py`、`finish.py`、`audit.py`。输入、报告、绑定恢复、用量和分项结论见[本轮目录](../../.tmp/verifier-overreach-references-20260914)及[复核](../../.tmp/verifier-overreach-references-20260914/review.json)。本次只修改实验与问题文档，生产复杂度变化为 0，产品测试不适用，不借用旧通过数声明产品完成。活动边界同步 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)。
 
 
 ## 92. 草稿范围与证据规模的交叉诊断
@@ -650,7 +650,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 新增八次累计 **174,588 tokens**，请求耗时合计 **384.251 秒**，墙钟 **137.128 秒**。原完整组复用两次经校验的旧归档，没有重复调用。没有服务错误、截断、重试、结构修复或预算扩展；原句绑定失败独立保留。
 
-实际执行本目录 `prepare.py`、`run.py`、`start_docs.py`、`finish.py`、`audit.py`。输入对照、原始解释、报告与人工复核见[本轮目录](../../.tmp/verifier-overreach-context-20260914)及[复核](../../.tmp/verifier-overreach-context-20260914/review.json)。审计核对原完整稿身份、段落子串、证据子集、Prompt 与 wire 同一性，封存复用基线和新增证据；生产源码与配置不变，生产净复杂度为 0，产品测试不适用。活动边界与 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)联动。
+实际执行本目录 `prepare.py`、`run.py`、`start_docs.py`、`finish.py`、`audit.py`。输入对照、原始解释、报告与人工复核见[本轮目录](../../.tmp/verifier-overreach-context-20260914)及[复核](../../.tmp/verifier-overreach-context-20260914/review.json)。审计核对原完整稿身份、段落子串、证据子集、Prompt 与 wire 同一性，封存复用基线和新增证据；生产源码与配置不变，生产净复杂度为 0，产品测试不适用。活动边界与 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)联动。
 
 
 ## 93. 自动关联草稿与引用原文的受控验证
@@ -665,7 +665,7 @@ B 的引文 18、20 明确属于 `chat.completions.create` 示例，交接却删
 
 外部 A 级参考为 [ALCE 引用支持检查](https://github.com/princeton-nlp/ALCE/blob/59472085253fca560f720051173511b275e6e301/eval.py#L276)和 [FActScore 逐事实取证判断](https://github.com/shmsw25/FActScore/blob/f28272deffcf33efc1f1117d5479c10bb75221a9/factscore/factscorer.py#L187)。前者按回答引用取原文再做 NLI，后者先检索事实相关段落再交判别模型；只采纳职责与输入边界，不照搬评分、关键词解析、固定引用数量或分句框架。第 87 节按 requirements 选证后并集输入的失败保留，本轮按原稿关联且分单元消费，不把它们混成同一方法已成功。
 
-证据与原文归执行记录，关联和判别分别由模型负责，代码只拥有引用绑定、完整覆盖及原文恢复。当前不改生产 Schema、Prompt、模型配置、缺项覆盖或修订循环。预声明、原始请求与消费链保存在[本轮目录](../../.tmp/verifier-cited-units-20260915)及[验证计划](../../.tmp/verifier-cited-units-20260915/plan.md)，活动条件与 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)联动。
+证据与原文归执行记录，关联和判别分别由模型负责，代码只拥有引用绑定、完整覆盖及原文恢复。当前不改生产 Schema、Prompt、模型配置、缺项覆盖或修订循环。预声明、原始请求与消费链保存在[本轮目录](../../.tmp/verifier-cited-units-20260915)及[验证计划](../../.tmp/verifier-cited-units-20260915/plan.md)，活动条件与 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)联动。
 
 
 ### 空白分隔行的消费契约更正
@@ -702,7 +702,7 @@ v2 消费前的确定性反事实已确认空白缺口可接受，删除正文�
 
 下一条条件设计收缩到 Conversation 原本的成文责任：成文时为自身陈述提交已有可见证据的引用，不在验收前让另一模型重新猜测引用。草稿仍只有一份权威正文，引用仅定位正文范围和已有来源；Runtime 校验范围与来源身份并恢复原文，不能由代码判断语义相邻或补充业务结论。窄职责支持判断只看该段正文与这些原文，拒绝后复用现有 Conversation 修订通路；原用户问题覆盖、缺项分类和读取覆盖门禁仍各守原职责。缺引用不自动证明陈述为假，合法引用也不自动证明支持。
 
-这一后续契约尚未接入或验证。重新准入必须明确正式 Final 写入口、可见证据身份与消费点，保护本轮 e009/e010 断片、同单元多来源和 e011 条件遗漏反例，再以原中文正式任务验证用户结果。若仍从完整目录重新选证，只是本轮已暴露缺口的同一方案，不能通过换名称宣称解决。活动设计与条件见 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)。
+这一后续契约尚未接入或验证。重新准入必须明确正式 Final 写入口、可见证据身份与消费点，保护本轮 e009/e010 断片、同单元多来源和 e011 条件遗漏反例，再以原中文正式任务验证用户结果。若仍从完整目录重新选证，只是本轮已暴露缺口的同一方案，不能通过换名称宣称解决。活动设计与条件见 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)。
 
 ### 用量、审计与归档
 
@@ -820,7 +820,7 @@ Conversation 拥有开放世界内容判断；实验代码只拥有固定输入�
 
 机制参考核对两个独立 A 级已发布实现：[LlamaIndex v0.12.52 的 BaseSynthesizer](https://github.com/run-llama/llama_index/blob/v0.12.52/llama-index-core/llama_index/core/response_synthesizers/base.py)将节点文本送入成文，并在 `_prepare_response_output` 附回 `source_nodes`；[LangChain 0.3.27 的 create_retrieval_chain](https://github.com/langchain-ai/langchain/blob/langchain%3D%3D0.3.27/libs/langchain/langchain/chains/retrieval.py)保留检索 `context` 并另生成 `answer`。两者证明调用端可保留输入来源，不提供逐句蕴含保证。只采纳调用内保留关联；不采纳额外未见节点、全历史引用、框架层次、缓存或持久化。权限和读取覆盖仍由本项目既有边界负责，生成失败原样保留，无默认成功或空结果降级；生命周期仅限本次实验调用，原始记录不被修改。
 
-本轮仅新增隔离实验和文档，生产净改动为 0，没有新 Agent、循环、生产 Schema 或配置。没有生产路径可达性收益声明，正式准入仍缺自主范围形成及原入口验收；不删除已验证的局部核验、覆盖拒绝和修订代码。失败只否定被测试的成文或交接主张，取证范围的缺口另行保留。活动取舍联动 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)，经验联动[面试复盘第 3 节](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)。本预声明写入时真实调用为 0。
+本轮仅新增隔离实验和文档，生产净改动为 0，没有新 Agent、循环、生产 Schema 或配置。没有生产路径可达性收益声明，正式准入仍缺自主范围形成及原入口验收；不删除已验证的局部核验、覆盖拒绝和修订代码。失败只否定被测试的成文或交接主张，取证范围的缺口另行保留。活动取舍联动 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，经验联动[面试复盘第 3 节](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)。本预声明写入时真实调用为 0。
 
 
 ### 实际结果：绑定可行，历史语义门槛未达
@@ -850,7 +850,7 @@ Conversation 拥有开放世界内容判断；实验代码只拥有固定输入�
 
 **保留无损绑定的局部可行性，不把它直接替换进生产。** 拒绝准入的依据是历史正文未达预声明支持标准，以及正式取证阶段还没有受控范围交接；不是要求所有后置问题全部解决才承认绑定有效。范围由历史成功选证固定，未证明自主形成范围；其中仍含大窗口、重复内容及其他主题，不能把这个离线预置条件当作已具备的工程能力。
 
-下一步应在实际取证返回边界验证如何保留本次任务所用原始范围，再成文和交接；不得让上游重新自由拼接同类 ID，也不把全部历史自动标成每个结论的支持。只有通过该前置边界，才具备将绑定机制最小化接入原循环的依据。本轮不对 Verifier 增加另一条同义禁令，不改已验证的局部核验、未读拒绝和修订循环，不扩展停止预算策略。活动条件已同步 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)，经验总结与本节在[面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)双向引用。
+下一步应在实际取证返回边界验证如何保留本次任务所用原始范围，再成文和交接；不得让上游重新自由拼接同类 ID，也不把全部历史自动标成每个结论的支持。只有通过该前置边界，才具备将绑定机制最小化接入原循环的依据。本轮不对 Verifier 增加另一条同义禁令，不改已验证的局部核验、未读拒绝和修订循环，不扩展停止预算策略。活动条件已同步 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，经验总结与本节在[面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)双向引用。
 
 累计 **8 次、87,273 tokens**，输入 70,223、输出 17,050；模型请求耗时累计 **346.311 秒**，并发请求的累计不是墙钟。历史局部核验两次分别约 72、83 秒，逐次复核后仅完成原定短控制，未追加调用。8 次均在 250k/1,200 秒预算内。
 
@@ -897,4 +897,4 @@ Conversation 拥有开放世界内容判断；实验代码只拥有固定输入�
 
 三次重复只证明这个固定样本的最小能力，不保证所有表述、长证据、完整草稿或当前正式修订循环均通过。修订机制见[完成文档](completed/multi-error-verification-revision.md)。后续若继续迁移，应保留现有单元核验和循环，检查较大草稿单元或修订稿是否仍含目标错误却被接受；不能要求一次找齐全部问题，也不能让 Verifier 搜索或代写答案。
 
-生产源文件身份保持不变，净生产复杂度为 0，没有新消费者或删除项。本轮不运行正式 E2E、发布矩阵或无关回归，不声明历史整稿误放已修复。活动边界联动 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)，历史失败和已成立的门禁、引用、修订收益均保留。
+生产源文件身份保持不变，净生产复杂度为 0，没有新消费者或删除项。本轮不运行正式 E2E、发布矩阵或无关回归，不声明历史整稿误放已修复。活动边界联动 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，历史失败和已成立的门禁、引用、修订收益均保留。

@@ -75,15 +75,6 @@ uv run uvicorn personal_agent.adapters.web.api:app --host 0.0.0.0 --port 8000 --
 - API: `http://127.0.0.1:8000`
 - Docs: `http://127.0.0.1:8000/docs`
 
-Durable Investigation Project 还需要独立常驻 worker：
-
-```bash
-uv run personal-agent worker --queue investigation
-```
-
-worker 启动时会扫描非终态且非 paused 的 Project，并以稳定 idempotency key 补入队；它不会
-自动解除预算、能力、审批、修复或用户暂停。
-
 ### 6.1 开发环境重启后端
 
 上面的 `--reload` 用于监听 Python 源码变化并自动重载 worker，不等于可靠的完整重启。以下场景应显式停止旧进程再启动：
@@ -232,7 +223,7 @@ npm run test:research-e2e
 - 配置的 Postgres 当前 schema 中全部普通表数据，包括业务表和可能残留的历史 LangGraph
   checkpoint/迁移元数据；历史表不是当前 Conversation 真源
 - `data/uploads/` 下全部上传源文件
-- 配置的 Neo4j 数据库中全部图谱节点和关系
+- 配置的 Neo4j 数据库中除 eval manifest 缓存分组外的节点和关系；精确清理范围见 [API](api.md#post-apidebugreset-database)
 
 ## Docker Compose
 

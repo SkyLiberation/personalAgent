@@ -57,12 +57,12 @@ interrupt、ToolGateway 包装和 lifecycle Event 都不会改善确认、重启
 
 ## E2E
 
-Release E04/E10 和 notes API integration 覆盖：
+`E04/E10` 是直接业务入口的 Application Integration，`E22` 验收自然语言删除的 Product E2E；分类和实际结果见[评测盘点](../evals/02-current-case-inventory.md)，不将直接 API 用例计入产品发布分母。相关检查点包括：
 
 - prepare 零副作用；
 - scope、错误 command id、缺失确认和 reject 反事实；
 - prepare/confirm 与 delete/restore 之间的进程重启；
-- exactly-once Receipt 和不重复状态事件；
+- 相同 Command 重放返回同一 Receipt，且不重复状态事件；
 - Item/Claim previous states 精确恢复；
 - 旧路径不可达。
 

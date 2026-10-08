@@ -8,7 +8,7 @@
 
 Admission 按根规范接受或拒绝 Proposal，不得拼接业务约束或重排 Plan。拒绝须返回 typed `DecisionFeedback`，说明原因、mutable/immutable fields、required repair、revision scope 和 disposition。
 
-模型不可用或 Proposal 连续不合法时，只允许 fail closed、暂停、请求用户或外部权威输入、请求缺失能力、等待环境变化、执行已冻结 Command，或对同一 digest 做幂等技术重试。禁止生成替代 Goal、Plan、查询、写入内容或业务回答。
+模型不可用或 Proposal 连续不合法时，运行系统只能按既有契约 fail closed、暂停、请求用户或外部权威输入、请求缺失能力、等待环境变化、执行仍获授权的冻结 Command，或进行有界技术重试。尚未成功完成的模型请求可在原输入契约与预算内重试，服务提供方等价绑定按 [CTX](context-memory-retrieval.md#3-capability-projection-与服务提供方绑定)执行；已有执行事实和冻结 Command 的恢复遵守第 4 节。禁止由确定性代码生成替代 Goal、Plan、查询、写入内容或业务回答。
 
 Procedure 只封装 prepare、confirm、commit、receipt、compensate 和 reconcile 等稳定事务不变量；不得选择目标、决定 payload 或猜测失败后的替代路径。
 
@@ -76,11 +76,11 @@ Command、Event、Receipt 不得机械成套创建：
 
 ## 4. 持久执行契约（Durable execution contract）
 
-具体 Application Capability 或 Product Aggregate 只有确需跨请求、进程、审批或恢复边界时才使用 durable execution，并至少支持：
+具体 Application Capability 或 Product Aggregate 只有确需跨请求、进程、审批或恢复边界时才使用 durable execution。按实际跨越的边界说明并验证以下契约，不为补齐形式创建无消费者状态、checkpoint 或补偿流程：
 
 - 明确生命周期和合法状态迁移；
-- checkpoint 与恢复；
-- 相同 digest 的幂等执行；
+- 基于 canonical 持久状态或必要 checkpoint 恢复，复用已有事实；
+- 重试或恢复可能重复执行动作时，保持相同 digest 的幂等与未知结果处理；
 - replay 不重新调用模型生成 Command；
-- typed 失败、retry policy、补偿或 reconcile；
-- required report 缺失时 fail closed。
+- typed 失败与有界 retry policy；部分完成或外部执行结果不确定时，定义适用补偿或 reconcile；
+- required result contract 所需证据缺失时 fail closed，未要求独立报告时不新建 report。

@@ -484,12 +484,14 @@ class OpenAIModelClient:
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}
         if _is_reasoning_model(model):
-            kwargs["max_completion_tokens"] = request.max_tokens
+            if request.max_tokens is not None:
+                kwargs["max_completion_tokens"] = request.max_tokens
             if request.reasoning_effort is not None:
                 kwargs["reasoning_effort"] = request.reasoning_effort
         else:
             kwargs["temperature"] = request.temperature
-            kwargs["max_tokens"] = request.max_tokens
+            if request.max_tokens is not None:
+                kwargs["max_tokens"] = request.max_tokens
         if request.kind == "text" and request.response_format is not None:
             kwargs["response_format"] = request.response_format
         if request.kind == "tool_calling":

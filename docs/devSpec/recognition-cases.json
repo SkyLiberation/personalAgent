@@ -254,6 +254,11 @@
       "id": "evd_local_fix_references",
       "task": "恢复确定性不变量的缺陷修复是否需要无条件外部机制比较？",
       "expected": "EVD"
+    },
+    {
+      "id": "cod_existing_text_reference",
+      "task": "模型文字复述与文本引用的职责怎样划分，才能由运行系统恢复原文？",
+      "expected": "COD"
     }
   ]
 }

@@ -177,7 +177,7 @@ S1 已执行一次，模型身份为 `mimo-v2.5`，正常 `stop`，返回三个�
 
 ## 70. 独立信息获取循环的外部实现与本地准入边界
 
-**用户提出将大量信息获取从主 Conversation 隔离，先独立找信息，再由主对话汇总。成熟实现支持该职责划分，但本工程尚未验证它能修复当前错误。** 本轮属于只读机制研究与纯文档更新，没有新增模型调用、生产结构或 Product E2E；历史有效读取契约、来源支持必检和修订循环继续保留。活动候选由 [Future 来源支持设计](../future/conversation-source-support.md#33-独立信息获取循环的条件诊断)拥有，队列准入不升级。
+**用户提出将大量信息获取从主 Conversation 隔离，先独立找信息，再由主对话汇总。成熟实现支持该职责划分，但本工程尚未验证它能修复当前错误。** 本轮属于只读机制研究与纯文档更新，没有新增模型调用、生产结构或 Product E2E；历史有效读取契约、来源支持必检和修订循环继续保留。活动候选由 [当轮独立获取诊断](evidence-acquisition.md#72-暂停-gpt-researcher-后的独立获取与原文交接验证)拥有，队列准入不升级。
 
 失败事实分成两类：第 38 节取证缺口仍在输入，模型也提到补查，却在没有新增原文时转称充分；第 65 节有 OpenAI 读取不全以及成文扩大结论。它们支持检查信息获取职责是否被其他决策干扰。另一方面，第 45 节仅保留已读原文独立成文仍出现无据推导，第 69 节 Verifier 看到了 32/122 和禁止标准，仍把文档级否定改释为局部未见。不能把这两类事实合并成“全部因为资料太多或证据没到达”；独立取证可能改进前者，不能预先宣称消除后者。
 
@@ -269,7 +269,7 @@ S1 已执行一次，模型身份为 `mimo-v2.5`，正常 `stop`，返回三个�
 
 诊断脚手架先后修正了两项误读：Schema 允许读取决定附带中间发现，但额外断言错误拒绝；Verifier 工具 content 是 data，第二返回值才是 ToolArtifact envelope。保存失败后，仅复用逐字段相同请求的原始响应恢复，没有重采样。修正版一次 system 消息索引预检错误发生在新模型调用前。最终修正版的模型额外字段错误与上述脚手架问题分开记录，不进行修复重试或挑选成功输出。
 
-本版有界停止修正仍未解决关键问题，停止继续加同义提示，也不把失败的独立循环接入生产。后续重新判断最小取证边界：区分获取模型对“相关范围已核对”的无依据自述与工具实际覆盖，先验证能否自主定位遗漏材料并保留未知范围；不让 Verifier 重新搜全文，不硬编码读满 122 段。已有依据充分、客观无法获取与原文带条件等控制尚未执行，自动回派获取和正式 target 仍未验证。活动取舍同步到 [Future](../future/conversation-source-support.md#33-独立信息获取循环的条件诊断)。
+本版有界停止修正仍未解决关键问题，停止继续加同义提示，也不把失败的独立循环接入生产。后续重新判断最小取证边界：区分获取模型对“相关范围已核对”的无依据自述与工具实际覆盖，先验证能否自主定位遗漏材料并保留未知范围；不让 Verifier 重新搜全文，不硬编码读满 122 段。已有依据充分、客观无法获取与原文带条件等控制尚未执行，自动回派获取和正式 target 仍未验证。活动取舍同步到 [当轮独立获取诊断](evidence-acquisition.md#72-暂停-gpt-researcher-后的独立获取与原文交接验证)。
 
 原始预声明、两版脚本、请求、响应、可见解释、来源身份、代码快照和用量均在[本轮归档](../../.tmp/isolated-evidence-loop-20260911)；结果以[人工语义复核](../../.tmp/isolated-evidence-loop-20260911/review.json)和[机械核对](../../.tmp/isolated-evidence-loop-20260911/mechanical-audit.json)为准，历史 failure.json 不覆盖有效恢复结果。481 份生产及测试 Python 与 .env 身份未变。文档与历史完整性检查结果保存于同目录，不因本轮无生产变更而声称通过未运行的正式 E2E、lint 或类型检查。
 
@@ -365,7 +365,7 @@ Verifier 的通过理由明确把上述否定称为“准确反映了证据的�
 
 **本轮共 11 次真实模型调用、580,543 tokens、424.397 秒模型调用时间。** 没有服务、解析或 token 预算失败。直接成文达到预声明三稿上限；运行中 runner 将该终止误标为 `decision_budget_exhausted`，原结果保留，[复核记录](../../.tmp/parent-evidence-reentry-20260912/review.json)明确更正为三稿上限。只修正后续脚本的统计标签，未重采样、改变输入或丢弃响应；这不属于模型语义问题。
 
-完整请求、响应、可见解释、回执、代码身份、用量和逐项判断保存在[本轮归档](../../.tmp/parent-evidence-reentry-20260912)。两分支初始输入一致，返回行与保存原文一致，481 份生产及测试 Python 和 `.env` 身份未变。生产净复杂度变化为零；未运行或宣称 Product E2E。活动边界同步 [Future](../future/conversation-source-support.md#33-独立信息获取循环的条件诊断)，历史章节保持。
+完整请求、响应、可见解释、回执、代码身份、用量和逐项判断保存在[本轮归档](../../.tmp/parent-evidence-reentry-20260912)。两分支初始输入一致，返回行与保存原文一致，481 份生产及测试 Python 和 `.env` 身份未变。生产净复杂度变化为零；未运行或宣称 Product E2E。活动边界同步 [当轮独立获取诊断](evidence-acquisition.md#72-暂停-gpt-researcher-后的独立获取与原文交接验证)，历史章节保持。
 
 
 ## 102. 搜索与顺序读取分离并接入 ripgrep
@@ -384,7 +384,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 先执行真实 rg Contract 和原服务 Integration，覆盖中文、0/1/多匹配、跨片段、元数据排除、正则错误、输出受限、权限拒绝、搜索后读取、覆盖保真和旧参数拒绝；临时新增测试仅保存在根 .tmp。适用检查通过后，以原自然中文入口的单例验证工具真实可用与完整用户结果，分别计证，不扩展昂贵 cohort。保持 MiMo thinking 与现有来源验证，先 collect-only 和成本复核；服务故障或同一阻塞一次有界修正后复现即停止追加候选，并保存与撤回被否定部分。原长任务的引用和语义独立阻塞不能覆盖已到达的搜索检查点，也不能因此声明整个任务通过。
 
-本轮代码身份、脚本、测试与结果统一在[归档目录](../../.tmp/artifact-grep-20260916)，不写 C:/pae。后续结果在本节补齐，活动取舍与[Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)及[面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)相互引用。
+本轮代码身份、脚本、测试与结果统一在[归档目录](../../.tmp/artifact-grep-20260916)，不写 C:/pae。后续结果在本节补齐，活动取舍与[Future](../future/conversation-verification-false-positive.md#3-下一准入边界)及[面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)相互引用。
 
 
 ### §102 首轮边界结果与方案收敛
@@ -399,7 +399,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 归档及完整预声明：[本轮记录](../../.tmp/plain-source-tools-20260916/predeclaration.md)。原 §95 中文正式任务只执行一个原子 target，沿用 MiMo thinking、64 轮、48 次工具、4,000,000 Conversation token 上限；独立 Verifier 用量另记，不改 grader。不以静态工具调用次数断言用户结果；工具坐标、权限、引用还原与原用户交付分别判断。新增临时测试均在根 `.tmp`；原失败、脚手架异常与后续修正不删除。
 
-跨模块责任与旧实现保留例外见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。活动边界联动 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)，引用子问题及历史失败继续归 [对象与来源支持记录](answer-object-mismatch.md)，经验回链 [面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)。运行结果在此节补齐，不以此前 220 项替代新表示的验证。
+跨模块责任与旧实现保留例外见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。活动边界联动 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，引用子问题及历史失败继续归 [对象与来源支持记录](answer-object-mismatch.md)，经验回链 [面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)。运行结果在此节补齐，不以此前 220 项替代新表示的验证。
 
 
 ### 确定性验证与启动环境
@@ -454,7 +454,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 随后复用候选的同一次真实决策继续执行原 Conversation 服务，不重抽首步，不把模型自述理解当成动作执行。最多追加 12 次模型请求、1,000,000 已知 tokens、2,400 秒，包含 Verifier 与结构修复；服务错误、自然终态或边界到达均保留。重点检查实际扩源、发现后的正文读取、被拒结论修订和完整交付，不能仅凭调用 `web_search` 宣布成功。新增脚本与产物统一位于根 `.tmp/query-result-reuse-20260917`；运行结果在本节补齐。
 
-活动条件回链 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)，已有机制保留及产品结果分离的经验回链[面试复盘](../interview/10-development-pitfalls.md#5-把减少文本当成保留有效正文)。本轮没有新增生产改动，离线状态回放不能冒充正式接入。
+活动条件回链 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，已有机制保留及产品结果分离的经验回链[面试复盘](../interview/10-development-pitfalls.md#5-把减少文本当成保留有效正文)。本轮没有新增生产改动，离线状态回放不能冒充正式接入。
 
 查询与来源证据的交接边界现由[完成文档](completed/query-execution-handoff.md)拥有；本节只保留孤立提示没有改善完整修订的历史结论。
 
@@ -524,7 +524,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 当前代码正式 baseline 已执行：原中文请求、MiMo v2.5、真实工具和入口不变；一次覆盖拒绝后继续取证，随后 Final 引用格式两次不合法而以 HTTP 503 结束，未交付答案。原始结果及脚手架标签问题见[评测登记](../evals/02-current-case-inventory.md#取证充分性契约的正式验证)。后一个问题在新契约之前存在，不将其归因为取证不足，也不在本轮改引用协议。
 
-候选在原 Final 中携带本稿充分性判断；覆盖反馈明确给出继续检索、修订和维持本稿的出口。声明由原服务投影至验证参数，存在时让稿件进入原局部支持与整稿核验，理由不作为来源证据。没有新工具、循环、缓存或持久状态。接口与责任归 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)，活动剩余门禁归 [Future](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)。
+候选在原 Final 中携带本稿充分性判断；覆盖反馈明确给出继续检索、修订和维持本稿的出口。声明由原服务投影至验证参数，存在时让稿件进入原局部支持与整稿核验，理由不作为来源证据。没有新工具、循环、缓存或持久状态。接口与责任归 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)，活动剩余门禁归 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)。
 
 固定同稿、同来源、同缺项分类的反事实已执行：去掉声明恢复覆盖拒绝；加上声明保持原文进入后续核验；无据保证、用户目标缺失和非法引用仍拒绝；后一稿不自动继承声明。相关测试 183 项通过。这些是 Contract / Runtime Conformance，不是模型自主行为或完整 E2E 通过。
 

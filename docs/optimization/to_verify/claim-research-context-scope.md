@@ -1,6 +1,6 @@
 # 研究智能体输入不承载运行控制
 
-2026-09-28 后续接入状态：用户明确要求完整接入且不运行 Offline 测试，已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链；以下隔离实验与准入结论按原日期保留。生产可达不等于正式 E2E 通过，当前验收见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
+2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-LOOP-PROMPT-CONTRACT-001` 属于[研究论断反馈修订无法收敛](../claim-revision-nonconvergence.md)。本页只处理研究智能体的工作 Context 混入实验停止规则；[新版复验触发](claim-revision-progress.md)另行处理编辑后不提交核验。该输入修正已写入[集成隔离候选](../../../.tmp/claim-integrated-20260926/research-system.txt)，首个[实发请求](../../../.tmp/claim-integrated-20260926/call-001-request.json)已核对没有累计错误或预算说明；尚未接入生产，不能据此归因于 c7 的反复改写或宣布完整集合通过。
 

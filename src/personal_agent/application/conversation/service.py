@@ -406,10 +406,25 @@ class ConversationService:
                 selection_request = self._research_selection_request(
                     messages, inputs, review_criteria, reuse_start_index=source_review_start_index,
                 )
-                selection_response = self._generate_model(selection_request)
+                try:
+                    selection_response = self._generate_model(selection_request)
+                except ConversationUnavailable as error:
+                    if error.response is not None:
+                        usage = self._record_model_usage(usage, error.response)
+                        self._commit(
+                            run_ref, principal, messages, inputs, usage, execution_order,
+                            concurrent_batches, context_composition,
+                            review_criteria=review_criteria, working_plan=working_plan,
+                        )
+                    raise
+                usage = self._record_model_usage(usage, selection_response)
+                self._commit(
+                    run_ref, principal, messages, inputs, usage, execution_order,
+                    concurrent_batches, context_composition,
+                    review_criteria=review_criteria, working_plan=working_plan,
+                )
                 assert isinstance(selection_response.value, ResearchEvidenceSelection)
                 evidence_selection = selection_response.value
-                usage = self._record_model_usage(usage, selection_response)
                 try:
                     validate_research_selection(evidence_selection, review_criteria, current_claims(inputs))
                     selected_ids = selected_citation_ids(evidence_selection.references, inputs)
@@ -451,20 +466,30 @@ class ConversationService:
                 # The selection response was already charged; this is the decision turn.
                 usage = usage.model_copy(update={"model_turns": usage.model_turns + 1})
             else:
-                decision, model_response, composition, protocol_feedback = self._decide(
-                    messages=messages,
-                    capabilities=self._model_visible_capabilities_for_turn(capabilities, inputs),
-                    inputs=inputs,
-                    usage=usage,
-                    review_criteria=review_criteria,
-                    turn_index=usage.model_turns,
-                    working_plan=working_plan,
-                    interaction_mode=interaction_mode,
-                    finalization_mode=finalization_pending,
-                    evidence_selection=evidence_selection,
-                    selected_ids=selected_ids,
-                    source_review_start_index=source_review_start_index,
-                )
+                try:
+                    decision, model_response, composition, protocol_feedback = self._decide(
+                        messages=messages,
+                        capabilities=self._model_visible_capabilities_for_turn(capabilities, inputs),
+                        inputs=inputs,
+                        usage=usage,
+                        review_criteria=review_criteria,
+                        turn_index=usage.model_turns,
+                        working_plan=working_plan,
+                        interaction_mode=interaction_mode,
+                        finalization_mode=finalization_pending,
+                        evidence_selection=evidence_selection,
+                        selected_ids=selected_ids,
+                        source_review_start_index=source_review_start_index,
+                    )
+                except ConversationUnavailable as error:
+                    if error.response is not None:
+                        usage = self._record_model_usage(usage, error.response, model_turn=True)
+                        self._commit(
+                            run_ref, principal, messages, inputs, usage, execution_order,
+                            concurrent_batches, context_composition,
+                            review_criteria=review_criteria, working_plan=working_plan,
+                        )
+                    raise
                 usage = self._record_model_usage(usage, model_response, model_turn=True)
             finalization_pending = False
             context_composition.append(composition)
@@ -1508,8 +1533,20 @@ class ConversationService:
                 )), usage
             arguments["research_basis"] = research_basis.model_dump(mode="json")
             arguments["research_segments"] = [segment.model_dump(mode="json") for segment in decision.segments]
-            arguments["cited_units"] = []
             arguments["source_reading_state"] = []
+            submissions = tuple(item for item in verification_inputs if isinstance(item, SubmittedFinal))
+            previous_receipts = observed_receipts(
+                verification_inputs, capability_names=frozenset({_VERIFICATION_CAPABILITY}),
+            )
+            if len(submissions) > 1 and previous_receipts:
+                previous = previous_receipts[-1]
+                if (
+                    previous.verdict == "failed"
+                    and previous.research_ref == research_basis.claims.resource_ref
+                    and previous.success_criteria == tuple(review_criteria.criteria)
+                    and previous.verified_draft == submissions[-2].final.message.strip()
+                ):
+                    arguments["previous_verification"] = previous.model_dump(mode="json")
         execution_scope = ExecutionScope(
             principal=principal,
             execution_id=run_ref,
@@ -1885,6 +1922,7 @@ class ConversationService:
                 provider_status_code=error.status_code,
                 provider_diagnostics=error.diagnostics,
                 retryable=error.retryable,
+                response=error.response,
             )
         else:
             unavailable = ConversationUnavailable(
@@ -1896,6 +1934,7 @@ class ConversationService:
                 action_kind=error.action_kind,
                 field_paths=error.field_paths,
                 error_types=error.error_types,
+                response=error.response,
             )
         ConversationService._log_model_failure(
             unavailable,

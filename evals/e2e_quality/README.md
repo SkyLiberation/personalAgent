@@ -2,16 +2,15 @@
 
 本目录当前由 [`evidence_catalog.py`](evidence_catalog.py) 分成两种**执行 selection**：
 
-- `release`：9 条同时具有 typed 用户结果契约与真实 HTTP/模型/PostgreSQL profile 的 Product E2E；
-- `diagnostic`：20 条 supporting evidence，参数化收集为 39 个 pytest item；其中新增的一条 Boundary Evaluation 有 20 个离线校准样本，不进入发布分母。
+- `release`：同时具有 typed 用户结果契约与真实 HTTP/模型/PostgreSQL profile 的 Product E2E；
+- `diagnostic`：supporting evidence，包括边界评测与离线校准，不进入发布分母。
 
 已撤回的 Investigation Project 及其 scripted conformance 已从当前矩阵删除；历史结论只由 checksum 归档保存。
 
 当前逐项证据分类、baseline 合法性和指标覆盖见
 [`docs/evals/README.md`](../../docs/evals/README.md)。
 
-用户输入不得点名内部 Tool、Agent、Artifact、Model、执行顺序或结束判断。精确 capability、
-并发、receipt、provider binding 只能在执行后通过 trace/contract 断言。
+Product E2E 使用目标用户的自然表达；内部 Tool、Agent、Artifact、Model、执行顺序或结束判断只有属于公开契约时才可作为用户要求或通过条件。诊断用例按其证据类别声明固定输入、capability、并发、receipt、provider binding 或故障边界，不将白盒条件冒充产品自然入口。
 
 ## 证据焦点
 
@@ -52,19 +51,7 @@ uv run python -m evals.e2e_quality.cross_cutting_validation `
 
 ## 运行
 
-```powershell
-$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
-$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
-uv run pytest evals/e2e_quality --e2e-scope=release `
-  --e2e-require-complete-matrix -q -s
-uv run python -m evals.e2e_quality.release_gate --trace-root data/e2e_traces
-```
-
-运行 diagnostic：
-
-```powershell
-uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s
-```
+正式执行、诊断运行、独立归档目录和发布门禁命令由[运行、归档与发布](../../docs/evals/04-running-and-release.md)维护。新运行先按该手册设置 `$evaluationEvidenceRoot` 和输出环境变量；精确节点与数量由 catalog 和实际收集结果计算，本篇不复制第二套操作指引或计数。
 
 每次执行生成 manifest、逐用例 trace、pytest summary 和 checksum。API key 不写入归档。
 历史 trace、skip、dirty worktree 或不同 revision 的通过结果均不能成为发布证据。
@@ -73,10 +60,10 @@ uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s
 
 ```powershell
 uv run python -m evals.e2e_quality.metrics_report `
-  --trace-root data/e2e_traces --list-cohorts
+  --trace-root <sealed-archive-root> --list-cohorts
 uv run python -m evals.e2e_quality.metrics_report `
-  --trace-root data/e2e_traces --profile <cohort-specific-profile> `
-  --require-complete-profile --output data/e2e_metrics/report.json
+  --trace-root <sealed-archive-root> --profile <cohort-specific-profile> `
+  --require-complete-profile --output "$evaluationEvidenceRoot/metrics/report.json"
 ```
 
 reporter 只读取 checksum 完整、profile 兼容的 archive，并把缺失 usage 标为 unavailable；它不能改变 release gate 的发布判断。

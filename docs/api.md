@@ -31,12 +31,12 @@
 
 ## `GET /api/notes`
 
-返回指定用户的知识笔记列表。
+返回指定用户的 active `KnowledgeItem` 列表，当前最多 200 条。
 
 查询参数：
 
 - `user_id`
-- `flat`（bool，默认 false）：为 true 时同时返回 chunk notes
+- `flat`（bool，默认 false）：当前保留该参数，但不改变返回内容
 
 ## Knowledge Lifecycle
 
@@ -52,7 +52,6 @@ Item/Claim。
 ```json
 {
   "user_id": "default",
-  "owner_id": "default",
   "reason": "内容已过期",
   "idempotency_key": "delete:note-123"
 }
@@ -97,7 +96,7 @@ Item/Claim states 恢复，并返回唯一 restore Receipt。
 
 ## `GET /api/notes/{note_id}/chunks`
 
-返回指定 parent note 的所有子 chunk notes。
+将指定知识项的 `EvidenceSpan` 转成 `KnowledgeNote` 兼容视图返回；这些视图来自证据片段，不能作为独立知识事实写回。
 
 ## `GET /api/digest`
 
@@ -195,9 +194,9 @@ Item/Claim states 恢复，并返回唯一 restore Receipt。
 {
   "note": {
     "id": "76ac8451-3c16-4259-80d8-256a072e0304",
-    "graph_sync_status": "pending"
+    "graph_sync": {"status": "synced"}
   },
-  "queued": true
+  "queued": false
 }
 ```
 
@@ -239,15 +238,14 @@ LangGraph checkpoint。
 
 ## `GET /api/tools`
 
-返回当前所有已注册的工具及其描述。
+返回当前已注册工具的名称、描述与 `exposure`。注册清单不代表普通 Conversation 的可调用清单；曝光与准入规则见[工具专题](topics/tools.md#注册与曝光)。
 
 示例响应：
 
 ```json
 [
-  {"name": "capture_url", "description": "抓取指定网页的正文内容，返回提取后的纯文本。"},
-  {"name": "capture_upload", "description": "解析上传的文件（支持 PDF、文本文件），返回提取后的正文内容。"},
-  {"name": "graph_search", "description": "在个人知识图谱中搜索与问题相关的实体、关系和笔记..."}
+  {"name": "capture_url", "description": "抓取网页正文", "exposure": "public_agent"},
+  {"name": "graph_search", "description": "搜索个人知识图谱", "exposure": "public_agent"}
 ]
 ```
 
@@ -255,12 +253,14 @@ LangGraph checkpoint。
 
 ## `POST /api/tools/{name}/execute`
 
-执行指定名称的工具。
+执行指定名称的工具，仍经过 Gateway 与 Policy。请求严格校验字段；鉴权启用时，请求的 `tenant_id`、`user_id` 必须与已认证身份一致。
 
 请求体：
 
 ```json
 {
+  "tenant_id": "default",
+  "user_id": "default",
   "kwargs": {
     "url": "https://example.com/article"
   }
@@ -277,13 +277,7 @@ LangGraph checkpoint。
 }
 ```
 
-可用工具：
-
-- `capture_url` — 入参：`url` (string)
-- `capture_upload` — 入参：`file_path` (string), `filename` (string), `content_type` (string, 可选)
-- `graph_search` — 入参：`question` (string), `user_id` (string, 可选, 默认 "default")
-- `web_search` — 入参：`question` (string), `user_id` (string, 可选)
-- `capture_text` — 入参：`text` (string), `user_id` (string, 可选, 默认 "default")
+工具集合由运行时注册表返回，参数由各工具的 `ArgsSchema` 校验。例如 `web_search` 接受 `query` 与可选 `limit`，`graph_search` 接受 `question` 与 `user_id`。完整契约与代码入口见[工具专题](topics/tools.md)。
 
 ---
 
@@ -313,7 +307,7 @@ LangGraph checkpoint。
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
 
-当前 goal-entry capability：
+知识读取与生命周期能力的部分入口：
 
 - `list_personal_knowledge`：读取当前 principal 的 active/conflicted canonical KnowledgeItem 引用；
 - `prepare_conversation_knowledge_save`：冻结 exact user span；
@@ -321,7 +315,7 @@ LangGraph checkpoint。
 
 ### `GET /api/entry/stream`
 
-SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，再流式返回 answer delta，
+SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，在一次 turn 完成后将最终文本分块发送为 answer delta；当前不是模型 token 原生流。
 最终 `done` 事件包含 `disposition`、`interaction_run_ref`、`conversation_id`，以及适用时的
 `pending_confirmation`。该入口不创建后台调查或 Task/GoalGraph，也不提供旧计划步骤和
 checkpoint snapshot。

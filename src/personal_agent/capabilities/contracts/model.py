@@ -161,7 +161,8 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     context_projection_ref: str
     sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
     temperature: float = 0
-    max_tokens: int = 500
+    # None delegates the output limit to the provider's model default.
+    max_tokens: int | None = None
     reasoning_effort: ModelReasoningEffort | None = None
     kind: ModelRequestKind = "structured"
     action_definitions: tuple[ModelActionDefinition, ...] = ()
@@ -257,7 +258,7 @@ class ModelCallIntent(BaseModel):
     sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
     structured_output_contract: str
     max_input_tokens: int = Field(ge=1)
-    max_output_tokens: int = Field(ge=1)
+    max_output_tokens: int | None = Field(ge=1)
 
 
 class SkillActivationDecision(BaseModel):
@@ -285,7 +286,7 @@ class ModelInvocationGrant(BaseModel):
     allowed_egress: Literal["none", "metadata", "content", "sensitive"] = "content"
     context_projection_ref: str
     max_input_tokens: int
-    max_output_tokens: int
+    max_output_tokens: int | None
     policy_revision: str = "v1"
 
 

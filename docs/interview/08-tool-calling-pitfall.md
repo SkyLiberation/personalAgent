@@ -1,6 +1,6 @@
 # 开发踩坑复盘：统一结构化 Proposal 阻塞工具调用
 
-> **这次最关键的坑不是模型偶尔输出了坏 JSON，而是旧模型契约把工具选择、动态参数、工作清单、子智能体委托和最终回答压进了同一个结构化 Proposal。** 当前代码已经用逐动作原生 Tool Calling 替换旧参数传输，并关闭 `L01` 的重复个人检索；最新 G2 证明剩余阻塞已经迁移到普通 Conversation 的语义路由、工作清单时机与 Completion 收口。
+> 本文保留统一 Proposal 与工具参数错位的历史复盘。现行动作、工作清单控制与最终提交已按 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)、[ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)分开；研究 claim 主链见 [ADR 0032](../adr/0032-conversation-research-claims.md)。下文 G2、`L01` 和旧准入状态只对应当轮，最新问题与证据分别由 [Future](../future/design-optimization-backlog.md)和[评测盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 1. 面试时先给结论
 
@@ -39,7 +39,7 @@
 
 ### 3.3 一个 Decision 同时承担了动作与生命周期
 
-**参数修复还会被工作清单和完成状态放大。** `AgentTurnDecision` 要求模型在 `ContinueTurnProposal` 与 `FinalMessage` 之间选择；继续执行时又要同时决定工具或 Agent、参数、`plan_step_id`、可选工作清单以及是否等待用户。Admission 返回一个局部错误后，模型重新生成的是整个 Decision，而不是只修复某个工具的参数。
+**参数修复还会被工作清单和完成状态放大。** 旧 `AgentTurnDecision` 要求模型在 `ContinueTurnProposal` 与 `FinalMessage` 之间选择；旧继续执行相位还同时决定工具或 Agent、参数、`plan_step_id`、可选工作清单以及是否等待用户。当时 Admission 返回一个局部错误后，模型重新生成的是整个 Decision，而不是只修复某个工具的参数。
 
 因此失败会在多个错误之间振荡：补上工作清单可能触发审阅边界，去掉工作清单又可能留下非法 `plan_step_id`；成功子智能体已经返回 Artifact 后，父级仍可能提出缺参读取或额外搜索；预算最终消耗在 Proposal 修复，而不是有效执行。稳定的治理原则本身没有错——Proposal 仍不能直接获得权限——问题在于模型侧的统一封装把原本应独立演进的语义绑在了一次生成中。
 
@@ -94,9 +94,9 @@ OpenAI 的公开 API 可以作为机制坐标，但不能据此推断 Codex 未�
 
 ## 7. 如果面试官追问“最后怎样落地”
 
-**已经落地的边界是让服务提供方产生带精确 Schema 的原生动作，`Adapter` 再把动作归一为内部 Proposal。** 运行系统继续拥有工具可见性、Admission、权限、预算、执行和 `Observation`；成功个人检索后，下一回合不再暴露同一读取动作。`L01` 的 `3/3` 只证明这个最小闭环，不能证明 Research 已经完成。
+现行动作相位向模型发送逐动作 Schema，`Adapter` 解码成内部 Proposal；`control_working_plan` 单独表达工作清单控制，运行系统关联执行事实。模型结束动作相位后进入 typed 最终提交，适用核验和 Completion 通过后交付。具体责任与消费者由[Runtime](../topics/runtime.md)及[工具专题](../topics/tools.md)拥有。
 
-当前剩余问题是相同混合证据请求会选择不同执行路径：直接 Web 路径重复采集并耗尽预算，外部智能体路径可以交付答案但成本高且随后仍提出过晚工作清单。下一候选必须先冻结用户结果和允许的执行边界，再判断责任属于 `InteractionIntent`、能力选择还是 Completion；不能增加重试次数来掩盖问题。
+工具参数、工作清单、来源支持、研究覆盖和最终汇总分别验收。历史参数阶段的局部通过保留原边界，后续研究失败在实际最早责任处定位；下一候选由问题证据准入，不能从旧参数故障推导当前根因。
 
 ## 8. 这次踩坑带来的判断
 

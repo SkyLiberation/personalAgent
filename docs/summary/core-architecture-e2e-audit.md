@@ -5,17 +5,17 @@
 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py)；当前架构、事实 owner
 和发布边界分别见
 [`core-architecture-current-state.md`](core-architecture-current-state.md) 与
-[`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md)。
+[当前评测用例盘点](../evals/02-current-case-inventory.md)。
 下文的 `TaskContract`、`TaskRuntimeProjection` 等只描述当时被测架构，不能外推为现状。
 
 本文中的 E01–E17 是架构边界/Profile 证据编号，不是 Phase 0 产品能力证据。
 当前产品能力、复杂交互及发布基线见
-[`phase0-capability-release-baseline.md`](phase0-capability-release-baseline.md)。
+[当前评测用例盘点](../evals/02-current-case-inventory.md)。
 旧编号即使历史通过，也不能被 release gate 当作产品能力证明。
 
-## 发布级证据标准
+## 当时的评测条件
 
-一个用例只有同时满足以下条件才计入 release E2E：
+2026-07-21 的架构矩阵按以下条件收集 release E2E。它们只解释历史结果；现行产品验收以 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)为准，并自动断言用户可观察结果及必要反事实：
 
 1. 从原始用户输入和外部 HTTP 入口进入独立 Uvicorn 进程；
 2. 使用真实 structured model、真实 PostgreSQL checkpoint，以及场景需要的真实 provider；
@@ -85,14 +85,6 @@ authority、egress、evidence 与 failure semantics 的完整等价类。合理�
 这说明 PlanMonitor 的合理最小动作在该场景是零 patch。只有真实 observation 使既有执行策略失效、
 且模型提出的 patch 通过 Plan Admission 时，PlanPatch 才有存在依据。
 
-## 运行与判定
+## 历史证据的使用边界
 
-```powershell
-$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E = "true"
-$env:PERSONAL_AGENT_E2E_TRACE_DIR = "data/e2e_traces"
-uv run pytest evals/e2e_quality/test_release_user_outcomes.py `
-  --e2e-scope=release -v -s
-```
-
-单个历史 trace 只证明对应架构场景曾通过。产品发布必须另行通过 Phase 0 release gate；
-diagnostic、架构 release 和 Capability Profile 都不能替代产品用户旅程。
+单个历史 trace 只证明对应代码、配置和输入下的架构场景曾通过。当前执行入口与命令由[评测执行说明](../evals/04-running-and-release.md)维护；发布按当前产品矩阵验收用户结果，不能复用旧架构通过数替代产品用户旅程。

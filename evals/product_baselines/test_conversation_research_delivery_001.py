@@ -393,6 +393,7 @@ def run_research_scenario(
                 delivered = verdict.value.passed
                 semantic_report.update({
                     "verdict": verdict.value.model_dump(mode="json"),
+                    "evaluation_status": verdict.value.evaluation_status,
                     "passed": delivered, "model": verdict.model,
                     "total_tokens": verdict.total_tokens, "response_content": verdict.content,
                 })

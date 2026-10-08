@@ -1,6 +1,6 @@
 # Evidence Engine
 
-**EvidenceEngine 是证据机械组件，不是业务 Workflow、Router 或最终回答器。** 它被 Research/Investigation 的验证链消费；Conversation 的 Personal Knowledge read 直接使用 `KnowledgeService.select_evidence()`，最终回答仍由 Conversation 单一拥有。
+**EvidenceEngine 提供证据归一、装配和 grounding 组件。** 周期 Research digest 的验证链是其生产消费者；Conversation 的个人知识读取直接使用 `KnowledgeService.select_evidence()`，最终回答由 Conversation 唯一拥有。
 
 ## 代码边界
 
@@ -37,26 +37,20 @@ SourceDocument / EvidenceItem
 
 ### Claim grounding
 
-`verify_claims()` 把候选文本拆为 claim，并返回 `supported/partially_supported/unsupported/contradicted`、supporting evidence ids 与 spans。模型 Judge 只能判断语义蕴含；evidence id、scope 与引用集合由确定性代码约束。
+`verify_claims()` 把候选文本拆为 claim，并返回 `supported/partially_supported/unsupported/contradicted`、supporting evidence ids 与 spans。当前默认使用 [HeuristicEntailmentJudge](../../src/personal_agent/application/entailment.py)，依据词重叠、数字与极性信号判断；Research digest 创建默认 `EvidenceEngine()`，没有注入模型 Judge。该标签属于组件检查结果，不能作为开放语义已经满足的证明。
 
 ## 生产消费者
 
-- Research digest verification：把 `ResearchSource` 投影为 `EvidenceItem`，验证每个 digest claim 与 source binding；
-- Investigation/Conversation review verifier：对冻结的候选文本和 admitted evidence 做 claim-level grounding；
-- 其他明确 Application：只有在 baseline 证明需要同一证据机械语义时才通过 Port 复用。
+Research digest verification 把 `ResearchSource` 投影为 `EvidenceItem`，检查每个 digest claim 与 source binding。
+
+Research digest 的实际调用位于 [application/research/service.py](../../src/personal_agent/application/research/service.py)。Conversation 的 claims 与 Final 核验由独立结构化模型调用承担，当前链路见[核验专题](../topics/verification-and-completion.md)；已撤回 Investigation 不再是消费者。
 
 Personal Knowledge 的 Claim、Evidence、conflict 和 scope 仍由 `KnowledgeService` 拥有。模型选择只读 `search_personal_knowledge` 后，Conversation 才把选择结果物化为有界 `tool_result`，而不是先运行一个子 RAG answer service。
 
-## Non-goals
+## 责任边界
 
-- 不判断用户 intent、Application Capability 或是否需要 research；
-- 不拥有 Artifact、Claim、ResearchEvent 或 Project 生命周期；
-- 不生成 FinalMessage，不决定 Completion；
-- 不根据 benchmark 名称硬编码策略；
-- 不持久化 ContextPack 或可从 canonical facts 重建的候选状态。
+具体 Application 决定任务、来源与结果契约，原业务服务保存 Artifact、Claim 或 ResearchEvent。Evidence Engine 消费调用方输入，返回可重建证据视图与检查结果；最终回答、语义验收及状态关闭由原消费者负责。
 
 ## 验证
 
-- Unit：normalization、fusion、budget、citation selection、claim grounding；
-- Offline eval：retrieval/rerank/evidence selection 的分布性质量；
-- Product E2E：由实际 Application 正式入口验证最终用户结果，不能由 component score 代替。
+检索、重排和证据选择使用有明确样本及前置条件的 Offline Eval；实际 Application 从正式入口验证最终用户结果，组件得分不代替 Product E2E。历史 Unit/Contract 证据只读保留，现行分工见 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)。

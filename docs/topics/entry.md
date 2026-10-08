@@ -1,6 +1,6 @@
 # 入口层说明
 
-本文汇总当前项目入口层的职责划分、已有入口、生产调用路径、现有能力和已知限制。
+本文拥有 Web、CLI 和飞书入口的适配职责与当前调用路径，具体 HTTP 字段由 [API](../api.md)拥有。
 入口只做协议适配、身份解析和输入校验；开放语义由 Conversation 模型提出 typed Proposal，
 权限与机械不变量由治理代码判断，入口不得补业务语义。
 
@@ -10,7 +10,7 @@
 
 - Web API 负责 HTTP 参数接收、鉴权、响应和 SSE 推送
 - 前端工作台通过 Web API 使用采集、问答、图谱、记忆和确认能力
-- CLI 提供最小本地操作入口
+- CLI 提供文本对话、周期研究、复习简报和固定流程管理入口
 - 飞书长连接把 IM 事件转为内部 `EntryInput`
 - `AgentService` 保持薄 facade，最终委托 `AgentRuntime` 中明确的 Conversation 或 Application
   use case
@@ -60,13 +60,17 @@
 作用：
 
 - 提供本地命令行入口
-- 每次命令构造 `AgentService`
-- 将命令行文本转换成 `ConversationMessage` 并调用 `converse()`
+- 按命令装配 `AgentService` 或对应领域执行依赖
+- 文本 `entry` 转换成 `ConversationMessage` 并调用 `converse()`
 - 输出 JSON 或文本结果
 
 当前 CLI 命令：
 
-- `entry`
+- `entry`：文本对话
+- `worker`：持久任务队列消费
+- `research-once`、`research-subscribe`、`research-schedule`：一次性研究、订阅和调度
+- `review-digest`：复习简报生成与投递
+- `procedure-eval-record`、`procedure-deploy`、`procedure-dry-run`：固定流程评测登记、部署与试运行
 
 ### 4. `FeishuService`
 
@@ -77,7 +81,7 @@
 - 使用飞书官方 SDK 长连接接收消息事件
 - 将飞书消息标准化为 `FeishuIncomingMessage`
 - 下载飞书文件并写入本地 uploads
-- 向 Agent 注册飞书群聊消息加载端口；线程总结 Goal 在 Action 执行阶段按需调用
+- 注册飞书群聊消息加载端口，由明确的业务入口按需调用
 - 文本对话转换成 canonical Conversation contract；文件和固定业务命令进入对应 Application
   use case
 - 将结果回复到飞书消息或群聊
@@ -92,7 +96,9 @@
 - `GET /api/notes`
 - `POST /api/notes/{note_id}/graph-sync`
 - `GET /api/notes/{note_id}/chunks`
-- `DELETE /api/notes/{note_id}`
+- `POST /api/notes/{note_id}/delete-commands` 及对应确认、恢复接口
+- `POST /api/knowledge/ingest-upload`
+- `POST /api/conversation/turn`
 - `GET /api/digest`
 - `GET /api/entry/stream`
 - `POST /api/debug/reset-database`
@@ -147,7 +153,7 @@ CLI command
 - 已具备 FastAPI Web API
 - 已具备前端静态资源托管
 - 已具备 Conversation SSE 入口；当前 SSE 是对完整回复的协议分块，不声称是模型 token 原生流
-- 已具备 tools、notes、digest、ask history 等管理接口
+- 已具备 tools、notes、digest 与 Conversation trace 查询接口
 - 已具备 API Key 鉴权和 token bucket 限流
 - 已具备 CORS 配置
 - 已具备 CLI 本地入口
@@ -161,21 +167,11 @@ CLI command
 
 ### 1. 统一的是契约与边界，不是一个总编排图
 
-Conversation 使用统一消息、身份、scope 与结果契约；`digest`、capture、Investigation 等固定或
-durable 产品能力拥有各自 Application 入口。不存在覆盖所有请求的 LangGraph Entry 总图。
+Conversation 使用统一消息、身份、scope 与结果契约；`digest`、capture 和周期 Research 拥有各自 Application 入口。依赖装配与状态责任见[当前核心架构](../summary/core-architecture-current-state.md)。
 
-### 2. CLI 能力仍偏基础
+### 2. CLI 与 HTTP 的操作范围不同
 
-CLI 当前只覆盖：
-
-- `entry`
-
-还没有覆盖：
-
-- 上传文件
-- 上传文件
-- ask history 查询和删除
-- graph sync
+CLI 命令见上文。文件上传、知识生命周期确认和图谱重同步由 HTTP API 提供，CLI 没有对应管理命令。
 
 ### 3. 飞书入口是后台线程处理，缺少更完整的任务状态反馈
 
@@ -191,10 +187,6 @@ Web 侧通过 API Key 映射用户，SSE 也支持 query 参数传 key；飞书�
 首 token 延迟或中途取消不满足要求，才应定义原生流式事件与恢复边界；不能仅为“更像现代
 Agent”引入另一套 event schema。
 
-## 演进方向
+## 证据与后续准入
 
-- 先用正式入口 E2E 证明专项入口造成了用户错误，再决定是否收敛
-- 只有多个生产消费者和独立生命周期得到证明时，才抽象统一事件协议
-- 为 CLI 增加 history、upload 和 graph sync 能力
-- 为飞书入口补更清晰的处理中/失败反馈
-- 强化用户身份、权限、租户隔离和审计能力
+当前已执行的用户结果与限制见[评测盘点](../evals/02-current-case-inventory.md)。已确认且尚未解决的问题由 [Future 队列](../future/design-optimization-backlog.md)维护；入口能力列表只描述代码存在的调用路径。

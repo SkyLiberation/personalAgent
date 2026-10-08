@@ -2,7 +2,7 @@
 
 **生产状态：2026-09-29 起退出。** 独立缺项分类暂停后，专用于越过其覆盖拒绝的 `evidence_sufficiency` 已从研究与 Final 契约移除；本 ADR 的局部结果与原始失败仍按历史版本保留。现行决定见 [ADR 0033](0033-claim-deletion-and-document-absence-pause.md)。
 
-**历史状态（2026-09-18）：候选已接入，局部语义已验证；正式 target 已执行并按原契约失败，该次运行的封存记录不足以判断覆盖分支是否被触发，收益与撤回条件都还没有证据。** 当轮活动边界见[语义验证设计](../future/conversation-verification-false-positive.md#3-条件候选与因果准入顺序)，过程与证据见[取证第 116 节](../optimization/evidence-acquisition.md#116-由模型决定结束取证的契约验证)。
+**历史状态（2026-09-18）：候选已接入，局部语义已验证；正式 target 已执行并按原契约失败，该次运行的封存记录不足以判断覆盖分支是否被触发，收益与撤回条件都还没有证据。** 当轮活动边界见[语义验证设计](../future/conversation-verification-false-positive.md#3-下一准入边界)，过程与证据见[取证第 116 节](../optimization/evidence-acquisition.md#116-由模型决定结束取证的契约验证)。
 
 ## 背景与决定
 

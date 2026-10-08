@@ -1,6 +1,6 @@
 # 主动知识闭环能力说明
 
-本文档描述在 Review Digest 复习触达之上扩展出的一组**主动知识能力**。它们的共同目标是让系统不只是被动回答问题，而是能「回看自己懂了什么、漏了什么」并主动行动——这是 Agent 区别于单次 RAG 问答的核心。
+本文说明知识缺口提问、主题整理和简报增长统计的现行用例及入口。各用例分别拥有检测、写入或投递事实，实际可用范围由当前曝光和执行契约决定。
 
 三项能力共享同一应用层，并从两类入口进入：
 
@@ -37,21 +37,21 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 
 ### 检测逻辑（确定性）
 
-`KnowledgeGapAnalyzer`（`src/personal_agent/insight/analyzer.py`）产出两类缺口：
+`KnowledgeGapAnalyzer`（[analyzer.py](../src/personal_agent/application/insight/analyzer.py)）产出两类缺口：
 
 | 缺口类型 | 判定 | 数据来源 |
 | --- | --- | --- |
 | `isolated_entity`（知识孤岛） | 实体在图谱中连接度 ≤ `min_entity_degree` | `GraphitiStore.get_topology(user_id)` |
 | `potential_conflict`（潜在矛盾） | 两条标题词重叠的笔记极性相反（复用 verifier 的否定词启发式） | `memory.list_recent_notes()` |
 
-检测本身完全确定性，符合工程「代码控执行、LLM 处理开放语义」的边界。提问措辞可选经 LLM 改写（见下），改写失败回退确定性模板。
+检测产出的是候选信号。词重叠与否定词不能判定语义矛盾，系统只据此提出问题；提问措辞可选经 LLM 改写，异常或空结果保留模板。
 
 ### 提问措辞接 LLM（可选增强）
 
 `KnowledgeGapAnalyzer` 接受一个可选的 `question_llm: Callable[[KnowledgeGap], str | None]`：
 
 - 装配处 `AgentRuntime` 用共享的 `LlmClient.generate_answer` 实现它。
-- LLM 未配置时返回 `None`，analyzer 保留确定性模板问题，不静默降级。
+- LLM 未配置时返回 `None`，analyzer 保留模板问题。
 - 任何异常或空结果都回退模板。
 
 ### 防刷屏与幂等
@@ -76,7 +76,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 
 ---
 
-## 2. 自动主题整理（consolidate_knowledge 意图）
+## 2. 自动主题整理（consolidate_knowledge）
 
 ### 能力
 
@@ -85,7 +85,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 ```text
 topic
   -> 在应用用例中检索并选择当前版本的相关笔记（所有权校验）
-  -> LLM 生成结构化综述草稿（失败回退确定性拼接）
+  -> LLM 生成综述草稿（空结果时拼接原文）
   -> capture_text 链路写入新笔记
   -> 对每条源笔记 supersede_note(old, new)
   -> 综述 supersedes_note_ids 记录来源，可回溯
@@ -95,13 +95,13 @@ topic
 
 | 组件 | 位置 | 职责 |
 | --- | --- | --- |
-| 应用用例 | `src/personal_agent/knowledge/consolidation.py` | 主题检索 / 生成 / 入库 / supersede 编排 |
-| 工具适配 | `src/personal_agent/tools/consolidate_knowledge.py` | topic-only args schema、governance、结果归一 |
+| 应用用例 | [consolidation.py](../src/personal_agent/application/knowledge/consolidation.py) | 主题检索 / 生成 / 入库 / supersede 编排 |
+| 工具适配 | `src/personal_agent/tools/consolidate_knowledge.py` | `topic`、`user_id` 参数、governance 与结果归一 |
 | 服务委托 | `AgentService.execute_consolidate` | 对外暴露入口 |
 
 工具治理：`risk_level=low`、`side_effects=("write_longterm",)`、`permission_scope="memory:write"`，无需 confirm（综述是新增笔记，原笔记走 supersede 标记而非删除，可恢复）。仍走 Gateway/Policy。
 
-容错：单条 `supersede_note` 失败记入返回的 `failed`，**不回滚整篇综述**——新笔记已是当前真源。
+容错：单条 `supersede_note` 失败记入返回的 `failed`，保留已写入的新笔记并报告失败列表。返回新笔记不代表所有源笔记均已退出检索。
 
 ### 返回结构
 
@@ -109,15 +109,19 @@ topic
 
 ### 入口边界
 
-当前以 `consolidate_knowledge` Protocol 接入 Executive。Task Analyzer 只表达目标和主题，不输出 note_id 或执行步骤；相关笔记选择由 `KnowledgeConsolidationUseCase` 完成。
+工具的当前曝光由 [tools/](../src/personal_agent/tools)声明，执行规则由[工具专题](topics/tools.md#注册与曝光)拥有：
 
-`review_digest` 与 `inspect_knowledge_gaps` 同样是 Protocol operation：前者只即时生成简报，后者只返回缺口分析；二者都不执行 scheduler 的投递和按日幂等逻辑。
+| 工具 | 曝光与职责 |
+| --- | --- |
+| `consolidate_knowledge` | `workflow_activity`；主题选笔记、生成和 supersede 由 `KnowledgeConsolidationUseCase` 完成 |
+| `review_digest` | `workflow_activity`；即时生成简报，投递与按日幂等由 job 拥有 |
+| `inspect_knowledge_gaps` | `public_agent`；返回缺口候选，不执行 scheduler 投递 |
 
 ---
 
 ## 3. 简报知识增长 section
 
-`ReviewDigestUseCase`（`src/personal_agent/review/service.py`）在「最近笔记 / 待复习」之外新增「知识增长」section：
+`ReviewDigestUseCase`（[service.py](../src/personal_agent/application/review/service.py)）在「最近笔记 / 待复习」之外新增「知识增长」section：
 
 - **趋势行**（始终可用）：本周新增 vs 上周笔记数，来自本地 `created_at`，例如「本周新增 5 条笔记（上周 3 条，↑2）」。图谱不可用时仍能展示。
 - **图谱概览**（图谱可用时追加）：实体/关联总数、连接最密集的概念、关联事实样例，来自 `get_topology(user_id)`。
@@ -130,47 +134,20 @@ topic
 
 ## 配置
 
-知识缺口追问（`KnowledgeGapConfig`，前缀 `PERSONAL_AGENT_KNOWLEDGE_GAP_`）：
+知识缺口提问的启用、日程、数量与检测参数统一见 [环境变量](env.md#知识缺口主动追问)。`max_gaps_per_run` 限制单次提问条数；知识增长统计随 Review Digest 生成，主题整理由对应 Application 用例执行，其当前曝光见前文入口表。
 
-```env
-PERSONAL_AGENT_KNOWLEDGE_GAP_ENABLED=false
-PERSONAL_AGENT_KNOWLEDGE_GAP_TIME=20:00
-PERSONAL_AGENT_KNOWLEDGE_GAP_SCHEDULER_ENABLED=false
-PERSONAL_AGENT_KNOWLEDGE_GAP_SCHEDULER_TICK_SECONDS=300
-PERSONAL_AGENT_KNOWLEDGE_GAP_MAX_GAPS=3
-PERSONAL_AGENT_KNOWLEDGE_GAP_MIN_DEGREE=1
-PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
-```
-
-`max_gaps_per_run` 限制单次提问条数，避免打扰用户——这是主动 Agent 最易翻车处。知识增长 section 与 consolidate 工具无独立开关，随 Review Digest / Agent runtime 默认启用。
-
-装配统一在 `web/context.py:build_web_app_context`，生命周期由 `startup()/shutdown()` 管理；`scheduler_enabled=true` 时启动应用内 runner。
+装配位于 [adapters/web/context.py](../src/personal_agent/adapters/web/context.py) 的 `build_web_app_context`，生命周期由 `startup()/shutdown()` 管理；`scheduler_enabled=true` 时启动应用内 runner。
 
 ---
 
-## 验证
+## 验证与证据
 
-相关测试：
-
-- `tests/test_knowledge_gap_analyzer.py`——孤岛 / 矛盾检测、max_gaps 上限、图谱失败降级、LLM 改写与回退
-- `tests/test_knowledge_gap_job.py`——有缺口才投递、按天去重、ledger 跨重启幂等、空跑不烧名额
-- `tests/test_review_digest_store.py::test_claim_gap_delivery_is_idempotent_per_day`——store 层原子幂等
-- `tests/test_review_digest_job.py`——知识增长 section（趋势 + 图谱、降级）
-- `tests/test_consolidate_knowledge_tool.py`——工具 governance 与结果契约
-- `tests/test_agent_flows.py::TestCaptureFlow::test_consolidate_knowledge_*`——端到端 supersede（真实 Postgres）
-
-常用命令：
-
-```bash
-uv run pytest tests/test_knowledge_gap_analyzer.py tests/test_knowledge_gap_job.py tests/test_consolidate_knowledge_tool.py tests/test_review_digest_job.py -q
-```
+有效证据与用户结果由[评测盘点](evals/02-current-case-inventory.md)维护。缺口检测、按日幂等、综述写入和源笔记替代应分别在各自责任边界验收；实现存在不能替代完整闭环通过。历史 `tests/` 只读保留，现行验证分工见 [QLT](devSpec/quality-security.md#1-测试职责与覆盖)。
 
 ---
 
 ## 已知边界
 
-- **consolidate 尚无自然语言主动触发**：需新增意图 + workflow + 多 note_id 解析注入，留作独立任务。
-- **gap 矛盾检测是词重叠 + 否定词启发式**：可能漏判语义矛盾，仅用于「值得问一句」而非断言冲突。
 - **gap 提问反馈未做强关联**：用户回答靠既有 capture 路径入库，没有「这条回答对应哪个 gap」的硬绑定（刻意避免脆弱的文本前缀解析）。
 - **趋势行是固定 7 天窗口**：未做可配置周期与按主题维度的趋势。
 - 多实例部署的同日幂等仍依赖 `knowledge_gap_deliveries` 主键兜底，未引入 distributed lock。

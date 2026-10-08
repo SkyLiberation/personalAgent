@@ -10,9 +10,7 @@ Verification 是 Agent 内部元能力：
 > 候选结果产生后、宣告完成前，依据用户 Goal、required result contract 和可见 Evidence，
 > 判断候选结果是否语义满足，并产生 typed assessment 与 repair feedback。
 
-“元能力”描述运行时义务，不表示所有领域共享一个万能 `VerifierService`。Personal Knowledge Answer、
-Conversation Review、Ask/RAG 和 Investigation Project 的判据 owner、输入事实、生命周期与
-失败消费者不同，因此保留领域 verifier；它们共同遵守相同架构不变量。
+“元能力”描述运行时义务。Conversation 的来源支持、研究覆盖、最终交付以及周期 Research digest 各有明确输入、判据和失败消费者，按各自业务契约核验。个人知识只返回证据；独立 Knowledge Answer 与后台 Investigation 的生产入口已经撤回。
 
 用户显式要求“审查并修订一段文本”是 Conversation Review 产品能力，不是通用 Verification 的
 触发前提，也不代表普通知识任务已经自动验证。
@@ -49,9 +47,11 @@ adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或
 
 普通整稿的局部支持核验使用 `interaction_verification.cited_support:v3-asserted-scope`。研究来源核验使用 `conversation.research.support:v1-bounded-feedback`，两者共享来源支持判据正文；研究 typed 反馈分别表达无据声明、已有支持范围、缺少前提和当前片段 ID，相关证据 ID 从原绑定确定性恢复给选证模型及写作者。模型先确定草稿实际主体、条件、强度及范围，再逐项核对可见依据；局部句内观察不能被扩大为全文否定，一个事实有据不能替同段其他事实放行。模型仍只输出相关证据 ID 和具体支持缺口；工具以 `checked_draft` 绑定本次精确段落，连同拒稿正文与意见交回原循环。证据 ID 只在当前单元校验；空发现继续后续核验，不证明完整用户结果。调用绑定由 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md)拥有，判别效果与限制见[范围一致性记录](../optimization/claim-verifier-consistency.md)。
 
-Conversation Verifier 当前使用 Registry 中的中文 `interaction_verification.system:v4-cited-evidence`，并固定加入 `interaction_verification.source_support:v1` 标准。模型必须逐条核对声明与实际证据的主体、条件、范围及强度；仅主题相关、URL 正确或没有发现矛盾不能替代支持。两份模板由同一工具消费，版本进入请求；JSON 输入由已有 typed 参数模型序列化，外部内容明确作为数据。
+Conversation Verifier 当前使用 Registry 中的中文 `interaction_verification.system:v5-criterion-references`，并固定加入 `interaction_verification.source_support:v1` 标准；研究最终核验使用 `conversation.research.final_verification:v5-revision-comparison`。研究最终请求保留 canonical binder 恢复的 `cited_units`，按顺序与 `research_segments` 的完整文字一一对应；每段带入其实际引用的原文及来源 URL。最终 Verifier 对照整段指代和具体页面的支持关系；多来源合法，某页面的陈述须由该页面支持。修订时 Runtime 从最近适用拒绝 Receipt 恢复旧稿和失败反馈，校验相同研究版本、冻结原项及上一稿正文；工具校验 digest/ID，并只带入旧稿、失败项与反馈。最终核验分别检查旧问题修复、全部语义变化及当前支持，核对完整清单数量和全文事实一致性；旧稿和旧意见不成为事实权威。接入与验证边界见[修订比较候选](../optimization/to_verify/final-revision-comparison.md)。模型必须逐条核对声明与实际证据的主体、条件、范围及强度；仅主题相关、URL 正确或没有发现矛盾不能替代支持。模板由同一工具消费，版本进入请求；JSON 输入由 typed 参数模型序列化，外部内容明确作为数据。
 
-工具对用户标准与系统支持标准合并去重，要求报告恰好覆盖全部项。缺失或重复来源支持项不能形成有效回执，来源支持不通过就参与现有聚合并拒稿。用户原标准由 `InteractionIntent` 冻结，回执 `success_criteria` 与 `criteria_digest` 仍绑定这组原标准；系统判断在 `criterion_results` 中独立保留，不改写用户要求。失败通过现有 Conversation 循环返回模型，修订稿重新验证。既有触发范围与预算保持；原生引用候选改变输入物化和成文 Schema，不增加服务或循环。接入决定及剩余风险见 [ADR 0020](../adr/0020-require-conversation-source-support-verification.md)。
+工具对用户标准与系统支持标准合并去重，从本次完整原文只读派生 `VerificationCriterion` 的 `criterion_id` 与 `criterion`。普通和研究最终模型只返回每个 ID 的三态及反馈，动态 Schema 列出当前合法身份与结果数量；工具再检查全部项恰好一次。Runtime 从当前输入恢复原文，形成 `BoundVerificationCriterionResult` 和回执，不以模型重抄文字识别验收项。未知、遗漏或重复 ID 产生明确输出契约失败，不形成有效回执；来源支持不通过参与现有聚合并拒稿。
+
+用户原标准由 `InteractionIntent` 冻结，回执 `success_criteria` 与 `criteria_digest` 仍绑定这组原标准；系统判断在 `criterion_results` 中独立保留，不改写用户要求。回执保留原文用于反馈和审计；三态、修订意见及研究事实缺口由模型判断，恢复引用不改变它们。失败通过现有 Conversation 循环返回模型，修订稿重新验证。既有触发范围与预算保持，不增加模型阶段、服务或循环。原文引用规范由 [COD](../devSpec/code-structure.md#21-已有文字通过引用传递)拥有，接入责任见 [ADR 0020](../adr/0020-require-conversation-source-support-verification.md)。
 
 当前生产链暂停独立文档缺项分类及其覆盖拒绝，研究与普通 Final 均直接进入仍适用的来源支持核验。普通整稿语义核验保留实际读取状态作为数据，但不能将未读内容当成已知事实；无据全文否定仍须按来源支持与用户结果判据拒绝。`evidence_sufficiency` 原先只负责越过独立覆盖拦截，现已随该分支移除。历史覆盖拒绝与补读恢复检查点见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)，当前取舍、风险及退出条件见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
 
@@ -63,13 +63,15 @@ Conversation Verifier 当前使用 Registry 中的中文 `interaction_verificati
 
 研究写作者以完整 `base_ref`、claim_id 和首尾片段 ID 指定正文修订范围；Runtime 从当前 canonical 稿恢复原文并合并。临时 typed 片段视图不写入 Journal，来源 Verifier 和独立汇总继续消费完整正文。每轮 Provider Schema 从本轮已选引用目录派生文档、连续行及部分行范围，并列出当前 claim 与片段身份；合法性仍由唯一 citation binder 和研究准入确定。
 
-研究写作者当前可用 `delete_claim` 撤回一个已有论断；准入层核对当前版本和身份，保留其余项后重新核验完整集合。独立缺项分类和覆盖反馈已暂停，普通来源支持和最终语义核验仍运行。现行边界见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
+研究写作者当前可用 `delete_claim` 撤回一个已有论断；准入层核对当前版本和身份，保留其余项后重新核验完整集合。独立文档缺项分类及对应覆盖反馈已暂停，原用户事实覆盖、来源支持和最终语义核验仍运行。现行边界见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
+
+周期 Research digest 当前使用默认 `EvidenceEngine` 的启发式 grounding，具体判断及过滤由 [Research 链路](../workflow/research-once-workflow.md#digest-核验与投递)拥有。该组件标签与 Conversation 的模型语义核验分别记录，不能替代用户结果证据。
 
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |
 | Conversation grounded answer | personal/tool Observations 到达后 | source constraint、citation、conflict 与 required evidence | Conversation revision / FinalMessage |
-| Investigation SubGoal | execution + Evidence Admission 后 | bounded SubGoal 是否被 admitted evidence 满足 | Outcome 或 verification repair |
-| Investigation Final | final Artifact 生成后 | required coverage、claim/evidence、排除条件 | CompletionReport |
+| Conversation 外部研究 | 当前 claims 提交或合法编辑后 | 每条来源支持及原用户事实覆盖 | 研究修订、补证或独立汇总 |
+| Conversation 研究最终交付 | 独立汇总提交后 | 对已核验事实的忠实性、具体来源归属及用户交付判据 | 同版本 FinalMessage / Completion |
 | Conversation Review | 用户显式要求审查文本时 | 最终文本是否满足冻结的用户明示判据 | revision loop / verified bytes |
 
 Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构性案例，但不能作为
@@ -88,14 +90,12 @@ Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构�
 Verification 通过只说明某个候选结果满足相应语义标准。只有 required result contract 的全部
 义务、assessment evidence 和 Artifact 齐全后，Completion Gate 才能进入领域终态。
 
-普通直接回答不为形式统一创建 CompletionReport；Personal Knowledge Answer 返回临时 assessment，
-因为该 assessment 被 HTTP 用户实际消费，不持久化无消费者投影。
+普通直接回答使用 Conversation 的结果契约；个人知识读取返回证据选择事实。内部 assessment 和 Receipt 由适用核验阶段产生，Completion 校验它们与当前提交的一致性。
 
 ## 执行证据
 
 - `ASK-001A`：Conversation 逐项引用互斥个人资料并明确冲突，禁止 web、跨 principal 泄漏和知识写入；
 - `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；
-- `E08`：普通回答 Claim delta 为零，显式 solidify 后才发生 Knowledge 写入。
 
 2026-10-01 引用继承契约：正文片段修订由 Runtime 保留目标 claim 已绑定引用；替换引用仅对新增坐标检查本轮选择，创建和增补的引用全部经过选择。正式写作者的引用原文目录从本轮选择与当前集合绑定的可见坐标恢复，合法编辑后的完整新版仍经过来源支持和事实覆盖。版本、claim 与片段范围、来源绑定及最终结果门禁继续由原责任主体拥有；本轮证据见[引用继承记录](../optimization/completed/claim-retained-references.md)。
 

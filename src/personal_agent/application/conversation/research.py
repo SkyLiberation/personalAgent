@@ -385,7 +385,7 @@ def research_request(name: str, output_type: type[BaseModel], payload: dict) -> 
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
     return StructuredModelRequest(
         operation=name.replace(".", "_"), version=prompt.version, messages=messages,
-        output_type=output_type, temperature=0, max_tokens=8192,
+        output_type=output_type, temperature=0,
         context_projection_ref=sealed_context_projection_ref(purpose=name, messages=messages),
         metadata={"component": "conversation_research"},
     )

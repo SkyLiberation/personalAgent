@@ -1,88 +1,81 @@
 # 研究回答来源支持：问题总览与经验索引
 
-**截至 2026-09-29，独立文档缺项分类与覆盖门禁已按用户要求从当前生产目标代码暂停；来源支持与整稿语义核验继续保留。** [本轮正式 target](../evals/02-current-case-inventory.md#2026-09-29-单条撤回与独立缺项识别暂停的正式-target)的独立分类响应归零，但入口超时且没有 Final，余下核验对无据全文否定的保护未验证。历史第 103 至 105 节曾取得五次正式分类交接有效、四次覆盖拒绝及补读恢复的局部证据，不因此改写为无效；该任务最终未交付。生成器仍可能反复提交缺项结论，普通语义核验也有误判风险。2026-09-18 的取证充分性候选正式 target 命中 64 个决策回合上限并未交付，覆盖拒绝为 0；该归档不保存验证入参，无法判断当时覆盖分支是否被触发。同次复验日志证明“带声明、来源未读完、进入来源支持核验”的历史路径发生过，其 7 条越界意见经逐条核对全部成立。当前停用决定与风险由 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)拥有。
+**当前推进需要区分来源支持、用户事实覆盖和最终表达保真。** 三者的局部通过不能相互替代，也不能覆盖原用户结果。近期失败集中在[具体来源归属](normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配)、[修订扩大列举范围](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)及[选证输出截断](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)。2026-10-07 从[修订比较的核验校准与实际反馈连续回放](claim-revision-nonconvergence.md#2026-10-07-修订比较的验证预声明)开始推进。
 
-本文只提供跨问题导航和证据摘要。每个具体问题的尝试集中在一份问题记录；生产事实见[验证专题](../topics/verification-and-completion.md)、[ADR 0020](../adr/0020-require-conversation-source-support-verification.md)与 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)，活动设计及准入状态由 [Future 队列](../future/design-optimization-backlog.md)拥有。面试经验见[开发踩坑与优化经验](../interview/10-development-pitfalls.md)，该文档反向引用具体问题记录，不维护第二份状态账本。
+本文提供跨问题导航，不维护第二份准入或结果台账。当前行为由[验证专题](../topics/verification-and-completion.md)、[ADR 0032](../adr/0032-conversation-research-claims.md)和 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)拥有；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有，原始用户结果由[评测盘点](../evals/02-current-case-inventory.md)拥有。拆分、复合识别及独立文档缺项识别已停用，历史局部收益按原条件保留。
 
 ## 当前核心问题与责任边界
 
-**当前必须区分“内容有来源支持”和“内容回答了用户所问对象”。** 第 85 节用输入参数约束解释工具执行结果契约，即使参数说明本身正确，也没有完成结果契约要求。该稿还把 MCP 示例中的 `isError` 写成无条件必须包含，现有证据不足以支持这个强度。不能用引用正确、主题相关或没有反证代替判断。
+先定位责任边界，再决定验证范围。执行系统提供原文、坐标与执行事实；模型提出论断和修订；来源 Verifier 判断依据能否支持具体声明，研究覆盖判断事实能否回答用户问题，最终 Verifier 判断实际成稿，Completion Gate 绑定同一通过稿。
 
-| 问题 | 当前判断与证据边界 | 唯一记录 |
-| --- | --- | --- |
-| 局部观察被写成全文缺项 | 历史正式任务已验证覆盖拦截与补读恢复；现行独立分类按用户要求暂停，来源支持与整稿核验仍须防止无据全文否定 | [文档缺项](document-absence.md)、[当前停用决定](../adr/0033-claim-deletion-and-document-absence-pause.md) |
-| 回答对象、接口、条件与强度错位 | 历史整稿存在误放；当前局部检查的单项最小复验目标识别 3/3、有据控制接受 3/3，当前生产循环已完成一次三项显式错误的渐进修订，尚不保证全部语义表达；不以历史失败直接断言当前再次复现 | [对象与适用范围第 114 节](answer-object-mismatch.md#114-当前局部-verifier-识别-iserror-普遍义务的最小复验) |
-| 规范要求的来源归属与表述范围 | 从反馈 Context 验收中拆出的独立诊断；历史来源错配与新增指代歧义分别说明，不作为反馈目标未修正的证据，也不预设二者同因 | [规范要求独立记录](normative-scope-attribution.md) |
-| 从执行职责推出权限责任或排他结论 | 历史核心来源推断问题；部分样本已有拦截，不能据此宣布生成与完整审查稳定 | [权限责任推断](permission-inference.md) |
-| Verifier 引句绑定导致反馈无法交接 | 见固化记录 | [调用单元绑定](completed/verifier-finding-binding.md) |
-| 原文行号与临时引用编号混用 | 文档版本与原文坐标已替换重复编号；本轮仅 Offline 验证，长期未复现结论仍按后续正常 E2E 的预声明观察条件固化 | [引用坐标独立记录](citation-coordinate-confusion.md) |
-| 逐行引文没有携带来源归属 | 正式核验以无法确认 OpenAI 来源为由拒绝；原可见目录的匹配均来自官方页，但局部输入只有正文，补全后的收益尚未验证 | [来源归属](citation-source-attribution.md) |
-| 拒稿后的计划恢复与取证决策 | 已有恢复通路保留，语义误放仍是独立问题。Plan 生命周期整体修正已接入，completed 状态下补证通路已有真实消费；诊断五稿仍提交未读全来源的缺项句，主动停止、未交付；第 109 节更正为未证明该原文存在被遗漏答案，不能把拒绝一概解释为必须全读 | [反馈与修订 §108](revision-feedback-loop.md#108-plan-生命周期整体修正) |
-| 相关材料可取得却未自主补到 | 读取状态和部分补证已有收益；GPT Researcher 暂停；第 103 节正式轨迹已自主搜索、按行读取并八次合法交接引用，保留工程接入；完整用户结果仍失败，分类交接阻塞已由第 104 节局部修复，语义修订仍未收敛 | [自主补证](evidence-acquisition.md) |
-
-拒稿后的取证决策仍是推进方向：第 109 节全文核查表明，保存的 OpenAI 指南并没有直接规定权限检查责任，不能继续把该轮解释为漏读现存答案。下一步验证扩源与诚实未知的通路，见[原文核查与扩源边界](document-absence.md#109-原文缺项核查与扩源反馈的边界验证)；[第 116 节](evidence-acquisition.md#116-由模型决定结束取证的契约验证)的取证充分性候选正式 target 已执行并失败，覆盖拒绝为 0，但该归档不保存验证入参，覆盖分支是否被触发不可判定；下一轮预声明见[第 119 节](evidence-acquisition.md#119-覆盖分支触发与声明消费的下一轮预声明)。整稿语义 Verifier 的对象与支持关系误判继续作为独立阻塞，并保护有据正例和诚实限定。仅本次证据不足可以符合来源边界，但未必完成原任务。读取数量增加、整体拒稿或所有判据都有结果均不能替代语义验收。模型返回解释只辅助定位，不能证明隐藏注意力或模型内部因果。
+| 问题边界 | 记录与候选入口 |
+| --- | --- |
+| 修正出处时把部分列举改成完整清单 | [实际连续修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)、[修订比较候选](to_verify/final-revision-comparison.md) |
+| 具体步骤被归到另一个来源页面 | [来源归属问题](normative-scope-attribution.md)、[来源归属候选](to_verify/answer-source-attribution.md) |
+| 相关事实没有回答用户所问对象 | [对象与适用范围](answer-object-mismatch.md)、[事实覆盖候选](to_verify/research-goal-coverage.md) |
+| 同一请求得到冲突判断 | [核验一致性与实际请求审计](claim-verifier-consistency.md) |
+| 缺证反馈后扩大主体、条件或义务强度 | [支持范围修订](to_verify/claim-supported-scope-repair.md)、[研究修订总问题](claim-revision-nonconvergence.md) |
+| 局部观察被写成全文缺项 | [历史缺项问题](document-absence.md)、[停用后的保护边界](to_verify/document-absence-pause.md) |
+| 原文行号与临时引用编号混用 | [引用坐标问题](citation-coordinate-confusion.md) |
+| 引用原文没有可核对的来源信息 | [来源绑定问题及剩余验收](citation-source-attribution.md) |
+| 后置失败遮蔽已完成模型成本 | [选证及时提交](research-selection-usage-commit.md)、[工具内部用量交接](tool-model-usage-handoff.md) |
+| 选证截断使后续阶段未到达 | [正式失败](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)、[默认额度候选](to_verify/research-provider-output-default.md) |
+| 拒稿后的取证、计划恢复和自主补证 | [反馈与修订](revision-feedback-loop.md)、[取证](evidence-acquisition.md) |
 
 ### 缺项问题的状态更正
 
-**原总览仍以第 65 节的 32/122 误放说明今天的阻塞，已与第 85 节工程证据不一致；此处据新证据更正。** 早期摘要、独立标准和禁令的失败全部保留在[同一缺项记录](document-absence.md)，不改写为成功，也不让它们覆盖后来已经成立的职责分离收益。
+独立缺项识别与读取覆盖门禁的历史有效边界见[职责分离](document-absence.md#83-文档缺项识别与普通支持验证的职责分离)、[真实读取消费](document-absence.md#85-覆盖门禁接入真实读取事实与生产工具)及[分类交接修复](document-absence.md#104-按来源顺序返回缺项分类)。这些局部证据保留，完整任务失败也保留；当前停用决定由 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)拥有，历史方案的“继续保留门禁”不再作为今天的实施指令。
 
-历史方案由模型识别稿件对哪些来源作出了文档级缺项声明，代码根据同一版本的真实读取覆盖拒绝未读完的声明。第 85 节正式任务在 23/121 时拒稿，Conversation 随后补读至 121/121，再重新验证并绑定交付。第 104 节将原句和身份复制改为同序布尔判断，由代码恢复来源。完整读取只解除覆盖门禁，整稿语义审查仍然必需；门禁不承担证明原文有无规定的职责。历史接入依据见[第 83 至 85 节](document-absence.md#83-文档缺项识别与普通支持验证的职责分离)，交接修复见[第 104 节](document-absence.md#104-按来源顺序返回缺项分类)。[第 105 节](document-absence.md#105-用自然语言解释未完整读取与修订边界)将覆盖反馈改为明确中文，确定性交接检查通过，原正式任务在触发前因计划终止阻塞，修订收益未获覆盖；经验讲述见[面试复盘第 1 节](../interview/10-development-pitfalls.md#1-局部观察被写成全文缺项)。
-
-历史覆盖目录面向已保存并卸载的来源版本。分类遗漏、错误关联以及短文直接展示与长文卸载混合的归属曾有验证边界；这些限制不构成已获局部检查点失效的证据。当前生产停用后的风险按 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)重新验收。
+[原文核查](document-absence.md#109-原文缺项核查与扩源反馈的边界验证)已更正“已保存来源存在被漏读答案”的旧解释。未取得证据时，模型可以扩源或说明本次取证限制；是否满足任务另由事实覆盖和最终交付判断。没有保存核验入参的历史运行只报告实际到达阶段，不推断缺项分支是否触发。
 
 ### 评测与成本的独立阻塞
 
-**原正式 E2E 仍为失败，覆盖检查点通过没有改变原结果。** 第 85 节后置评测发生 `StructuredOutputFailure`，未产生有效语义结论；人工审计另行确认上述对象与强度残留。已有 Journal 未完整归集 Verifier 调用用量，完整成本未知。自动验收和成本问题后置，不用它们解释已确认的语义误放，也不把它们写成已经修好。第 94 节三次正式运行均在新引用协议交接前终止，没有进入 Verifier；一次反馈修正和仅扩容预算的复验均单独保留。正式结果由[评测盘点](../evals/02-current-case-inventory.md#成文引用与局部支持核验的迁移验证)拥有。
+正式结果、有效独立评分和已完成模型成本分别记录。无有效评分不代表答案通过；已确认的来源错误也不因评分结构失败而消失。局部通过、前置截断、服务超时和未交付按阶段归因，见[评测盘点](../evals/02-current-case-inventory.md)、[Provider 诊断](to_verify/model-provider-diagnostics.md)与[用量交接](tool-model-usage-handoff.md)。
 
 ## 必须保留的经验
 
-**每个有效修复都应留在后续验证的基础上，不能因整答仍失败就回到旧链重做。** 下表是摘要，完整条件在对应问题内。
+有效机制在后续验证中继续保留，独立下游失败不重开已解决问题。已固化机制只引用唯一完成文档，不在本页重述状态、结果或待办。
 
-| 已成立的收益 | 证据与限制 |
+| 查阅目的 | 唯一记录 |
 | --- | --- |
-| 真实读取状态与续读提示 | [第 68 节](evidence-acquisition.md#68-读取返回歧义的最小工程修正)修正零匹配、无剩余、越界和空资源的歧义；工具可用不保证模型自主取得目标证据 |
-| 文档缺项识别、代码拒绝与补读恢复 | [第 85 节](document-absence.md#85-覆盖门禁接入真实读取事实与生产工具)曾取得正式检查点，现行生产已暂停该独立机制；完整任务和全部分类表达未获保证 |
-| 中文契约与独立来源支持必检 | [第 56 节](verification-source-support.md#56-将独立来源支持检查接入正式-verifier)已接入并有局部拦截；模型仍可能将必检项判错 |
-| 真实反馈驱动修订与同稿绑定 | [完成文档](completed/multi-error-verification-revision.md) |
-| 明确取证对象有帮助 | [第 75 节](answer-object-mismatch.md#75-明确取证对象后的补证收益与范围残留)两种明确结果问法均未混入参数，其中一条自主取得遗漏依据；人工澄清不能冒充生产自主澄清 |
-| 完整报告与动作协议恢复 | [第 54 节](verifier-output-truncation.md#54-验证报告被局部预算截断的单边界资格检查)取得完整报告；[第 80 节](action-final-protocol.md#80-恢复生产适配器后复核动作协议失败)复核已有适配器纠正通路。两者均不能证明结论正确 |
+| 真实反馈逐轮修订与同稿绑定 | [多错误渐进修订](completed/multi-error-verification-revision.md) |
+| 被拒稿的完整文字和引用交接 | [完整基稿](completed/complete-rejected-draft-handoff.md) |
+| 引句、验收项和编辑目标的身份恢复 | [调用单元](completed/verifier-finding-binding.md)、[验收项引用](completed/final-criterion-transcription.md)、[片段寻址](completed/claim-fragment-addressing.md) |
+| 已完成报告按实际输入消费 | [来源报告复用](completed/claim-source-review-reuse.md) |
+| 引用继承与坐标反馈 | [引用继承](completed/claim-retained-references.md)、[坐标反馈](completed/research-admission-coordinate-feedback.md) |
+| 动作与独立评分恢复 | [动作协议](completed/conversation-action-protocol-recovery.md)、[评分资格](completed/research-grader-qualification.md)、[评分额度](completed/research-grader-output-budget.md) |
 
 ## 已尝试的方法与未证实假设
 
-**方法是问题内的尝试，不再作为跨问题追加正文的容器。** 以下链接汇集原始条件、收益、反例和停止理由；不以失败一次推断方法普遍无效。
+历史尝试集中在具体问题内。提示、输入聚焦、职责分离或预算调整只在其实际输入与判据范围内成立，不作为所有语义误判的总解释。
 
-| 曾尝试的方法或解释 | 已有结论与记录 |
+| 尝试或待区分假设 | 原始问题与证据入口 |
 | --- | --- |
-| 显式禁令、反问、模型对照、引用及 few-shot | [权限推断记录](permission-inference.md)保留完整生成与前提对照；定向理解不等于自主正确成文，示例不能使用当前测试答案 |
-| 摘要、全文标志、最高优先级、独立分类 | [缺项记录](document-absence.md)集中比较；后期职责分离已接入，不能沿用旧候选的失败结论称当前未修复 |
-| Context 裁剪、单句与多错误对照 | [对象错位记录](answer-object-mismatch.md)保留正反例；没有证明上下文长度或一次只能识别一个错误是唯一根因 |
-| 独立获取、任务聚焦与交接 | [补证记录](evidence-acquisition.md)保留实际读取与证据收益；对象澄清的独立结果交叉引用对象记录 |
-| 多错误的渐进核验与修订 | [完成文档](completed/multi-error-verification-revision.md) |
-| 提取正文、原生历史或扩大报告额度 | 分别属于[正文保真](source-extraction.md)、[思考传递](thinking-context-transport.md)、[报告截断](verifier-output-truncation.md)，不作为语义总解释 |
+| 显式禁令、反问、示例与推导判断 | [权限责任推断](permission-inference.md) |
+| 摘要、全文标志与缺项分类 | [文档缺项](document-absence.md) |
+| Context 裁剪、单句与完整稿、两侧聚焦 | [对象错位](answer-object-mismatch.md) |
+| 先取证再写作、扩源及主动停止 | [取证](evidence-acquisition.md)、[选证候选](to_verify/claim-evidence-selection.md) |
+| 片段保护与真实反馈消费 | [片段有界修订](to_verify/claim-fragment-revision.md)、[修订总问题](claim-revision-nonconvergence.md) |
+| 正文提取、思考传递和输出截断 | [提取](source-extraction.md)、[思考](thinking-context-transport.md)、[截断](verifier-output-truncation.md) |
 
 ## 阅读顺序与完整记录
 
-**历史章节已按主要验证问题迁移；已解决问题进一步按 [completed 规则](README.md#已解决问题的固化规则)收敛为结论与失败尝试摘要。** 原四份按阶段混合的正文已移除。联合实验在归档中保留完整对照，各问题只记录相关结论；不能复制报告或把同一次实验统计多遍。早期综合盘点保留为原问题历史，不再接收新问题。
+历史编号用于反查，日期对应当轮代码和证据身份。旧复合坐标、旧引用复制协议及已撤回候选不作为当前生产反例；停止理由保留在原问题中。
 
-| 要查的问题 | 完整尝试与结论 |
+| 要查的问题 | 完整记录 |
 | --- | --- |
-| 局部观察被写成全文缺项 | [问题记录](document-absence.md)；历史编号 3、4、6、8、9、30、31、32、67、69、78、81、82、83、84、85；分类交接修复见第 104 节 |
-| 回答对象与证据适用范围错位 | [问题记录](answer-object-mismatch.md)；历史编号 57、58、59、60、61、62、63、66、75、86、87、88、89、90、91、92、93、94、95、96、97、98、99、100、101 |
-| 从执行职责推成权限责任与排他结论 | [问题记录](permission-inference.md)；历史编号 1、2、7、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、26、27、33、34、35、36、40、43、44、45、46 |
-| 相关证据可取得却未自主补到 | [问题记录](evidence-acquisition.md)；历史编号 5、28、29、38、68、70、71、72、73、74、76、77、102、103、111、113 |
-| 整稿验收未独立落实来源支持 | [问题记录](verification-source-support.md)；历史编号 47、48、49、55、56 |
-| 拒稿后的恢复、计划及反馈消费 | [问题记录](revision-feedback-loop.md)、[取证记录](evidence-acquisition.md)；历史编号 39、50、51、52、53、106 至 108、115 至 120 |
-| 多错误的渐进核验与修订 | [完成文档](completed/multi-error-verification-revision.md) |
-| 支持判断的引句绑定失败 | [完成文档](completed/verifier-finding-binding.md) |
-| 动作阶段输出普通正文的协议恢复 | [问题记录](action-final-protocol.md)；历史编号 79、80 |
-| 正文提取混入导航或删除有效条款 | [问题记录](source-extraction.md)；历史编号 41、42、110 |
-| 思考配置与原生历史传递疑点 | [问题记录](thinking-context-transport.md)；历史编号 37 |
-| 验证报告被局部输出额度截断 | [问题记录](verifier-output-truncation.md)；历史编号 54 |
+| 近期研究、来源、汇总和最终核验的关系 | [研究修订总问题](claim-revision-nonconvergence.md)、[候选索引](to_verify/README.md) |
+| 局部观察被写成全文缺项 | [文档缺项](document-absence.md)；历史编号 3、4、6、8、9、30、31、32、67、69、78、81 至 85、104、105、109 |
+| 对象与依据范围错位 | [对象错位](answer-object-mismatch.md)；历史编号 57 至 66、75、86 至 101、114 |
+| 执行职责被推成权限责任 | [权限推断](permission-inference.md)；原文保留对应历史编号 |
+| 自主补证及拒稿后的恢复 | [取证](evidence-acquisition.md)、[反馈修订](revision-feedback-loop.md) |
+| 整稿验收的来源支持职责 | [来源支持](verification-source-support.md)；历史编号 47 至 49、55、56 |
+| 动作阶段输出与结构恢复 | [动作协议问题](action-final-protocol.md)、[完成记录](completed/conversation-action-protocol-recovery.md) |
+| 正文提取、思考配置和核验额度 | [提取](source-extraction.md)、[思考](thinking-context-transport.md)、[截断](verifier-output-truncation.md) |
+| 面试经验讲述 | [开发踩坑与优化经验](../interview/10-development-pitfalls.md)；证据继续由具体问题拥有 |
 
 ## 后续推进与接入规则
 
-**新尝试只追加到对应具体问题，跨问题总览只更新导航和结论。** 原问题出现不同 Prompt、模型或检索候选时仍在同一问题记录中比较；独立阻塞另立具体问题，不能继续追加到“Verifier”“生成阶段”一类混合文件。
+新尝试写入同一具体问题，总览只维护导航。未充分证明的机制由 `to_verify/` 保留，已解决机制按 [completed 规则](README.md#已解决问题的固化规则)收敛；Future 维护准入，正式评测维护原始用户结果。
 
-面试复盘与问题记录必须双向引用到对应章节。面试材料负责错误、机制、收益和边界的讲述，完整实验和归档入口保留在 optimization；Future 只拥有尚未闭环的活动方案与队列，评测文档拥有原始用户结果。
-
-继续保留缺项门禁、读取优化、来源必检和修订循环。对象与支持关系的新 Prompt 已完成[第 86 节](answer-object-mismatch.md#86-区分所问对象与证据对象的完整稿-prompt-验证)的 19 次离线验证，未通过准入，生产 Prompt 保持。[第 87 节](answer-object-mismatch.md#87-模型选择原文后的整稿验证职责对照)进一步验证模型选择后交接原文，暴露选择关联错位，未取得核心收益。用户要求先回到最小支持判断，[第 88 节](answer-object-mismatch.md#88-仅证据与草稿的最小支持判断)仍出现示例字段强制化误放。[第 89、90 节](answer-object-mismatch.md#90-独立过度判断识别的职责验证)随后取得明确任务下的局部识别收益；[第 91 节](answer-object-mismatch.md#91-证据标识交接与完整稿过度判断验证)更正引文改写与额外发现的阻塞归因，证据标识恢复成立；原完整稿仍漏判 MCP 字段强制化，未接入。[第 92 节](answer-object-mismatch.md#92-草稿范围与证据规模的交叉诊断)交叉对照中单独缩小一侧各为 1/2，两侧聚焦为 2/2；[第 93 节](answer-object-mismatch.md#93-自动关联草稿与引用原文的受控验证)自动关联后两条链均命中目标、四个控制符合预期，但第二条关联漏交已有依据；保留逐单元核验收益，停止原样接入事后补引用器，[第 94 节](answer-object-mismatch.md#94-conversation-成文引用与缺证恢复的工程接入)试接入成文引用与局部拦截；十次局部控制符合预期，但三次原正式任务均卡在复制引用协议，候选已撤回。第 95 至 100 节的旧引用协议已被替换，相关逐稿错误及过期计划从过程正文清除，仅保留[失败尝试摘要](answer-object-mismatch.md#95-原生正文分段与引用交接验证)与封存证据入口。现行读取和编号契约见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)；旧复合坐标失败不再作为当前反例，也不用于重开已经替换的协议问题。[第 101 节](answer-object-mismatch.md#101-固定证据范围内成文与系统绑定的对照)完成固定证据后成文的 8 次真实调用：候选两例完整绑定，但历史稿仍有来源扩张，局部 Verifier 还误拒已有直接支持的非排他陈述；没有自主证据范围形成证据，未接入生产。保留同稿补证边界，不要求生成器首次完美。原参数正例新增的严格模式实际生效歧义已单独记录，不把合理拒绝当作退化；复杂 Context 因果仍未验证。临时核对产物统一在项目 `.tmp`；局部收益与独立失败分开记录，不为文档整理重跑付费实验。
+先审查实际请求，在条件局部回放中消费同一轨迹的实际反馈和实际输出；人工相邻控制只校准判断边界，不能拼接成产品成功。核验符合预声明后再扩大至连续修订和正式 E2E。完整读取、工具可用、模型理由、合法动作与一次放行均不能替代用户结果。

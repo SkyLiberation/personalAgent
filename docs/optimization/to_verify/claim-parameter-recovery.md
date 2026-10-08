@@ -1,6 +1,6 @@
 # 参数拒绝未回传研究模型
 
-2026-09-28 后续接入状态：用户明确要求完整接入且不运行 Offline 测试，已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链；以下隔离实验与准入结论按原日期保留。生产可达不等于正式 E2E 通过，当前验收见[问题入口](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。
+2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-PARAMETER-RECOVERY-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 的实验恢复边界。它与[调用前范围不明确](../completed/claim-argument-scope.md)分别验收；本项不判断引用是否支持论断。
 
