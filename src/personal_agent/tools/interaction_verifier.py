@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from hashlib import sha256
 import json
+from hashlib import sha256
 from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
@@ -12,12 +12,15 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     sealed_context_projection_ref,
 )
-from personal_agent.capabilities.contracts.research import ResearchBasis, ResearchFinalReport
+from personal_agent.capabilities.contracts.research import (
+    ResearchBasis,
+    ResearchFinalReport,
+)
 from personal_agent.capabilities.contracts.verification import (
     BoundVerificationCriterionResult,
-    ConversationAnswerSegment,
     CitedDraftUnit,
     CitedSupportRejection,
+    ConversationAnswerSegment,
     OverreachReport,
     SemanticVerificationReceipt,
     SemanticVerificationReport,
@@ -26,21 +29,36 @@ from personal_agent.capabilities.contracts.verification import (
     VerificationCriterionResult,
 )
 from personal_agent.kernel.prompts import get_prompt
-from personal_agent.tools.base import ToolArtifact, governance_extras, tool_failure, tool_response, tool_success
+from personal_agent.tools.base import (
+    ToolArtifact,
+    governance_extras,
+    tool_failure,
+    tool_response,
+    tool_success,
+)
 
 
 def _bound_report_type(
-    report_type: type[SemanticVerificationReport], criteria: tuple[VerificationCriterion, ...],
+    report_type: type[SemanticVerificationReport],
+    criteria: tuple[VerificationCriterion, ...],
 ) -> type[SemanticVerificationReport]:
     """Expose only the current request's references, including system criteria."""
     allowed_ids = tuple(item.criterion_id for item in criteria)
     result_type = create_model(
-        "CurrentVerificationCriterionResult", __base__=VerificationCriterionResult,
-        criterion_id=(Literal[allowed_ids], Field(description="只引用当前 success_criteria 的 criterion_id。")),
+        "CurrentVerificationCriterionResult",
+        __base__=VerificationCriterionResult,
+        criterion_id=(
+            Literal[allowed_ids],
+            Field(description="只引用当前 success_criteria 的 criterion_id。"),
+        ),
     )
     return create_model(
-        f"Current{report_type.__name__}", __base__=report_type,
-        criterion_results=(tuple[result_type, ...], Field(min_length=len(criteria), max_length=len(criteria))),
+        f"Current{report_type.__name__}",
+        __base__=report_type,
+        criterion_results=(
+            tuple[result_type, ...],
+            Field(min_length=len(criteria), max_length=len(criteria)),
+        ),
     )
 
 
@@ -57,18 +75,34 @@ class VerifyInteractionDraftArgs(BaseModel):
     def check_draft_coverage(self):
         if self.research_basis is not None:
             if not self.research_segments or self.source_reading_state:
-                raise ValueError("research final verification requires claim-bound segments")
+                raise ValueError(
+                    "research final verification requires claim-bound segments"
+                )
             if len(self.cited_units) != len(self.research_segments) or any(
                 unit.draft != segment.text
-                for unit, segment in zip(self.cited_units, self.research_segments, strict=True)
+                for unit, segment in zip(
+                    self.cited_units, self.research_segments, strict=True
+                )
             ):
-                raise ValueError("research final evidence must bind each exact segment in order")
-            if "".join(segment.text for segment in self.research_segments) != self.draft:
-                raise ValueError("research segments must preserve the entire exact draft")
+                raise ValueError(
+                    "research final evidence must bind each exact segment in order"
+                )
+            if (
+                "".join(segment.text for segment in self.research_segments)
+                != self.draft
+            ):
+                raise ValueError(
+                    "research segments must preserve the entire exact draft"
+                )
         elif self.research_segments:
             raise ValueError("research segments require a verified research basis")
-        if self.cited_units and "".join(unit.draft for unit in self.cited_units) != self.draft:
-            raise ValueError("cited units must preserve the entire exact draft in order")
+        if (
+            self.cited_units
+            and "".join(unit.draft for unit in self.cited_units) != self.draft
+        ):
+            raise ValueError(
+                "cited units must preserve the entire exact draft in order"
+            )
         for unit in self.cited_units:
             ids = [evidence.id for evidence in unit.execution_evidence]
             if len(ids) != len(set(ids)):
@@ -76,7 +110,9 @@ class VerifyInteractionDraftArgs(BaseModel):
         return self
 
 
-def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> BaseTool:
+def build_verify_interaction_draft_tool(
+    model_client: StructuredModelClient,
+) -> BaseTool:
     @tool(
         "verify_interaction_draft",
         description=(
@@ -107,15 +143,28 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
         research_basis: ResearchBasis | None = None,
         research_segments: tuple[ConversationAnswerSegment, ...] = (),
     ):
-        prompt = get_prompt("conversation.research.final_verification" if research_basis is not None
-                            else "interaction_verification.system")
-        support_prompt = get_prompt("conversation.research.faithfulness" if research_basis is not None
-                                    else "interaction_verification.source_support")
-        verification_criteria = tuple(dict.fromkeys((
-            *success_criteria, support_prompt.template,
-        )))
-        criteria = tuple(VerificationCriterion(criterion_id=f"r{index}", criterion=text)
-                         for index, text in enumerate(verification_criteria, start=1))
+        prompt = get_prompt(
+            "conversation.research.final_verification"
+            if research_basis is not None
+            else "interaction_verification.system"
+        )
+        support_prompt = get_prompt(
+            "conversation.research.faithfulness"
+            if research_basis is not None
+            else "interaction_verification.source_support"
+        )
+        verification_criteria = tuple(
+            dict.fromkeys(
+                (
+                    *success_criteria,
+                    support_prompt.template,
+                )
+            )
+        )
+        criteria = tuple(
+            VerificationCriterion(criterion_id=f"r{index}", criterion=text)
+            for index, text in enumerate(verification_criteria, start=1)
+        )
         criteria_context = [item.model_dump(mode="json") for item in criteria]
         verification_input = VerifyInteractionDraftArgs(
             draft=draft,
@@ -132,18 +181,25 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             "success_criteria": criteria_context,
             "execution_evidence": [
                 evidence.model_dump(mode="json", exclude={"id"})
-                for unit in units for evidence in unit.execution_evidence
+                for unit in units
+                for evidence in unit.execution_evidence
             ],
             "source_reading_state": [
-                state.model_dump(mode="json") for state in verification_input.source_reading_state
+                state.model_dump(mode="json")
+                for state in verification_input.source_reading_state
             ],
         }
         if verification_input.research_basis is not None:
             verification_payload = {
                 "draft": draft,
                 "success_criteria": criteria_context,
-                "research_basis": verification_input.research_basis.model_dump(mode="json"),
-                "segments": [segment.model_dump(mode="json") for segment in verification_input.research_segments],
+                "research_basis": verification_input.research_basis.model_dump(
+                    mode="json"
+                ),
+                "segments": [
+                    segment.model_dump(mode="json")
+                    for segment in verification_input.research_segments
+                ],
                 "cited_units": [unit.model_dump(mode="json") for unit in units],
             }
         cited_prompt = get_prompt("interaction_verification.cited_support")
@@ -154,70 +210,90 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
                 {"role": "system", "content": cited_prompt.template},
                 {"role": "user", "content": unit.model_dump_json()},
             ]
-            support = model_client.generate(StructuredModelRequest(
-                operation="interaction_cited_support",
-                version=cited_prompt.version,
-                messages=cited_messages,
-                output_type=OverreachReport,
+            support = model_client.generate(
+                StructuredModelRequest(
+                    operation="interaction_cited_support",
+                    version=cited_prompt.version,
+                    messages=cited_messages,
+                    output_type=OverreachReport,
+                    context_projection_ref=sealed_context_projection_ref(
+                        purpose="interaction_cited_support",
+                        messages=cited_messages,
+                    ),
+                    max_tokens=32_768,
+                    temperature=0,
+                    metadata={"component": "interaction_verifier"},
+                )
+            ).value
+            valid_ids = {evidence.id for evidence in unit.execution_evidence}
+            for finding in support.findings:
+                if len(set(finding.evidence_ids)) != len(
+                    finding.evidence_ids
+                ) or not set(finding.evidence_ids).issubset(valid_ids):
+                    raise ValueError(
+                        "support finding must reference only submitted evidence"
+                    )
+            if support.findings:
+                rejection = CitedSupportRejection(
+                    rejected_draft=draft,
+                    checked_draft=unit.draft,
+                    findings=support.findings,
+                )
+                return tool_response(
+                    ToolArtifact(
+                        ok=False,
+                        data=rejection.model_dump(mode="json"),
+                        error=rejection.explanation,
+                        error_kind="unrecoverable",
+                    )
+                )
+        messages = [
+            {
+                "role": "system",
+                "content": prompt.template,
+            },
+            {
+                "role": "user",
+                "content": json.dumps(verification_payload, ensure_ascii=False),
+            },
+        ]
+        response = model_client.generate(
+            StructuredModelRequest(
+                operation="interaction_semantic_verification",
+                version=prompt.version,
+                messages=messages,
+                output_type=_bound_report_type(
+                    ResearchFinalReport
+                    if verification_input.research_basis is not None
+                    else SemanticVerificationReport,
+                    criteria,
+                ),
                 context_projection_ref=sealed_context_projection_ref(
-                    purpose="interaction_cited_support", messages=cited_messages,
+                    purpose="interaction_semantic_verification",
+                    messages=messages,
                 ),
                 max_tokens=32_768,
                 temperature=0,
-                metadata={"component": "interaction_verifier"},
-            )).value
-            valid_ids = {evidence.id for evidence in unit.execution_evidence}
-            for finding in support.findings:
-                if len(set(finding.evidence_ids)) != len(finding.evidence_ids) or not set(finding.evidence_ids).issubset(valid_ids):
-                    raise ValueError("support finding must reference only submitted evidence")
-            if support.findings:
-                rejection = CitedSupportRejection(
-                    rejected_draft=draft, checked_draft=unit.draft, findings=support.findings,
-                )
-                return tool_response(ToolArtifact(
-                    ok=False, data=rejection.model_dump(mode="json"),
-                    error=rejection.explanation, error_kind="unrecoverable",
-                ))
-        messages = [{
-            "role": "system",
-            "content": prompt.template,
-        }, {
-            "role": "user",
-            "content": json.dumps(verification_payload, ensure_ascii=False),
-        }]
-        response = model_client.generate(StructuredModelRequest(
-            operation="interaction_semantic_verification",
-            version=prompt.version,
-            messages=messages,
-            output_type=_bound_report_type(
-                ResearchFinalReport if verification_input.research_basis is not None else SemanticVerificationReport,
-                criteria,
-            ),
-            context_projection_ref=sealed_context_projection_ref(
-                purpose="interaction_semantic_verification", messages=messages,
-            ),
-            max_tokens=32_768,
-            temperature=0,
-            metadata={
-                "component": "interaction_verifier",
-                "source_support_prompt_version": support_prompt.version,
-            },
-        ))
+                metadata={
+                    "component": "interaction_verifier",
+                    "source_support_prompt_version": support_prompt.version,
+                },
+            )
+        )
         report = response.value
         reported_ids = tuple(result.criterion_id for result in report.criterion_results)
         criteria_by_id = {item.criterion_id: item.criterion for item in criteria}
-        if (
-            len(reported_ids) != len(criteria)
-            or set(reported_ids) != set(criteria_by_id)
+        if len(reported_ids) != len(criteria) or set(reported_ids) != set(
+            criteria_by_id
         ):
-            return tool_response(tool_failure(
-                "最终核验模型输出未按当前 criterion_id 恰好覆盖每个验收项，不能形成核验回执。",
-            ))
+            return tool_response(
+                tool_failure(
+                    "最终核验模型输出未按当前 criterion_id 恰好覆盖每个验收项，不能形成核验回执。",
+                )
+            )
         statuses = tuple(result.status for result in report.criterion_results)
         verdict = (
-            "passed"
-            if all(status == "satisfied" for status in statuses)
-            else "failed"
+            "passed" if all(status == "satisfied" for status in statuses) else "failed"
         )
         if verdict == "failed" and not report.revision_feedback.strip():
             derived_feedback = "\n".join(
@@ -229,9 +305,11 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
                 raise ValueError(
                     "semantic verifier must provide feedback for failed criteria"
                 )
-            report = report.model_copy(update={
-                "revision_feedback": derived_feedback,
-            })
+            report = report.model_copy(
+                update={
+                    "revision_feedback": derived_feedback,
+                }
+            )
         criteria_payload = json.dumps(
             success_criteria,
             ensure_ascii=False,
@@ -241,17 +319,24 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
         draft_digest = sha256(normalized_draft.encode("utf-8")).hexdigest()
         receipt = SemanticVerificationReceipt(
             **report.model_dump(mode="python", exclude={"criterion_results"}),
-            criterion_results=tuple(BoundVerificationCriterionResult(
-                **result.model_dump(mode="python"), criterion=criteria_by_id[result.criterion_id],
-            ) for result in report.criterion_results),
+            criterion_results=tuple(
+                BoundVerificationCriterionResult(
+                    **result.model_dump(mode="python"),
+                    criterion=criteria_by_id[result.criterion_id],
+                )
+                for result in report.criterion_results
+            ),
             verdict=verdict,
             receipt_id=f"svr_{draft_digest[:20]}",
             verified_draft=normalized_draft,
             draft_digest=draft_digest,
             success_criteria=tuple(success_criteria),
             criteria_digest=sha256(criteria_payload.encode("utf-8")).hexdigest(),
-            research_ref=(verification_input.research_basis.claims.resource_ref
-                          if verification_input.research_basis is not None else None),
+            research_ref=(
+                verification_input.research_basis.claims.resource_ref
+                if verification_input.research_basis is not None
+                else None
+            ),
         )
         return tool_response(tool_success(receipt.model_dump(mode="json")))
 
@@ -259,6 +344,8 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
 
 
 __all__ = [
-    "SemanticVerificationReceipt", "SemanticVerificationReport",
-    "VerifyInteractionDraftArgs", "build_verify_interaction_draft_tool",
+    "SemanticVerificationReceipt",
+    "SemanticVerificationReport",
+    "VerifyInteractionDraftArgs",
+    "build_verify_interaction_draft_tool",
 ]

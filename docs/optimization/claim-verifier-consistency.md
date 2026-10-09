@@ -127,4 +127,4 @@
 
 本次来源请求 19 次，全部形成合法 typed 报告，无精确重复 SDK 请求；没有重复采样，故不能据此宣称相同输入判决稳定。[来源实发审计](../../.tmp/research-source-reuse-repair-20261001/source-audit.json)包含本次全部判断，未形成结论的历史结构失败仍单列。
 
-c2 第 5 版明确限定“本条引用的原文范围”，报告仍将其读为整份资料没有结果约束；该局部范围误读与其他实际缺口分别归因。c1/c2/c7 的反馈已进入 writer，但部分改写扩大范围或新增事实未绑定引用，连续消费由[支持范围候选](to_verify/claim-supported-scope-repair.md#2026-10-01-真实反馈消费结果与下一设计边界)拥有。最终验收项重抄的确定性失败由[独立问题](completed/final-criterion-transcription.md)拥有，不作为来源语义冲突。后续先固定清晰相邻样本重审判据，不再增加同义 Prompt 补丁。
+c2 第 5 版明确限定“本条引用的原文范围”，报告仍将其读为整份资料没有结果约束；该局部范围误读与其他实际缺口分别归因。c1/c2/c7 的反馈已进入 writer，但部分改写扩大范围或新增事实未绑定引用，连续消费由[支持范围候选](to_verify/claim-supported-scope-repair.md#已观察结果与下一边界)拥有。最终验收项重抄的确定性失败由[独立问题](completed/final-criterion-transcription.md)拥有，不作为来源语义冲突。后续先固定清晰相邻样本重审判据，不再增加同义 Prompt 补丁。

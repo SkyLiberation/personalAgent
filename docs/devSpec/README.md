@@ -16,7 +16,7 @@
 | [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、派生缓存与投影、契约一致性与生产可达性 |
 | [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan、Admission、执行、Verification、Completion、Command 与恢复协议 |
 | [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入审计、反馈表达、存储边界、能力投影与服务方等价绑定 |
-| [COD：代码组织与实现约束](code-structure.md) | 类型与不变量、已有文字引用、职责与编排、错误、依赖注入、命名与通用 Prompt 契约 |
+| [COD：代码组织与实现约束](code-structure.md) | 可读性优先、功能模块化与开发上下文、类型与不变量、已有文字引用、职责与编排、错误、依赖注入、命名与通用 Prompt 契约 |
 | [QLT：测试、评估、观测与安全](quality-security.md) | 验证方式、替身边界、Golden Set、E2E 阻塞、核验漏放的最小充分上下文诊断与任务设计复审、安全与审计 |
 | [REL：迁移、ADR 与完成门禁](migration-release.md) | 兼容例外、迁移、ADR 与分类完成检查 |
 | [DOC：文档模块规范](../AGENTS.md) | 文档事实治理、生命周期与检查 |

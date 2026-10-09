@@ -65,6 +65,11 @@
 - 产品设计同时执行 `e2e-first`：实现前确定正式入口、自然用户请求、可自动断言的用户结果和必要反事实，建立可执行验收并取得第 4 节依据，再实施和运行真实 target E2E。验收判据未明确或无法执行时，不进入对应生产实现；工程重构和纯文档任务按第 4 节选择适用验收，不制造产品 E2E。
 - 落地过程中，每轮方案、实现或证据变化必须同步更新对应设计文档及受影响权威正文，明确已实现、已验证和剩余条件，直接删除或改写过期、冗余及冲突描述，不能只在文末追加纠偏，也不能推迟到任务结束。正文归属与生命周期执行 [DOC](docs/AGENTS.md)。
 
+### 2.8 可读性优先，模块化控制开发上下文
+
+- 设计、代码和文档首先服务于可读性：读者应能沿清楚的职责、命名、typed 契约和控制流理解结果如何产生。详细规则由 [COD 可读性](docs/devSpec/code-structure.md#31-可读性优先)和 [DOC](docs/AGENTS.md#2-中文写作与结构门禁)拥有。
+- 功能模块化用于控制 Code Agent 完成任务所需的上下文。按稳定职责组织内聚实现，明确入口、契约和直接协作者，使局部任务可局部理解与修改；拆分须减少必要查阅范围，并计入跨文件跳转与协作成本。禁止按行数机械拆分或通过碎片化增加理解成本，执行 [COD 模块化](docs/devSpec/code-structure.md#32-功能模块化与开发上下文)。
+
 ## 3. 任务路由：按识别信号读取细则
 
 识别信号帮助定位实际任务域，不缩小用户请求。涉及多域时读取所有适用细则。
@@ -76,7 +81,7 @@
 | `ARC` | 架构分层、业务事实、决策归属、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Product Aggregate、派生数据、缓存、物化投影、生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay、durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
 | `CTX` | Context、System Prompt、模型输入、反馈执行异常、Memory、RAG、Artifact、检索、权限过滤、预算物化、Capability Projection、服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
-| `COD` | 类或模块拆分、内部类型、payload、依赖注入、生产 Prompt、指令模板、文本引用、文字复述、LangGraph、Router、Planner、Workflow、错误分类、命名、编码智能体行为 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
+| `COD` | 可读性、功能模块化、Code Agent 开发上下文、类或模块拆分、内部类型、payload、依赖注入、生产 Prompt、指令模板、文本引用、文字复述、LangGraph、Router、Planner、Workflow、错误分类、命名、编码智能体行为 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
 | `DOC` | 新增、修改、移动或评审 Markdown、Mermaid、ADR、评测归档、架构说明、中文写作、文档索引 | [文档模块规范](docs/AGENTS.md) |
 | `QLT` | 单元测试、tests/、Offline Eval、Unit、Contract、Integration、Golden Set、Real E2E、E2E 阻塞、核验漏放、最小充分上下文、真实环境 smoke、Trace、安全、权限、审计、评测 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | Schema 迁移、协议迁移、兼容窗口、ADR、发布评审、合并验收、完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |

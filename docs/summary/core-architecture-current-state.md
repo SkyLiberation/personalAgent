@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-> 本文按 2026-10-02 工作树中的生产代码核对责任边界和主链。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。代码已接入与产品验收分别判断。
+> 本文说明生产代码的责任边界和主链。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。代码已接入与产品验收分别判断。
 
 ## 1. 核心判断
 
@@ -81,6 +81,8 @@ MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝�
 ## 7. 模型与服务提供方边界
 
 Application 只依赖 `StructuredModelClient`。组合根根据 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；两者都在调用边界携带 Schema，并将结果物化为同一 Pydantic 契约。
+
+模型适配的阅读入口按职责组织：`infra/structured_model.py` 拥有公开工厂、SDK 调用、超时、协议修复、重试与观测装配；`infra/model_response.py` 集中响应 envelope、流内容、原生动作调用和用量归一化。现有 Adapter 与计量包装器直接消费这些解析函数，业务准入仍由 Application 拥有。解析规则的局部修改从新模块及其 typed 契约进入，调用与恢复问题从原适配入口进入。
 
 当前本地模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索显式绑定 AnySearch，URL 正文读取绑定 builtin。配置只证明部署选择，不证明服务健康或产品结果。
 

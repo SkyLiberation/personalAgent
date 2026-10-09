@@ -22,7 +22,6 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `CODE-READABILITY-MODULARITY-001`：代码阅读路径与功能职责需要明确工程依据 | [COD 模块职责](../../devSpec/code-structure.md#3-模块职责规模与生产可达性)；内部重构按 EVD 验收 | [可读性与模块化整理](code-readability-modularity.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001`：模型服务失败的具体诊断在异常转换中丢失 | [原研究 E2E 429 与失败边界](model-provider-diagnostics.md#失败事实与最早责任) | [有界诊断交接](model-provider-diagnostics.md) |
 | `RESEARCH-GOAL-COVERAGE-001`：用户所问事实被相关格式和取证限制替代 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[实际覆盖漏放与候选](research-goal-coverage.md) | [逐项用户事实覆盖](research-goal-coverage.md) |
 | `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：缺证修订扩大声明 | 同上；支持范围反馈被改写成更广否定的真实修订；引用交接见[完成记录](../completed/claim-atomic-evidence-revision.md) | [支持范围约束](claim-supported-scope-repair.md) |

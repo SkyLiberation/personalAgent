@@ -31,6 +31,7 @@
 
 | 阅读目的 | 入口 |
 | --- | --- |
+| 可读性优先与功能模块化如何控制开发上下文 | [规范与响应解析职责整理](completed/code-readability-modularity.md) |
 | 近期候选如何开始验证 | [近期候选入口](to_verify/README.md#近期候选入口)；本轮预声明见[当前稿独立核验](claim-revision-nonconvergence.md#2026-10-08-当前稿独立核验的预声明) |
 | 当前还缺什么、哪些修复已有收益 | [问题总览](conversation-source-support.md#当前核心问题与责任边界) |
 | 同一问题试过什么、为何停止或接入 | [十个问题入口与历史编号](conversation-source-support.md#阅读顺序与完整记录) |

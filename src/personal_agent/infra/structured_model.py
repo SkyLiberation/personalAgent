@@ -18,42 +18,51 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import replace
 from queue import Empty, Queue
 from threading import Thread
-from dataclasses import replace
 from time import perf_counter, sleep
-from types import SimpleNamespace
 from typing import Any, Callable, Iterator, Protocol
 from urllib.parse import urlparse
 
 from openai import APIError, APIStatusError, OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
+
 from personal_agent.capabilities.contracts.model import (
-    ModelActionInvocation,
+    PROVIDER_DIAGNOSTIC_MAX_CHARS,
+    ModelInvocationUnavailable,
+    ProviderFailureDiagnostics,
     StreamChunk,
     StreamingModelClient,
     StructuredModelClient,
     StructuredModelRequest,
     StructuredModelResponse,
-    ModelInvocationUnavailable,
-    PROVIDER_DIAGNOSTIC_MAX_CHARS,
-    ProviderFailureDiagnostics,
     StructuredOutputFailure,
     StructuredOutputT,
 )
-
-from personal_agent.kernel.structured_parse import load_json_lenient, parse_structured
-from personal_agent.kernel.config_models import LangSmithConfig, OpenAIConfig, StructuredConfig
+from personal_agent.infra.model_response import (
+    _aggregate_usage,
+    _collect_streamed_chat_response,
+    _EmptyNestedCompletionError,
+    _extract_action_invocations,
+    _is_sse_payload,
+    _require_chat_choices,
+    _structured_chat_message,
+    _sum_usage,
+    _usage,
+)
+from personal_agent.kernel.config_models import (
+    LangSmithConfig,
+    OpenAIConfig,
+    StructuredConfig,
+)
 from personal_agent.kernel.llm_schemas import structured_response_format
 from personal_agent.kernel.llm_telemetry import record_llm_usage
 from personal_agent.kernel.logging_utils import log_event
 from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
-
-
-class _EmptyNestedCompletionError(RuntimeError):
-    """A provider accepted the request but returned no nested completion."""
 
 
 class ModelCallDeadlineExceeded(ModelInvocationUnavailable, TimeoutError):
@@ -136,191 +145,6 @@ def _is_reasoning_model(model: str) -> bool:
     )
 
 
-def _usage(response: Any) -> dict[str, int]:
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return {}
-    values: dict[str, int] = {}
-    for key, attrs in (
-        ("input_tokens", ("input_tokens", "prompt_tokens")),
-        ("output_tokens", ("output_tokens", "completion_tokens")),
-        ("total_tokens", ("total_tokens",)),
-    ):
-        for attr in attrs:
-            value = getattr(usage, attr, None)
-            if isinstance(value, int):
-                values[key] = value
-                break
-    if "total_tokens" not in values and "input_tokens" in values and "output_tokens" in values:
-        values["total_tokens"] = values["input_tokens"] + values["output_tokens"]
-    return values
-
-
-def _aggregate_usage(responses: list[Any]) -> dict[str, int]:
-    return _sum_usage([_usage(response) for response in responses])
-
-
-def _sum_usage(usages: list[dict[str, int]]) -> dict[str, int]:
-    """Keep complete component totals and the known total-token lower bound."""
-    totals: dict[str, int] = {}
-    for key in ("input_tokens", "output_tokens", "total_tokens"):
-        values = [usage[key] for usage in usages if key in usage]
-        if values and (key == "total_tokens" or len(values) == len(usages)):
-            totals[key] = sum(values)
-    return totals
-
-
-def _require_chat_choices(response: Any) -> Any:
-    choices = getattr(response, "choices", None)
-    if not choices:
-        raise RuntimeError("invalid provider response: missing chat completion choices")
-    return choices
-
-
-def _structured_chat_message(response: Any) -> Any:
-    """Normalize provider-native and direct structured-content transports."""
-    choices = getattr(response, "choices", None)
-    if choices:
-        message = choices[0].message
-        return SimpleNamespace(
-            content=_unwrap_structured_content(getattr(message, "content", "")),
-            tool_calls=getattr(message, "tool_calls", None) or [],
-        )
-    if isinstance(response, str) and response.strip():
-        return SimpleNamespace(
-            content=_unwrap_structured_content(response),
-            tool_calls=[],
-        )
-    if isinstance(response, dict):
-        raw_choices = response.get("choices")
-        if isinstance(raw_choices, list) and raw_choices:
-            message = raw_choices[0].get("message", {})
-            if isinstance(message, dict):
-                return SimpleNamespace(
-                    content=_unwrap_structured_content(message.get("content")),
-                    tool_calls=message.get("tool_calls") or [],
-                )
-        return SimpleNamespace(
-            content=json.dumps(response, ensure_ascii=False),
-            tool_calls=[],
-        )
-    raise RuntimeError("invalid provider response: missing structured completion content")
-
-
-def _unwrap_structured_content(content: Any) -> str:
-    """Unwrap OpenAI-compatible providers that nest a completion envelope."""
-    if isinstance(content, dict):
-        candidate = json.dumps(content, ensure_ascii=False)
-    else:
-        candidate = str(content or "").strip()
-    for _ in range(6):
-        if not candidate:
-            return ""
-        try:
-            decoded = load_json_lenient(candidate)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return candidate
-        if isinstance(decoded, str):
-            candidate = decoded.strip()
-            continue
-        if not _is_chat_completion_envelope(decoded):
-            return candidate
-        # Decision Ownership Taxonomy: provider transport normalization.
-        # Envelope structure uniquely identifies the nested content field;
-        # this branch does not create or repair any Proposal semantics.
-        nested = _chat_completion_envelope_content(decoded)
-        candidate = (
-            json.dumps(nested, ensure_ascii=False)
-            if isinstance(nested, dict)
-            else str(nested).strip()
-        )
-    return candidate
-
-
-def _is_chat_completion_envelope(value: Any) -> bool:
-    if not isinstance(value, dict):
-        return False
-    object_type = str(value.get("object") or "")
-    return (
-        object_type.startswith("chat.completion")
-        and "choices" in value
-    )
-
-
-def _chat_completion_envelope_content(envelope: dict[str, Any]) -> Any:
-    choices: Any = envelope.get("choices")
-    if isinstance(choices, str):
-        try:
-            choices = load_json_lenient(choices)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                "invalid provider response: nested chat completion choices are malformed"
-            ) from exc
-    if not isinstance(choices, list) or not choices:
-        raise _EmptyNestedCompletionError(
-            "invalid provider response: nested chat completion choices are missing"
-        )
-    choice = choices[0]
-    if isinstance(choice, str):
-        try:
-            choice = load_json_lenient(choice)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                "invalid provider response: nested chat completion choice is malformed"
-            ) from exc
-    if not isinstance(choice, dict):
-        raise RuntimeError(
-            "invalid provider response: nested chat completion choice is invalid"
-        )
-    message: Any = choice.get("message") or choice.get("delta")
-    if isinstance(message, str):
-        try:
-            message = load_json_lenient(message)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                "invalid provider response: nested chat completion message is malformed"
-            ) from exc
-    if isinstance(message, dict):
-        nested = message.get("content")
-        if nested is None:
-            nested = message.get("parsed")
-        if nested is not None:
-            return nested
-    if choice.get("text") is not None:
-        return choice["text"]
-    raise RuntimeError(
-        "invalid provider response: nested chat completion content is missing"
-    )
-
-
-def _is_sse_payload(response: Any) -> bool:
-    return isinstance(response, str) and response.lstrip().startswith("data:")
-
-
-def _collect_streamed_chat_response(stream: Any) -> Any:
-    content_parts: list[str] = []
-    model = ""
-    usage = None
-    for chunk in stream:
-        model = getattr(chunk, "model", None) or model
-        usage = getattr(chunk, "usage", None) or usage
-        choices = getattr(chunk, "choices", None) or []
-        if not choices:
-            continue
-        delta = getattr(choices[0], "delta", None)
-        content = getattr(delta, "content", None)
-        if isinstance(content, str):
-            content_parts.append(content)
-    content = "".join(content_parts)
-    if not content:
-        raise RuntimeError("invalid provider response: missing streamed completion content")
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=[]))],
-        model=model,
-        usage=usage,
-    )
-
-
 def _report_usage_to_run_tree(response: StructuredModelResponse[Any]) -> None:
     usage = {
         key: value
@@ -343,109 +167,13 @@ def _report_usage_to_run_tree(response: StructuredModelResponse[Any]) -> None:
         pass
 
 
-def _extract_action_invocations(
-    message: Any,
-    request: StructuredModelRequest[Any],
-) -> tuple[ModelActionInvocation, ...]:
-    """Normalize call structure; the Application owns declared-action admission."""
-    tool_calls = getattr(message, "tool_calls", None) or []
-    if not tool_calls:
-        raise StructuredOutputFailure(
-            request.operation,
-            "provider returned no action call for a tool-calling request",
-            reason_code="provider_action_missing",
-        )
-    seen_call_ids: set[str] = set()
-    normalized: list[ModelActionInvocation] = []
-    for call in tool_calls:
-        if isinstance(call, dict):
-            call_id = str(call.get("id") or "")
-            call_type = str(call.get("type") or "function")
-            function = call.get("function")
-        else:
-            call_id = str(getattr(call, "id", "") or "")
-            call_type = str(getattr(call, "type", "function") or "function")
-            function = getattr(call, "function", None)
-        if call_type != "function":
-            raise StructuredOutputFailure(
-                request.operation,
-                f"unsupported provider action type {call_type!r}",
-                reason_code="provider_action_type_unsupported",
-            )
-        if not call_id or call_id in seen_call_ids:
-            reason = "missing" if not call_id else "duplicate"
-            raise StructuredOutputFailure(
-                request.operation,
-                f"provider action call_id is {reason}",
-                reason_code=(
-                    "provider_action_call_id_missing"
-                    if not call_id
-                    else "provider_action_call_id_duplicate"
-                ),
-            )
-        seen_call_ids.add(call_id)
-        if isinstance(function, dict):
-            name = str(function.get("name") or "")
-            raw_arguments = function.get("arguments", "{}")
-        else:
-            name = str(getattr(function, "name", "") or "")
-            raw_arguments = getattr(function, "arguments", "{}")
-        if isinstance(raw_arguments, str):
-            try:
-                arguments = json.loads(raw_arguments)
-            except json.JSONDecodeError as exc:
-                raise StructuredOutputFailure(
-                    request.operation,
-                    f"model action {name!r} returned invalid JSON arguments",
-                    reason_code="provider_action_arguments_invalid_json",
-                ) from exc
-        else:
-            arguments = raw_arguments
-        if not isinstance(arguments, dict):
-            raise StructuredOutputFailure(
-                request.operation,
-                f"model action {name!r} arguments require an object",
-                reason_code="provider_action_arguments_not_object",
-            )
-        try:
-            invocation = ModelActionInvocation(
-                call_id=call_id,
-                name=name,
-                arguments=arguments,
-            )
-        except ValidationError as exc:
-            raise StructuredOutputFailure(
-                request.operation,
-                "provider action name does not satisfy the wire contract",
-                reason_code="provider_action_unknown",
-            ) from exc
-        normalized.append(invocation)
-    return tuple(normalized)
-
-
 class OpenAIModelClient:
-    """Shared OpenAI-compatible Chat Completions adapter.
+    """OpenAI-compatible SDK calls and bounded protocol repair.
 
-    Concrete structured-output adapters own request construction. This base owns
-    only common SDK invocation, response normalization, typed validation, text /
-    tool-calling requests and streaming.
-
-    The adapter is **pure**: it only assembles kwargs, calls the SDK, extracts
-    content / tool_calls / usage / latency, and returns structured objects. No
-    tracing (langsmith spans, ``record_llm_usage``, ``log_event``) lives here —
-    that is the job of ``ObservedStructuredModelClient`` /
-    ``ObservedStreamingModelClient``, applied at composition time. This keeps
-    the call logic decoupled from observability and lets tracing evolve without
-    touching the adapter.
-
-    ``config`` may be an ``OpenAIConfig`` or ``StructuredConfig`` (both expose
-    ``api_key`` / ``base_url`` / ``timeout_seconds`` / ``max_retries``; the
-    resolved model is ``model_override`` or ``config.model``). The SDK retry
-    loop is disabled here: ``config.max_retries`` belongs to the typed-operation
-    retry decorator assembled in the composition root. Keeping one retry owner
-    prevents one configured budget from multiplying into nested provider
-    requests. Streaming calls also fail closed because replaying a partially
-    observed stream is not generally safe.
+    Concrete adapters build structured requests. Response normalization lives
+    in ``model_response``; this adapter applies typed validation and owns text,
+    native action and streaming transport. It emits local repair diagnostics;
+    tracing and usage recording are owned by the observability decorators.
     """
 
     def __init__(
@@ -553,7 +281,9 @@ class OpenAIModelClient:
         exc: Exception,
     ) -> ModelInvocationUnavailable:
         status_code = getattr(exc, "status_code", None)
-        retryable = status_code in {408, 409, 429} or status_code is None or status_code >= 500
+        retryable = (
+            status_code in {408, 409, 429} or status_code is None or status_code >= 500
+        )
         category = (
             "provider_rejected"
             if status_code is not None and status_code < 500
@@ -569,7 +299,9 @@ class OpenAIModelClient:
             diagnostics=self._provider_diagnostics(exc),
         )
 
-    def _provider_diagnostics(self, exc: Exception) -> ProviderFailureDiagnostics | None:
+    def _provider_diagnostics(
+        self, exc: Exception
+    ) -> ProviderFailureDiagnostics | None:
         body = getattr(exc, "body", None)
         envelope = body if isinstance(body, dict) else {}
         detail = envelope.get("error", envelope)
@@ -589,7 +321,8 @@ class OpenAIModelClient:
             text = re.sub(
                 r"(?i)\b(api[_-]?key|access[_-]?token|authorization|cookie|password|secret)"
                 r"\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"']+",
-                r"\1=[redacted]", text,
+                r"\1=[redacted]",
+                text,
             )
             text = re.sub(r"[\x00-\x1f\x7f]", " ", text).strip()
             return text[:PROVIDER_DIAGNOSTIC_MAX_CHARS] or None
@@ -598,8 +331,11 @@ class OpenAIModelClient:
             error_code=clean(detail.get("code")),
             error_type=clean(detail.get("type")),
             message=clean(detail.get("message")),
-            request_id=clean(getattr(exc, "request_id", None) or envelope.get("request_id")
-                             or headers.get("x-request-id")),
+            request_id=clean(
+                getattr(exc, "request_id", None)
+                or envelope.get("request_id")
+                or headers.get("x-request-id")
+            ),
             retry_after=clean(headers.get("retry-after")),
         )
         return diagnostics if diagnostics.model_dump(exclude_none=True) else None
@@ -642,16 +378,22 @@ class OpenAIModelClient:
         try:
             for repair in range(2):
                 chat_request = self._structured_chat_request(
-                    request, schema,
+                    request,
+                    schema,
                     parse_error=retry_errors[-1] if retry_errors else None,
                 )
                 response = self._create_structured_completion(client, chat_request)
                 responses.append(response)
                 response = self._normalize_streaming_structured_response(
-                    client, chat_request, response, responses,
+                    client,
+                    chat_request,
+                    response,
+                    responses,
                 )
                 content, parsed, parse_error = self._parse_typed_response(
-                    request, response, latency_ms=round((perf_counter() - start) * 1000, 2),
+                    request,
+                    response,
+                    latency_ms=round((perf_counter() - start) * 1000, 2),
                 )
                 if parse_error is None:
                     usage = _aggregate_usage(responses)
@@ -671,8 +413,11 @@ class OpenAIModelClient:
                     raise StructuredOutputFailure(request.operation, parse_error)
                 retry_errors.append(parse_error)
                 log_event(
-                    logger, logging.WARNING, "llm.structured_schema_repair",
-                    operation=request.operation, version=request.version,
+                    logger,
+                    logging.WARNING,
+                    "llm.structured_schema_repair",
+                    operation=request.operation,
+                    version=request.version,
                     parse_error=parse_error[:500],
                 )
         except (StructuredOutputFailure, ModelInvocationUnavailable) as exc:
@@ -690,7 +435,9 @@ class OpenAIModelClient:
                     output_tokens=usage.get("output_tokens"),
                     total_tokens=usage.get("total_tokens"),
                     raw_response=responses[-1],
-                    retry_attempts=len(responses) - 1 + int(isinstance(exc, ModelInvocationUnavailable)),
+                    retry_attempts=len(responses)
+                    - 1
+                    + int(isinstance(exc, ModelInvocationUnavailable)),
                     retry_errors=retry_errors,
                 )
             raise
@@ -775,15 +522,20 @@ class OpenAIModelClient:
         for attempt in range(2):
             try:
                 response = self._create_chat_completion(
-                    client, request.operation, self._chat_kwargs(chat_request),
+                    client,
+                    request.operation,
+                    self._chat_kwargs(chat_request),
                 )
             except ModelInvocationUnavailable as exc:
                 if responses:
                     exc.response = StructuredModelResponse(
-                        value=None, model=getattr(responses[-1], "model", None) or self._resolved_model,
+                        value=None,
+                        model=getattr(responses[-1], "model", None)
+                        or self._resolved_model,
                         latency_ms=round((perf_counter() - start) * 1000, 2),
                         total_tokens=_aggregate_usage(responses).get("total_tokens"),
-                        retry_attempts=attempt, retry_errors=repair_errors,
+                        retry_attempts=attempt,
+                        retry_errors=repair_errors,
                     )
                 raise
             responses.append(response)
@@ -791,23 +543,34 @@ class OpenAIModelClient:
             try:
                 action_invocations = (
                     _extract_action_invocations(message, chat_request)
-                    if request.kind == "tool_calling" else ()
+                    if request.kind == "tool_calling"
+                    else ()
                 )
                 break
             except StructuredOutputFailure as exc:
                 if not (
-                    attempt == 0 and request.kind == "tool_calling"
+                    attempt == 0
+                    and request.kind == "tool_calling"
                     and request.action_choice == "required"
-                    and exc.reason_code in ("provider_action_missing", "provider_action_arguments_invalid_json")
+                    and exc.reason_code
+                    in (
+                        "provider_action_missing",
+                        "provider_action_arguments_invalid_json",
+                    )
                 ):
                     protocol_failure = exc
                     break
                 repair_errors.append(exc.reason_code)
                 repair_prompt = get_prompt("action.repair.system")
                 log_event(
-                    logger, logging.WARNING, "llm.action_protocol_repair",
-                    operation=request.operation, version=request.version, reason_code=exc.reason_code,
-                    repair_prompt_name=repair_prompt.name, repair_prompt_version=repair_prompt.version,
+                    logger,
+                    logging.WARNING,
+                    "llm.action_protocol_repair",
+                    operation=request.operation,
+                    version=request.version,
+                    reason_code=exc.reason_code,
+                    repair_prompt_name=repair_prompt.name,
+                    repair_prompt_version=repair_prompt.version,
                 )
                 rejected_calls = [
                     call if isinstance(call, dict) else call.model_dump(mode="json")
@@ -815,14 +578,27 @@ class OpenAIModelClient:
                 ]
                 chat_request = replace(
                     request,
-                    metadata={**request.metadata, "action_prompt_name": repair_prompt.name,
-                              "action_prompt_version": repair_prompt.version},
-                    messages=[{"role": "system", "content": repair_prompt.render(
-                        validation_feedback=json.dumps({
-                            "reason_code": exc.reason_code, "rejected_content": message.content,
-                            "rejected_calls": rejected_calls,
-                        }, ensure_ascii=False),
-                    )}, *request.messages],
+                    metadata={
+                        **request.metadata,
+                        "action_prompt_name": repair_prompt.name,
+                        "action_prompt_version": repair_prompt.version,
+                    },
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": repair_prompt.render(
+                                validation_feedback=json.dumps(
+                                    {
+                                        "reason_code": exc.reason_code,
+                                        "rejected_content": message.content,
+                                        "rejected_calls": rejected_calls,
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            ),
+                        },
+                        *request.messages,
+                    ],
                 )
         response = responses[-1]
         message = _require_chat_choices(response)[0].message
@@ -830,7 +606,11 @@ class OpenAIModelClient:
         content = (message.content or "").strip()
         usage = _aggregate_usage(responses)
         result = StructuredModelResponse(
-            value=(None if action_invocations or protocol_failure is not None else self._default_value(request)),
+            value=(
+                None
+                if action_invocations or protocol_failure is not None
+                else self._default_value(request)
+            ),
             model=getattr(response, "model", None) or self._resolved_model,
             latency_ms=latency_ms,
             content=content,
@@ -854,7 +634,9 @@ class OpenAIModelClient:
         request: StructuredModelRequest[Any],
     ) -> Iterator[StreamChunk]:
         client = self._client()
-        stream = client.chat.completions.create(**self._chat_kwargs(request, stream=True))
+        stream = client.chat.completions.create(
+            **self._chat_kwargs(request, stream=True)
+        )
         full_text = ""
         usage: dict[str, int] = {}
         for chunk in stream:
@@ -882,20 +664,23 @@ def _schema_repair_instruction(
     parse_error: str,
 ) -> tuple[dict[str, str], dict[str, str]]:
     prompt = get_prompt("structured.repair.system")
-    return ({
-        "role": "system",
-        "content": prompt.render(
-            validation_feedback=parse_error[:2000],
-            output_schema=json.dumps(
-                schema,
-                ensure_ascii=False,
-                separators=(",", ":"),
+    return (
+        {
+            "role": "system",
+            "content": prompt.render(
+                validation_feedback=parse_error[:2000],
+                output_schema=json.dumps(
+                    schema,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
             ),
-        ),
-    }, {
-        "structured_prompt_name": prompt.name,
-        "structured_prompt_version": prompt.version,
-    })
+        },
+        {
+            "structured_prompt_name": prompt.name,
+            "structured_prompt_version": prompt.version,
+        },
+    )
 
 
 class StrictJsonSchemaAdapter(OpenAIModelClient):
@@ -996,19 +781,27 @@ class RetryingStructuredModelClient:
 
         def aggregate(response: StructuredModelResponse) -> StructuredModelResponse:
             attempts = [*failed_responses, response]
-            usage = _sum_usage([
-                {key: value for key in ("input_tokens", "output_tokens", "total_tokens")
-                 if (value := getattr(item, key, None)) is not None}
-                for item in attempts
-            ])
+            usage = _sum_usage(
+                [
+                    {
+                        key: value
+                        for key in ("input_tokens", "output_tokens", "total_tokens")
+                        if (value := getattr(item, key, None)) is not None
+                    }
+                    for item in attempts
+                ]
+            )
             return replace(
                 response,
                 latency_ms=round((perf_counter() - start) * 1000, 2),
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
                 total_tokens=usage.get("total_tokens"),
-                retry_attempts=response.retry_attempts + len(failed_responses)
-                + sum(item.retry_attempts for item in failed_responses if item is not None),
+                retry_attempts=response.retry_attempts
+                + len(failed_responses)
+                + sum(
+                    item.retry_attempts for item in failed_responses if item is not None
+                ),
                 retry_errors=[*retry_errors, *response.retry_errors],
             )
 
@@ -1017,12 +810,28 @@ class RetryingStructuredModelClient:
                 response = self._delegate.generate(request)
                 return aggregate(response)
             except Exception as exc:
-                observed = exc.response if isinstance(exc, (StructuredOutputFailure, ModelInvocationUnavailable)) else None
+                observed = (
+                    exc.response
+                    if isinstance(
+                        exc, (StructuredOutputFailure, ModelInvocationUnavailable)
+                    )
+                    else None
+                )
                 if attempt >= self._max_retries or not _is_retryable_model_error(exc):
-                    if isinstance(exc, (StructuredOutputFailure, ModelInvocationUnavailable)):
-                        if observed is None and any(item is not None for item in failed_responses):
-                            previous = next(item for item in reversed(failed_responses) if item is not None)
-                            observed = StructuredModelResponse(value=None, model=previous.model, latency_ms=0)
+                    if isinstance(
+                        exc, (StructuredOutputFailure, ModelInvocationUnavailable)
+                    ):
+                        if observed is None and any(
+                            item is not None for item in failed_responses
+                        ):
+                            previous = next(
+                                item
+                                for item in reversed(failed_responses)
+                                if item is not None
+                            )
+                            observed = StructuredModelResponse(
+                                value=None, model=previous.model, latency_ms=0
+                            )
                         if observed is not None:
                             exc.response = aggregate(observed)
                     if retry_errors:
@@ -1034,15 +843,19 @@ class RetryingStructuredModelClient:
                             prompt_version=request.version,
                             attempts=attempt + 1,
                             retry_errors=retry_errors + [str(exc)[:240]],
-                            provider_diagnostics=(exc.diagnostics.model_dump(exclude_none=True)
-                                if isinstance(exc, ModelInvocationUnavailable) and exc.diagnostics else None),
+                            provider_diagnostics=(
+                                exc.diagnostics.model_dump(exclude_none=True)
+                                if isinstance(exc, ModelInvocationUnavailable)
+                                and exc.diagnostics
+                                else None
+                            ),
                         )
                     raise
                 failed_responses.append(observed)
                 if observed is not None:
                     retry_errors.extend(observed.retry_errors)
                 retry_errors.append(str(exc)[:240])
-                delay = self._backoff_seconds * (2 ** attempt)
+                delay = self._backoff_seconds * (2**attempt)
                 log_event(
                     logger,
                     logging.WARNING,
@@ -1053,8 +866,12 @@ class RetryingStructuredModelClient:
                     max_retries=self._max_retries,
                     retry_delay_seconds=round(delay, 3),
                     retry_error=retry_errors[-1],
-                    provider_diagnostics=(exc.diagnostics.model_dump(exclude_none=True)
-                        if isinstance(exc, ModelInvocationUnavailable) and exc.diagnostics else None),
+                    provider_diagnostics=(
+                        exc.diagnostics.model_dump(exclude_none=True)
+                        if isinstance(exc, ModelInvocationUnavailable)
+                        and exc.diagnostics
+                        else None
+                    ),
                 )
                 if delay > 0:
                     sleep(delay)
@@ -1124,7 +941,9 @@ class RedactedTracePayloadPolicy:
             "max_tokens": request.max_tokens,
             "message_count": len(messages),
             "message_roles": [str(message.get("role", "")) for message in messages],
-            "message_chars": sum(len(str(message.get("content", ""))) for message in messages),
+            "message_chars": sum(
+                len(str(message.get("content", ""))) for message in messages
+            ),
             "action_names": [
                 definition.name for definition in request.action_definitions
             ],
@@ -1165,7 +984,8 @@ class FullTracePayloadPolicy:
             "action_definitions": [
                 definition.model_dump(mode="json")
                 for definition in request.action_definitions
-            ] or None,
+            ]
+            or None,
             "action_choice": request.action_choice,
             "response_format": request.response_format,
         }
@@ -1308,10 +1128,15 @@ class ObservedStreamingModelClient:
         self._observability = observability
 
     def stream(self, request: StructuredModelRequest[Any]) -> Iterator[StreamChunk]:
-        from personal_agent.kernel.langsmith_tracing import langsmith_llm_span, report_usage_metadata
+        from personal_agent.kernel.langsmith_tracing import (
+            langsmith_llm_span,
+            report_usage_metadata,
+        )
 
         start = perf_counter()
-        resolved_model = getattr(self._delegate, "_resolved_model", request.metadata.get("model", "unknown"))
+        resolved_model = getattr(
+            self._delegate, "_resolved_model", request.metadata.get("model", "unknown")
+        )
         run_ctx = {
             "component": request.metadata.get("component", "stream"),
             "prompt_name": request.operation,
@@ -1378,6 +1203,7 @@ def build_structured_model_client(
         )
         client = ObservedStructuredModelClient(client, policy)
     from personal_agent.capabilities.model_resolution import GovernedModelClient
+
     return GovernedModelClient(client, provider="openai_compatible", model=config.model)
 
 
@@ -1403,6 +1229,7 @@ def build_chat_model_client(
         )
         client = ObservedStructuredModelClient(client, policy)
     from personal_agent.capabilities.model_resolution import GovernedModelClient
+
     return GovernedModelClient(
         client,
         provider="openai_compatible",
@@ -1420,9 +1247,13 @@ def build_streaming_model_client(
     client: StreamingModelClient = OpenAIModelClient(config)
     observed: StreamingModelClient = (
         ObservedStreamingModelClient(client, observability)
-        if observability.enabled else client
+        if observability.enabled
+        else client
     )
-    from personal_agent.capabilities.model_resolution import GovernedStreamingModelClient
+    from personal_agent.capabilities.model_resolution import (
+        GovernedStreamingModelClient,
+    )
+
     return GovernedStreamingModelClient(
         observed,
         provider="openai_compatible",

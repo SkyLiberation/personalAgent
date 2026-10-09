@@ -4,6 +4,7 @@
 
 | 已解决的问题 | 固化记录 |
 | --- | --- |
+| 可读性优先级与 Code Agent 局部阅读边界未明确，模型响应解析与调用装配混装 | [可读性优先与功能模块化](code-readability-modularity.md) |
 | 无研究稿时选证Schema允许无效answered身份 | [按实际状态呈现选证契约](research-selection-state-contract.md) |
 | 目录拒绝抢先绕过反馈、非法 JSON 没有进入已有一次纠正 | [Conversation 动作协议恢复](conversation-action-protocol-recovery.md) |
 | 被拒稿只有正文、缺少逐段引用关系 | [完整基稿交接](complete-rejected-draft-handoff.md) |

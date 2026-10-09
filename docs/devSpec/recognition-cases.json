@@ -296,6 +296,21 @@
       "expected": "COD"
     },
     {
+      "id": "cod_readability_first",
+      "task": "提高代码可读性，整理命名和复杂控制流，如何保持主路径容易理解？",
+      "expected": "COD"
+    },
+    {
+      "id": "cod_agent_development_context",
+      "task": "为控制 Code Agent 开发上下文，功能模块化如何明确入口、直接协作者与局部阅读范围？",
+      "expected": "COD"
+    },
+    {
+      "id": "doc_readability_structure",
+      "task": "整理 Markdown 架构说明与文档索引，按中文写作规范提高可读性并删除重复正文。",
+      "expected": "DOC"
+    },
+    {
       "id": "qlt_verifier_minimal_context",
       "task": "核验漏放时，如何在最小充分上下文识别错误并判断当前核验任务设计是否合理？",
       "expected": "QLT"
