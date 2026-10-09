@@ -1464,7 +1464,7 @@ c1 已取得局部支持通过；模型最终合法修改 c2 引用，但第 15 
 
 生产 Provider 完成 66 次，输入 1,052,518、输出 142,461、total 1,194,979 tokens；独立 grader 6 次共 32,346 tokens，总已完成用量 1,227,325。Journal 为 62 次 typed 操作、28 回合、23 工具和 1,143,604 tokens。直接模型的 63 份响应与 Journal 三项相等，3 次最终核验工具的 51,375 tokens 未交回总账，见[成本逐分项审计](../../.tmp/research-source-reuse-repair-20261001/cost-audit.json)及[独立用量问题](../optimization/tool-model-usage-handoff.md)。本次所有已发请求已完成，不把差额归为在途请求。
 
-真实修订反馈被 12 次 writer 请求消费；12 次修改均核验完整新 claim，其中 9 次正文片段修改、3 次引用修改。来源报告复用的责任边界由[固化记录](../optimization/completed/claim-source-review-reuse.md)拥有；支持范围反馈的收益、再次新增无据声明和后续设计由[候选结果](../optimization/to_verify/claim-supported-scope-repair.md#2026-10-01-真实反馈消费结果与下一设计边界)拥有。最终前两份报告的验收项转录失败由[独立问题](../optimization/completed/final-criterion-transcription.md)拥有。拆分、复合识别和独立缺项识别继续零调用，删除未被选择。
+真实修订反馈被 12 次 writer 请求消费；12 次修改均核验完整新 claim，其中 9 次正文片段修改、3 次引用修改。来源报告复用的责任边界由[固化记录](../optimization/completed/claim-source-review-reuse.md)拥有；支持范围反馈的收益、再次新增无据声明和后续设计由[候选结果](../optimization/to_verify/claim-supported-scope-repair.md#已观察结果与下一边界)拥有。最终前两份报告的验收项转录失败由[独立问题](../optimization/completed/final-criterion-transcription.md)拥有。拆分、复合识别和独立缺项识别继续零调用，删除未被选择。
 
 与上一封存正式轨迹相比，来源物理完成 42→19，生产完成 76→66；从未到达覆盖与最终稿，推进到返回答案。生产已知 tokens 1,188,071→1,194,979，未下降；决策回合 19→28，工具 10→23；前次入口超时7200秒，本次返回5042秒。两次独立随机轨迹且本轮两项机制一起变化，以上只是描述，不作为成本或延迟的单变量消融。原用户结果两次均 `0/1`。本轮不运行 `tests/`，实际命令、脚手架修正、全部代码身份及检查由[封存报告](../../.tmp/research-source-reuse-repair-20261001/REPORT.md)拥有。
 
@@ -1548,7 +1548,7 @@ Provider 按 ID 去重完成 **45** 个生产响应，输入 753,493、输出 14
 
 八条 claim 保持到第 19 版并全部取得来源支持。31 次来源物理响应对应 26 个实际绑定报告：8 份空 findings、18 份非空；另 5 份 length 空正文没有判决。覆盖第一份原始报告识别三个用户相关缺口，但字符串引用触发 38 项类型错误；结构恢复在相同业务输入上改为九项 covered、两项 delivery_check，缺口未送入研究修订。事实、实发输入和原文依据由[覆盖恢复问题](../optimization/to_verify/research-goal-coverage.md#2026-10-02-覆盖结构恢复抹除缺项反馈)拥有。
 
-五次最终报告都未形成有效回执：前四次各十二项 satisfied，但忠实性 criterion 漏了中文句号；第五次仍漏句号并改写另一项文字，还带一项原始 insufficient_evidence。Runtime 按逐字集合拒绝，详见[验收项转录问题](../optimization/completed/final-criterion-transcription.md)。c8 新正文未同步引用、后续独立改引用的连续结果见[修订子问题](../optimization/to_verify/claim-supported-scope-repair.md#2026-10-02-新增事实未随正文绑定引用)。这些原始响应均保留，不用结构恢复或较早 satisfied 覆盖原始失败。
+五次最终报告都未形成有效回执：前四次各十二项 satisfied，但忠实性 criterion 漏了中文句号；第五次仍漏句号并改写另一项文字，还带一项原始 insufficient_evidence。Runtime 按逐字集合拒绝，详见[验收项转录问题](../optimization/completed/final-criterion-transcription.md)。c8 新正文未同步引用、后续独立改引用的连续结果见[修订子问题](../optimization/completed/claim-atomic-evidence-revision.md)。这些原始响应均保留，不用结构恢复或较早 satisfied 覆盖原始失败。
 
 Provider 响应 ID 去重完成 93 次：intent 1、agent turn 30、selector 24、来源 31、覆盖 2、最终核验 5。实际输入 1,767,488、输出 245,534、合计 **2,013,022 tokens**，全部请求完成且 thinking 开启、reasoning 保留。Journal 为 79 个 typed 操作、32 回合、18 工具、1,945,314 tokens；差额输入 57,431、输出 10,277、total 67,708 精确等于五次最终工具模型响应，见[工具用量交接](../optimization/tool-model-usage-handoff.md#2026-10-02-最终契约失败调用仍有漏计)。六次 length 分别为来源五次、selector 一次，单次输出上限均 8192；结构恢复响应仍计成本。
 
@@ -1605,3 +1605,127 @@ Provider 响应 ID 去重：生产 89 份，输入 1,445,823、输出 213,840、
 [成本审计](../../.tmp/source-attribution-product-target-20261002/target-audit.json)确认五个去重Provider响应，HTTP均200：intent1、agent turn2、selector2；输入43110、输出18472、total **61582 tokens**，thinking均开启、reasoning保留。实际工具web_search2、web_read2；claims、来源报告、覆盖、汇总、最终核验、拆分及独立缺项识别均0。Journal前缀为3个typed操作、2回合、4工具、22187 tokens，差额输入23011、输出16384、total39395精确等于两份已完成选证响应，由[计量子问题](../optimization/research-selection-usage-commit.md#2026-10-02-选证结构失败的已完成用量)拥有。
 
 归属候选的正式消费检查点未到达，原局部2/2保留，整体候选继续待验证；最早产品阻塞另登记为[选证截断子问题](../optimization/claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)。本轮合计十个实际响应、205087 tokens：局部143505和正式61582分别计量；两组中间态与产品结果不合并为成功率。运行期间源码、共用eval和fixture不变，静态、文档、代码身份及封存见[正式报告](../../.tmp/source-attribution-product-target-20261002/REPORT.md)。完整发布矩阵与停用单元测试未运行，不声明收敛或发布完成。
+
+## 2026-10-08 当前稿独立核验与正式入口续验
+
+[当前稿候选](../optimization/to_verify/final-revision-comparison.md)先恢复原无响应边界，再完成局部校准。八份有效判决为 **8/8**：三份历史输出来自两份不同真实稿，五份相邻人工控制来自四份不同正文；控制只用于评分边界。原三次无响应尝试保留，不能当作判决。历史初始状态的真实反馈、汇总修订、canonical 引用绑定、v6 最终核验及原 v8 独立评分连续消费同一轨迹，条件局部用户结果 **1/1**。本轮新增九份完成 SDK 响应，校准 123,824、连续验证 132,827、合计 256,651 tokens；连同首轮已知成本，局部已知 **339,856**，另有三次未知用量。实际输入、成本与条件边界见[局部审计](../../.tmp/current-draft-verifier-resume-20261008/input-and-cost-audit.json)。
+
+候选原样迁入三个生产模块，新增 3、删除 40 行，净减少 37；最终 Prompt 为 v6-current-draft，删除 `previous_verification`，汇总 v3 继续消费真实最新稿与反馈。没有新阶段、类型、模块、存储或开关。原中文任务、HTTP、空资料、生产 Composition Root、mimo-v2.6-flash、thinking、480 秒 deadline、32 回合 / 48 工具 / 2,000,000 tokens / 7,200 秒 HTTP、原 grader v8、fixture 与结果断言保持。原测试 PostgreSQL 15432 不可达，改用既有健康实例 16432，仅作用于该评测子进程；没有修改 `.env` 或生产配置。
+
+执行 `.venv/Scripts/python.exe .tmp/current-draft-verifier-resume-20261008/run_product.py`，原正式用例一个样本一次，[封存结果](../../.tmp/current-draft-verifier-resume-20261008/product/conversation-research-delivery-001/target/20261008T060953.653872Z-23464-99261d53/summary.json)为 **0/1**，正式用例 4777.762494 秒。生产达到 32 回合、23 次工具，返回 limitation，未交付答案；独立 grader、coverage、汇总和最终 Verifier 均未到达。来源修订 c2、c6 加入新事实后保留旧引用，后续来源反馈仍拒绝，归入[既有原子引用候选](../optimization/completed/claim-atomic-evidence-revision.md)，不把上游未完成记作 v6 判断失败。局部资格不覆盖原用户失败。
+
+[正式审计](../../.tmp/current-draft-verifier-resume-20261008/product-audit.json)确认 62 次 SDK 尝试、60 份完成响应，输入 1,505,471、输出 192,231、已知合计 **1,697,702 tokens**；两次无响应用量未知，全部实发请求 thinking 开启。一次约 302 秒传输失败、一次 480 秒 deadline 均经既有重试恢复，具体根因未知，另由[传输问题](../optimization/model-provider-transport.md)记录。运行期间 261 份生产源码与候选身份一致。启动包装器在结果封存后发生 GBK 输出编码失败；原日志保留，按 UTF-8 修复包装器且只读恢复结果，没有重复付费运行。原 pytest 退出码及包装器总耗时未被捕获，明确标为未知，不能用正式失败状态推造退出码。
+
+本轮全部局部与正式已知成本 **2,037,558 tokens**，另有五次未知 SDK 用量。完整发布矩阵和停用单元测试未运行，发布成功分子不增加；后续独立修复及新正式样本按独立身份登记，旧失败结果保持。
+
+## 2026-10-08 正文与新增引用的连续修订
+
+[原子候选](../optimization/completed/claim-atomic-evidence-revision.md)复用上述正式失败中的 c2、c6 实际写作请求、前置状态、冻结标准及已选原文。候选只修改研究准入与 writer Prompt 两个模块，`ReviseClaimFragment.additional_references` 由模型明确选择，Runtime 保留旧引用并去重合并，全部坐标与版本成立后生成一个新版。其他研究 Prompt、最终 v6、模型、thinking、deadline 与评分保持。两份真实失败状态的合成新增字段回放及八个拒绝控制通过，付费调用零；这些控制不冒充实际模型输出。
+
+付费前审计两条业务消息逐字一致。封存 Trace 对原始 dict 字段排序，恢复实际 SDK 请求的键顺序后再进入生产构造器；所有值及 typed 身份保持，没有另设局部输入。第一条 c2 实际同次新增两项引用，来源完整请求消费实际新稿及绑定原文，原缺证解除，却因流程衔接与“完整职责”产生两项范围反馈，原资格 **0/1**、36,963 tokens 保留。预声明独立有界修订后，同一反馈经原 selector、同一 writer、同一 source 连续消费，收窄实际范围并通过，三次调用、82,208 tokens。第二条 c6 随正文明确新增五项引用，实际来源复验首次通过，两次调用、27,943 tokens。
+
+两份实际原子绑定成立；c2 一次反馈修订后、c6 首次来源通过，不改写第一次失败为首次成功。七份 SDK 响应全部完成、输入 132,325、输出 14,789、合计 **147,114 tokens**，thinking 开启、没有额外重试或未知用量；[实发审计](../../.tmp/claim-atomic-reference-repair-20261008/input-and-cost-audit.json)确认真实反馈、选择与生成原样进入后置消费者。两份历史无新增依据的正文动作回放与旧准入结果相同。该组是条件 Offline Eval，不计 Product E2E 成功分子。
+
+仅将同一候选两个模块逐字迁入生产，261 份源码身份全部匹配。原正式用例收集一项，数据库只读预检通过；新正式样本按同一中文请求、空资料、HTTP、生产 Composition Root、原模型、原 grader v8 与 32/48/2M/7200 边界执行一次，新结果独立归档于 `.tmp/claim-atomic-reference-repair-20261008/product/`。此前正式 **0/1** 保留，实际正式结果见下节，完整用户通过仍未成立。完整发布矩阵与停用单元测试未运行。
+
+## 2026-10-08 原子引用修订后的正式入口结果
+
+实际命令 `.venv/Scripts/python.exe .tmp/claim-atomic-reference-repair-20261008/run_product.py` 执行原中文 HTTP 用例一个样本一次，[封存结果](../../.tmp/claim-atomic-reference-repair-20261008/product/conversation-research-delivery-001/target/20261008T074117.886631Z-28628-aa12ecb7/summary.json)为 **0/1**，pytest 退出 1、3232.02 秒，包装器 3240.894847 秒。生产入口 2779.771721 秒、19 回合及 19 次工具调用，返回 `disposition=answer`；独立语义评分失败，`delivered=false`。原中文目标、空初态、模型及 thinking、480 秒请求边界、32/48/2M/7200 预算、v8 grader 与参考 fixture 均保持，261 份生产源码运行期间与候选一致。相对 HEAD 四个生产文件新增 16、删除 45，净减少 29 行。
+
+正式原子引用消费 **5/5**，局部成果由[完成记录](../optimization/completed/claim-atomic-evidence-revision.md)拥有。当前研究第 8 版来源通过，v5 coverage 判充分，synthesis v3 成稿，v6 当前核验一次 passed 并形成合法回执；实际 v6 输入没有历史比较，完整稿及逐段依据匹配。原完整评分把正文保留宿主/客户端及调用链衔接未知、自检声称已覆盖判为核心三方协作缺项，作为当时[覆盖审查](../optimization/to_verify/research-goal-coverage.md)的标签依据。另一个 `evidence_gap` 是实际 OpenAI `/api/docs/mcp` 引用页面未进入评分参考，属于评测依据不足；MCP 规范版本差异当时未被报告。原两个finding及正式失败保持；后续补齐参考后的标签复核见本页精确引用版本小节，不将原单次标签作为当前已确定的产品漏放。
+
+[正式审计](../../.tmp/claim-atomic-reference-repair-20261008/product-audit.json)确认 48 次 SDK 请求、48 份完成响应，无传输失败或未知用量。生产输入 998,220、输出 128,268、total **1,126,488**；独立 grader 输入 43,983、输出 19,712、total **63,695**，耗时 434.311214 秒；本样本合计 **1,190,183 tokens**。两份现有 selector 结构恢复均计入，不把物理响应数当研究回合数。Journal 的 34,908-token 差额由[工具模型用量交接](../optimization/tool-model-usage-handoff.md#2026-10-08-最终当前稿核验响应仍未交接)独立拥有。
+
+连同前述两个局部阶段和第一正式失败，本轮累计已知 **3,374,855 tokens**，五次旧未知用量仍保留。独立随机轨迹的成本差异不作为机制消融；完整发布矩阵与停用单元测试未运行，产品验收和发布分子不增加。证据身份、命令和限定结论见[本轮报告](../../.tmp/claim-atomic-reference-repair-20261008/REPORT.md)。
+
+## 2026-10-08 OpenAI MCP 指南的评分参考补齐预声明
+
+问题编号 `RESEARCH-GRADER-MCP-REFERENCE-001`。上述实际答案引用 `/api/docs/mcp`，现行七页参考没有该页面；原 grader 的 evidence_gap 正确表达输入不足。独立 HTTP 抓取同一官方页面的 Markdown，200返回，30,815字符；实际出处、时间、内容hash及原七页逐项不变由[抓取身份](../../.tmp/research-reference-gap-20261008/capture.json)保存。确认批准跳过的只读示例和 ChatGPT 写入确认条款均在对应正文，整页作为第八项来源，不注入生产研究。
+
+候选只追加参考及新revision，不更改v8 Prompt、Schema、用户要求、结论断言或成功标准。先用最新实际完整答案及原用户目标 Offline 重评一次：有效核心协作缺项必须仍失败，该页面引起的依据不足须可判定；再复用已封存的完整合法控制一次，须通过且不增补可选必答项。最多2个逻辑操作、160,000已完成tokens、1200秒，出现明确误判停止参考迁移，服务未知单列。合格后逐字替换唯一正式fixture并更新比较身份；旧E2E保持0/1，不用新参考重写其结果。本组仅是评测参考资格，不计Product E2E。生产代码不变，完整发布矩阵与停用单元测试不运行。
+
+### 完整页面参考资格失败与有界范围修正
+
+第一次服务尝试超过480秒，没有判决，用量未知；原重试的完成响应为77,801 tokens。新参考补齐后 grader 对同一实际完整答案返回 findings 为空，将架构角色及调用链衔接认作可选细节，没有保留预声明的核心缺项，资格 **0/1**。累计930.05秒，合法控制及fixture迁移均未执行；原正式0/1保持。实际请求、页面与输出由[资格结果](../../.tmp/research-reference-gap-20261008/qualification-result.json)保存。参考缺口已可判定与整体判断冲突分别记录，不能据该次passed改写旧E2E或宣布评分稳定。
+
+有界修正仅将新增页面改为真实来源的完整相关读窗：引言与只读工具范围、API批准跳过示例的条件及完整例子、写入确认与信任限制。原七页逐字保持，新增正文逐行从已独立抓取页面恢复并保留行号，不截断断言的条件，不增加理想原文。页面中其他长代码示例是否影响判断是待证假设，两个随机返回不构成确定性因果。沿用同一两个判据、v8 Prompt/Schema/模型/thinking/deadline，至多2个逻辑操作、160,000已知tokens、1200秒；首个明确反例停止本方向，不再追加范围补丁。新身份独立归档 `.tmp/research-reference-gap-compact-20261008/`，原失败和未知成本保留，合格前fixture仍不修改。
+
+## 2026-10-08 精确引用版本与评分资格复核
+
+精简参考的实际首例为 inconclusive，资格 **0/1**，一次 SDK 完成响应、**54,744 tokens**、104.075秒；合法控制及迁移未执行。新增指南的引用可以判定，但答案引用的 MCP tools 是2025-06-18版，原七页只有2026-07-28版，无法验证所引版本。原 grader 未继续认定三方关系缺项。该实际证据缺口与核心判断分歧分别保留，不把新版条款直接当成旧版依据，也不修改原正式失败或前两次资格期望。[精简资格结果](../../.tmp/research-reference-gap-compact-20261008/qualification-result.json)保存原输出。
+
+先通过独立 HTTP 取得实际引用的2025-06-18版官方 tools Markdown，200、10,857字符，完整正文及抓取身份见[精确版本](../../.tmp/research-reference-version-gap-20261008/capture.json)。候选保留前八项逐字不变，只追加该版本和新参考 revision；没有向生产轨迹补入资料。此项属于评分依据修复，v8 Prompt、Schema、用户结果契约及生产代码保持。
+
+本次参考资格使用已封存、边界明确的两个控制各一次：`complete-without-extra-settings` 必须 passed；`missing-client-validation` 必须 failed 且含用户结果缺项，不产生参考不足。二者全部合格后，对原实际完整答案重评一次，检查精确引用的依据缺口是否解除，并保留真实语义判决。第三项是判断分歧诊断，不预设其总体通过或失败，不计产品成功；前两次原核心缺项期望仍按失败保留。这样先验证参考能区分实际职责遗漏和完整合法回答，再复核有争议的旧标签，不以争议标签作为参考唯一准入证据。
+
+至多3个逻辑操作、250,000已完成tokens、1800秒，依据前两次约55,000—78,000-token评分成本和新增旧版正文；固定控制首次误判停止。若两项控制合格、实际旧稿不再有引用依据缺口，可将同一参考逐字迁入唯一fixture；若核心语义判断仍有分歧，研究覆盖候选保持隔离，不能宣称该关系问题已解决。旧E2E、旧pytest失败、成本和引用缺口均不追溯覆盖。新身份归档 `.tmp/research-reference-version-gap-20261008/`，只证明评分参考边界，不执行或声称新的Product E2E。
+
+### 精确参考实际资格与原正式方案恢复
+
+执行 `.venv/Scripts/python.exe -X utf8 .tmp/research-reference-version-gap-20261008/qualify.py`，既有完整正例passed、客户端校验缺失反例failed且含必要缺项，固定控制 **2/2**。原实际完整答案的独立诊断为passed、无findings或引用缺口；这项是封存文本的Offline重评，**不是新Product E2E**，原正式0/1及pytest退出1保持。3个逻辑操作、3份完成SDK响应、**192,273 tokens**，无恢复或未知用量，参考版本资格成立；r2标签分歧按[覆盖记录](../optimization/to_verify/research-goal-coverage.md#标签复核后的撤回与原方案续验)撤回本轮确定漏放主张，未迁入候选覆盖Schema。
+
+逐字迁移9项参考至唯一正式fixture，保持前七项、控制、v8 Prompt/Schema和用户结果契约；新增官方MCP指南的完整相关读窗及实际引用的2025版tools全文。此项只修复评分依据，生产261份源码保持身份。新正式target在 `.tmp/current-draft-qualified-reference-target-20261008/` 独立归档，原中文请求、空资料、正式HTTP与Composition Root、模型/thinking/480秒边界、32回合/48工具/2,000,000 tokens/7200秒等待及v8评分保持。预声明一个原用例一次，验证原v6当前稿分工和已固化原子交接在完整交付中被消费；覆盖及来源机制保持，不注入中间稿或新参考到生产。新target仍失败时封存并从最早责任边界审查，不因一次新评分通过增加历史产品成功分子。
+
+## 2026-10-08 已校准参考续验的选证状态阻塞
+
+实际命令 `.venv/Scripts/python.exe -X utf8 .tmp/current-draft-qualified-reference-target-20261008/run_product.py`，一个原中文正式样本一次，**0/1**、pytest退出1、741.57秒，包装750.232356秒，入口708.335722秒后HTTP503。原自然目标、空初态、模型/thinking、480秒边界及产品预算保持；261份生产源码、v8评分代码及新参考在执行期间均未变。仅初始取证和选证到达，claims、来源、Coverage、synthesis、finalv6和独立grader均未到达；没有独立评分新用量。[正式审计](../../.tmp/current-draft-qualified-reference-target-20261008/product-audit.json)及原pytest失败保留。
+
+10份SDK响应全部完成，输入107,874、输出17,786、total **125,660 tokens**，无传输失败或未知；两次结构恢复及一份动作协议纠正均计入。部分Journal的全部已知用量相等，但入口异常使原用例没有取得Trace，脚手架按entry/HTTPError登记；实际最早责任通过请求、响应及保存的部分Journal定位，不把终态泛类当根因。
+
+首次选证正常响应在当前无claims时返回多项answered及空claim_ids，现有恢复把它改为合法ready后继续真实搜索。第二选证正常响应含多余键`:references`，既有一次结构恢复修正该键，却把r5改为answered及空claim_ids；现行类型拒绝，恢复耗尽后抛StructuredOutputFailure并传播503。两次响应finish_reason=stop，无截断。SDK输出Schema仍包含answered且claim_ids可为空，实际Python校验却要求answered必须关联当前claim；初始状态没有合法claim身份，该不变量没有在当次Schema中呈现。独立阻塞为`RESEARCH-SELECTION-STATE-CONTRACT-001`，最终v6和原子引用差异未改变该原选证契约。
+
+下一最小修复由[选证状态契约设计](../optimization/completed/research-selection-state-contract.md)拥有：按实际当前稿状态投影合法输出形状，禁止空稿阶段生成已回答身份，不重写模型语义决定；先回放同一两个实际初始输入和已有稿回归，再续接实际输出及单个原正式入口。此前累计已知4,366,388加本次为 **4,492,048 tokens**，六次旧未知保持，独立评分与生产用量不混算。完整发布矩阵和停用单元测试未运行。
+
+### 选证状态契约局部资格与原入口恢复
+
+状态契约的三个真实输入回放3/3通过协议与原项范围核对，两个空稿状态均取得合法选证，已有8个claim输入的Schema和业务messages逐字保持。3个逻辑操作/5次SDK共99,178 tokens，其中两次格式错误沿原恢复完成。消费第二次实际选证的续接由模型自行调用真实Artifact读取和搜索，得到正文及MCP命中，1个操作/1次SDK共14,064 tokens；合计113,242，全部6次SDK完成。这是条件Offline Eval，尚不构成ProductE2E。
+
+三个生产模块逐字迁入隔离候选，全部261源文件身份一致；源目录相对HEAD四文件31增48删、净减17行，没有新增阶段、模型调用、存储或开关。`.tmp/research-selection-state-target-20261008/`按原正式用例一个样本一次恢复，评分代码/v8与已资格9页参考、中文用户输入、目标、32/48/2M/7200、模型及480秒保持。原失败封存，当前正式结果待取得。至此全部轮次累计已知4,605,290 tokens，历史6个未知用量保持。
+
+## 2026-10-08 选证状态修复后的正式入口结果
+
+`.tmp/research-selection-state-target-20261008/`原中文HTTP样本0/1，pytest退出1，3267.51秒，外层3276.4972914秒，生产入口3004.441392秒，独立评分245.7120101秒。22/32决策回合、14/48工具，answer已进入Completion，但完整用户断言未通过。47次SDK全部完成（46生产含恢复、1评分），生产722,048（599,558输入/122,490输出），评分64,760（57,130输入/7,630输出），累计786,808，无新增未知。全部轮次累计已知5,392,098，历史6个未知保持。Journal666,454与生产SDK差55,594，等于两次最终工具模型响应，由现有计量交接问题拥有。
+
+三个正式初始选证请求逐字对照canonical快照和SDKSchema，合法状态经实际writer生成4条claim，来源及覆盖消费；初始状态问题按[窄机制](../optimization/completed/research-selection-state-contract.md)固化。原子编辑保持。Finalv6第一次拒绝三方协作表达，synthesisv3消费真实旧稿与反馈后修订，第二次v6独立通过；两次当前稿请求均无previous_verification，完整段落与引用逐字一致。该分工检查点成立，整体结果失败分别计分。
+
+独立评分唯一factual_error：a37/a38把Stateful Tools的非规范性授权设计指导写成“MCP规范要求”，参考r3.454/r3.472已有完整限定，故不是评分输入缺口。同一正式Artifact第453行含限定、471行含授权行为，453从未进入生产模型请求；最早错误由初始writer生成，来源核验在缺限定的实际输入中继续放行。按[规范性限定取证设计](../optimization/to_verify/normative-context-acquisition.md)先做责任边界诊断。报告earliest_failure记录的provider_action_missing是已恢复早期动作问题，不是本次最终语义失败责任，原字段保留。
+
+## 2026-10-08 规范性限定诊断与选证候选撤回
+
+本轮只执行条件Offline Eval，未新增Product E2E。原正式失败的Source请求0046、canonical快照0033、Artifact及原文身份固定；实际章节限定453被补读后，原v1对错误标签负例、正确设计指导及真实协议条款三项诊断3/3，12,150已知tokens、一份SDK超时未知用量。补读参数、额外引用与正稿由分析者设置，不能计为模型取证成效。
+
+隔离selector v8首项实际缺行引用被Runtime拒绝，原校准0/3保留，SDK15,293补审计。实际错误反馈恢复并接余下已有稿及充分状态控制，协议3/3、87,635新增tokens；已有稿仍把d4:471标为有据协议要求，补证仅覆盖另一claim，目标语义资格0/1，候选撤回且未迁入生产。充分状态控制选择write，未附加全面取证义务。未进入连续writer或正式样本，不以协议通过覆盖语义失败。
+
+原始请求、实际反馈、所有SDK响应及失败见[封存结果](../../.tmp/normative-context-acquisition-20261008/REPORT.json)、[语义反例](../../.tmp/normative-context-acquisition-20261008/semantic-review.json)、[实际用量审计](../../.tmp/normative-context-acquisition-20261008/usage-audit.json)。本档115,078已知tokens，8次物理SDK请求中7完成、1未知，wrapper父记录不重复计费；连续累计5,507,176已知tokens、7次未知SDK消耗，未知不补零。实际工程身份未变化，下一责任边界由[唯一活动设计](../optimization/to_verify/normative-context-acquisition.md)拥有。
+
+## 2026-10-08 来源归属候选反例与重复阻塞复审
+
+隔离来源v2只改变判据与版本，原正式Source0046的错误c2、业务输入及Schema逐字保持，未补入453限定。首项实际仍返回空findings，目标语义0/1，原控制失败记录保留；两个正控制及连续writer未到达，正式样本零、生产迁入零。真实SDK输入含候选规则，重试业务输入相同，未凭模板归因。
+
+首次480秒超时未知用量保留，原恢复策略取得一份响应，总逻辑655.5秒、10,153 tokens；两份物理SDK中一完成、一未知，wrapper父记录不重复计量。见[封存结果](../../.tmp/source-normative-attribution-20261008/REPORT.json)、[实发输入与语义审查](../../.tmp/source-normative-attribution-20261008/semantic-review.json)、[成本审计](../../.tmp/source-normative-attribution-20261008/usage-audit.json)。累计5,517,329已知tokens、8次未知SDK消耗。
+
+该来源候选与上一条选证候选均未解除同一归属错误，按新明确的[EVD方案复审门禁](../devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)停止受影响路径的候选、生产补丁和E2E扩展。原正式结果0/1与主优化实际拒稿—修订—当前稿独立通过分别保留。[唯一设计](../optimization/to_verify/normative-context-acquisition.md)已改为输入与机制复审，生产仍为选证v7、来源v1，重新准入须有新因果依据。
+
+
+## 2026-10-08 核验漏放的最小充分上下文诊断
+
+按用户要求，在唯一设计中预声明最多3逻辑调用、60,000已知tokens及1,800秒原子复审边界，首个充分负例漏放或正控制误拒即停止。生产来源v1-bounded-feedback、Schema、mimo-v2.6-flash、thinking、480秒deadline和原恢复策略保持；原正式0046无限定放行与封存完整c2加限定拒绝按身份复用，未额外重采样。
+
+从正式实际c2.f2无损裁出127字授权声明，Runtime派生c2.f1；保留同一Artifact的471授权原文、452标题和453非规范性限定，5片段减为1、9项证据减为3。材料来自真实工具结果，但读取参数及引用由分析者选择，故仅为条件Offline Eval。实际SDK请求逐字匹配预声明业务消息，原文、资源版本、URL与行号保真，Source Prompt及输出契约未改变。
+
+首项实际返回空findings，已确认的非规范性指导被写为协议要求仍未识别，语义0/1；正常stop、typed合法、无恢复或传输失败。按声明停止，正确设计指导及无限定两个后续控制均未调用，不能报告为通过或失败。1个逻辑/物理SDK，输入1,897、输出947、合计2,844 tokens，30.2秒，无新增未知；累计已知5,520,173 tokens，历史8次未知SDK消耗保留。完整输入、原始响应、语义审查及账目分别见[输入审计](../../.tmp/verifier-minimal-context-20261008/input-audit.json)、[实际结果](../../.tmp/verifier-minimal-context-20261008/diagnostic-result.json)、[审阅与SDK审计](../../.tmp/verifier-minimal-context-20261008/semantic-review.json)、[成本审计](../../.tmp/verifier-minimal-context-20261008/usage-audit.json)。
+
+该反例否定当前任务在最小充分输入下可靠承担此性质判断，以及“仅补齐限定即可解决”的充分方案；不能据独立随机判决证明裁剪致退化、唯一根因或该类任务普遍不可行。按[QLT新增门禁](../devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)复审核验目标、职责、判据及输入输出契约。无新增生产修改或正式E2E，原完整用户结果0/1与主方案有效局部证据分别保持；[唯一设计](../optimization/to_verify/normative-context-acquisition.md)已同步改写。
+
+
+## 2026-10-08 最小输入补充真实归属要求后识别
+
+用户要求改变最小输入直至核验器识别。唯一设计先预声明A1追加canonical r4、A2仅重排证据、A3仅精简隔离系统判据三个因果诊断，最多3个负例变体及首个识别变体的2个正控制，共5逻辑调用、60,000已知tokens、1,800秒原子复审边界。各变体负例不重采样，首个识别后停止其他变体；恢复与未知用量独立记录。预声明原文与身份保存在 `.tmp/verifier-input-decision-contract-20261008/preregistered-design.md`。
+
+A1保持原127字错误授权声明、471授权原文、452标题、453非规范性限定、证据次序、来源身份、Runtime c2.f1目录、现行Source v1及输出Schema，只增加实际InteractionTrace.review_criteria投影出的r4：“发送内容必须区分模型能力、应用实现与协议要求这三类归属。”新字段使用隔离typed输入，不修改生产构造。实发SDK业务消息与声明逐字一致，模型mimo-v2.6-flash、thinking、480秒deadline与原恢复策略保持。
+
+首项明确定位c2.f1，引用授权e001和非规范性限定e003，指出将非规范性指导归为协议要求的冲突，目标识别1/1。仅改标签的合法设计指导和真实x-mcp-header协议条款两个正控制均返回空findings，2/2，条件局部合计3/3。A2与A3各三项未调用。反馈同时出现“强制性”，人工只认可其性质归属识别，不据此判稿件明确声明MUST或独立强度错误。结果与实发审阅见[语义审查](../../.tmp/verifier-input-decision-contract-20261008/semantic-review.json)、[输入审计](../../.tmp/verifier-input-decision-contract-20261008/input-audit.json)。
+
+3个逻辑/物理SDK均完成，无恢复、传输失败或新增未知；负例2,520 tokens/41.9秒，指导正例2,233/9.0秒，协议正例1,920/7.7秒，合计6,673 tokens、模型用时58.5秒。输入合计5,523、输出1,150；累计已知5,526,846 tokens，历史8次未知消耗保持，wrapper父记录不重复计账。[账目审计](../../.tmp/verifier-input-decision-contract-20261008/usage-audit.json)拥有各项原始SDK坐标。
+
+最小有效变化是追加真实任务要求，支持任务语境影响局部性质判断的假设。历史无r4漏放与本次有r4识别是独立随机判决，不能作为确定性因果消融或稳定收益证明；本轮仍使用分析者投影的真实限定与正稿，不能证明生产自主取证、连续链或产品E2E通过。261份生产Python源码及.env身份保持，未修改生产或运行正式E2E，原用户结果0/1保留。[活动设计](../optimization/to_verify/normative-context-acquisition.md)已同步输入契约和取证责任的下一步边界。

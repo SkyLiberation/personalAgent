@@ -38,7 +38,7 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 拥有。模型不可用时只能返回 `insufficient_evidence`、暂停或请求缺失能力，不能用 fixture、
 关键词或回答组装器生成替代“通过”。
 
-外部研究当前采用版本化 claims 作为中间产物：研究 Verifier 拥有来源支持与事实覆盖；复合论断识别 Verifier 已停用，不再生成结构诊断。研究选证、写作和覆盖共享冻结验收项的只读编号。覆盖接收当前 claims、全部实际返回的去重可引用读窗及执行派生读取状态，独立判断原项的必要事实关系，反馈绑定原项、当前 claim 和实际坐标；未读正文经原动作入口取得。Runtime 校验原项全集、claim 身份及引用，汇总研究充分性。URL 呈现、语言与提交过程通过 `delivery_check` 交给最终核验；来源网址无需再次出现在网页正文行或 claim 正文中。运行系统从已引用证据的执行来源确定性生成 `ResearchBasis.sources`，独立汇总接收该绑定并负责呈现用户要求的 URL；最终 Verifier 拥有对已核验事实的忠实性及用户结果判据。最终 Receipt 绑定当前 `research_ref`，Completion 同时校验研究版本和完整正文，研究通过不等于最终交付。普通非研究草稿继续直接对提交依据核验。装配和证据边界见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
+外部研究当前采用版本化 claims 作为中间产物：研究 Verifier 拥有来源支持与事实覆盖；复合论断识别 Verifier 已停用，不再生成结构诊断。研究选证、写作和覆盖共享冻结验收项的只读编号。选证Schema由Runtime按当前稿存在事实物化：初始输出不能声明answered或绑定claim，已有稿继续按当前身份校验；所有消费者沿同一父契约。覆盖接收当前 claims、全部实际返回的去重可引用读窗及执行派生读取状态，独立判断原项的必要事实关系，反馈绑定原项、当前 claim 和实际坐标；未读正文经原动作入口取得。Runtime 校验原项全集、claim 身份及引用，汇总研究充分性。URL 呈现、语言与提交过程通过 `delivery_check` 交给最终核验；来源网址无需再次出现在网页正文行或 claim 正文中。运行系统从已引用证据的执行来源确定性生成 `ResearchBasis.sources`，独立汇总接收该绑定并负责呈现用户要求的 URL；最终 Verifier 拥有对已核验事实的忠实性及用户结果判据。最终 Receipt 绑定当前 `research_ref`，Completion 同时校验研究版本和完整正文，研究通过不等于最终交付。普通非研究草稿继续直接对提交依据核验。装配和证据边界见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
 
 普通非研究候选由 Conversation 原生正文段提交引用；运行系统恢复每段全部指定的可见原文，局部 Verifier 先检查本段与依据。未引正文保留空证据，引用错误或支持拒绝返回既有循环。普通审查只取得提交引用的并集，不复制 Journal 或重新暴露未读全文。候选状态及验证边界见 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)。模型逐条产生 criterion status 与 feedback，Verifier
 adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或 `insufficient_evidence` 都聚合为 `failed`。逐判据三态与 feedback 仅供智能体诊断与恢复，运行系统不再根据失败类别重新开放或隐藏工具。汇总反馈缺失时，adapter 只从未满足 criterion 已有的 feedback 派生；逐判据反馈同样缺失时仍 fail closed。该派生不增加语义事实，也不能替代 Completion。
@@ -47,7 +47,7 @@ adapter 只把所有 `satisfied` 聚合为 `passed`，任一 `not_satisfied` 或
 
 普通整稿的局部支持核验使用 `interaction_verification.cited_support:v3-asserted-scope`。研究来源核验使用 `conversation.research.support:v1-bounded-feedback`，两者共享来源支持判据正文；研究 typed 反馈分别表达无据声明、已有支持范围、缺少前提和当前片段 ID，相关证据 ID 从原绑定确定性恢复给选证模型及写作者。模型先确定草稿实际主体、条件、强度及范围，再逐项核对可见依据；局部句内观察不能被扩大为全文否定，一个事实有据不能替同段其他事实放行。模型仍只输出相关证据 ID 和具体支持缺口；工具以 `checked_draft` 绑定本次精确段落，连同拒稿正文与意见交回原循环。证据 ID 只在当前单元校验；空发现继续后续核验，不证明完整用户结果。调用绑定由 [ADR 0029](../adr/0029-bind-verifier-feedback-to-input-unit.md)拥有，判别效果与限制见[范围一致性记录](../optimization/claim-verifier-consistency.md)。
 
-Conversation Verifier 当前使用 Registry 中的中文 `interaction_verification.system:v5-criterion-references`，并固定加入 `interaction_verification.source_support:v1` 标准；研究最终核验使用 `conversation.research.final_verification:v5-revision-comparison`。研究最终请求保留 canonical binder 恢复的 `cited_units`，按顺序与 `research_segments` 的完整文字一一对应；每段带入其实际引用的原文及来源 URL。最终 Verifier 对照整段指代和具体页面的支持关系；多来源合法，某页面的陈述须由该页面支持。修订时 Runtime 从最近适用拒绝 Receipt 恢复旧稿和失败反馈，校验相同研究版本、冻结原项及上一稿正文；工具校验 digest/ID，并只带入旧稿、失败项与反馈。最终核验分别检查旧问题修复、全部语义变化及当前支持，核对完整清单数量和全文事实一致性；旧稿和旧意见不成为事实权威。接入与验证边界见[修订比较候选](../optimization/to_verify/final-revision-comparison.md)。模型必须逐条核对声明与实际证据的主体、条件、范围及强度；仅主题相关、URL 正确或没有发现矛盾不能替代支持。模板由同一工具消费，版本进入请求；JSON 输入由 typed 参数模型序列化，外部内容明确作为数据。
+Conversation Verifier 使用 Registry 的中文 `interaction_verification.system:v5-criterion-references`，并加入 `interaction_verification.source_support:v1`；研究最终核验使用 `conversation.research.final_verification:v6-current-draft`。研究最终请求仅物化当前完整稿、冻结标准、当前研究、当前段落和 canonical binder 恢复的 `cited_units`；每段实际原文与来源 URL 按顺序与 `research_segments` 的完整文字一一对应。最终 Verifier 独立核对当前声明的主体、条件、数量、范围、义务强度及具体页面支持关系，检查完整清单与全文事实一致性。多来源合法，某页面的陈述须由该页面支持；主题相关、URL 正确或未发现矛盾不能替代支持。汇总者从 Journal 消费实际旧稿与真实失败反馈，修订并自查旧问题；最终核验通过当前稿产生新判决。Runtime 继续绑定当前确切正文、冻结标准及研究版本，Completion 消费同一通过稿。接入及验证边界见[独立核验方案](../optimization/to_verify/final-revision-comparison.md)。模板由同一工具消费，版本进入请求；JSON 由 typed 参数序列化，外部内容作为数据。
 
 工具对用户标准与系统支持标准合并去重，从本次完整原文只读派生 `VerificationCriterion` 的 `criterion_id` 与 `criterion`。普通和研究最终模型只返回每个 ID 的三态及反馈，动态 Schema 列出当前合法身份与结果数量；工具再检查全部项恰好一次。Runtime 从当前输入恢复原文，形成 `BoundVerificationCriterionResult` 和回执，不以模型重抄文字识别验收项。未知、遗漏或重复 ID 产生明确输出契约失败，不形成有效回执；来源支持不通过参与现有聚合并拒稿。
 
@@ -61,7 +61,7 @@ Conversation Verifier 当前使用 Registry 中的中文 `interaction_verificati
 
 ## 当前生产实例
 
-研究写作者以完整 `base_ref`、claim_id 和首尾片段 ID 指定正文修订范围；Runtime 从当前 canonical 稿恢复原文并合并。临时 typed 片段视图不写入 Journal，来源 Verifier 和独立汇总继续消费完整正文。每轮 Provider Schema 从本轮已选引用目录派生文档、连续行及部分行范围，并列出当前 claim 与片段身份；合法性仍由唯一 citation binder 和研究准入确定。
+研究写作者以完整 `base_ref`、claim_id 和首尾片段 ID 指定正文修订范围；Runtime 从当前 canonical 稿恢复原文并合并。正文使用新依据时，模型同次明确提交 `additional_references`，Runtime 保留已有引用、去重合并新增项，并检查新位置属于本轮选择且实际可见；版本、片段及引用全部成立才产生一个新版。临时 typed 片段视图不写入 Journal，来源 Verifier 和独立汇总继续消费完整正文。每轮 Provider Schema 从本轮已选引用目录派生文档、连续行及部分行范围，并列出当前 claim 与片段身份；合法性仍由唯一 citation binder 和研究准入确定。
 
 研究写作者当前可用 `delete_claim` 撤回一个已有论断；准入层核对当前版本和身份，保留其余项后重新核验完整集合。独立文档缺项分类及对应覆盖反馈已暂停，原用户事实覆盖、来源支持和最终语义核验仍运行。现行边界见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
 

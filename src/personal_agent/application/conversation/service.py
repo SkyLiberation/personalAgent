@@ -63,7 +63,7 @@ from .research import (
     InitialResearchSubmission, ResearchSubmission, CreateClaims, ReviseClaimFragment,
     ReplaceClaimReferences, AddClaims, DeleteClaim, RecheckClaims, ReturnToActions,
     StopResearch, accepted_basis, admit_claim_change, current_claims, verification_steps,
-    has_research_source_text, in_research_mode, ResearchEvidenceSelection, research_request,
+    has_research_source_text, in_research_mode, ResearchEvidenceSelection, InitialResearchEvidenceSelection, research_request,
     editable_research_claims, research_submission_type, applicable_research_review,
     research_review_context, research_goal_requirements, validate_research_selection,
 )
@@ -1534,19 +1534,6 @@ class ConversationService:
             arguments["research_basis"] = research_basis.model_dump(mode="json")
             arguments["research_segments"] = [segment.model_dump(mode="json") for segment in decision.segments]
             arguments["source_reading_state"] = []
-            submissions = tuple(item for item in verification_inputs if isinstance(item, SubmittedFinal))
-            previous_receipts = observed_receipts(
-                verification_inputs, capability_names=frozenset({_VERIFICATION_CAPABILITY}),
-            )
-            if len(submissions) > 1 and previous_receipts:
-                previous = previous_receipts[-1]
-                if (
-                    previous.verdict == "failed"
-                    and previous.research_ref == research_basis.claims.resource_ref
-                    and previous.success_criteria == tuple(review_criteria.criteria)
-                    and previous.verified_draft == submissions[-2].final.message.strip()
-                ):
-                    arguments["previous_verification"] = previous.model_dump(mode="json")
         execution_scope = ExecutionScope(
             principal=principal,
             execution_id=run_ref,
@@ -1620,7 +1607,8 @@ class ConversationService:
         )
         visible = materialize_citation_context(materialize_interaction_inputs(decision_inputs))
         source_feedback = research_review_context(review, inputs)
-        return research_request("conversation.research.evidence_selection", ResearchEvidenceSelection, {
+        output_type = InitialResearchEvidenceSelection if claims is None else ResearchEvidenceSelection
+        return research_request("conversation.research.evidence_selection", output_type, {
             "conversation": [message.model_dump(mode="json") for message in messages],
             "requirements": [item.model_dump(mode="json") for item in research_goal_requirements(criteria)],
             "inputs": [item.model_dump(mode="json") for item in visible],

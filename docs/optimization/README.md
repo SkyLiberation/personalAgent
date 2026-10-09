@@ -15,9 +15,12 @@
 | `CONVERSATION-RESEARCH-STOP-001`：来源支持修正及其取证前置条件 | [问题总览与经验索引](conversation-source-support.md)、[正文搜索读取第 103 节](evidence-acquisition.md#103-正文行坐标统一与预编号引用联动) | [来源语义与修订设计](../future/conversation-verification-false-positive.md) |
 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`：验证漏放与循环修订 | [对象错位](answer-object-mismatch.md)、[文档缺项](document-absence.md)、[反馈修订](revision-feedback-loop.md)、[研究论断无法收敛及子问题](claim-revision-nonconvergence.md)、[按问题关联的待验证方案](to_verify/README.md)、[阶段动作选择](claim-action-selection.md)、[相同输入核验不一致](claim-verifier-consistency.md) | [Verifier 设计](../future/conversation-verification-false-positive.md) |
 | `CITATION-COORDINATE-CONFUSION-001`：原文行号与临时引用编号混用 | [失败事实与记录](citation-coordinate-confusion.md) | [统一文档坐标与后续观察条件](../future/citation-coordinate-identity.md) |
-| `ANSWER-NORMATIVE-SCOPE-001`：规范主体、来源与义务强度对应 | [独立问题与反馈验收边界](normative-scope-attribution.md) | [最终稿具体来源归属候选](to_verify/answer-source-attribution.md)；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有 |
-| `ANSWER-ENUMERATION-SCOPE-001`：真实反馈修订扩大列举范围 | [实际修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [最终稿修订比较候选](to_verify/final-revision-comparison.md) |
+| `ANSWER-NORMATIVE-SCOPE-001`：规范主体、来源与义务强度对应 | [独立问题与反馈验收边界](normative-scope-attribution.md) | [最终稿具体来源归属候选](to_verify/answer-source-attribution.md)、[重复失败后的方案复审](to_verify/normative-context-acquisition.md)；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有 |
+| `ANSWER-ENUMERATION-SCOPE-001`：真实反馈修订扩大列举范围 | [实际修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验候选](to_verify/final-revision-comparison.md) |
+| `MODEL-PROVIDER-TRANSPORT-001`：服务传输与 deadline 阻断核验 | [独立服务阻塞与恢复](model-provider-transport.md) | 按原失败完整请求恢复后继续原候选 |
+| `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：缺证反馈修订扩大否定范围 | [支持范围修订](to_verify/claim-supported-scope-repair.md) | [支持范围约束](to_verify/claim-supported-scope-repair.md)；引用交接见[完成记录](completed/claim-atomic-evidence-revision.md) |
 | `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：选证输出截断 | [正式入口失败](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [服务方默认输出额度候选](to_verify/research-provider-output-default.md) |
+| `RESEARCH-SELECTION-STATE-CONTRACT-001`：空研究稿的选证输出允许无效answered身份 | [实际正式失败](../evals/02-current-case-inventory.md#2026-10-08-已校准参考续验的选证状态阻塞) | [按真实状态呈现选证契约](completed/research-selection-state-contract.md) |
 | `RESEARCH-SELECTION-USAGE-COMMIT-001`：失败前已完成选证用量漏计 | [计量提交问题](research-selection-usage-commit.md) | [及时提交候选](to_verify/research-selection-usage-commit.md) |
 
 同一队列项可以有不同机制域的设计；记录必须写清覆盖范围。本表不代表同编号的网页搜索/抓取分离、来源生成或评测工作已经全部完成，也不维护第二份准入状态。
@@ -28,7 +31,7 @@
 
 | 阅读目的 | 入口 |
 | --- | --- |
-| 近期已接入候选如何开始验证 | [近期候选入口](to_verify/README.md#近期候选入口)；实际输入输出链见[修订比较验证](claim-revision-nonconvergence.md#2026-10-07-修订比较的验证预声明) |
+| 近期候选如何开始验证 | [近期候选入口](to_verify/README.md#近期候选入口)；本轮预声明见[当前稿独立核验](claim-revision-nonconvergence.md#2026-10-08-当前稿独立核验的预声明) |
 | 当前还缺什么、哪些修复已有收益 | [问题总览](conversation-source-support.md#当前核心问题与责任边界) |
 | 同一问题试过什么、为何停止或接入 | [十个问题入口与历史编号](conversation-source-support.md#阅读顺序与完整记录) |
 | 文档缺项的优化与当前边界 | [文档缺项](document-absence.md)，最新为[第 109 节原文核查与扩源边界](document-absence.md#109-原文缺项核查与扩源反馈的边界验证) |

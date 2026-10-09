@@ -24,9 +24,11 @@
 
 当前保留[研究与覆盖联合候选](../optimization/to_verify/research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)。剩余门禁为未读必要关系识别、来源反馈与修订范围判别、覆盖恢复的语义保真，以及按原用户目标判断必要性、保持真实声明的来源归属。最新正式轨迹发现客户端结果校验缺项并消费真实修订，后续独立评分复核确认流程步骤被错归到MCP架构页；未展开字段或安全条款不自动成为必答缺项，见[覆盖消费记录](../optimization/to_verify/research-goal-coverage.md#2026-10-02-引用身份修复后的覆盖消费)。原评分及暂停机制保持，停止同向补丁及新增付费样本；原用户结果由[最新评测登记](../evals/02-current-case-inventory.md#2026-10-02-验收项引用恢复的正式验证)拥有。
 
+2026-10-08补齐实际引用页面及规范版本后，原单次r2核心缺项标签未获确认；本轮两个隔离覆盖候选撤回，当前v5覆盖及原子写作保持。既有明确客户端职责遗漏和结构恢复问题继续保留；当前先用[已校准参考](../optimization/completed/research-grader-qualification.md#实际引用页面与版本的参考资格)续验原正式方案，具体取舍由[标签复核](../optimization/to_verify/research-goal-coverage.md#标签复核后的撤回与原方案续验)拥有。
+
 ### 最终修订与计量验收
 
-[修订比较候选](../optimization/to_verify/final-revision-comparison.md)已接入现有最终核验；[计量候选](../optimization/to_verify/research-selection-usage-commit.md)已接入成功及异常提交边界。2026-10-02 接入时尚未调用模型；2026-10-07 [核心校准未成立](../optimization/claim-revision-nonconvergence.md#核验校准的实际结果)，停止同向 Prompt 追加，未进入连续修订及新正式 E2E。下一判断责任重审仍保持实际稿件、真实反馈与原验收项；语义门禁通过后再扩大循环。计量按完成响应与 Journal 等式及恢复去重独立验收，不随本次最终语义失败推断成败。
+[当前稿独立核验候选](../optimization/to_verify/final-revision-comparison.md)已进入生产 v6，剩余门禁是原正式入口中的当前稿消费、完整用户结果及语义回归排除。保留真实稿件、冻结原项、逐段原文和汇总者实际反馈；一个原 target 按当前身份连续验证。候选直接证明回归时撤回三个模块差异；独立阻塞优先解决后恢复本入口。[计量候选](../optimization/to_verify/research-selection-usage-commit.md)按完成响应与 Journal 等式及恢复去重独立验收。实际结果与下一边界由[同一问题记录](../optimization/claim-revision-nonconvergence.md#独立阻塞恢复与原方案续验)拥有。
 
 ### 有范围的未知与正常交付
 

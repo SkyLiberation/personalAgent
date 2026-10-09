@@ -76,6 +76,21 @@
       "expected": "EVD"
     },
     {
+      "id": "evd_independent_blocker",
+      "task": "落地中遇到非本方案引入的独立阻塞，应怎样优先解决后继续实施？",
+      "expected": "EVD"
+    },
+    {
+      "id": "evd_repeated_blocker_review",
+      "task": "同一阻塞经过一次有界修正仍复现，怎样处理重复阻塞并完成方案复审后再继续？",
+      "expected": "EVD"
+    },
+    {
+      "id": "evd_preserve_design_consistency",
+      "task": "处理独立阻塞时，如何保证方案一致性并保留原方案的验收依据？",
+      "expected": "EVD"
+    },
+    {
       "id": "ref_claude_context",
       "task": "参考 Claude Code 能力参考，比较它的 Context 隔离和渐进式披露机制。",
       "expected": "REF"
@@ -186,6 +201,11 @@
       "expected": "DOC"
     },
     {
+      "id": "qlt_e2e_blocker_resume",
+      "task": "E2E 阻塞来自环境或评测器时，怎样封存失败、验证修复并回跑原入口？",
+      "expected": "QLT"
+    },
+    {
       "id": "qlt_golden_set",
       "task": "语义决策变更如何设计 Golden Set 和 Real E2E 评测？",
       "expected": "QLT"
@@ -274,6 +294,11 @@
       "id": "cod_existing_text_reference",
       "task": "模型文字复述与文本引用的职责怎样划分，才能由运行系统恢复原文？",
       "expected": "COD"
+    },
+    {
+      "id": "qlt_verifier_minimal_context",
+      "task": "核验漏放时，如何在最小充分上下文识别错误并判断当前核验任务设计是否合理？",
+      "expected": "QLT"
     }
   ]
 }

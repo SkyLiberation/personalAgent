@@ -1,8 +1,50 @@
 # 研究论断反馈修订无法收敛
 
-**当前推进以实际失败边界为单位，完整用户交付仍未通过。** 近期候选分别处理[具体来源归属](to_verify/answer-source-attribution.md)、[修订扩大列举范围](to_verify/final-revision-comparison.md)、[选证输出截断](to_verify/research-provider-output-default.md)和[已完成选证用量漏计](to_verify/research-selection-usage-commit.md)。2026-10-07 先验证修订比较，预声明见下节；历史失败、未到达阶段和局部收益分别保留。
+**当前推进以实际失败边界为单位，完整用户交付仍未通过。** 近期候选分别处理[具体来源归属](to_verify/answer-source-attribution.md)、[修订扩大列举范围](to_verify/final-revision-comparison.md)、[选证输出截断](to_verify/research-provider-output-default.md)和[已完成选证用量漏计](to_verify/research-selection-usage-commit.md)。2026-10-08 按当前稿独立核验与修订反馈分工开展隔离校准，预声明见下节；历史失败、未到达阶段和局部收益分别保留。
 
 当前生产契约由 [ADR 0032](../adr/0032-conversation-research-claims.md)、[ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)及[验证专题](../topics/verification-and-completion.md)拥有。已解决的寻址、参数、引用、报告消费、身份与计量问题统一见 [completed 索引](completed/README.md)。完整用户结果由[正式评测](../evals/02-current-case-inventory.md)拥有，下文各日期只解释对应历史轨迹。
+
+## 2026-10-08 当前稿独立核验的预声明
+
+用户要求按讨论的职责分工开始优化。首轮按[唯一候选设计](to_verify/final-revision-comparison.md)先在 `.tmp/current-draft-verifier-20261008/` 的独立源码验证：旧稿和真实反馈仍交给汇总者，最终 Verifier 仅验收当前完整稿、冻结原项和当前依据。保留现行来源、引用、研究版本及 Completion 契约；首次隔离时生产尚未修改。
+
+运行前封存当前 clean HEAD、三个受影响模块及实际历史输入。先按设计运行至多 8 个校准核验，任一清晰语义误判或结构失败即停止；局部成立后至多一条连续真实反馈轨迹及一个原正式 target。模型、thinking、评分器、原用户目标与预算保持，标签不交给模型，构造控制和原实际输出分别计分。完整计划、预算、命令与退出条件由候选设计和本轮归档拥有，尚未执行项不记通过。
+
+### 本轮实际结果与服务阻塞
+
+生产源码保持 `410cf16` 的原身份；文档先行计划形成后封存工作树，三个候选差异仅存在于 `.tmp/current-draft-verifier-20261008/candidate/src/`。注册最终 Prompt 为 `v6-current-draft`，汇总与其余六个研究 Prompt 保持。原实际稿、当前依据、冻结原项及逐段真实来源未改写；四个人工相邻控制仍单列，不作为真实修订输出。
+
+| 顺序与输入来源 | 预期 | 实际 | 已取得的边界 |
+| --- | --- | --- | --- |
+| 1：实际完整枚举错误稿 | 拒绝 | 拒绝 | 忠实性反馈明确指出五步数量与四项完整清单矛盾 |
+| 2：人工出处纠正、合法部分列举 | 接受 | 接受 | 本次没有将部分列举扩大为完整清单要求 |
+| 3：实际来源错配稿 | 拒绝 | 拒绝 | 明确指出 MCP 架构页不能支持归属于它的 OpenAI 流程步骤 |
+| 4：人工同义部分列举 | 接受 | 无有效响应 | 三次现有服务尝试均未取得判决；一次传输失败、两次 480 秒 deadline，最后抛出 `ModelCallDeadlineExceeded` |
+| 5—8：有据范围纠错、无据新增及前两项重复 | 按原预声明 | 未执行 | 服务失败后停止，无连续修订及正式入口运行 |
+
+有效语义判决匹配 `3/3`，其中真实历史输出 `2/2`、人工相邻控制 `1/1`；只完成计划中的 `3/8` 个判决。共启动 4 个逻辑核验、6 次 SDK 服务请求。前三项已知用量为 83,205 tokens、258.21 秒；第四项耗时 1,259.88 秒，三个无响应服务请求的用量未知。整个校准阶段 1,518.16 秒。两层观察帧没有重复计费，原始输入与成本核对见[实发审计](../../.tmp/current-draft-verifier-20261008/input-and-cost-audit.json)，原结果见[校准结果](../../.tmp/current-draft-verifier-20261008/calibration-result.json)。
+
+SDK 使用现有 Adapter 前置 Schema 指令，原业务消息角色、顺序和字节保持；预期标签与旧反馈未进入最终请求，完整稿及逐段引用一一对应。服务异常发生在第四项请求返回前，没有当前稿判决，不能归为候选语义反例；三个已有结果也不足以宣称可靠性或单独归因历史隔离收益。首份错误稿的准确反馈见[真实枚举错误回执](../../.tmp/current-draft-verifier-20261008/actual-enumeration-error-r1-receipt.json)，源码、参数、原始响应及判据身份由[本轮归档](../../.tmp/current-draft-verifier-20261008/plan.json)拥有。
+
+首轮停止新增模型调用，未迁移生产，未扩大到连续修订或 Product E2E；候选保留为待验证。连续回放脚本已准备并编译，运行量为 0；它从原历史提交调用 Runtime，消费实际回执、实际汇总输出和原独立评分，不注入理想反馈。原用户结果仍失败，旧生产及有效反馈交接保留，首轮隔离不延长 ADR 的临时接入例外。
+
+### 独立阻塞恢复与原方案续验
+
+2026-10-08 用户授权先解决前述阻塞、继续原方案。按[候选续验设计](to_verify/final-revision-comparison.md#身份验证与退出)，在 `.tmp/current-draft-verifier-resume-20261008/` 封存新计划与执行身份，不覆盖首轮。服务失败由[独立问题](model-provider-transport.md)拥有；只读列表预检返回，原第 4 项完整请求首次服务尝试在 72.56 秒返回正确判决，当前服务边界恢复，历史根因未确认。
+
+续验完成五个有效报告，全部匹配；连同原三个判决，校准为 `8/8`，真实历史输出判决 `3/3`（两个不同实际稿）、人工相邻控制判决 `5/5`（四个不同控制）。共启动 9 个校准逻辑操作、11 次 SDK 请求，首轮三个无响应请求及未知成本仍保留。新增已知用量 123,824 tokens、346.08 秒，校准累计已知 207,029 tokens；输入、Schema、候选及原封存 checksum 保持，详见[实发审计](../../.tmp/current-draft-verifier-resume-20261008/input-and-cost-audit.json)。
+
+本轮静态命令为 `ruff check` 三个隔离模块、`compileall` 候选与脚手架，以及原 Product E2E 文件的 `pytest --collect-only`（仅收集 1 项，未执行）；均通过。Prompt 家族结构对照确认仅最终核验变化，文档链接、锚点、表格和代码块按本次差异检查；具体命令与结果在归档中封存。初次审计脚手架按未前置 Schema 的消息和只含字面值的 Prompt 解析，分别在静态检查处暴露并修正，没有改变已发送请求或追加模型调用。未运行或维护停用单元测试。
+
+连续回放从原历史实际出处错稿进入 Runtime，取得新真实拒绝，汇总者逐字节消费旧稿与实际 Observation；一次实际修订纠正出处并保持部分列举，经过新稿引用绑定、当前核验及原 v8 独立用户结果评分，`1/1` 条件轨迹通过。共 4 个模型操作、132,827 tokens、581.18 秒，实际反馈、生成及核验均未替换。局部累计已知 339,856 tokens，三次旧无响应请求成本仍未知；该历史状态续接不是 Product E2E。结果见[连续链](../../.tmp/current-draft-verifier-resume-20261008/continuation-result.json)及[独立评分](../../.tmp/current-draft-verifier-resume-20261008/continuation-grade.json)。
+
+生产按校验和逐字节迁移同一三个候选模块，删除最终历史比较字段与资格投影，汇总 v3、当前稿及版本/引用/Completion 约束保持。权威专题与 ADR 同步为 v6；生产身份和净复杂度见[迁移记录](../../.tmp/current-draft-verifier-resume-20261008/production-migration.json)。
+
+原正式入口 target 为 `0/1`，耗时 4,777.76 秒，32 个决策回合、23 次工具调用后返回 limitation，未进入完整事实覆盖、汇总、最终核验及独立评分。62 次 SDK 请求中 60 次完成，已知输入 1,505,471、输出 192,231、合计 1,697,702 tokens；一次传输失败与一次 480 秒 deadline 后均由现有重试恢复，两份失败请求用量未知。已知 total 与终态 Journal 相等，输入、输出及模型次数仍因未知调用保持不完整。原静态身份与 261 个生产源码文件均等于隔离候选；该前置失败不证明 v6 回归，也不覆盖原完整用户失败。
+
+来源核验实际推进到 c6，先前 c1-c5 当前报告通过。c2 与 c6 均收到新原文后仅修改正文，新事实没有同次绑定依据，造成额外拒绝和后续引用轮次；优先继续[既有原子修订候选](completed/claim-atomic-evidence-revision.md)，原最终核验分工保持。服务原因仍未确定；辅助 stdout 转发在产品归档完成后发生 GBK 编码错误，已封存原脚本并改为 UTF-8，零付费采集恢复直接读取原密封失败。子进程退出码与 launcher 精确耗时未取得，保持未知。正式结果及完整边界见[产品审计](../../.tmp/current-draft-verifier-resume-20261008/product-audit.json)和[采集恢复](../../.tmp/current-draft-verifier-resume-20261008/console-capture-recovery.json)。
+
+正文与新增依据交接由[原子修订完成记录](completed/claim-atomic-evidence-revision.md)拥有。新正式样本已进入 coverage、汇总及 v6 核验，返回 answer，原评分下完整用户结果 **0/1**。其核心协作缺项标签在补齐评分参考后出现相反判决；[目标覆盖记录](to_verify/research-goal-coverage.md#标签复核后的撤回与原方案续验)撤回本轮确定漏放主张及隔离候选，保留既有明确职责缺项。实际引用页面与版本的独立阻塞由[参考资格完成记录](completed/research-grader-qualification.md#实际引用页面与版本的参考资格)拥有。原中文正式入口按已校准参考续验，原方案、输入和旧失败保持；实际结果与成本由[评测登记](../evals/02-current-case-inventory.md#2026-10-08-精确引用版本与评分资格复核)拥有。
 
 ## 2026-10-07 修订比较的验证预声明
 
@@ -76,7 +118,7 @@
 
 [Provider 诊断交接](to_verify/model-provider-diagnostics.md)已接入现行异常与日志，固定失败反事实 2/2；原正式 E2E 再运行一次，93 个 MiMo 请求均为 200，实际服务错误检查点未触发。第 19 版八条 claim 来源通过；覆盖结构恢复把三项缺口改为 covered，见[覆盖恢复问题](to_verify/research-goal-coverage.md#2026-10-02-覆盖结构恢复抹除缺项反馈)。最终身份交接由[引用恢复完成记录](completed/final-criterion-transcription.md)拥有；该次完整用户结果由[评测登记](../evals/02-current-case-inventory.md#2026-10-02-mimo-诊断补齐后的正式验证)拥有。
 
-修订仍观察到[新增事实未绑定引用](to_verify/claim-supported-scope-repair.md#2026-10-02-新增事实未随正文绑定引用)，后续独立改引用才恢复相应支持。最终工具模型的已完成用量继续存在[交接漏计](tool-model-usage-handoff.md#2026-10-02-最终契约失败调用仍有漏计)。研究与覆盖组合保持，Source、覆盖恢复、最终验收项身份及成本交接按各自责任处理。
+修订仍观察到[新增事实未绑定引用](completed/claim-atomic-evidence-revision.md)，后续独立改引用才恢复相应支持。最终工具模型的已完成用量继续存在[交接漏计](tool-model-usage-handoff.md#2026-10-02-最终契约失败调用仍有漏计)。研究与覆盖组合保持，Source、覆盖恢复、最终验收项身份及成本交接按各自责任处理。
 
 ## 2026-10-02 研究与覆盖共同保持并验证
 
@@ -219,3 +261,5 @@ claim 候选先执行两份独立结构判据的固定输入资格，再执行�
 针对修订循环，分别记录最近被核验版本、当前版本、其间合法编辑与参数拒绝、是否重新提交、原拒稿缺口在新核验中是否仍存在，以及新出现的缺口。只有新核验能判断新稿是否仍有旧缺口；一次放行还不能证明 Verifier 稳定。正文删去某个词、增加引用或拆分 claim 均不能由确定性代码直接判为语义成功。核验一致性、复合论断和提示契约按上表独立验收，不因某一项改善就并入同一成功结论。
 
 本次后置阻塞分别见[最终验收项转录](completed/final-criterion-transcription.md)及[工具内部模型用量交接](tool-model-usage-handoff.md)，原正式结果由评测文档拥有。
+
+本轮后续正式入口已解除空稿503，[状态契约](completed/research-selection-state-contract.md)按窄机制固化。两次Finalv6中，首次拒稿真实驱动synthesis修订，第二次独立验收当前稿通过，分工消费检查点成立；完整用户结果0/1，唯一实质错误是未取证的非规范性章节限定被误作协议要求。[独立候选](to_verify/normative-context-acquisition.md)先修复该边界，原当前稿方案及所有旧失败保持。结果及成本由[新正式登记](../evals/02-current-case-inventory.md#2026-10-08-选证状态修复后的正式入口结果)拥有。

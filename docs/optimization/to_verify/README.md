@@ -8,11 +8,12 @@
 
 ## 近期候选入口
 
-2026-10-02 接入的下列候选保留各自失败边界。2026-10-07 修订比较的核验校准未成立，停止扩大循环；预声明、真实输入、实际结果与责任反事实由[同一问题记录](../claim-revision-nonconvergence.md#2026-10-07-修订比较的验证预声明)拥有。选证输出与计量是独立前置边界，不用它们的失败否定尚未到达的最终语义候选。
+下列候选保留各自失败边界。2026-10-07 修订比较校准未成立；2026-10-08 当前稿独立核验恢复服务后完成校准及实际反馈连续链，已进入生产 v6，正式入口待验收。真实输入、结果与边界由[同一问题记录](../claim-revision-nonconvergence.md#独立阻塞恢复与原方案续验)拥有。选证输出及计量分别按各自前置边界验证。
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [最终稿修订比较与范围保真](final-revision-comparison.md) |
+| `ANSWER-NORMATIVE-SCOPE-001`：行为有据但规范性质归属缺证仍放行 | [实际新失败与两条候选反例](../normative-scope-attribution.md#2026-10-08-章节规范性限定未取证) | [规范性归属方案复审](normative-context-acquisition.md) |
+| `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验与修订反馈分工](final-revision-comparison.md) |
 | `RESEARCH-SELECTION-USAGE-COMMIT-001`：后置写作或选证输出失败造成已完成用量漏计 | [正式用量差额](../research-selection-usage-commit.md) | [已完成选证用量的及时提交](research-selection-usage-commit.md) |
 | `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：单次输出截断阻断正式研究 | [正式选证失败](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [研究请求采用服务方默认输出额度](research-provider-output-default.md) |
 | `ANSWER-NORMATIVE-SCOPE-001`：多来源稿的指代导致具体页面归属错误 | [真实来源错配](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | [最终稿具体来源归属](answer-source-attribution.md) |
@@ -21,9 +22,10 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
+| `CODE-READABILITY-MODULARITY-001`：代码阅读路径与功能职责需要明确工程依据 | [COD 模块职责](../../devSpec/code-structure.md#3-模块职责规模与生产可达性)；内部重构按 EVD 验收 | [可读性与模块化整理](code-readability-modularity.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001`：模型服务失败的具体诊断在异常转换中丢失 | [原研究 E2E 429 与失败边界](model-provider-diagnostics.md#失败事实与最早责任) | [有界诊断交接](model-provider-diagnostics.md) |
 | `RESEARCH-GOAL-COVERAGE-001`：用户所问事实被相关格式和取证限制替代 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[实际覆盖漏放与候选](research-goal-coverage.md) | [逐项用户事实覆盖](research-goal-coverage.md) |
-| `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：把特定主体缺证改成更广否定 | 同上；应用主体缺证反馈到任意主体缺失的真实修订 | [支持范围约束缺证修订](claim-supported-scope-repair.md) |
+| `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：缺证修订扩大声明 | 同上；支持范围反馈被改写成更广否定的真实修订；引用交接见[完成记录](../completed/claim-atomic-evidence-revision.md) | [支持范围约束](claim-supported-scope-repair.md) |
 | `CLAIM-WRITER-TYPED-OUTPUT-001`：首次研究提交的空集合与字符串引用导致 503 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式入口失败与局部修正](claim-writer-typed-output.md) | [研究写作者 typed 提交契约](claim-writer-typed-output.md) |
 | `CLAIM-DUPLICATE-ADDITION-001`：增补后缺少单条撤回能力 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[重复增补反例](../claim-revision-nonconvergence.md#2026-09-29-暂停拆分与复合识别的正式对比) | [单条研究论断撤回候选](claim-deletion.md) |
 | `DOCUMENT-ABSENCE-PAUSE-001`：独立缺项识别反复拒稿后的剩余保护边界 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式调用与拒绝计数](../../evals/02-current-case-inventory.md#2026-09-29-拆分与复合识别停用对比) | [独立文档缺项识别暂停候选](document-absence-pause.md) |

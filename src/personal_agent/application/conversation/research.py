@@ -76,6 +76,17 @@ class ResearchEvidenceSelection(_Strict):
         return tuple(reference for need in self.needs for reference in need.references)
 
 
+class InitialResearchInformationNeed(ResearchInformationNeed):
+    """No current claim exists to identify as an answered research requirement."""
+
+    status: Literal["ready", "needs_evidence", "delivery_check"]
+    claim_ids: tuple[str, ...] = Field(default=(), max_length=0)
+
+
+class InitialResearchEvidenceSelection(ResearchEvidenceSelection):
+    needs: tuple[InitialResearchInformationNeed, ...] = Field(min_length=1)
+
+
 def validate_research_selection(
     selection: ResearchEvidenceSelection, criteria: ReviewCriteria, current: ResearchClaims | None,
 ) -> None:
@@ -105,6 +116,9 @@ class ReviseClaimFragment(_Edit):
     start_fragment_id: str = Field(pattern=r"^c[1-9][0-9]*\.f[1-9][0-9]*$")
     end_fragment_id: str = Field(pattern=r"^c[1-9][0-9]*\.f[1-9][0-9]*$")
     replacement: str
+    additional_references: tuple[ConversationEvidenceReference, ...] = Field(
+        default=(), description="与本次正文修订一同提交的新增引用；已有引用由 Runtime 保留，新增坐标须本轮选中。",
+    )
 
 
 class ReplaceClaimReferences(_Edit):
@@ -255,7 +269,7 @@ def research_submission_type(
             reference["pattern"] = (rf"^(?:{docs}):[1-9][0-9]*(?:-[1-9][0-9]*|:[1-9][0-9]*-[1-9][0-9]*)?$"
                                     if docs else r"^(?!)$")
             reference["description"] = (
-                "可见坐标来自本轮选择及当前集合已绑定引用。创建和增补只用本轮选择；替换引用可保留目标 claim 的已有坐标，新增坐标须本轮选中。完整行可选同一连续范围内的单行或子区间，不能跨缺行；"
+                "可见坐标来自本轮选择及当前集合已绑定引用。创建和增补只用本轮选择；正文修订的追加引用和引用替换均可保留目标 claim 已有坐标，新增坐标须本轮选中。完整行可选同一连续范围内的单行或子区间，不能跨缺行；"
                 "部分行只用原样坐标。当前范围："
                 + json.dumps([bound.model_dump(mode="json") for bound in bounds], ensure_ascii=False)
             )
@@ -361,7 +375,12 @@ def admit_claim_change(
                 updated = claim.text[:start.start] + action.replacement + claim.text[end.end:]
                 if not updated.strip():
                     raise ValueError("片段修订不能清空整个 claim。")
-                replacements = (ResearchClaim(claim_id=claim.claim_id, text=updated, references=claim.references),)
+                references = tuple(dict.fromkeys((*claim.references, *action.additional_references)))
+                require_selected(
+                    (claim.model_copy(update={"references": references}),),
+                    selected_citation_ids(claim.references, inputs),
+                )
+                replacements = (ResearchClaim(claim_id=claim.claim_id, text=updated, references=references),)
                 claims = claims[:index] + replacements + claims[index + 1:]
             elif isinstance(action, ReplaceClaimReferences):
                 claim = claims[index]

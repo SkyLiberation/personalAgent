@@ -22,6 +22,7 @@
 - 原始用户结果与预声明的局部检查点分别计分。失败按发生位置与因果关系归因；局部通过不能覆盖 E2E 失败，后续独立失败也不能否定已成立机制。候选保留、撤回和重新准入按 [EVD](docs/devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)处理。
 - 默认产品语言为中文。生产 Prompt 的任务逻辑，以及 Product E2E、Golden Set 与 Offline Eval 的用户输入、目标、成功标准、失败反馈和结果解释以中文为主。明确的多语言契约按相同语义建立自然表达镜像，分别验证与报告，不跨语言外推；代码、协议、命令与 URL 保留原文。
 - 模型语义设计或异常定位必须审计实际模型请求及构造链，不能只凭模板、输出或可见理由归因。执行 [CTX 输入审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)。
+- 核验器漏放已确认错误时，先按 [QLT 最小充分上下文诊断](docs/devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)排除干扰并保留必要事实；充分准确输入仍漏放时，停止当前核验任务的生产准入，重审任务合理性、职责、判据与输入输出契约。
 - 后置行为依赖不确定模型前置决策时，按 [EVD 连续验证](docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)消费同一轨迹的实际输出；理想中间状态、独立采样和成功筛选只能作为条件局部证据。
 
 ### 2.2 一个事实只有一个 owner
@@ -70,14 +71,14 @@
 
 | 规范 | 识别信号 | 必读细则 |
 | --- | --- | --- |
-| `EVD` | 新增功能、能力优化、设计项、优化项、docs-first、e2e-first、机制收益、缺陷修复、模型依赖链、baseline、消融、target E2E、工程重构、复杂度准入、外部机制比较 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
+| `EVD` | 新增功能、能力优化、设计项、优化项、docs-first、e2e-first、独立阻塞、重复阻塞、方案复审、方案一致性、机制收益、缺陷修复、模型依赖链、baseline、消融、target E2E、工程重构、复杂度准入、外部机制比较 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
 | `REF` | 优秀智能体、外部智能体、Agent Harness 比较、Claude Code 能力参考、GPT/Codex 能力参考、OpenHands 能力参考、DeepSeek Harness 能力参考、Gemini CLI 能力参考、Hermes Agent 能力参考、Letta 能力参考、LangGraph 能力参考 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
 | `ARC` | 架构分层、业务事实、决策归属、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Product Aggregate、派生数据、缓存、物化投影、生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay、durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
 | `CTX` | Context、System Prompt、模型输入、反馈执行异常、Memory、RAG、Artifact、检索、权限过滤、预算物化、Capability Projection、服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
 | `COD` | 类或模块拆分、内部类型、payload、依赖注入、生产 Prompt、指令模板、文本引用、文字复述、LangGraph、Router、Planner、Workflow、错误分类、命名、编码智能体行为 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
 | `DOC` | 新增、修改、移动或评审 Markdown、Mermaid、ADR、评测归档、架构说明、中文写作、文档索引 | [文档模块规范](docs/AGENTS.md) |
-| `QLT` | 单元测试、tests/、Offline Eval、Unit、Contract、Integration、Golden Set、Real E2E、真实环境 smoke、Trace、安全、权限、审计、评测 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
+| `QLT` | 单元测试、tests/、Offline Eval、Unit、Contract、Integration、Golden Set、Real E2E、E2E 阻塞、核验漏放、最小充分上下文、真实环境 smoke、Trace、安全、权限、审计、评测 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | Schema 迁移、协议迁移、兼容窗口、ADR、发布评审、合并验收、完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |
 
 修改 `docs/**`、`evals/**` 或生产 Prompt，分别读取 [DOC](docs/AGENTS.md)、[EVM](evals/AGENTS.md)或 [Prompt 模块规范](src/personal_agent/kernel/prompt_templates/AGENTS.md)。从仓库根启动时也须显式读取，不能假定子目录入口已自动加载。
@@ -106,7 +107,8 @@
 
 - 改公共模型、Schema、状态或入口前搜索全部调用方和权威文档。保留工作树用户改动，禁止破坏性 Git 操作覆盖。
 - 先清理被替代或冲突的内容，再做最小修改。外部依赖与非确定性输入通过 Port 注入，错误分类按 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止用空结果、默认成功或模糊 fallback 掩盖失败。
-- E2E 失败先封存结果、审查断言，定位最早责任主体；一次有界修正后先回跑原失败边界。复现时停止追加局部补丁，重新审查根因和正交方案；独立工作继续。执行 [QLT 阻塞处理](docs/devSpec/quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)。
+- 落地出现已确认非本方案引入的独立阻塞时，必须优先定位并解决，再继续原方案实施与验收；保留原目标、职责边界、核心机制和验收标准，执行 [EVD 独立阻塞处理](docs/devSpec/change-evidence.md#71-独立阻塞优先解决并保持方案一致性)。
+- 失败先封存结果、审查断言，定位最早责任主体；一次有界修正后先回跑原失败边界。同一阻塞仍复现时，必须停止受影响路径的候选实验、生产补丁和整轮重跑，按 [EVD 方案复审](docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)重审实际输入、根因、责任和机制，取得新因果依据并更新唯一设计后再准入。更换 Prompt、模块或版本不重置同一阻塞的尝试；独立工作可继续，原方案调整与撤回须有对应因果证据。E2E 的阶段处理执行 [QLT](docs/devSpec/quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)。
 - 评审只报告可定位、可复现且影响正确性、安全性、性能或维护门禁的问题。结论不超过已执行证据，未执行的适用检查不得写成通过。
 
 ## 6. 完成门禁

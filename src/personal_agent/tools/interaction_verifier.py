@@ -52,7 +52,6 @@ class VerifyInteractionDraftArgs(BaseModel):
     source_reading_state: tuple[SourceReadingState, ...] = ()
     research_basis: ResearchBasis | None = None
     research_segments: tuple[ConversationAnswerSegment, ...] = ()
-    previous_verification: SemanticVerificationReceipt | None = None
 
     @model_validator(mode="after")
     def check_draft_coverage(self):
@@ -74,15 +73,6 @@ class VerifyInteractionDraftArgs(BaseModel):
             ids = [evidence.id for evidence in unit.execution_evidence]
             if len(ids) != len(set(ids)):
                 raise ValueError("cited evidence ids must be unique within their unit")
-        previous = self.previous_verification
-        if previous is not None:
-            if self.research_basis is None or previous.research_ref != self.research_basis.claims.resource_ref:
-                raise ValueError("revision comparison requires the same approved research revision")
-            if previous.verdict != "failed" or previous.success_criteria != self.success_criteria:
-                raise ValueError("revision comparison requires an applicable failed verification")
-            digest = sha256(previous.verified_draft.strip().encode("utf-8")).hexdigest()
-            if previous.draft_digest != digest or previous.receipt_id != f"svr_{digest[:20]}":
-                raise ValueError("revision comparison must bind the exact rejected draft")
         return self
 
 
@@ -116,7 +106,6 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
         source_reading_state: tuple[SourceReadingState, ...] = (),
         research_basis: ResearchBasis | None = None,
         research_segments: tuple[ConversationAnswerSegment, ...] = (),
-        previous_verification: SemanticVerificationReceipt | None = None,
     ):
         prompt = get_prompt("conversation.research.final_verification" if research_basis is not None
                             else "interaction_verification.system")
@@ -135,7 +124,6 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
             source_reading_state=source_reading_state,
             research_basis=research_basis,
             research_segments=research_segments,
-            previous_verification=previous_verification,
         )
         units = verification_input.cited_units or (CitedDraftUnit(draft=draft),)
         # Only writer-submitted evidence reaches either semantic consumer.
@@ -157,18 +145,6 @@ def build_verify_interaction_draft_tool(model_client: StructuredModelClient) -> 
                 "research_basis": verification_input.research_basis.model_dump(mode="json"),
                 "segments": [segment.model_dump(mode="json") for segment in verification_input.research_segments],
                 "cited_units": [unit.model_dump(mode="json") for unit in units],
-                "previous_verification": (
-                    verification_input.previous_verification.model_dump(mode="json", include={
-                        "receipt_id": True,
-                        "verified_draft": True,
-                        "revision_feedback": True,
-                        "criterion_results": {
-                            index: True
-                            for index, result in enumerate(verification_input.previous_verification.criterion_results)
-                            if result.status != "satisfied"
-                        },
-                    }) if verification_input.previous_verification is not None else None
-                ),
             }
         cited_prompt = get_prompt("interaction_verification.cited_support")
         for unit in units if verification_input.research_basis is None else ():

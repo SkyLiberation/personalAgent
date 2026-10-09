@@ -8,7 +8,7 @@ Conversation 保留 canonical binder 按最终每段 references 恢复的 `Cited
 
 研究来源 Verifier 继续判断 claim 的事实支持。最终 Verifier 按整段上下文解析“其、该页、上述资料”等指代，对照所称页面实际返回的原文；多来源共同支持的论断保留全部相关引用。写作者在局部修订改变前文来源时，把受影响的相邻指代句纳入最小连续编辑范围。独立汇总按具体说明关联现有引用，并从 `ResearchBasis.sources` 获取对应 URL。
 
-初次来源归属验证使用 writer v16、synthesis v2、research final v4，复用已有模型请求、typed 引用及 binder。当前来源归属机制继续保留；同日[修订比较候选](final-revision-comparison.md)更新汇总与最终核验版本，真实新身份的语义与正式验收待统一执行。权威调用链见 [ADR 0032](../../adr/0032-conversation-research-claims.md)。
+初次来源归属验证使用 writer v16、synthesis v2、research final v4，复用已有模型请求、typed 引用及 binder。当前来源归属机制继续保留；同日[修订比较候选](final-revision-comparison.md)更新汇总与最终核验版本，新身份已在2026-10-08正式入口两次物化逐段原文与URL并验收当前稿；本文的完整用户门禁仍待取得，最新独立失败是章节非规范性限定未取证。权威调用链见 [ADR 0032](../../adr/0032-conversation-research-claims.md)。
 
 ## 证据与剩余门禁
 
@@ -21,3 +21,5 @@ Conversation 保留 canonical binder 按最终每段 references 恢复的 `Cited
 正式预算保持 2M tokens、32 回合、48 工具和7200秒HTTP；完整用户结果与来源归属检查点分别验收。正式target失败即封存并归因，不追加同向提示、修改评分契约或重复采样寻找通过。反例直接否定来源归属机制或证明新增输入引入回归时，撤回对应生产部分；未到达的正式边界单列。枚举范围候选后续按用户要求先实现、统一延后测试；实际状态由[修订比较方案](final-revision-comparison.md)拥有。
 
 本次正式target实际0/1：两次选证响应截断且缺必填 `reason`，入口503，claims未创建，归属候选的生产消费检查点未到达。来源归属条件局部证据保留，完整候选继续待验证；最早阻塞由[选证输出子问题](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)拥有，完整结果及成本由[正式登记](../../evals/02-current-case-inventory.md#2026-10-02-具体来源归属候选的正式入口验证)拥有。
+
+后续正式来源消费已到达，两次Finalv6的段落、原文与来源身份逐字核对成立，未复现旧错页归属；完整用户结果0/1仍保留。[规范性限定取证](normative-context-acquisition.md)拥有新确定的章节层级缺口，当前页面绑定机制保持。正式结果见[登记](../../evals/02-current-case-inventory.md#2026-10-08-选证状态修复后的正式入口结果)。

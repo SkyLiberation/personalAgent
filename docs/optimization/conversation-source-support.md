@@ -1,6 +1,6 @@
 # 研究回答来源支持：问题总览与经验索引
 
-**当前推进需要区分来源支持、用户事实覆盖和最终表达保真。** 三者的局部通过不能相互替代，也不能覆盖原用户结果。近期失败集中在[具体来源归属](normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配)、[修订扩大列举范围](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)及[选证输出截断](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)。2026-10-07 从[修订比较的核验校准与实际反馈连续回放](claim-revision-nonconvergence.md#2026-10-07-修订比较的验证预声明)开始推进。
+**当前推进需要区分来源支持、用户事实覆盖和最终表达保真。** 三者的局部通过不能相互替代，也不能覆盖原用户结果。近期失败集中在[具体来源归属](normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配)、[修订扩大列举范围](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)及[选证输出截断](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)。本轮按[当前稿独立核验的预声明](claim-revision-nonconvergence.md#2026-10-08-当前稿独立核验的预声明)先执行隔离校准。
 
 本文提供跨问题导航，不维护第二份准入或结果台账。当前行为由[验证专题](../topics/verification-and-completion.md)、[ADR 0032](../adr/0032-conversation-research-claims.md)和 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)拥有；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有，原始用户结果由[评测盘点](../evals/02-current-case-inventory.md)拥有。拆分、复合识别及独立文档缺项识别已停用，历史局部收益按原条件保留。
 
@@ -10,7 +10,7 @@
 
 | 问题边界 | 记录与候选入口 |
 | --- | --- |
-| 修正出处时把部分列举改成完整清单 | [实际连续修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)、[修订比较候选](to_verify/final-revision-comparison.md) |
+| 修正出处时把部分列举改成完整清单 | [实际连续修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)、[当前稿独立核验候选](to_verify/final-revision-comparison.md) |
 | 具体步骤被归到另一个来源页面 | [来源归属问题](normative-scope-attribution.md)、[来源归属候选](to_verify/answer-source-attribution.md) |
 | 相关事实没有回答用户所问对象 | [对象与适用范围](answer-object-mismatch.md)、[事实覆盖候选](to_verify/research-goal-coverage.md) |
 | 同一请求得到冲突判断 | [核验一致性与实际请求审计](claim-verifier-consistency.md) |
