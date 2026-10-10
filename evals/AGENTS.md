@@ -1,14 +1,12 @@
 # 评测模块规范（EVM）
 
-> 适用于 `evals/**`，继承根 [AGENTS.md](../AGENTS.md)。修改前阅读 [EVD](../docs/devSpec/change-evidence.md)、[QLT](../docs/devSpec/quality-security.md)、[评测体系](../docs/evals/README.md)及目标目录。本文拥有用例登记、比较身份、归档和执行效率。
+> 适用于 `evals/**`，补充根 [AGENTS.md](../AGENTS.md)的评测约束。修改评测前阅读 [EVD](../docs/devSpec/change-evidence.md)、[QLT](../docs/devSpec/quality-security.md)、[评测体系](../docs/evals/README.md)及目标目录；仅整理本文时按 DOC 检查。本文拥有用例登记、比较身份、归档和执行效率。
 
 ## 1. 证据分类不能混用
 
 验证类别和替身边界由 [QLT](../docs/devSpec/quality-security.md#1-测试职责与覆盖)拥有；完整 Product E2E 资格由根规范拥有。直调 Application 的旅程是 Integration，文件名、marker 或 `baseline` 标签不提升证据等级。
 
-- 产品失败 baseline：变更前相同用户、输入、入口、初始事实和结果契约下的失败证据。
-- 指标 baseline：固定工作负载与配置后的质量、成本或延迟参考。
-- 回归 E2E：验证已有行为，不能倒推原设计必要性。
+产品失败 baseline、指标 baseline 和回归 E2E 的区别由 [EVD](../docs/devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)拥有；命名不能提升证据资格。
 
 涉及模型前置决策时执行 [EVD 连续验证](../docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)；归档保留依赖、同轨迹消费、前置失败与后置未到达。评测 Prompt 执行 [COD 通用契约](../docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)，题目、资料和标签由场景数据提供。
 
@@ -30,7 +28,7 @@
 用例的目标、证据类别、关键反事实、范围外事项和断言责任主体须可从 catalog、contract 或权威文档反查。
 
 - 断言只覆盖声明结果、必要反事实及权限、隔离、幂等与副作用不变量；删除不影响目的的断言应清理。内部路径只有属于公开契约时才能作为产品通过条件。
-- 优化验收不追加无关步骤、工具、顺序、措辞或调用次数。不同横切套件复用同一密封 Trace，分别报告整例结果与预声明局部检查点。
+- 优化用例的来源、预声明与验收执行 [EVD 闭环规则](../docs/devSpec/change-evidence.md#14-真实用例驱动优化与验收闭环)。不同横切套件复用同一密封 Trace，分别报告整例结果与已确定局部检查点。
 - E2E 失败按 [QLT 阻塞流程](../docs/devSpec/quality-security.md#2-e2e-阻塞按目标阶段和单变量处理)审查并归档，不另建状态或发布清单。
 
 局部通过、后续独立失败与合法终态按 [EVD 归因](../docs/devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)判断；局部通过不进入产品成功分子。
@@ -58,6 +56,8 @@
 ## 6. 运行与声明
 
 运行前预声明门槛、样本量、重复次数、成本与停止条件；按任务需要选择评测，不默认启动全量 live 矩阵。
+
+验收与重新打开按 [EVD 第 1.4 节](../docs/devSpec/change-evidence.md#14-真实用例驱动优化与验收闭环)执行。真实阶段回放按 Offline Eval 保存 E2E 来源；未执行、未到达和失败按原计划保留，旧通过记录保持原身份。
 
 定向 target 只证明该变更边界。发布声明须绑定目标 clean revision 的完整 release matrix，不能引用 dirty 版本或旧归档替代。报告分子、分母、未执行与未到达数量，以及适用的方差或置信边界；一次轨迹内多次调用不能冒充独立任务样本。不挑成功重跑，不改评分器迎合失败。
 

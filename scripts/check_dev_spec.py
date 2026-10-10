@@ -6,8 +6,10 @@ import hashlib
 import json
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +37,7 @@ ROUTE_RE = re.compile(
     r"\[[^]]+\]\((?P<path>[^)]+)\) \|$"
 )
 LINK_RE = re.compile(r"(?<!!)\[[^]]*\]\(([^)]+)\)")
+HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 ASCII_WORD_RE = re.compile(r"[a-z0-9_]+")
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
@@ -114,29 +117,65 @@ def identify_module_overlay(target: str) -> str | None:
     matching_prefixes = [
         prefix
         for prefix in MODULE_OVERLAYS
-        if normalized_target == prefix
-        or normalized_target.startswith(f"{prefix}/")
+        if normalized_target == prefix or normalized_target.startswith(f"{prefix}/")
     ]
     if not matching_prefixes:
         return None
     return MODULE_OVERLAYS[max(matching_prefixes, key=len)]
 
 
-def check_links(paths: list[Path]) -> int:
+def heading_anchors(path: Path) -> set[str]:
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(
+        r"^```[^\n]*\n.*?^```[^\n]*$", "", text, flags=re.MULTILINE | re.DOTALL
+    )
+    anchors: set[str] = set()
+    for heading in HEADING_RE.findall(text):
+        heading = re.sub(r"!?\[([^]]+)\]\([^)]+\)", r"\1", heading)
+        heading = re.sub(r"<[^>]*>", "", heading).lower().replace("`", "")
+        slug = "".join(
+            char
+            for char in heading
+            if char in "-_ " or unicodedata.category(char)[0] in "LN"
+        ).replace(" ", "-")
+        anchor = slug
+        suffix = 0
+        while anchor in anchors:
+            suffix += 1
+            anchor = f"{slug}-{suffix}"
+        anchors.add(anchor)
+    return anchors
+
+
+def check_links(paths: list[Path]) -> tuple[int, int]:
     checked = 0
+    checked_anchors = 0
+    anchor_cache: dict[Path, set[str]] = {}
     for source in paths:
         text = source.read_text(encoding="utf-8")
         if text.count("```") % 2:
             fail(f"unbalanced fenced code block: {source.relative_to(ROOT)}")
         for raw_target in LINK_RE.findall(text):
-            target = raw_target.strip().strip("<>").split("#", 1)[0]
-            if not target or re.match(r"^[a-z]+://", target):
+            target = urlsplit(raw_target.strip().strip("<>"))
+            if target.scheme or target.netloc:
                 continue
-            resolved = (source.parent / target).resolve()
+            resolved = (
+                (source.parent / unquote(target.path)).resolve()
+                if target.path
+                else source
+            )
             if not resolved.exists():
                 fail(f"broken local link in {source.relative_to(ROOT)}: {raw_target}")
             checked += 1
-    return checked
+            if target.fragment and resolved.suffix == ".md":
+                if resolved not in anchor_cache:
+                    anchor_cache[resolved] = heading_anchors(resolved)
+                if unquote(target.fragment) not in anchor_cache[resolved]:
+                    fail(
+                        f"broken heading anchor in {source.relative_to(ROOT)}: {raw_target}"
+                    )
+                checked_anchors += 1
+    return checked, checked_anchors
 
 
 def main() -> int:
@@ -156,7 +195,7 @@ def main() -> int:
             f"must not exceed {MAX_INSTRUCTION_LINES}"
         )
     for module_instruction in MODULE_INSTRUCTIONS:
-        combined_size = len(agents_bytes) + len(module_instruction.read_bytes())
+        combined_size = len(agents_bytes) + 2 + len(module_instruction.read_bytes())
         if combined_size >= MAX_INSTRUCTION_BYTES:
             fail(
                 f"root plus {module_instruction.relative_to(ROOT)} is "
@@ -199,26 +238,29 @@ def main() -> int:
         AGENTS,
         CLAUDE,
         ROOT / "docs" / "README.md",
+        ROOT / "docs" / "chinese-writing-spec.md",
+        ROOT / "docs" / "future" / "README.md",
+        ROOT / "docs" / "optimization" / "README.md",
+        ROOT / "docs" / "evals" / "README.md",
         *MODULE_INSTRUCTIONS,
     ]
     link_sources.extend(sorted(SPEC_DIR.glob("*.md")))
     link_sources.extend(sorted((ROOT / "docs" / "agentRef").glob("*.md")))
-    checked_links = check_links(link_sources)
+    checked_links, checked_anchors = check_links(link_sources)
 
-    baseline_bytes = fixture["baseline"]["bytes_per_entry"]
-    reduction = 1.0 - len(agents_bytes) / baseline_bytes
     digest = hashlib.sha256(agents_bytes).hexdigest().upper()
-    print("devSpec validation: PASS" if not misses else "devSpec validation: FAIL")
-    print(f"entry sync: byte-identical, sha256={digest}")
     print(
-        f"entry size: {len(agents_bytes)} bytes, {line_count} lines, "
-        f"reduction={reduction:.2%}"
+        "devSpec validation: PASS"
+        if not misses and not overlay_misses
+        else "devSpec validation: FAIL"
     )
+    print(f"entry sync: byte-identical, sha256={digest}")
+    print(f"entry size: {len(agents_bytes)} bytes, {line_count} lines")
     print(f"routes: {len(routes)}/9")
     print(
         "module instruction chains: "
         + ", ".join(
-            f"{path.parent.name}={len(agents_bytes) + len(path.read_bytes())} bytes"
+            f"{path.parent.name}={len(agents_bytes) + 2 + len(path.read_bytes())} bytes"
             for path in MODULE_INSTRUCTIONS
         )
     )
@@ -229,6 +271,7 @@ def main() -> int:
         f"({overlay_correct / len(overlay_results):.2%})"
     )
     print(f"local links: {checked_links} checked")
+    print(f"heading anchors: {checked_anchors} checked")
     for case_id, expected, actual in misses:
         print(f"MISS {case_id}: expected={expected}, actual={actual}")
     for case_id, expected, actual in overlay_misses:

@@ -1,6 +1,6 @@
 # 生产 Prompt 模块规范
 
-> 适用于 `src/personal_agent/kernel/prompt_templates/**`，继承根 [AGENTS.md](../../../../AGENTS.md)。修改前阅读 [COD 通用契约](../../../../docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)和 [CTX 输入审计](../../../../docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)；本文只拥有注册、序列化和版本规则。
+> 适用于 `src/personal_agent/kernel/prompt_templates/**`，补充根 [AGENTS.md](../../../../AGENTS.md)的模板约束。修改模板前阅读 [COD 通用契约](../../../../docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)和 [CTX 输入审计](../../../../docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)；仅整理本文时按 DOC 检查。本文拥有注册、序列化和版本规则。
 
 ## 1. 唯一注册与生产消费
 
@@ -12,7 +12,7 @@
 
 动态区块使用稳定结构并明确数据与指令边界；来源、角色、可信范围及成功标准按 COD 和 CTX 表达。不是所有自然语言正文都必须转换为 JSON，结构化边界也不能替代语义说明。
 
-已有文字的复述、引用与转交按 [COD 文本引用规则](../../../../docs/devSpec/code-structure.md#21-已有文字通过引用传递)设计：Prompt 说明当前合法引用及新增语义字段，恢复原文由 Runtime 承担，不要求模型重抄正文证明身份或保真。
+已有文字的引用与恢复职责由 [COD 文本引用规则](../../../../docs/devSpec/code-structure.md#21-已有文字通过引用传递)拥有；序列化保留当前合法引用、可读原文和来源对应关系。
 
 只有明确的行为保持迁移才要求实际发送字节不变。修复已知语义缺陷按产品变更取得证据、更新版本，不能同时声称保持字节。
 

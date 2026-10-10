@@ -12,7 +12,7 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `ANSWER-NORMATIVE-SCOPE-001`：行为有据但规范性质归属缺证仍放行 | [实际新失败与两条候选反例](../normative-scope-attribution.md#2026-10-08-章节规范性限定未取证) | [规范性归属方案复审](normative-context-acquisition.md) |
+| `ANSWER-NORMATIVE-SCOPE-001`：最简字段保持；A6 标签独立修正，旧成绩保留。Source v7 正在验证实际断言及缺证报告口径，A2 说明扩张为明确目标 | [原正式结果](../normative-scope-attribution.md#2026-10-08-章节规范性限定未取证)、[原封存成绩](normative-context-acquisition.md#六项直接分类的最终结果) | [标签审定与最小修正](normative-context-acquisition.md#标签审定与实际断言忠实性的最小修正) |
 | `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验与修订反馈分工](final-revision-comparison.md) |
 | `RESEARCH-SELECTION-USAGE-COMMIT-001`：后置写作或选证输出失败造成已完成用量漏计 | [正式用量差额](../research-selection-usage-commit.md) | [已完成选证用量的及时提交](research-selection-usage-commit.md) |
 | `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：单次输出截断阻断正式研究 | [正式选证失败](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [研究请求采用服务方默认输出额度](research-provider-output-default.md) |
