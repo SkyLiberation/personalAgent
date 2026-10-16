@@ -170,8 +170,11 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     response_format: dict[str, object] | None = None
     extra_body: dict[str, object] | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+    max_output_repairs: int = 1
 
     def __post_init__(self) -> None:
+        if self.max_output_repairs < 0:
+            raise ValueError("output repair budget must be nonnegative")
         if not self.context_projection_ref.strip():
             raise ValueError("model request requires an explicit context projection reference")
         if self.context_projection_ref.startswith("inline:"):

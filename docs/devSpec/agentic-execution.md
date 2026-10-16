@@ -48,6 +48,8 @@ Plan 协议必须遵守以下责任边界：
 
 FinalMessage 不得通过重复枚举全部 Plan Step ID 来替代 Verifier。工具成功、Plan 状态、模型自述和固定预算也都不能替代 Semantic Verification 或 Completion Gate。
 
+研究模型在同一研究版本提交的完整 `final_answer` 属于最终交付提议。Runtime 只将该字段的确切正文与引用恢复为 `FinalMessage`，按同版本统一核验和 Completion 交付；字段缺失时保存中间进展，继续研究。该恢复不生成答案，也不增加独立汇总或第二次语义核验。
+
 ## 3. Tool、Command、digest 与 Receipt
 
 是否形成 Command 按[根规范第 2.4 节](../../AGENTS.md#24-决策执行与完成不得混装)判断；禁止为形式统一持久化只读、低风险且可安全重试的 ToolCall。

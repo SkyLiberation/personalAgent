@@ -4,13 +4,13 @@
 
 ## 解决机制
 
-研究来源核验消费当前整条 draft、全部已绑定原文及 Runtime 无损派生的片段目录。`ResearchSupportReport` 每项反馈分别返回 `unsupported_assertion`、`supported_scope`、`missing_premise`、相关 `evidence_ids` 及片段首尾 ID，明确草稿断言、已有支持与尚缺前提。模型输出定位 ID，Runtime 检查当前片段范围及证据身份，不要求重抄旧句。
+研究来源核验消费当前整条 `draft`、全部已绑定原文、Runtime 无损派生的片段目录及真实返回视图。`ResearchSupportReport` 每项反馈使用 `category`、`error_description`、`evidence_ids` 和片段首尾 ID；说明共同交代草稿断言、已有支持及缺失前提，不再保留三个重复解释字段。当前契约由[证据用途固化记录](../completed/source-evidence-purpose.md)及生产类型拥有。模型输出定位 ID，Runtime 检查当前片段范围及证据身份，恢复原文后交给消费者。
 
 Runtime 从该报告的原始绑定恢复相关 evidence ID 的实际原文，作为 `source_feedback` 交给正式选证模型和写作者。写作者先核对原文，再选择收窄、删除无据部分、按支持范围改写、改引用或取证，保留有据内容及用户所需事实。反馈解释只描述修订任务；新事实和否定必须来自实际原文，某个主体缺证不能推出没有任何主体。
 
 ## 防护与责任
 
-研究反馈采用唯一 typed 契约，替换研究路径的平面 OverreachReport；普通整稿核验保留自身输出契约，双方共享同一来源支持判据正文。未修改普通 Prompt 的语义字节。反馈中的片段 ID 绑定当前整条 claim，证据 ID 只从该次原始核验输入恢复，来源 URL 继续由执行来源投影。
+研究反馈采用唯一 typed 契约，普通整稿核验保留自身输出契约。反馈中的片段 ID 绑定当前整条 `claim`，证据 ID 只从该次原始核验输入恢复，来源 URL 继续由执行来源投影。本条引用用于支持外部事实，全部真实返回视图用于核对稿件对本次取得范围的表述，不能相互替代。
 
 片段合并和已有引用保持由 Runtime 执行。正文与新增引用的交接由[原子修订完成记录](../completed/claim-atomic-evidence-revision.md)拥有。修订后核验整条 claim 中的每项事实，包括新增否定与解释；无据替换继续返回反馈。事实覆盖及最终用户结果由各自 Verifier 判断。反馈扩展接入原来源请求，不新增核验阶段。
 
@@ -24,3 +24,17 @@ Runtime 从该报告的原始绑定恢复相关 evidence ID 的实际原文，�
 真实 c1 将特定主体缺证扩大为任意主体缺失，下一修订收窄后来源通过；c7 曾新增无据范围。typed 反馈和原文已经送达，首次语义修订仍需验证，不能继续叠加同义提示。实际输入及修订由[2026-10-01 归档](../../../.tmp/research-source-reuse-repair-20261001/repair-audit.json)保留。
 
 正文与新增依据分轮提交的子问题由[完成记录](../completed/claim-atomic-evidence-revision.md)唯一拥有。该契约继续保留，本候选只处理支持范围反馈被改写成更广否定或新无据声明；核验范围误读由[一致性问题](../claim-verifier-consistency.md)独立归因。下一样本保持真实反馈、原文与 thinking，连续核对修订语义、未受影响事实及原用户要求。
+
+## 2026-10-11 实际修订与核验问题的分工
+
+当前条件连续链的c1、c4原缺项已通过真实反馈修订。c4新增的限定否定曾被Source以相邻补充输入流程要求澄清；此项核验错误及证据用途混用已由[固化记录](../completed/source-evidence-purpose.md)拥有，不能把它认作writer事实错误或在本候选中继续维护核验修正。原支持范围修订问题仍按自身真实反例及验收边界保留，当前整份后续核验由[原链设计](../completed/source-proof-boundary-isolation.md#生产接入与真实消费)拥有。
+
+## 2026-10-13 新增对象前提的真实修订反例
+
+正式 P1 的实际连续消费中，writer 修复 c6 三项缺证时新增了“按 output schema 校验结构化结果”。selector 已选中包含该对象前提的完整 d5:190–192，writer 却只提交 d5:192 的 this schema 孤句；后置 Source 正确报告指代前提缺证。这是“修订扩大实际声明、提交引用没有同步支持”的当前真实反例，不是分类器失效；新型对象身份前提由现有证据充分性点覆盖，无须新增分类。完整输入、实际决定、源码身份和一次传输失败由[当前消费设计](claim-supported-scope-repair.md#2026-10-13-新增对象前提的真实修订反例)及[密封终态](../../../.tmp/source-c6-transport-continuation-20261013/REPORT.json)拥有。
+
+现有反馈循环已有补引用及限缩出口。本轮先按已定位责任验证真实 selector／writer 能否消费精确反馈，保留旧修正计数与失败，不默认追加 Prompt、字段或代码对原文前提的语义推导；未取得当前完整 Source 与 Coverage 前不宣布该修订已收敛。
+
+## 2026-10-14 补引用同时新增错误组织归属
+
+新正式 `irun_e52728e51bbe47aa` 的 c5 收到三项真实标题缺证反馈。selector 选中 Clients SHOULD／Servers MUST 引导行，writer 实际追加引用，同时给正文新增“这三项均列在 Clients SHOULD 标题之下”。其中 outputSchema 的结构化结果校验实际位于另一小节，Source 据本条已绑定原文准确指出事实冲突，复核逐字维持。原引用缺口已补，新写作事实不成立；该有效反馈可以由删除错误归属修复，预算停止前没有执行下一次修订。当前属于正常待修，不证明核验反馈阻断研究或必须改写作 Prompt。完整真实输入、同轨迹推理与一次中立追问由[复审设计](normative-context-acquisition.md#两项中立决策追问预声明)拥有，原始预算失败及其他已验边界保持。

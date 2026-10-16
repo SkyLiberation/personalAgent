@@ -55,3 +55,34 @@ personalAgent 的发布证据仍由[测试、评估、观测与安全规范](../
 ADK 的轨迹匹配可要求相同工具与参数顺序，LangSmith 示例也允许参考步骤比对；这些做法只适用于路径本身属于契约的对象。本项目开放研究任务不据此固定搜索顺序、调用次数或选用工具。借鉴其分层诊断，而不照搬固定轨迹评分或示例中的模拟执行。涉及模型前置依赖时仍需连续真实输出，单步定位不能替代完整任务验证。
 
 协议合法率、执行成功率与语义修复率必须分别命名；结构化 JSON 动作的结果也不能冒充供应商原生 function calling 成功率。一次轨迹内的多次调用并非独立任务样本，少量调用只能说明已观察到的失败模式，不能外推稳定性。外部资料没有为本项目提供通用合格阈值，阈值必须由本项目预声明的结果契约决定。
+
+## 5. 核验波动与重复阻塞的处理机制
+
+2026-10-12 核对以下独立机制。它们分别处理评测、核验输入、循环控制与恢复，不构成消除 LLM 随机性的统一保证。及时检索和采用准入由 [EVD 重复阻塞复审](../devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)拥有，本节只保存外部依据。
+
+| 实现与证据身份 | 已核对的机制 | 可借鉴范围与限制 |
+| --- | --- | --- |
+| Anthropic 官方工程文章，2026-01-09，B 级：[Agent evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) | 区分至少一次成功的 `pass@k` 与所有试次成功的 `pass^k`；用清楚标准、合法与错误对照校准模型评分 | 一致性主张须在实验前定义试次与判据；不能在旧用例通过后临时追加可靠性门槛，也不能反复采样只留一次成功 |
+| Anthropic Managed Agents，官方动态文档于本日复核，A 级：[Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes) | Grader 使用独立上下文，按明确 rubric 核查交付物并把反馈送回 Agent；`max_iterations` 限制修订循环 | 隔离实现者自评、逐项核验结果和有界修订；独立上下文不能保证语义判断正确，不自动要求按每类新建模型调用 |
+| Anthropic 官方动态文档于本日复核，A 级：[Develop tests](https://platform.claude.com/docs/en/test-and-evaluate/develop-tests) | 按判断性质选择代码、人工或模型评分，模型评分先检验可靠性再扩大使用 | 结构、身份等确定性约束与开放语义分工；其精确词面示例不适合直接判断本项目含混的规范性质 |
+| OpenHands software-agent-sdk 公共提交 `c0471362d340ade1e334595ba98417108b415e88`，A 级：[StuckDetector](https://github.com/OpenHands/software-agent-sdk/blob/c0471362d340ade1e334595ba98417108b415e88/openhands-sdk/openhands/sdk/conversation/stuck_detector.py#L208-L244)、[LocalConversation](https://github.com/OpenHands/software-agent-sdk/blob/c0471362d340ade1e334595ba98417108b415e88/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py#L744-L768) | 启用检测时，相同动作连续报错达到阈值产生一次纠正反馈；再重复则判为 `STUCK`，运行循环据状态退出 | 借鉴有界纠正和确定停止；这是动作错误循环检测，不是规范性质核验，也不是自动检索外部方案的实现。该坐标是已核对公共提交，不宣称最新发布版 |
+| LangGraph 官方动态文档于本日复核，A 级：[Checkpointers](https://docs.langchain.com/oss/python/langgraph/checkpointers) | 恢复复用已完成节点写入；显式 replay 从检查点后重新执行，包括 LLM 调用 | 明确恢复与重新判决的边界；无效结构响应尚不是已接受业务结果，不能为保留语义而直接将其作为合法发现消费 |
+
+这些资料支持先明确可判关系与评分边界、控制重复成本、保留真实结果的方向。新增多评审、模型替换或恢复协议仍需本工程真实失败、最小因果方案及预声明验收；外部品牌或机制存在本身不是收益证据。
+
+## 6. 研究核验与汇总的职责边界
+
+2026-10-15 按“研究是否足够、依据是否支持、汇总是否忠实”复核以下资料。前两项是独立实现的 A 级官方动态文档；源码项固定提交，不称作最新版本。
+
+| 实现与坐标 | 实际机制、消费者及生命周期 | 本工程取舍 |
+| --- | --- | --- |
+| Anthropic Managed Agents，[Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)，A 级 | Grader 在独立上下文按 rubric 检查交付物，把结果反馈给执行 Agent；迭代受 `max_iterations` 限制，失败增加实际修订成本 | 采纳明确被评产物、验收要求及反馈消费者。独立上下文用于隔离实现过程，不据此增设 Source 后复核，也不推定每个判据都应单独调用 |
+| Anthropic，[Multi-agent research system：Effective evaluation](https://www.anthropic.com/engineering/multi-agent-research-system)，B 级官方工程文章 | 研究结果按事实准确性、引用准确性、完整性等 rubric 评分；团队比较过多个评审，报告其单次 LLM 调用更符合人工判断 | 支持在一次判断中保留不同判据的设计方向。这是其研究评测结果，不是通用优劣结论，也不提供本工程 Source／Final 的生产协议或准确率保证 |
+| LangSmith，[Evaluate a RAG application](https://docs.langchain.com/langsmith/evaluate-rag-tutorial#define-evaluators)，A 级 | 评测分别比较回答与问题、回答与资料；判据是数据集评估结果，由实验消费，不产生生产权限或完成状态 | 采纳目标充分性与证据支持的语义区别。本工程由同一研究核验器处理，仍按类别及真实用例分别验收；资料没有证明合并调用必定更准或更省 |
+| Open Deep Research，提交 `1b7d2e80db9faa586165c60e09096dbbfd483a64`，A 级：[supervisor／final_report_generation](https://github.com/langchain-ai/open_deep_research/blob/1b7d2e80db9faa586165c60e09096dbbfd483a64/src/open_deep_research/deep_researcher.py#L607-L657)、[报告 Prompt](https://github.com/langchain-ai/open_deep_research/blob/1b7d2e80db9faa586165c60e09096dbbfd483a64/src/open_deep_research/prompts.py#L228-L248) | 研究 supervisor 收集结果后交接 notes；报告节点消费 research_brief、消息及 findings 成文。节点另有输出预算及超限恢复，研究停止条件也可能来自迭代耗尽 | 采纳依据原研究问题和完整笔记组织整体回答；本工程的事实综合由现有研究 writer 承担。不复制多智能体拓扑、笔记压缩或超限裁剪；该代码没有提供本工程的 typed Source 审批与 Final 融合回执，研究停止也不能直接充当研究合格 |
+
+2026-10-15 补充核对 STORM 官方公开 `main` 源码，A 级动态坐标：[提纲生成](https://github.com/stanford-oval/storm/blob/main/knowledge_storm/storm_wiki/modules/outline_generation.py)、[正文生成](https://github.com/stanford-oval/storm/blob/main/knowledge_storm/storm_wiki/modules/article_generation.py)。提纲节点消费收集到的研究对话；正文节点按主题、章节提纲和检索资料成文。采纳由完整问题组织材料及写作的机制，不据此新增提纲事实、关系图、多智能体或独立模型阶段；该实现没有本工程的 claims／Source 协议，也不能证明其消除本例漏放。Open Deep Research 仍以上表固定提交解释，不声称最新实现。
+
+同日针对核验再次漏放复核 [LangSmith RAG 评测](https://docs.langchain.com/langsmith/evaluate-rag-tutorial)：回答对问题的 relevance 与回答对原文的 groundedness 是不同比较，其示例分别使用对应输入；[Anthropic outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)把 rubric 应用于实际交付物并限制迭代次数。两者均为 A 级官方动态文档。采纳目标满足与事实有据分别校准、按交付物验收和有界纠正；不照搬多个评测调用或解释字段，也不据此认定“如实说明未知”自动满足本工程的核心目标。用户允许未知的具体边界仍由本任务要求及真实用例决定。
+
+上述资料均未直接规定本工程的统一产物、八类核验及完成契约。该候选依据真实失败和用户最新要求设计，唯一正文见[研究与最终回答统一核验](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。参考实现的模型输出只提供语义判断或正文；权限、原文身份、版本及完成条件仍由各自宿主负责，本工程不从参考架构继承权限或恢复保证。

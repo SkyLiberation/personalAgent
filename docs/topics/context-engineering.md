@@ -183,7 +183,7 @@ Conversation 从原 Interaction Journal 恢复消息、工作清单和已提交�
 
 ## 有证据的对话上下文
 
-个人知识由模型按需选择 `search_personal_knowledge` 后，以只读证据进入同一 Conversation；外部工具返回实际执行结果和可见来源。普通交付、研究 claims 与独立汇总按各自相位消费这些事实，不运行第二条 Ask 成文链。检索资源和组件评测的边界见[检索专题](retrieval-reasoning.md)，产品检查点见[Grounded Answer 链路](../workflow/capture-ask-model-flow.md)。
+个人知识由模型按需选择 `search_personal_knowledge` 后，以只读证据进入同一 Conversation；外部工具返回实际执行结果和可见来源。普通交付与同版本研究 claims、最终回答按各自路径消费这些事实；研究只保留当前完整版本和适用反馈，不再经过独立汇总。检索资源和组件评测的边界见[检索专题](retrieval-reasoning.md)，产品检查点见[Grounded Answer 链路](../workflow/capture-ask-model-flow.md)。
 
 ## 上下文腐化防护
 

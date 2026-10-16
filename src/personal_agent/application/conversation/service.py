@@ -56,18 +56,18 @@ from .context_materialization import (
 )
 from .artifact_search import ArtifactSearchPort, SearchActionOutputArguments, search_artifact_text
 from .artifact_reading import ReadArtifactArguments, read_artifact_text
-from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, materialize_reference_sources, selected_citation_ids
+from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, selected_citation_ids
 from .interaction_prompt import build_interaction_system_prompt
 from .final_revisions import FinalRevisionError, materialize_final_revision
 from .research import (
     InitialResearchSubmission, ResearchSubmission, CreateClaims, ReviseClaimFragment,
     ReplaceClaimReferences, AddClaims, DeleteClaim, RecheckClaims, ReturnToActions,
-    StopResearch, accepted_basis, admit_claim_change, current_claims, verification_steps,
+    StopResearch, accepted_research, admit_claim_change, current_claims, verification_steps,
     has_research_source_text, in_research_mode, ResearchEvidenceSelection, InitialResearchEvidenceSelection, research_request,
     editable_research_claims, research_submission_type, applicable_research_review,
     research_review_context, research_goal_requirements, validate_research_selection,
 )
-from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview, ResearchReopening
+from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
 from .source_reading import materialize_source_reading_state
 from .model_actions import (
     build_model_action_definitions,
@@ -287,9 +287,9 @@ class ConversationService:
             ))
         else:
             inputs = []
-        # The injected model binding is stable for this invocation; resumed work
-        # establishes a new eligibility boundary without a second cache owner.
-        source_review_start_index = len(inputs)
+        # The review owner checks its exact original input and current version.
+        # Restarting this invocation does not change those persisted facts.
+        source_review_start_index = 0
         execution_order = list(prior.execution_order if prior else ())
         concurrent_batches = list(prior.concurrent_batches if prior else ())
         context_composition = list(prior.context_composition if prior else ())
@@ -516,6 +516,7 @@ class ConversationService:
                         ConversationAnswerSegment(text=decision.reason),
                     ))
                 else:
+                    approved = None
                     if isinstance(decision, ReturnToActions):
                         inputs.append(DecisionFeedback(
                             action_id="research-return", reason_code="research_needs_evidence",
@@ -535,11 +536,20 @@ class ConversationService:
                             ))
                         else:
                             inputs.append(claims)
+                            has_final_answer = bool(claims.final_answer) and bool("".join(
+                                segment.text for segment in claims.final_answer
+                            ).strip())
+                            if not has_final_answer:
+                                inputs.append(DecisionFeedback(
+                                    action_id="research-final", reason_code="final_answer_missing",
+                                    message="研究进展已保存，但尚未提交完整最终回答，不能交付。",
+                                    required_repair="继续取证或沿当前版本提交 final_answer；仅修改回答可用 recheck_claims。",
+                                ))
                             checks = verification_steps(
                                 claims, tuple(inputs), messages, review_criteria,
                                 reuse_start_index=(len(inputs) if isinstance(decision, RecheckClaims)
                                                    else source_review_start_index),
-                            )
+                            ) if has_final_answer else iter(())
                             step = next(checks, None)
                             while step is not None:
                                 self._commit(
@@ -557,12 +567,15 @@ class ConversationService:
                                 else:
                                     inputs.append(step)
                                     step = next(checks, None)
-                    self._commit(
-                        run_ref, principal, messages, inputs, usage, execution_order,
-                        concurrent_batches, context_composition,
-                        review_criteria=review_criteria, working_plan=working_plan,
-                    )
-                    continue
+                            approved = accepted_research(inputs, reuse_start_index=source_review_start_index)
+                    if approved is None:
+                        self._commit(
+                            run_ref, principal, messages, inputs, usage, execution_order,
+                            concurrent_batches, context_composition,
+                            review_criteria=review_criteria, working_plan=working_plan,
+                        )
+                        continue
+                    decision = FinalMessage(disposition="answer", segments=approved.final_answer)
             if isinstance(decision, FinalMessage):
                 if (
                     review_criteria.plan_review_required
@@ -624,7 +637,22 @@ class ConversationService:
                         ),
                         working_plan=working_plan,
                     )
-                if review_criteria.requires_review and decision.disposition == "answer":
+                if current_claims(inputs) is not None and decision.disposition == "answer":
+                    approved = accepted_research(inputs, reuse_start_index=source_review_start_index)
+                    if approved is None or decision.segments != approved.final_answer:
+                        inputs.append(DecisionFeedback(
+                            action_id="research-completion", reason_code="research_answer_not_approved",
+                            message="只能交付当前完整研究版本经统一核验通过的确切回答。",
+                            required_repair="沿当前研究版本修订或补证并重新核验，不能另写答案绕过研究。",
+                        ))
+                        finalization_pending = True
+                        self._commit(
+                            run_ref, principal, messages, inputs, usage, execution_order,
+                            concurrent_batches, context_composition,
+                            review_criteria=review_criteria, working_plan=working_plan,
+                        )
+                        continue
+                elif review_criteria.requires_review and decision.disposition == "answer":
                     inputs.append(SubmittedFinal(
                         action_id=f"final-{usage.model_turns}",
                         resource_ref=ResourceRef(resource_id=f"{run_ref}:final", resource_type="conversation_final",
@@ -648,16 +676,7 @@ class ConversationService:
                     inputs.append(result.interaction_input)
                     execution_order.append(result.action_id)
                     if verified is None:
-                        research_basis = accepted_basis(inputs)
-                        receipts = observed_receipts(
-                            (result.interaction_input,), capability_names=frozenset({_VERIFICATION_CAPABILITY}),
-                        )
-                        if research_basis is not None and receipts and receipts[-1].research_feedback.strip():
-                            inputs.append(ResearchReopening(
-                                resource_ref=research_basis.claims.resource_ref,
-                                feedback=receipts[-1].research_feedback,
-                            ))
-                        finalization_pending = research_basis is not None
+                        finalization_pending = False
                         # Verifier owns acceptance, not the next action.
                         # Check the hard budget before the model chooses again.
                         self._commit(
@@ -1521,19 +1540,6 @@ class ConversationService:
                 )
             ],
         }
-        research_basis = accepted_basis(verification_inputs)
-        if research_basis is not None:
-            approved_ids = {source.evidence_id for source in research_basis.sources}
-            final_ids = {source.evidence_id for source in materialize_reference_sources(decision.segments, verification_inputs)}
-            if not final_ids.issubset(approved_ids):
-                return None, _ActionResult(action_id, DecisionFeedback(
-                    action_id=action_id, action_name="final_message", reason_code="final_reference_outside_research",
-                    message="汇总稿引用了当前已核验 claims 之外的来源位置。",
-                    required_repair="使用已核验研究所含的引用坐标修订完整汇总稿。",
-                )), usage
-            arguments["research_basis"] = research_basis.model_dump(mode="json")
-            arguments["research_segments"] = [segment.model_dump(mode="json") for segment in decision.segments]
-            arguments["source_reading_state"] = []
         execution_scope = ExecutionScope(
             principal=principal,
             execution_id=run_ref,
@@ -1582,9 +1588,6 @@ class ConversationService:
             return None, result, usage
         if decision.message.strip() != passed.verified_draft:
             raise ValueError("verified receipt must bind the submitted answer")
-        expected_research_ref = research_basis.claims.resource_ref if research_basis is not None else None
-        if passed.research_ref != expected_research_ref:
-            raise ValueError("verified receipt must bind the current approved research revision")
         return (decision, result, usage)
 
     @staticmethod
@@ -1652,13 +1655,11 @@ class ConversationService:
             () if finalization_mode else build_model_action_definitions(capabilities)
         )
         claims = current_claims(inputs)
-        basis = accepted_basis(inputs) if finalization_mode else None
         research_mode = in_research_mode(
             inputs, finalization_mode=finalization_mode,
             requires_review=review_criteria.requires_review,
         )
         prompt_name = (
-            "conversation.research.synthesis" if basis is not None else
             "conversation.research.writer" if research_mode else
             "conversation.final" if finalization_mode else "conversation.action"
         )
@@ -1676,7 +1677,7 @@ class ConversationService:
             interaction_mode=interaction_mode,
             finalization_mode=finalization_mode,
         )
-        if research_mode or basis is not None:
+        if research_mode:
             system_content = get_prompt(prompt_name).template
         visible_messages = [{"role": "system", "content": system_content}]
         conversation_content = [item.model_dump(mode="json") for item in messages]
@@ -1741,21 +1742,6 @@ class ConversationService:
                 default=str,
             )
             visible_messages.append({"role": "system", "content": typed_inputs_content})
-        if basis is not None:
-            # Independent synthesis receives no acquisition history, raw sources or researcher instructions.
-            latest_final = next((item for item in reversed(inputs) if isinstance(item, SubmittedFinal)), None)
-            final_feedback = next((item for item in reversed(inputs) if (
-                isinstance(item, ActionObservation) and item.capability_id == _VERIFICATION_CAPABILITY
-            ) or (isinstance(item, DecisionFeedback) and item.action_name == "final_message")), None)
-            typed_inputs_content = json.dumps({
-                "conversation": conversation_content,
-                "research_basis": basis.model_dump(mode="json"),
-                "success_criteria": review_criteria.criteria,
-                "latest_final": latest_final.model_dump(mode="json") if latest_final else None,
-                "final_feedback": final_feedback.model_dump(mode="json") if final_feedback else None,
-            }, ensure_ascii=False)
-            visible_messages = [{"role": "system", "content": system_content},
-                                {"role": "user", "content": typed_inputs_content}]
         provider_protocol_error = None
         try:
             response = self._generate_model(
@@ -1769,7 +1755,7 @@ class ConversationService:
                         messages=visible_messages,
                     ),
                     temperature=0,
-                    max_tokens=32_768,
+                    max_tokens=131_072 if research_mode else 32_768,
                     kind=("structured" if finalization_mode else "tool_calling"),
                     action_definitions=action_definitions,
                     action_choice=(None if finalization_mode else "required"),
@@ -1795,7 +1781,7 @@ class ConversationService:
             # By subtraction, so the two segments are disjoint by construction and
             # always sum to the prompt that was sent.
             system_prompt_other_chars=len(system_content) - len(capability_projection),
-            conversation_messages_chars=0 if basis is not None else sum(
+            conversation_messages_chars=sum(
                 len(item["content"]) for item in conversation_content
             ),
             typed_inputs_chars=len(typed_inputs_content),

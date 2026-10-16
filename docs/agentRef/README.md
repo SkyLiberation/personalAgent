@@ -15,7 +15,7 @@
 | Plan、Todo、任务分解、计划审批、计划修订 | [计划与任务管理](planning-and-task-management.md) | 如何把研究、计划、执行和完成分开 |
 | 工具调用、权限、审批、沙箱、Hook、副作用 | [工具执行与安全](tool-execution-and-safety.md) | 如何限制能力、准入动作并生成执行事实 |
 | Subagent、Handoff、并行、团队、委托 | [多智能体与委托](multi-agent-and-delegation.md) | 如何隔离角色与上下文，并明确最终结果 owner |
-| Checkpoint、resume、replay、durable execution、长任务 | [运行恢复与长任务](runtime-recovery.md) | 如何恢复必要状态而不重复副作用 |
+| 长任务、增量进展、跨上下文接续、Checkpoint、resume、replay、durable execution | [运行恢复与长任务](runtime-recovery.md) | 如何保留目标与有效成果并收敛交付；跨恢复边界时如何避免丢失事实或重复副作用 |
 | Skill、Plugin、MCP、Extension、能力发现 | [技能与扩展](skills-and-extensibility.md) | 如何按需披露可复用流程与外部能力 |
 | Trace、Observation、Review、Verifier、评测 | [验证与可观测](verification-and-observability.md) | 如何区分运行记录、语义验证和用户完成 |
 

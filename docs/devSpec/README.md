@@ -12,19 +12,19 @@
 
 | 入口 | 唯一主讲内容 |
 | --- | --- |
-| [EVD：变更证据与设计准入](change-evidence.md) | 设计顺序、基线与因果证据、连续模型链、复杂度、机制比较、阻塞复审、优化验收与重新打开 |
+| [EVD：变更证据与设计准入](change-evidence.md) | 设计顺序、基线与因果证据、连续模型链、验证额度、复杂度、机制比较、阻塞复审、优化验收与重新打开 |
 | [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、派生缓存与投影、契约一致性与生产可达性 |
 | [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan、Admission、执行、Verification、Completion、Command 与恢复协议 |
-| [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入与已有推理记录审计、反馈表达、存储边界、能力投影与服务方等价绑定 |
+| [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入与 think 审计、中立追问、反馈表达、存储边界、能力投影与服务方等价绑定 |
 | [COD：代码组织与实现约束](code-structure.md) | 可读性优先、功能模块化与开发上下文、类型与不变量、已有文字引用、职责与编排、错误、依赖注入、命名与通用 Prompt 契约 |
 | [QLT：测试、评估、观测与安全](quality-security.md) | 验证方式、替身边界、Golden Set、E2E 阻塞、核验漏放的最小充分上下文诊断与任务设计复审、安全与审计 |
 | [REL：迁移、ADR 与完成门禁](migration-release.md) | 兼容例外、迁移、ADR 与分类完成检查 |
 | [DOC：文档模块规范](../AGENTS.md) | 文档事实治理、生命周期与检查 |
 | [EVM：评测模块规范](../../evals/AGENTS.md) | 用例登记、比较身份、归档、历史证据复用、运行声明与成本控制 |
 | [生产 Prompt 模块规范](../../src/personal_agent/kernel/prompt_templates/AGENTS.md) | `PromptSpec` 注册、序列化、版本与消费检查 |
-| [REF：优秀智能体能力组件参考](../agentRef/README.md) | 外部机制检索坐标与证据范围，不拥有工程规则或采用结论 |
+| [REF：优秀智能体能力组件参考](../agentRef/README.md) | 外部机制检索坐标、重复阻塞的同类方法检索与证据范围，不拥有工程规则或采用结论 |
 
-文档目录由[文档索引](../README.md)拥有，中文表达由[写作规范](../chinese-writing-spec.md)拥有，Future 与优化记录的生命周期分别由 [Future 索引](../future/README.md)和[优化索引](../optimization/README.md)拥有。
+文档目录由[文档索引](../README.md)拥有，中文表达及设计 Spec 结构由[写作规范](../chinese-writing-spec.md#62-spec-结构与需求追溯)拥有，Future 与优化记录的生命周期分别由 [Future 索引](../future/README.md)和[优化索引](../optimization/README.md)拥有。
 
 ## 3. Codex 官方机制与本工程选择
 
@@ -54,5 +54,7 @@
 门槛是已登记样本全部命中、9 个任务域完整、入口一致且满足尺寸要求。样本总数以 JSON 为准，实际尺寸与链接数量以命令输出为准，不在规范重复维护历史快照。
 
 任务样本采用关键词启发式，只检查导航首选，不代表 Code Agent 的实际语义识别或完整任务域并集。目录样本检查文件位置与适用入口；不加载模型、不运行产品评测或单元测试。报告命中数、样本数与误判，尺寸变化只与本次修改前的工作树比较，不用历史拆分快照计算当前收益。
+
+实际执行重复阻塞方案复审时，主流程由 EVD 拥有，外部机制查询另读 REF；首选 EVD 不代表可以跳过 REF。只查询外部机制的动作首选 REF，即使其背景是重复阻塞。导航样本分别覆盖实际复审及检索动作，不能只凭背景中的“复审”或单个“检索”词决定主流程。
 
 脚本检查 Markdown 标题生成的锚点，HTML 自定义锚点、表格含义和 Mermaid 另按 [DOC](../AGENTS.md#5-提交前检查)审读。机械检查不能替代规则一致性评审。

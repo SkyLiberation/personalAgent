@@ -12,7 +12,9 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `ANSWER-NORMATIVE-SCOPE-001`：最简字段保持；A6 标签独立修正，旧成绩保留。Source v7 正在验证实际断言及缺证报告口径，A2 说明扩张为明确目标 | [原正式结果](../normative-scope-attribution.md#2026-10-08-章节规范性限定未取证)、[原封存成绩](normative-context-acquisition.md#六项直接分类的最终结果) | [标签审定与最小修正](normative-context-acquisition.md#标签审定与实际断言忠实性的最小修正) |
+| `RESEARCH-GOAL-COVERAGE-001`：claims 与最终回答统一产物、单次核验；C1、G2 及原目标正式续验各 1/1；其余既定边界和新 r11 反馈误读分别记录 | [正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
+| `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：原产品预算未交付；按用户要求先扩预算验证完整交付，输入优化后置 | [原预算正式失败](../../../.tmp/coverage-reference-production-target-20261015/REPORT.json) | [预算复审与扩预算验证](research-input-budget.md) |
+| `ANSWER-NORMATIVE-SCOPE-001`：自动复核已删除，真实反馈继续修订；最新 target 原预算未交付 | [已验边界及 c4 闭环](../completed/source-proof-boundary-isolation.md) | [范围校准与真实反馈消费](normative-context-acquisition.md#用户确认范围后的-c7-实际修订验收) |
 | `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验与修订反馈分工](final-revision-comparison.md) |
 | `RESEARCH-SELECTION-USAGE-COMMIT-001`：后置写作或选证输出失败造成已完成用量漏计 | [正式用量差额](../research-selection-usage-commit.md) | [已完成选证用量的及时提交](research-selection-usage-commit.md) |
 | `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：单次输出截断阻断正式研究 | [正式选证失败](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [研究请求采用服务方默认输出额度](research-provider-output-default.md) |

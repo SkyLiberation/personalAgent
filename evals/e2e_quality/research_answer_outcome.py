@@ -184,7 +184,7 @@ def research_answer_request(
         context_projection_ref=sealed_context_projection_ref(
             purpose="research_answer_outcome_offline", messages=messages,
         ),
-        sensitivity="public", temperature=0, max_tokens=32_768,
+        sensitivity="public", temperature=0, max_tokens=131_072,
         metadata={"reference_revision": reference_set.revision},
     )
 

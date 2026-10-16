@@ -27,12 +27,12 @@ messages + authenticated principal
   -> governed Tool/Agent/Application action execution
   -> ActionObservation | DecisionFeedback
   -> returned source text opens research submission / model-selected prepare_final (within budget)
-  -> external research: typed claims -> automatic research verification
-  -> independent synthesis / ordinary conversation: typed FinalSubmission
-  -> Semantic Verification -> Completion -> send or continue
+  -> 研究：同版本 claims 与 final_answer -> 统一核验 -> Completion
+  -> 普通：FinalSubmission -> 原整稿核验 -> Completion
+  -> 交付确切通过的回答，或继续修订
 ```
 
-外部研究的 claim 版本由原 Interaction Journal 保存；模型自主取证、编辑，运行时自动复验并计入原预算。研究通过才构造独立汇总 Context，最终正文仍经 Verification 和 Completion。当前生产接入、例外范围及正式验收状态见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
+外部研究的 claims 与最终回答由同一版本和原 Interaction Journal 保存；模型自主取证和编辑，统一核验通过后直接经 Completion 交付确切回答。全部调用计入原预算，不再构造独立汇总或研究 Final。当前生产接入、例外范围及正式验收状态见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
 
 模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 
@@ -46,7 +46,7 @@ Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDe
 
 Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answer 为边界，不能从全部步骤 completed 推导；未交付任务的修订保持 Plan 身份。跨轮恢复按同一边界保留该 Plan 的成功执行资料，包括无活动项时的结果。新计划仍遵守 default/auto 审阅规则。整体候选、证据和限制见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
-`FinalMessage` 不再是可以与普通 Tool Call 并列返回的 Provider action。模型在 action phase 可通过无 payload 的 `prepare_final` 请求相位切换；需要核验且非计划审阅的研究任务，在已有真实可引用正文后也由运行时进入研究提交，模型仍可决定继续取证；兼容动作执行后，下一回合不暴露任何 action definitions，研究提交生成 typed `InitialResearchSubmission` / `ResearchSubmission`，独立汇总或普通交付生成 strict typed `FinalSubmission`；其中完整新稿仍是 `FinalMessage`，局部修订由代码还原为完整 `FinalMessage`。Final Prompt 投影冻结审查条件、工作清单语义内容和剩余预算，但不暴露 Plan identity、执行绑定或动作定义。主模板和 request version 统一由 [Prompt Registry](../llm-prompts.md) 拥有。`StructuredModelResponse` 禁止同时携带 typed value 与 action invocations。普通只读工具仍可在一个 action phase 并行调用，这条互斥只约束最终交付。
+`FinalMessage` 不再是可以与普通 Tool Call 并列返回的 Provider action。模型在 action phase 可通过无 payload 的 `prepare_final` 请求相位切换；需要核验且非计划审阅的研究任务，在已有真实可引用正文后也由运行时进入研究提交，模型仍可决定继续取证；兼容动作执行后，下一回合不暴露任何 action definitions，研究提交生成 typed `InitialResearchSubmission` / `ResearchSubmission`，由同一模型携带 claims 与可选最终回答；统一核验通过后 Runtime 从该字段恢复 `FinalMessage`。普通交付生成 strict typed `FinalSubmission`，完整稿或局部修订均还原为 `FinalMessage`。Final Prompt 投影冻结审查条件、工作清单语义内容和剩余预算，但不暴露 Plan identity、执行绑定或动作定义。主模板和 request version 统一由 [Prompt Registry](../llm-prompts.md) 拥有。`StructuredModelResponse` 禁止同时携带 typed value 与 action invocations。普通只读工具仍可在一个 action phase 并行调用，这条互斥只约束最终交付。
 
 当前工作树删除了“有验收标准就已有待改正文和充分材料”的指令，也删除了由此强制非 `answer` 继续迭代的分支。
 验收条件只约束结果，不决定用户任务或证据是否齐全；任务语义与合法 disposition 由模型判断。
@@ -54,7 +54,7 @@ Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answe
 `failed` 不因标准存在而改成成功答案。合法终态不等于满足原用户结果；真实 E2E 已运行，但尚未到达模型 Final，见
 [评测记录](../evals/02-current-case-inventory.md#验收条件不再推导改稿任务的边界修复)。
 
-语义 verifier 注册为 `workflow_activity`：它不进入模型可见能力，也不能通过普通交互入口调用；运行系统通过独立固定流程校验与执行入口生成 `SemanticVerificationReceipt`。Verifier 只聚合 `passed|failed`；运行系统不解读逐判据的失败类别来选择工具相位。预算内的失败把完整 feedback 交还智能体决定修订或继续取证；下一轮已耗尽预算则直接停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和最终交付入口保持可用。
+普通整稿 verifier 注册为 `workflow_activity`，由运行系统调用并生成 `SemanticVerificationReceipt`，不进入模型可见能力。研究统一核验沿 Model Port 返回绑定当前版本的 `ResearchReview`，Completion 不再追加语义调用。Verifier 只聚合 `passed|failed`；运行系统不解读逐判据的失败类别来选择工具相位。预算内的失败把完整 feedback 交还智能体决定修订或继续取证；下一轮已耗尽预算则直接停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和最终交付入口保持可用。
 
 当前代码在每个决策回合的系统 Prompt 中物化剩余 `model_turns`、`tool_calls`、`agent_calls` 和 `tokens`。下一决策调用前，`max_model_turns`、正数 `max_tool_calls` 或 `max_total_tokens` 任一耗尽即返回 typed 预算 `limitation`，保留已提交执行事实；即使模型已经请求 `prepare_final`，也不绕过该检查。预算分支不隐藏工具后追加强制 Final，不启动 Verifier，不生成替代答案；宽限状态与事件字段已删除。`max_tool_calls=0` 仍表示不使用工具，不会跳过正常的无工具回答。上限依据已提交用量检查，不承诺在途请求的最终 token 永不超过数值，也不把停止等同于研究完成。生产证据见[当前评测用例盘点](../evals/02-current-case-inventory.md)，取舍见 [ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)。
 

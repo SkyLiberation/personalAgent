@@ -14,7 +14,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | 目录 | 定位 |
 | --- | --- |
 | [`AGENTS.md`](AGENTS.md) | `docs/**` 的目录级文档治理入口；继承根主规范并链接中文写作与权威索引 |
-| [`chinese-writing-spec.md`](chinese-writing-spec.md) | `docs/` 全目录的中文语法、术语、证据措辞和存量迁移门禁 |
+| [`chinese-writing-spec.md`](chinese-writing-spec.md) | 所有工程文档和对用户回答的表达规范；拥有设计 Spec 结构、需求追溯、证据措辞和存量迁移门禁 |
 | [`devSpec/`](devSpec/README.md) | 根 `AGENTS.md` 与 `CLAUDE.md` 按任务渐进披露的开发、设计、测试、文档和发布细则 |
 | [`agentRef/`](agentRef/README.md) | 按组件组织的外部机制检索与分级参考；不定义本工程现状、路线或采用结论 |
 | `topics/` | 当前入口、运行系统、工具、记忆、上下文、检索与验收的权威专题 |

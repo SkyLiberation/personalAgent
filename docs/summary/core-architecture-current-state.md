@@ -42,8 +42,8 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
-6. 外部研究在适用条件下提交版本化 claims，经来源支持与事实覆盖后进入独立汇总；普通交付直接生成 typed `FinalSubmission`。
-7. 运行系统还原完整 `FinalMessage`，经过适用的 Verification 和 Completion 后才交付。
+6. 外部研究提交同版本 claims 与最终回答，由统一核验检查来源、两者一致性及目标满足；普通交付生成 typed `FinalSubmission`。
+7. 运行系统按各自路径完成语义核验和 Completion，仅交付确切通过的 `FinalMessage` 正文。
 
 当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
 

@@ -183,8 +183,6 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     draft_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     success_criteria: tuple[str, ...] = Field(min_length=1)
     criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    research_ref: ResourceRef | None = None
-    research_feedback: str = ""
 
 
 __all__ = [

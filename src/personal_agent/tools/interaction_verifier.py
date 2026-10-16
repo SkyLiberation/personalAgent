@@ -12,15 +12,10 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     sealed_context_projection_ref,
 )
-from personal_agent.capabilities.contracts.research import (
-    ResearchBasis,
-    ResearchFinalReport,
-)
 from personal_agent.capabilities.contracts.verification import (
     BoundVerificationCriterionResult,
     CitedDraftUnit,
     CitedSupportRejection,
-    ConversationAnswerSegment,
     OverreachReport,
     SemanticVerificationReceipt,
     SemanticVerificationReport,
@@ -68,34 +63,9 @@ class VerifyInteractionDraftArgs(BaseModel):
     success_criteria: tuple[str, ...] = Field(min_length=1)
     cited_units: tuple[CitedDraftUnit, ...] = ()
     source_reading_state: tuple[SourceReadingState, ...] = ()
-    research_basis: ResearchBasis | None = None
-    research_segments: tuple[ConversationAnswerSegment, ...] = ()
 
     @model_validator(mode="after")
     def check_draft_coverage(self):
-        if self.research_basis is not None:
-            if not self.research_segments or self.source_reading_state:
-                raise ValueError(
-                    "research final verification requires claim-bound segments"
-                )
-            if len(self.cited_units) != len(self.research_segments) or any(
-                unit.draft != segment.text
-                for unit, segment in zip(
-                    self.cited_units, self.research_segments, strict=True
-                )
-            ):
-                raise ValueError(
-                    "research final evidence must bind each exact segment in order"
-                )
-            if (
-                "".join(segment.text for segment in self.research_segments)
-                != self.draft
-            ):
-                raise ValueError(
-                    "research segments must preserve the entire exact draft"
-                )
-        elif self.research_segments:
-            raise ValueError("research segments require a verified research basis")
         if (
             self.cited_units
             and "".join(unit.draft for unit in self.cited_units) != self.draft
@@ -140,19 +110,9 @@ def build_verify_interaction_draft_tool(
         success_criteria: tuple[str, ...],
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
-        research_basis: ResearchBasis | None = None,
-        research_segments: tuple[ConversationAnswerSegment, ...] = (),
     ):
-        prompt = get_prompt(
-            "conversation.research.final_verification"
-            if research_basis is not None
-            else "interaction_verification.system"
-        )
-        support_prompt = get_prompt(
-            "conversation.research.faithfulness"
-            if research_basis is not None
-            else "interaction_verification.source_support"
-        )
+        prompt = get_prompt("interaction_verification.system")
+        support_prompt = get_prompt("interaction_verification.source_support")
         verification_criteria = tuple(
             dict.fromkeys(
                 (
@@ -171,8 +131,6 @@ def build_verify_interaction_draft_tool(
             success_criteria=success_criteria,
             cited_units=cited_units,
             source_reading_state=source_reading_state,
-            research_basis=research_basis,
-            research_segments=research_segments,
         )
         units = verification_input.cited_units or (CitedDraftUnit(draft=draft),)
         # Only writer-submitted evidence reaches either semantic consumer.
@@ -189,21 +147,8 @@ def build_verify_interaction_draft_tool(
                 for state in verification_input.source_reading_state
             ],
         }
-        if verification_input.research_basis is not None:
-            verification_payload = {
-                "draft": draft,
-                "success_criteria": criteria_context,
-                "research_basis": verification_input.research_basis.model_dump(
-                    mode="json"
-                ),
-                "segments": [
-                    segment.model_dump(mode="json")
-                    for segment in verification_input.research_segments
-                ],
-                "cited_units": [unit.model_dump(mode="json") for unit in units],
-            }
         cited_prompt = get_prompt("interaction_verification.cited_support")
-        for unit in units if verification_input.research_basis is None else ():
+        for unit in units:
             if not unit.draft.strip():
                 continue
             cited_messages = [
@@ -263,9 +208,7 @@ def build_verify_interaction_draft_tool(
                 version=prompt.version,
                 messages=messages,
                 output_type=_bound_report_type(
-                    ResearchFinalReport
-                    if verification_input.research_basis is not None
-                    else SemanticVerificationReport,
+                    SemanticVerificationReport,
                     criteria,
                 ),
                 context_projection_ref=sealed_context_projection_ref(
@@ -332,11 +275,7 @@ def build_verify_interaction_draft_tool(
             draft_digest=draft_digest,
             success_criteria=tuple(success_criteria),
             criteria_digest=sha256(criteria_payload.encode("utf-8")).hexdigest(),
-            research_ref=(
-                verification_input.research_basis.claims.resource_ref
-                if verification_input.research_basis is not None
-                else None
-            ),
+
         )
         return tool_response(tool_success(receipt.model_dump(mode="json")))
 

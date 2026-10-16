@@ -33,6 +33,7 @@ from evals.product_baselines.evidence import (
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.infra.structured_model import build_structured_model_client
+from personal_agent.application.conversation.models import InteractionTrace
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.product_e2e]
@@ -153,6 +154,7 @@ def _turn(
     user_id: str,
     conversation_id: str,
     text: str,
+    interaction_run_ref: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], float, dict[str, Any] | None]:
     started = perf_counter()
     try:
@@ -163,6 +165,7 @@ def _turn(
                 "conversation_id": conversation_id,
                 "messages": [{"role": "user", "content": text}],
                 "interaction_mode": "auto",
+                **({"interaction_run_ref": interaction_run_ref} if interaction_run_ref else {}),
             },
         )
         trace = _get_json(
@@ -309,6 +312,8 @@ def run_research_scenario(
     product_evidence_recorder: ProductEvidenceRecorder,
     scenario: _Scenario,
     repetition: int,
+    *,
+    resume_run_ref: str | None = None,
 ) -> None:
     reference_set = None
     if scenario.outcome_contract is not None:
@@ -324,9 +329,27 @@ def run_research_scenario(
         "scenario_id": scenario.scenario_id,
         "repetition": repetition,
         "initial_conversation_count": 0,
-        "restart_server_after_entry_error": True,
         "dataset_revision": scenario.dataset_revision,
     }
+    if resume_run_ref is not None:
+        prior = InteractionTrace.model_validate(_get_json(
+            f"{live_web_search_process.base_url}/api/conversation/runs/{resume_run_ref}"
+            f"?{urlencode({'user_id': user_id})}"
+        ))
+        assert prior.principal == AuthenticatedPrincipal(
+            tenant_id="personal-agent", user_id=user_id,
+        )
+        assert prior.final_message is None, "恢复样本必须仍有未完成工作"
+        assert len(prior.messages) == 1 and prior.messages[0].role == "user"
+        assert prior.messages[0].content == scenario.request, "不得改写原任务后冒充恢复"
+        conversation_id = prior.conversation_id
+        initial_state.update({
+            "isolated_conversation": conversation_id,
+            "initial_conversation_count": 1,
+            "resumed_interaction_run_ref": resume_run_ref,
+            "initial_trace_digest": canonical_evidence_digest(prior.model_dump(mode="json")),
+            "initial_usage": prior.usage.model_dump(mode="json"),
+        })
     product_evidence_recorder.enroll(
         nodeid=request.node.nodeid,
         identity=ProductEvidenceIdentity(
@@ -351,9 +374,8 @@ def run_research_scenario(
         user_id=user_id,
         conversation_id=conversation_id,
         text=scenario.request,
+        interaction_run_ref=resume_run_ref,
     )
-    if entry_error is not None:
-        live_web_search_process.restart()
     answer = str(result.get("message", {}).get("content", ""))
     concept_coverage = _concept_coverage(answer, scenario.required_concepts)
     source_coverage = _source_coverage(
@@ -438,8 +460,11 @@ def run_research_scenario(
         ),
         "elapsed_seconds": report["elapsed_seconds"],
         "model_turns": usage.get("model_turns"),
-        "usage_incomplete": not isinstance(usage.get("total_tokens"), int),
-        "total_tokens": usage.get("total_tokens") or 0,
+        "usage_incomplete": (
+            usage.get("provider_usage_complete") is False
+            or not isinstance(usage.get("total_tokens"), int)
+        ),
+        "total_tokens": usage.get("total_tokens"),
     }
     product_evidence_recorder.capture_report(report)
 

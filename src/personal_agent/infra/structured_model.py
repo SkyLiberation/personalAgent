@@ -25,7 +25,7 @@ from time import perf_counter, sleep
 from typing import Any, Callable, Iterator, Protocol
 from urllib.parse import urlparse
 
-from openai import APIError, APIStatusError, OpenAI
+from openai import APIError, APIStatusError, ContentFilterFinishReasonError, OpenAI
 from pydantic import BaseModel
 
 from personal_agent.capabilities.contracts.model import (
@@ -42,10 +42,7 @@ from personal_agent.capabilities.contracts.model import (
 )
 from personal_agent.infra.model_response import (
     _aggregate_usage,
-    _collect_streamed_chat_response,
-    _EmptyNestedCompletionError,
     _extract_action_invocations,
-    _is_sse_payload,
     _require_chat_choices,
     _structured_chat_message,
     _sum_usage,
@@ -184,7 +181,6 @@ class OpenAIModelClient:
     ) -> None:
         self._config = config
         self._model_override = model_override
-        self._structured_streaming = False
 
     # -- shared helpers --------------------------------------------------
 
@@ -256,24 +252,8 @@ class OpenAIModelClient:
         request: StructuredModelRequest[Any],
     ) -> Any:
         kwargs = self._chat_kwargs(request)
-        if not self._structured_streaming:
-            return self._create_chat_completion(client, request.operation, kwargs)
-        streaming_kwargs = {
-            **kwargs,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        try:
-            return _run_with_deadline(
-                lambda: _collect_streamed_chat_response(
-                    client.chat.completions.create(**streaming_kwargs)
-                ),
-                client=client,
-                operation=request.operation,
-                timeout_seconds=self._config.timeout_seconds,
-            )
-        except (APIStatusError, APIError) as exc:
-            raise self._provider_unavailable(request.operation, exc) from exc
+        kwargs.update(stream=True, stream_options={"include_usage": True})
+        return self._create_chat_completion(client, request.operation, kwargs)
 
     def _provider_unavailable(
         self,
@@ -346,17 +326,31 @@ class OpenAIModelClient:
         operation: str,
         kwargs: dict[str, Any],
     ) -> Any:
+        def invoke() -> Any:
+            if kwargs.get("stream"):
+                stream_kwargs = {key: value for key, value in kwargs.items() if key != "stream"}
+                with client.chat.completions.stream(**stream_kwargs) as stream:
+                    return stream.get_final_completion()
+            return client.chat.completions.create(**kwargs)
+
         try:
             return _run_with_deadline(
-                lambda: client.chat.completions.create(**kwargs),
+                invoke,
                 client=client,
                 operation=operation,
                 timeout_seconds=self._config.timeout_seconds,
             )
+        except ContentFilterFinishReasonError as exc:
+            raise ModelInvocationUnavailable(
+                operation, "provider_rejected", model=self._resolved_model,
+                provider_host=urlparse(self._config.base_url or "").hostname,
+                retryable=False,
+                diagnostics=ProviderFailureDiagnostics(error_type="content_filter"),
+            ) from exc
         except (APIStatusError, APIError) as exc:
             raise self._provider_unavailable(operation, exc) from exc
 
-    # -- unified non-streaming entrypoint -------------------------------
+    # -- complete-response entrypoint ----------------------------------
 
     def generate(
         self,
@@ -376,7 +370,7 @@ class OpenAIModelClient:
         responses: list[Any] = []
         retry_errors: list[str] = []
         try:
-            for repair in range(2):
+            for repair in range(request.max_output_repairs + 1):
                 chat_request = self._structured_chat_request(
                     request,
                     schema,
@@ -384,12 +378,6 @@ class OpenAIModelClient:
                 )
                 response = self._create_structured_completion(client, chat_request)
                 responses.append(response)
-                response = self._normalize_streaming_structured_response(
-                    client,
-                    chat_request,
-                    response,
-                    responses,
-                )
                 content, parsed, parse_error = self._parse_typed_response(
                     request,
                     response,
@@ -409,7 +397,7 @@ class OpenAIModelClient:
                         retry_attempts=len(responses) - 1,
                         retry_errors=retry_errors,
                     )
-                if repair:
+                if repair == request.max_output_repairs:
                     raise StructuredOutputFailure(request.operation, parse_error)
                 retry_errors.append(parse_error)
                 log_event(
@@ -453,23 +441,6 @@ class OpenAIModelClient:
         raise RuntimeError(
             "structured requests require an explicit structured-output adapter"
         )
-
-    def _normalize_streaming_structured_response(
-        self,
-        client: OpenAI,
-        chat_request: StructuredModelRequest[StructuredOutputT],
-        response: Any,
-        responses: list[Any],
-    ) -> Any:
-        try:
-            _structured_chat_message(response)
-        except _EmptyNestedCompletionError:
-            if self._structured_streaming or not _is_sse_payload(response):
-                return response
-            self._structured_streaming = True
-            response = self._create_structured_completion(client, chat_request)
-            responses.append(response)
-        return response
 
     def _parse_typed_response(
         self,

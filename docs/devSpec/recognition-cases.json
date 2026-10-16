@@ -100,6 +100,21 @@
       "expected": "REF"
     },
     {
+      "id": "ref_repeated_blocker_mechanisms",
+      "task": "重复阻塞复审中，检索优秀智能体处理核验结论波动的同类机制，并核对官方文档与源码。",
+      "expected": "REF"
+    },
+    {
+      "id": "evd_repeated_blocker_reference_review",
+      "task": "对重复阻塞执行方案复审，分析当前修正为何仍失败；同时检索优秀智能体的同类机制并明确重新准入条件。",
+      "expected": "EVD"
+    },
+    {
+      "id": "ref_verifier_variation_mechanisms",
+      "task": "检索优秀智能体处理核验结论波动的同类机制，比较其纠正与终止边界，并核对官方源码。",
+      "expected": "REF"
+    },
+    {
       "id": "ref_memory_agents",
       "task": "整理外部智能体的 Memory 能力，比较 Letta 能力参考和 Hermes Agent 能力参考。",
       "expected": "REF"
@@ -327,6 +342,11 @@
     {
       "id": "ctx_model_reasoning_record",
       "task": "模型推理记录如何结合实际输入与最终输出，区分注意到问题后放弃报告和输出遗漏？",
+      "expected": "CTX"
+    },
+    {
+      "id": "ctx_neutral_decision_question",
+      "task": "中立追问如何核对模型实际采用的材料与任务规则，并区分明示事实和推断？",
       "expected": "CTX"
     },
     {

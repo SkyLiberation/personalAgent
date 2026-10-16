@@ -1,8 +1,8 @@
 """Project and bind one citation syntax: document snapshot and returned line."""
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from hashlib import sha256
 import json
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -142,7 +142,10 @@ def materialize_citation_context(inputs: Iterable[InteractionInput]) -> tuple[Ci
     return tuple(result)
 
 
-def _resolve_citation(evidence_id: str, catalog: dict[str, AvailableCitation]) -> tuple[AvailableCitation, ...]:
+_CitationT = TypeVar("_CitationT", bound=CitationLine)
+
+
+def _resolve_citation(evidence_id: str, catalog: Mapping[str, _CitationT]) -> tuple[_CitationT, ...]:
     """Expand a writer's range only into exact, already returned full lines."""
     document, position, *columns = evidence_id.split(":")
     coordinates = (evidence_id,)
@@ -190,3 +193,8 @@ def selected_citation_ids(
     catalog = {location.evidence_id: location for locations in _catalog(inputs).values() for location in locations}
     return frozenset(location.evidence_id for reference in references
                      for location in _resolve_citation(reference.evidence_id, catalog))
+
+
+def validate_citation_reference(reference: ConversationEvidenceReference, catalog: Mapping[str, CitationLine]) -> None:
+    """Reject references outside the exact returned coordinate projection."""
+    _resolve_citation(reference.evidence_id, catalog)

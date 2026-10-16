@@ -1,10 +1,10 @@
 # 评测用例分别验证什么
 
-> **本文件用于在面试中解释canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
+> **本文件用于在面试中解释 canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 1. 不同分类回答不同问题
 
-Product E2E、Application Integration、Runtime Conformance、Capability Profile 和 Boundary Evaluation 分别验收用户结果、业务入口、运行不变量、外部能力组合和局部判断。数量以 catalog 为准，本文按现行分类解释各用例目的，执行结果仍由评测盘点拥有。
+Product E2E、Application Integration、Runtime Conformance、Capability Profile 和 Boundary Evaluation 分别验收用户结果、业务入口、运行不变量、外部能力组合和局部判断。数量以 catalog 为准，本文覆盖 catalog 的现行用例目的，执行结果仍由评测盘点拥有。独立研究、Memory 或规模 baseline 不因在面试中引用就进入 catalog 或发布分母。
 
 | 类型 | 验证的问题 | 关键判据 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Product E2E、Application Integration、Runtime Conformance、Capability Profile
 
 ## 2. Product E2E 验收用户结果
 
-**九条 Product E2E 从自然用户请求进入，并直接判断最终结果和关键反事实。**
+**Product E2E 从自然用户请求进入，并直接判断最终结果和关键反事实。**
 
 | 用例 | 设计目的 | 关键验收点 |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ Product E2E、Application Integration、Runtime Conformance、Capability Profile
 
 ## 3. Application Integration 验收业务入口
 
-**八条 Application Integration 直接验证正式业务 API 与 canonical 事实链。**
+**Application Integration 直接验证正式业务 API 与 canonical 事实链。**
 
 | 用例 | 设计目的 | 关键验收点 |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ Product E2E、Application Integration、Runtime Conformance、Capability Profile
 
 ## 4. Runtime Conformance 验收运行不变量
 
-**七条 Runtime Conformance 直接验证并发、预算、上下文、权限和恢复等机械事实。**
+**Runtime Conformance 直接验证并发、预算、上下文、权限和恢复等机械事实。**
 
 | 用例 | 设计目的 | 关键验收点 |
 | --- | --- | --- |
@@ -61,7 +61,7 @@ Product E2E、Application Integration、Runtime Conformance、Capability Profile
 
 ## 5. Capability Profile 验收外部能力组合
 
-**四条 Capability Profile 验证 GitHub、Notion 与大结果读取等具体配置组合。**
+**Capability Profile 验证 GitHub、Notion 与大结果读取等具体配置组合。**
 
 | 用例 | 设计目的 | 关键验收点 |
 | --- | --- | --- |

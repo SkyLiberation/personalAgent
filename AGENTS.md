@@ -23,8 +23,8 @@
 - Product E2E 必须由目标用户的自然表达进入正式入口，经过生产 Composition Root、真实模型和 canonical 决策、执行、Verification、Completion 链路。脚本替代模型决策、直调组件或注入中间结果只能证明其实际边界，不能作为产品 E2E、baseline 或发布证据。
 - E2E 自动断言用户结果与必要反事实；对象、调用、Trace、状态或局部通过不能替代用户结果。原始用户结果与局部检查点分别计分，按最早责任与因果关系归因；内部路径只有属于公开契约时才能作为产品通过条件，独立后续失败不否定已成立机制。
 - 默认产品语言为中文。生产 Prompt 的任务逻辑，以及 Product E2E、Golden Set 与 Offline Eval 的用户输入、目标、成功标准、失败反馈和结果解释以中文为主。明确的多语言契约按相同语义建立自然表达镜像，分别验证与报告，不跨语言外推；代码、协议、命令与 URL 保留原文。
-- 模型语义设计或异常定位按 [CTX 输入审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)核对实际请求、构造链及可用的同轨迹推理记录；依赖前置模型决策时，按 [EVD 连续验证](docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)消费实际输出。
-- 核验漏放按 [QLT](docs/devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)检查最小充分输入；仍漏放时停止对应生产准入并重审任务设计。核验点通用，每次未识别归类到明确判据与真实轨迹用例。
+- 模型语义设计或异常定位按 [CTX 输入审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)核对实际请求、构造链及同轨迹 think；决策依据仍不清楚时，按其规则进行中立追问或反问。依赖前置模型决策时，按 [EVD 连续验证](docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)消费实际输出。
+- 核验漏放按 [QLT](docs/devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)检查最小充分输入；按预声明判据仍不满足核验契约时，停止对应生产准入并重审任务设计。核验点通用，每次未识别归类到明确判据与真实轨迹用例。
 
 ### 2.2 一个事实只有一个 owner
 
@@ -60,12 +60,16 @@
 
 ### 2.7 docs-first 与 e2e-first
 
-- 设计与优化项在候选实验或实现前更新唯一设计文档；产品项同时固定正式入口、自然请求、用户结果、反事实与可执行验收，取得第 4 节依据后实施。会话计划和事后补文档不能替代。执行 [EVD 流程](docs/devSpec/change-evidence.md#7-强制开发与设计流程)。
+- 设计与优化项在候选实验或实现前按 [Spec 结构](docs/chinese-writing-spec.md#62-spec-结构与需求追溯)更新唯一设计文档；产品项同时固定正式入口、自然请求、用户结果、反事实与可执行验收，取得第 4 节依据后实施。会话计划和事后补文档不能替代。执行 [EVD 流程](docs/devSpec/change-evidence.md#7-强制开发与设计流程)。
 - 每轮方案、实现或证据改变时，同步设计与受影响权威正文，区分已实现、已验证和剩余条件，直接清理过期、重复与冲突内容。纯文档按 DOC 检查，只读分析按事实报告。
 
 ### 2.8 可读性优先，模块化控制开发上下文
 
 按清楚的职责、命名、typed 契约和控制流组织代码与文档。模块化减少局部任务的必要查阅范围，明确入口和直接协作者，并计入跨文件跳转与协作成本；禁止按行数机械拆分。执行 [COD](docs/devSpec/code-structure.md#3-模块职责规模与生产可达性)及 [DOC](docs/AGENTS.md#2-中文写作与结构门禁)。
+
+### 2.9 清晰、简单、不冗余的表达
+
+所有文档和对用户的回答必须清晰、简单、不冗余。先直接回应核心问题，再补必要解释；具体要求由[写作规范](docs/chinese-writing-spec.md#1-目标与适用范围)拥有。
 
 ## 3. 任务路由：按识别信号读取细则
 
@@ -74,10 +78,10 @@
 | 规范 | 适用任务与识别信号 | 必读细则 |
 | --- | --- | --- |
 | `EVD` | 新增功能、能力优化、缺陷修复、工程重构；制定设计项、优化项、docs-first、e2e-first、baseline、消融、target E2E；处理独立阻塞、重复阻塞、方案复审、方案一致性；审查模型依赖链、奥卡姆剃刀与复杂度准入 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
-| `REF` | 调研优秀智能体、外部智能体或 Agent Harness 比较；参考 Claude Code、GPT/Codex、OpenHands、DeepSeek Harness、Gemini CLI、Hermes Agent、Letta、LangGraph 的外部能力机制 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
+| `REF` | 调研优秀智能体、外部智能体或 Agent Harness 比较；同类机制、重复阻塞复审中的外部方法检索；参考 Claude Code、GPT/Codex、OpenHands、DeepSeek Harness、Gemini CLI、Hermes Agent、Letta、LangGraph 的外部能力机制 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
 | `ARC` | 调整架构分层、业务事实与状态归属；设计 Schema、Model、Repository、Port、Adapter；核对 Application Capability、Product Aggregate、派生数据、缓存、物化投影和生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | 修改 Proposal、Admission、ToolCall 协议；调整 Command、Approval、digest、Receipt 的执行绑定；设计 Execution、Verification、Completion、replay 与 durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
-| `CTX` | 审计 Context、System Prompt、模型输入、模型推理记录和反馈执行异常；调整 Memory、RAG、Artifact、检索、权限过滤、预算物化；核对 Capability Projection 与服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
+| `CTX` | 审计 Context、System Prompt、模型输入、模型推理记录、中立追问和反馈执行异常；调整 Memory、RAG、Artifact、检索、权限过滤、预算物化；核对 Capability Projection 与服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
 | `COD` | 改善可读性、功能模块化与 Code Agent 开发上下文，进行类或模块拆分；修改内部类型、payload、依赖注入、错误分类、命名；设计生产 Prompt、文本引用、文字复述或 LangGraph、Router、Planner、Workflow 编排 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
 | `DOC` | 整理 Markdown、Mermaid、AGENTS.md、CLAUDE.md 与 ADR 正文；维护评测说明、架构说明、中文写作、文档索引；规范整理与引用清理 | [文档模块规范](docs/AGENTS.md) |
 | `QLT` | Real E2E、Offline Eval、Golden Set 与真实环境 smoke 的验证设计；解释停用范围与历史证据：单元测试、tests/、Contract、Integration；定位 E2E 阻塞、核验漏放、最小充分上下文；核对 Trace、安全、权限、审计与评测职责 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
@@ -115,7 +119,7 @@
 
 - 改公共模型、Schema、状态或入口前搜索全部调用方和权威文档。保留工作树用户改动，禁止破坏性 Git 操作覆盖。
 - 先删除被替代或冲突内容，再做最小修改；依赖注入与错误分类执行 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止以空结果、默认成功或模糊 fallback 掩盖失败。
-- 独立阻塞按 [EVD 第 7.1 节](docs/devSpec/change-evidence.md#71-独立阻塞优先解决并保持方案一致性)优先解决并保留原方案；同一阻塞经一次有界修正仍复现时，停止受影响路径的新实验、补丁及整轮重跑，按 [EVD 第 7.2 节](docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)复审后重新准入。更换措辞、模块或版本不重置尝试；独立工作可继续。
+- 独立阻塞按 [EVD 第 7.1 节](docs/devSpec/change-evidence.md#71-独立阻塞优先解决并保持方案一致性)优先解决并保留原方案；同一阻塞完成一次有界修正后，按预声明判据仍未解除时，执行 [EVD 第 7.2 节](docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)，停止受影响路径的候选实验、生产补丁和整轮重跑。识别或报告重复阻塞时，须及时检索优秀智能体解决同类问题的机制，记录适用差异及取舍后再准入下一候选。修正计数与协议重试、样本重复区分，更换措辞、模块或版本不重置记录；隔离诊断和独立工作可继续。
 - 评审只报告可定位、可复现且影响正确性、安全性、性能或维护门禁的问题。结论不超过已执行证据，未执行的适用检查不得写成通过。
 
 ## 6. 完成门禁

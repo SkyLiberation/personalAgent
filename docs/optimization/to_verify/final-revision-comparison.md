@@ -1,6 +1,8 @@
 # 最终稿独立核验与修订反馈分工
 
-`ANSWER-ENUMERATION-SCOPE-001` 属于[研究修订未收敛问题](../claim-revision-nonconvergence.md)。本页拥有唯一候选设计，[Future 队列](../../future/design-optimization-backlog.md)拥有准入状态。2026-10-08 服务恢复后完成隔离校准和实际反馈连续链，已将同一三个模块迁入生产 v6；首个正式 target 未到达最终核验，原子交接修复后的target已真实消费v6并通过当前稿核验，原完整评分仍失败。随后定位并修复评分参考页面和版本缺口，撤回依据不足的覆盖候选；已校准参考的正式入口在初始选证Schema与Runtime约束不一致处返回503；[状态契约](../completed/research-selection-state-contract.md)完成三个真实状态及实际工具续接验证并迁入，原方案的正式拒稿—真实修订—独立当前稿验收链已成立，但完整用户结果因非规范章节限定漏取证失败；该独立边界修复后继续同入口验收。实际结果及限定边界由[本轮记录](../claim-revision-nonconvergence.md#独立阻塞恢复与原方案续验)拥有。
+`ANSWER-ENUMERATION-SCOPE-001` 属于[研究修订未收敛问题](../claim-revision-nonconvergence.md)。本页保存枚举范围失败、v6 已接入机制及其证据；[Future 队列](../../future/design-optimization-backlog.md)拥有准入状态。v6 的实际拒稿、汇总修订和新稿核验链已成立，完整用户结果保持原失败，实际证据由[连续记录](../claim-revision-nonconvergence.md#独立阻塞恢复与原方案续验)拥有。
+
+2026-10-15 用户最新要求由同一研究模型生成 claims 和最终回答，并由一个核验器检查事实、融合和原目标；缺最终回答由完成门禁拦截。下一次职责及契约变更统一由[研究核验合并设计](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)拥有，本页不再维护独立的 Final 目标覆盖方案。下文机制及预声明按原 v6 身份保留；新设计尚未实施，不能把旧局部结果记成新统一核验通过。
 
 ## 失败事实与输入差异
 

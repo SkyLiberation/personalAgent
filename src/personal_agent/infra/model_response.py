@@ -185,38 +185,6 @@ def _chat_completion_envelope_content(envelope: dict[str, Any]) -> Any:
     )
 
 
-def _is_sse_payload(response: Any) -> bool:
-    return isinstance(response, str) and response.lstrip().startswith("data:")
-
-
-def _collect_streamed_chat_response(stream: Any) -> Any:
-    content_parts: list[str] = []
-    model = ""
-    usage = None
-    for chunk in stream:
-        model = getattr(chunk, "model", None) or model
-        usage = getattr(chunk, "usage", None) or usage
-        choices = getattr(chunk, "choices", None) or []
-        if not choices:
-            continue
-        delta = getattr(choices[0], "delta", None)
-        content = getattr(delta, "content", None)
-        if isinstance(content, str):
-            content_parts.append(content)
-    content = "".join(content_parts)
-    if not content:
-        raise RuntimeError(
-            "invalid provider response: missing streamed completion content"
-        )
-    return SimpleNamespace(
-        choices=[
-            SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=[]))
-        ],
-        model=model,
-        usage=usage,
-    )
-
-
 def _extract_action_invocations(
     message: Any,
     request: StructuredModelRequest[Any],

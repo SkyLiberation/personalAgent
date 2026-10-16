@@ -5,7 +5,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview, ResearchReopening
+from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
 from personal_agent.capabilities.contracts.verification import (
     ConversationAnswerSegment,
     ConversationEvidenceReference,
@@ -373,7 +373,7 @@ class ActionObservation(_StrictModel):
     )
 
 
-InteractionInput = DecisionFeedback | ActionObservation | SubmittedFinal | ResearchClaims | ResearchReview | ResearchReopening
+InteractionInput = DecisionFeedback | ActionObservation | SubmittedFinal | ResearchClaims | ResearchReview
 
 
 class LoopBudgetPolicy(_StrictModel):

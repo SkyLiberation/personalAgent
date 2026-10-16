@@ -1,24 +1,25 @@
 """Claim admission and version-bound research checks in the Conversation loop."""
 
 import json
+from dataclasses import replace
 from collections.abc import Generator, Sequence
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model, model_validator
 
 from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     sealed_context_projection_ref,
 )
 from personal_agent.capabilities.contracts.research import (
-    ResearchBasis,
+    ResearchAnswerTarget,
     ResearchClaim,
     ResearchClaimContent,
     ResearchClaims,
-    ResearchCoverageReport,
-    ResearchReopening,
+    ResearchClaimSpan,
+    ResearchRequirementTarget,
+    ResearchSupportFinding,
     ResearchReview,
-    ResearchSource,
     ResearchSupportReport,
 )
 from personal_agent.capabilities.contracts.verification import (
@@ -26,6 +27,7 @@ from personal_agent.capabilities.contracts.verification import (
     CitedEvidence,
     ConversationAnswerSegment,
     ConversationEvidenceReference,
+    SourceReadingState,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.prompts import get_prompt
@@ -143,10 +145,18 @@ def validate_research_selection(
 class CreateClaims(_Strict):
     kind: Literal["create_claims"]
     claims: tuple[ResearchClaimContent, ...] = Field(min_length=1)
+    final_answer: tuple[ConversationAnswerSegment | ResearchAnswerTarget, ...] | None = Field(
+        default=None, min_length=1,
+        description="可选的完整最终回答顺序；新段提交 text/references，未改段以当前 answer_segment_id 引用。",
+    )
 
 
 class _Edit(_Strict):
     base_ref: ResourceRef
+    final_answer: tuple[ConversationAnswerSegment | ResearchAnswerTarget, ...] | None = Field(
+        default=None, min_length=1,
+        description="可选的完整最终回答顺序；新段提交 text/references，未改段以当前 base_ref 的 answer_segment_id 引用。",
+    )
 
 
 class ReviseClaimFragment(_Edit):
@@ -223,10 +233,44 @@ class EditableClaim(_Strict):
     references: tuple[ConversationEvidenceReference, ...]
 
 
+class EditableResearchAnswerSegment(ConversationAnswerSegment):
+    """Read-only address of an existing paragraph in this research revision."""
+
+    answer_segment_id: str = Field(pattern=r"^a[1-9][0-9]*$")
+
+
+class ResearchSourceClaim(CitedDraftUnit):
+    """The complete claim and its own bound evidence, with lossless addresses."""
+
+    claim_id: str = Field(pattern=r"^c[1-9][0-9]*$")
+    fragments: tuple[EditableClaimFragment, ...]
+
+
+class ResearchAnswerUnit(CitedDraftUnit):
+    answer_segment_id: str = Field(pattern=r"^a[1-9][0-9]*$")
+
+
+class MissingResearchFinalAnswer(ValueError):
+    reason_code = "final_answer_missing"
+
+
+class ResearchSourceInput(_Strict):
+    """One complete research revision, frozen goals and actual returned evidence."""
+
+    research_ref: ResourceRef
+    conversation: tuple[ConversationMessage, ...]
+    requirements: tuple[ResearchGoalRequirement, ...]
+    claims: tuple[ResearchSourceClaim, ...] = Field(min_length=1)
+    final_answer: tuple[ResearchAnswerUnit, ...] = Field(min_length=1)
+    returned_evidence: tuple[CitableInput, ...]
+    source_reading_state: tuple[SourceReadingState, ...]
+
+
 class EditableResearchClaims(_Strict):
     kind: Literal["research_claims"] = "research_claims"
     resource_ref: ResourceRef
     claims: tuple[EditableClaim, ...]
+    final_answer: tuple[EditableResearchAnswerSegment, ...] | None
 
 
 def editable_claim_fragments(claim: ResearchClaim) -> tuple[EditableClaimFragment, ...]:
@@ -270,6 +314,15 @@ def editable_research_claims(current: ResearchClaims) -> EditableResearchClaims:
                 references=claim.references,
             )
             for claim in current.claims
+        ),
+        final_answer=(
+            tuple(
+                EditableResearchAnswerSegment(
+                    **segment.model_dump(), answer_segment_id=f"a{index}"
+                )
+                for index, segment in enumerate(current.final_answer, 1)
+            )
+            if current.final_answer is not None else None
         ),
     )
 
@@ -373,6 +426,11 @@ def research_submission_type(
                     ensure_ascii=False,
                 )
             )
+            if "ResearchAnswerTarget" in definitions:
+                definitions["ResearchAnswerTarget"]["properties"]["answer_segment_id"]["enum"] = (
+                    [f"a{index}" for index in range(1, len(current.final_answer or ()) + 1)]
+                    if current is not None else []
+                )
             return schema
 
     return ScopedResearchSubmission
@@ -400,7 +458,6 @@ def in_research_mode(
 ) -> bool:
     return (
         finalization_mode
-        and accepted_basis(inputs) is None
         and (
             current_claims(inputs) is not None
             or (
@@ -416,41 +473,20 @@ def in_research_mode(
     )
 
 
-def accepted_basis(inputs: Sequence[InteractionInput]) -> ResearchBasis | None:
+def accepted_research(
+    inputs: Sequence[InteractionInput], *, reuse_start_index: int = 0,
+) -> ResearchClaims | None:
+    """Completion reads only the exact current revision with an applicable pass."""
     current = current_claims(inputs)
-    if current is None:
+    if current is None or not current.final_answer or not "".join(
+        segment.text for segment in current.final_answer
+    ).strip():
         return None
-    if any(
-        isinstance(item, ResearchReopening)
-        and item.resource_ref == current.resource_ref
-        for item in inputs
-    ):
+    review = _applicable_source_review(current, inputs, reuse_start_index)
+    if review is None or review.report.findings:
         return None
-    latest = next(
-        (item for item in reversed(inputs) if isinstance(item, ResearchReview)), None
-    )
-    if (
-        latest is None
-        or latest.resource_ref != current.resource_ref
-        or not isinstance(latest.report, ResearchCoverageReport)
-        or not latest.report.sufficient
-    ):
-        return None
-    return ResearchBasis(claims=current, sources=_referenced_sources(current, inputs))
-
-
-def _referenced_sources(
-    current: ResearchClaims, inputs: Sequence[InteractionInput]
-) -> tuple[ResearchSource, ...]:
-    """Project the cited execution source identities without creating another fact owner."""
-    return tuple(
-        dict.fromkeys(
-            ResearchSource(
-                evidence_id=location.evidence_id, source_url=location.source.source_url
-            )
-            for location in materialize_reference_sources(current.claims, inputs)
-        )
-    )
+    materialize_cited_draft(current.final_answer, inputs)
+    return current
 
 
 def admit_claim_change(
@@ -580,9 +616,37 @@ def admit_claim_change(
                 claims = claims[:index] + replacements + claims[index + 1 :]
             else:
                 raise ValueError("unsupported claim change")
-    result = ResearchClaims(resource_ref=reference, claims=claims)
+    answer = None
+    if action.final_answer is not None:
+        previous = {
+            f"a{index}": segment
+            for index, segment in enumerate(current.final_answer or (), 1)
+        } if current is not None else {}
+        restored = []
+        for segment in action.final_answer:
+            if isinstance(segment, ResearchAnswerTarget):
+                existing = previous.get(segment.answer_segment_id)
+                if existing is None:
+                    raise ValueError("answer_segment_id 必须属于当前 base_ref 的实际最终回答；整次提交未应用。")
+                restored.append(existing)
+            else:
+                restored.append(segment)
+        answer = tuple(restored)
+    elif isinstance(action, RecheckClaims) and current is not None:
+        answer = current.final_answer
+    result = ResearchClaims(resource_ref=reference, claims=claims, final_answer=answer)
     # Coordinates must bind before any journal mutation or semantic call.
     materialize_cited_draft(result.claims, inputs)
+    if answer is not None:
+        bound_claim_ids = selected_citation_ids(
+            tuple(reference for claim in result.claims for reference in claim.references), inputs
+        )
+        bound_answer_ids = selected_citation_ids(
+            tuple(reference for segment in answer for reference in segment.references), inputs
+        )
+        if not bound_answer_ids.issubset(bound_claim_ids):
+            raise ValueError("最终回答只能引用本次准入后 claims 已绑定的原文；整次提交未应用。")
+        materialize_cited_draft(answer, inputs)
     return result
 
 
@@ -600,6 +664,7 @@ def research_request(
         messages=messages,
         output_type=output_type,
         temperature=0,
+        max_tokens=131_072,
         context_projection_ref=sealed_context_projection_ref(
             purpose=name, messages=messages
         ),
@@ -609,44 +674,35 @@ def research_request(
 
 def _applicable_source_review(
     current: ResearchClaims,
-    claim: ResearchClaim,
-    unit: CitedDraftUnit,
     inputs: Sequence[InteractionInput],
     reuse_start_index: int,
 ) -> ResearchReview | None:
-    """Reuse only the latest equal-input fact within this model binding lifetime."""
-    version = get_prompt("conversation.research.support").version
+    """A whole-revision judgment is valid only for the same complete input.
+
+    The journal owns this run's immutable messages and review criteria. Its
+    resource identity binds that frozen goal; evidence is rebuilt from the
+    exact original prefix rather than copied into an approval mirror.
+    """
+    version = research_source_prompt_version()
     for index in range(len(inputs) - 1, reuse_start_index - 1, -1):
         review = inputs[index]
         if (
             not isinstance(review, ResearchReview)
-            or review.claim_id != claim.claim_id
-            or not isinstance(review.report, ResearchSupportReport)
+            or review.resource_ref != current.resource_ref
             or review.source_prompt_version != version
-            or review.resource_ref.model_copy(
-                update={"revision": current.resource_ref.revision}
-            )
-            != current.resource_ref
         ):
             continue
         prefix = inputs[:index]
-        original = next(
-            (
-                item
-                for item in reversed(prefix)
-                if isinstance(item, ResearchClaims)
-                and item.resource_ref == review.resource_ref
-            ),
-            None,
-        )
+        original = current_claims(prefix)
         if original is None:
-            raise ValueError("source judgment has no original claim revision")
-        previous = next(
-            (item for item in original.claims if item.claim_id == claim.claim_id), None
-        )
+            raise ValueError("research judgment has no original revision")
         if (
-            previous == claim
-            and materialize_cited_draft((previous,), prefix)[0] == unit
+            original == current
+            and materialize_reference_sources(original.claims, prefix)
+            == materialize_reference_sources(current.claims, inputs)
+            and _returned_research_sources(prefix) == _returned_research_sources(inputs)
+            and materialize_source_reading_state(prefix)
+            == materialize_source_reading_state(inputs)
         ):
             return review
     return None
@@ -658,31 +714,9 @@ def applicable_research_review(
     *,
     reuse_start_index: int,
 ) -> ResearchReview | None:
-    """Project the current repair feedback, including a retained rejection."""
     if current is None:
         return None
-    latest = next(
-        (item for item in reversed(inputs) if isinstance(item, ResearchReview)), None
-    )
-    if (
-        latest is not None
-        and latest.resource_ref == current.resource_ref
-        and isinstance(latest.report, ResearchCoverageReport)
-    ):
-        return latest
-    selected = None
-    for claim, unit in zip(
-        current.claims, materialize_cited_draft(current.claims, inputs), strict=True
-    ):
-        review = _applicable_source_review(
-            current, claim, unit, inputs, reuse_start_index
-        )
-        if review is not None:
-            selected = review
-            assert isinstance(review.report, ResearchSupportReport)
-            if review.report.findings:
-                return review
-    return selected
+    return _applicable_source_review(current, inputs, reuse_start_index)
 
 
 class ResearchSourceFeedback(_Strict):
@@ -690,49 +724,47 @@ class ResearchSourceFeedback(_Strict):
     execution_evidence: tuple[CitedEvidence, ...]
 
 
+def _claim_evidence(
+    claim: ConversationAnswerSegment, inputs: Sequence[InteractionInput],
+) -> tuple[CitedEvidence, ...]:
+    """Use existing document coordinates, avoiding per-claim eNNN collisions."""
+    return tuple(
+        CitedEvidence(id=location.evidence_id, text=location.text, source=location.source)
+        for location in materialize_reference_sources((claim,), inputs)
+    )
+
+
 def research_review_context(
     review: ResearchReview | None,
     inputs: Sequence[InteractionInput],
 ) -> ResearchSourceFeedback | None:
-    """Resolve verifier-local evidence IDs from the original bound input."""
-    if (
-        review is None
-        or not isinstance(review.report, ResearchSupportReport)
-        or not review.report.findings
-    ):
+    if review is None or not review.report.findings:
         return None
     index = next(index for index, item in enumerate(inputs) if item is review)
     prefix = inputs[:index]
-    original = next(
-        item
-        for item in reversed(prefix)
-        if isinstance(item, ResearchClaims) and item.resource_ref == review.resource_ref
-    )
-    claim = next(item for item in original.claims if item.claim_id == review.claim_id)
+    original = current_claims(prefix)
+    if original is None or original.resource_ref != review.resource_ref:
+        raise ValueError("research feedback must bind its original revision")
     relevant_ids = {
-        identity
-        for finding in review.report.findings
-        for identity in finding.evidence_ids
+        identity for finding in review.report.findings for identity in finding.evidence_ids
+    }
+    evidence_by_id = {
+        evidence.id: evidence
+        for evidence in (
+            *_returned_research_evidence(prefix),
+            *(evidence for claim in original.claims for evidence in _claim_evidence(claim, prefix)),
+        )
+        if evidence.id in relevant_ids
     }
     return ResearchSourceFeedback(
-        review=review,
-        execution_evidence=tuple(
-            evidence
-            for evidence in materialize_cited_draft((claim,), prefix)[
-                0
-            ].execution_evidence
-            if evidence.id in relevant_ids
-        ),
+        review=review, execution_evidence=tuple(evidence_by_id.values()),
     )
 
 
-def research_coverage_request(
-    current: ResearchClaims,
+def _returned_research_sources(
     inputs: Sequence[InteractionInput],
-    messages: Sequence[ConversationMessage],
-    criteria: ReviewCriteria,
-) -> StructuredModelRequest:
-    """Give coverage its own view of returned sources, independent of draft citations."""
+) -> tuple[CitableInput, ...]:
+    """One read-only projection of visible, actually returned source coordinates."""
     visible = materialize_citation_context(materialize_interaction_inputs(inputs))
     seen: set[str] = set()
     sources = []
@@ -744,53 +776,153 @@ def research_coverage_request(
             if citation.evidence_id not in seen:
                 seen.add(citation.evidence_id)
                 lines.append(citation)
-        if lines or item.observation.payload.get("retrieval"):
-            sources.append(item.model_copy(update={"citations": tuple(lines)}))
-    return research_request(
-        "conversation.research.coverage",
-        ResearchCoverageReport,
-        {
-            "conversation": [message.model_dump(mode="json") for message in messages],
-            "requirements": [
-                item.model_dump(mode="json")
-                for item in research_goal_requirements(criteria)
-            ],
-            "claims": current.model_dump(mode="json"),
-            "source_material": [item.model_dump(mode="json") for item in sources],
-            "source_reading_state": [
-                state.model_dump(mode="json")
-                for state in materialize_source_reading_state(inputs)
-            ],
-        },
+        sources.append(item.model_copy(update={"citations": tuple(lines)}))
+    return tuple(sources)
+
+
+def _returned_research_evidence(
+    inputs: Sequence[InteractionInput],
+) -> tuple[CitedEvidence, ...]:
+    return tuple(
+        CitedEvidence(id=location.evidence_id, text=location.text, source=location.source)
+        for item in _returned_research_sources(inputs)
+        for location in item.citations
     )
 
 
-def validate_research_coverage(
-    report: ResearchCoverageReport,
-    criteria: ReviewCriteria,
+def research_support_input(
     current: ResearchClaims,
     inputs: Sequence[InteractionInput],
-) -> None:
-    expected = {item.criterion_id for item in research_goal_requirements(criteria)}
-    actual = [item.criterion_id for item in report.requirements]
-    if len(set(actual)) != len(actual) or set(actual) != expected:
-        raise ValueError(
-            "research coverage must account for every frozen criterion exactly once"
-        )
-    valid_claim_ids = {claim.claim_id for claim in current.claims}
-    if any(
-        not set(item.claim_ids).issubset(valid_claim_ids)
-        for item in report.requirements
-    ):
-        raise ValueError(
-            "research coverage must reference only current claim identities"
-        )
-    selected_citation_ids(
-        tuple(
-            reference for item in report.requirements for reference in item.references
+    messages: Sequence[ConversationMessage],
+    criteria: ReviewCriteria,
+) -> ResearchSourceInput:
+    if not current.final_answer or not "".join(segment.text for segment in current.final_answer).strip():
+        raise MissingResearchFinalAnswer("最终回答尚未提交；当前研究可保留，须生成完整回答后才可核验与完成。")
+    claim_ids = selected_citation_ids(tuple(ref for claim in current.claims for ref in claim.references), inputs)
+    answer_ids = selected_citation_ids(tuple(ref for segment in current.final_answer for ref in segment.references), inputs)
+    if not answer_ids.issubset(claim_ids):
+        raise ValueError("最终回答只能引用本版 claims 已绑定的真实坐标。")
+    return ResearchSourceInput(
+        research_ref=current.resource_ref,
+        conversation=tuple(messages),
+        requirements=research_goal_requirements(criteria),
+        claims=tuple(
+            ResearchSourceClaim(
+                claim_id=claim.claim_id, draft=claim.text,
+                fragments=editable_claim_fragments(claim),
+                execution_evidence=_claim_evidence(claim, inputs),
+            )
+            for claim in current.claims
         ),
-        inputs,
+        final_answer=tuple(
+            ResearchAnswerUnit(
+                answer_segment_id=f"a{index}", draft=segment.text,
+                execution_evidence=_claim_evidence(segment, inputs),
+            )
+            for index, segment in enumerate(current.final_answer, 1)
+        ),
+        returned_evidence=_returned_research_sources(inputs),
+        source_reading_state=materialize_source_reading_state(inputs),
     )
+
+
+def research_source_prompt_version() -> str:
+    return get_prompt("conversation.research.support").version
+
+
+def validate_research_support(
+    report: ResearchSupportReport, source_input: ResearchSourceInput,
+) -> None:
+    """Own finding references; semantic correctness remains with the model."""
+    returned_ids = {
+        line.evidence_id for item in source_input.returned_evidence for line in item.citations
+    }
+    requirement_ids = {item.criterion_id for item in source_input.requirements}
+    fragments = {
+        fragment.fragment_id: (claim, index)
+        for claim in source_input.claims
+        for index, fragment in enumerate(claim.fragments)
+    }
+    answer_units = {unit.answer_segment_id: unit for unit in source_input.final_answer}
+    for finding in report.findings:
+        target = finding.target
+        if isinstance(target, ResearchRequirementTarget):
+            if target.criterion_id not in requirement_ids:
+                raise ValueError("目标缺项必须引用当前冻结验收编号。")
+            allowed_ids = returned_ids
+        elif isinstance(target, ResearchAnswerTarget):
+            unit = answer_units.get(target.answer_segment_id)
+            if unit is None:
+                raise ValueError("发现须定位当前最终回答段落。")
+            bound_ids = {evidence.id for evidence in unit.execution_evidence}
+            allowed_ids = bound_ids if finding.category == "citation_not_supported" else bound_ids | returned_ids
+        else:
+            start = fragments.get(target.start_fragment_id)
+            end = fragments.get(target.end_fragment_id)
+            if start is None or end is None or start[0].claim_id != end[0].claim_id or start[1] > end[1]:
+                raise ValueError("发现必须绑定同一当前 claim 的有序片段范围。")
+            bound_ids = {evidence.id for evidence in start[0].execution_evidence}
+            allowed_ids = bound_ids if finding.category == "citation_not_supported" else bound_ids | returned_ids
+        if len(set(finding.evidence_ids)) != len(finding.evidence_ids) or not set(finding.evidence_ids).issubset(allowed_ids):
+            raise ValueError("发现只能引用该类别及目标实际允许的已返回证据坐标。")
+
+
+def research_support_output_type(source_input: ResearchSourceInput) -> type[ResearchSupportReport]:
+    """Publish the same contract with current IDs and read-boundary validation."""
+    fragment_ids = tuple(fragment.fragment_id for claim in source_input.claims for fragment in claim.fragments)
+    requirement_ids = tuple(item.criterion_id for item in source_input.requirements)
+    span = create_model(
+        "CurrentResearchClaimSpan", __base__=ResearchClaimSpan,
+        start_fragment_id=(Literal[fragment_ids], ...),
+        end_fragment_id=(Literal[fragment_ids], ...),
+    )
+    target = create_model(
+        "CurrentResearchRequirementTarget", __base__=ResearchRequirementTarget,
+        criterion_id=(Literal[requirement_ids], ...) if requirement_ids else (
+            str, Field(pattern=r"^(?!)$"),
+        ),
+    )
+    answer_target = create_model(
+        "CurrentResearchAnswerTarget", __base__=ResearchAnswerTarget,
+        answer_segment_id=(Literal[tuple(unit.answer_segment_id for unit in source_input.final_answer)], ...),
+    )
+    finding = create_model(
+        "CurrentResearchSupportFinding", __base__=ResearchSupportFinding,
+        target=(span | target | answer_target, ...),
+    )
+
+    def check_finding(value: ResearchSupportFinding) -> ResearchSupportFinding:
+        validate_research_support(ResearchSupportReport(findings=(value,)), source_input)
+        return value
+
+    bound_finding = Annotated[finding, AfterValidator(check_finding)]
+    report = create_model(
+        "CurrentResearchSupportReport", __base__=ResearchSupportReport,
+        findings=(tuple[bound_finding, ...], ...),
+    )
+    return cast(type[ResearchSupportReport], report)
+
+
+def research_support_request(source_input: ResearchSourceInput) -> StructuredModelRequest:
+    return replace(
+        research_request(
+            "conversation.research.support",
+            research_support_output_type(source_input),
+            source_input.model_dump(mode="json"),
+        ),
+        max_tokens=131_072,
+        max_output_repairs=2,
+    )
+
+
+def research_source_steps(
+    source_input: ResearchSourceInput,
+) -> Generator[StructuredModelRequest, BaseModel | None, ResearchSupportReport]:
+    report = yield research_support_request(source_input)
+    assert isinstance(report, ResearchSupportReport)
+    report = ResearchSupportReport.model_validate(report.model_dump(mode="json"))
+    validate_research_support(report, source_input)
+    return report
 
 
 def verification_steps(
@@ -801,59 +933,14 @@ def verification_steps(
     *,
     reuse_start_index: int,
 ) -> Generator[StructuredModelRequest | ResearchReview, BaseModel | None, None]:
-    """Bind every current claim; only changed or unchecked inputs call the model."""
+    """One judgment owns both support and goal coverage of this revision."""
     assert 0 <= reuse_start_index <= len(inputs)
-    units = materialize_cited_draft(current.claims, inputs)
-    for claim, unit in zip(current.claims, units, strict=True):
-        previous = _applicable_source_review(
-            current, claim, unit, inputs, reuse_start_index
-        )
-        if previous is not None:
-            assert isinstance(previous.report, ResearchSupportReport)
-            if previous.report.findings:
-                return
-            continue
-        fragments = editable_claim_fragments(claim)
-        report = yield research_request(
-            "conversation.research.support",
-            ResearchSupportReport,
-            {
-                **unit.model_dump(mode="json"),
-                "fragments": [
-                    fragment.model_dump(mode="json") for fragment in fragments
-                ],
-            },
-        )
-        assert isinstance(report, ResearchSupportReport)
-        valid_ids = {evidence.id for evidence in unit.execution_evidence}
-        positions = {
-            fragment.fragment_id: index for index, fragment in enumerate(fragments)
-        }
-        for finding in report.findings:
-            if len(set(finding.evidence_ids)) != len(finding.evidence_ids) or not set(
-                finding.evidence_ids
-            ).issubset(valid_ids):
-                raise ValueError(
-                    "research support finding must reference only submitted evidence"
-                )
-            if (
-                finding.start_fragment_id not in positions
-                or finding.end_fragment_id not in positions
-                or positions[finding.start_fragment_id]
-                > positions[finding.end_fragment_id]
-            ):
-                raise ValueError(
-                    "research support finding must bind an ordered current claim fragment range"
-                )
-        yield ResearchReview(
-            resource_ref=current.resource_ref,
-            claim_id=claim.claim_id,
-            report=report,
-            source_prompt_version=get_prompt("conversation.research.support").version,
-        )
-        if report.findings:
-            return
-    report = yield research_coverage_request(current, inputs, messages, criteria)
-    assert isinstance(report, ResearchCoverageReport)
-    validate_research_coverage(report, criteria, current, inputs)
-    yield ResearchReview(resource_ref=current.resource_ref, report=report)
+    if _applicable_source_review(current, inputs, reuse_start_index) is not None:
+        return
+    report = yield from research_source_steps(
+        research_support_input(current, inputs, messages, criteria),
+    )
+    yield ResearchReview(
+        resource_ref=current.resource_ref, report=report,
+        source_prompt_version=research_source_prompt_version(),
+    )

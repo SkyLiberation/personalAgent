@@ -262,4 +262,4 @@ claim 候选先执行两份独立结构判据的固定输入资格，再执行�
 
 本次后置阻塞分别见[最终验收项转录](completed/final-criterion-transcription.md)及[工具内部模型用量交接](tool-model-usage-handoff.md)，原正式结果由评测文档拥有。
 
-本轮后续正式入口已解除空稿503，[状态契约](completed/research-selection-state-contract.md)按窄机制固化。两次Finalv6中，首次拒稿真实驱动synthesis修订，第二次独立验收当前稿通过，分工消费检查点成立；完整用户结果0/1，唯一实质错误是未取证的非规范性章节限定被误作协议要求。[独立候选](to_verify/normative-context-acquisition.md)先修复该边界，原当前稿方案及所有旧失败保持。结果及成本由[新正式登记](../evals/02-current-case-inventory.md#2026-10-08-选证状态修复后的正式入口结果)拥有。
+本轮后续正式入口已解除空稿503，[状态契约](completed/research-selection-state-contract.md)按窄机制固化。两次Finalv6中，首次拒稿真实驱动synthesis修订，第二次独立验收当前稿通过，分工消费检查点成立；完整用户结果0/1，唯一实质错误是未取证的非规范性章节限定被误作协议要求。[独立候选](completed/source-proof-boundary-isolation.md#生产接入与真实消费)先修复该边界，原当前稿方案及所有旧失败保持。结果及成本由[新正式登记](../evals/02-current-case-inventory.md#2026-10-08-选证状态修复后的正式入口结果)拥有。

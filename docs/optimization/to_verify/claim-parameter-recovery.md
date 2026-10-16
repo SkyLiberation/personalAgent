@@ -10,6 +10,18 @@
 
 ## 修复方案与保留条件
 
+### 2026-10-11 选证参数拒绝的真实续接
+
+[范围反馈消费](../../../.tmp/source-returned-feedback-consumption-20261011/continuation-error.json)首个实际 selector 决定 write，却提交 d4:302-304；303 未返回，原生 selected_citation_ids 正确抛 CitationBindingError。writer、Source、Coverage 未到达，不计修订失败。一次物理、23,014 tokens、34.41 秒，零重试，累计 6,181,697 已知 tokens及十一次历史未知；原六项及范围四项关闭保持。
+
+生产 ConversationService.respond 已将该真实校验异常构造成 research_selection_invalid 的 DecisionFeedback 后继续；隔离 continue.py 将校验放在外层 try，只保存异常并停止。最早责任是回放遗漏既有参数反馈消费，不能归为生产参数恢复缺陷或 Source 分类回归，也不修改 Source／selector Prompt。
+
+一次有界回放修正：在 `.tmp/source-selection-parameter-resume-20261011/` 冻结完整失败 selector 输入、实际输出、同一真实 canonical 状态与候选；对实际输出再次调用原生校验产生同一异常，按生产同一 typed 字段及规则自动建立反馈，保留 claims、资料、S1 原反馈及旧成本。不得手改非法选择、补第303行、删除失败或重发无反馈请求。新 selector 的完整请求只能增加这条实际参数反馈，合法 write 后才进入原 writer 和核验。
+
+不重置原轨迹：原八逻辑、250,000 tokens、首调用起1,800秒包含已失败一次和23,014 tokens，余七逻辑、226,986 tokens。首调用时间从原 attempt 文件的创建事实取得，不以新进程重启；原 MiMo、thinking、480秒deadline、SDK和恢复保持。下一 selector 仍非法、非write，或后置语义／协议／服务失败立即停止，不继续同方向修正或重采样；复审后方可重新准入。验收错误进入完整实发请求1/1、原生合法选证1/1，后置修订与完整链分别报告，未到达不计为修复通过。命令 `.venv/Scripts/python.exe -B -X utf8 .tmp/source-selection-parameter-resume-20261011/continue.py`。
+
+实际续接已按原预算执行并停止：参数反馈进入完整selector请求1/1，下一实际输出原生选证合法1/1，writer仅改c4.f2并正确取得五步。后置第一个Source误拒明确局部读窗，剩余Source及Coverage未到达；该失败由[范围复审](../completed/source-cited-returned-scope.md#问题与解决机制)拥有，不反写参数恢复失败。三物理82,254 tokens、414.32秒，零重试；连原非法选择四次105,268 tokens、原计时873.23秒。见[SDK及输入审计](../../../.tmp/source-selection-parameter-resume-20261011/sdk-consumption-audit.json)和[实际报告](../../../.tmp/source-selection-parameter-resume-20261011/REPORT.json)。当前这个已送达错误的参数恢复边界关闭，历史其他未覆盖恢复保持；不重做已成功selector或writer。
+
 模型参数形状、目标身份或引用位置不合法时，代码返回带原始提议、错误位置、原因、未应用标记及所见版本的参数反馈。下一轮同时提供最新可用范围；错误保留至合法创建、编辑或提交后清除。真实语义反馈保留自身被验版本，不能被参数反馈覆盖。
 
 失败不写入当前集合，也不消耗首次创建身份。程序不替模型改参数、不默默补证；研究模型可以修正或继续取证。恢复共用决策与成本预算，服务错误与内部不变量仍终止；达到预声明的参数拒绝上限后保存错误并停止，不伪装为已交给模型消费。原轨迹上限为三次，[首次扩限](../claim-field-tool-mixup.md#扩大参数拒绝上限后的恢复验证)为累计六次；[能力验证](../claim-field-tool-mixup.md#优先验证合法引用编辑能力)提高到十次，随后[完整循环验证](../revision-feedback-loop.md#145-宽限制下的完整研究修订循环)提高到二十次并同步相邻预算，保留全部历史用量。各次条件独立封存，不将后续预算写回原结果。

@@ -22,4 +22,4 @@ Conversation 保留 canonical binder 按最终每段 references 恢复的 `Cited
 
 本次正式target实际0/1：两次选证响应截断且缺必填 `reason`，入口503，claims未创建，归属候选的生产消费检查点未到达。来源归属条件局部证据保留，完整候选继续待验证；最早阻塞由[选证输出子问题](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)拥有，完整结果及成本由[正式登记](../../evals/02-current-case-inventory.md#2026-10-02-具体来源归属候选的正式入口验证)拥有。
 
-后续正式来源消费已到达，两次Finalv6的段落、原文与来源身份逐字核对成立，未复现旧错页归属；完整用户结果0/1仍保留。[规范性限定取证](normative-context-acquisition.md)拥有新确定的章节层级缺口，当前页面绑定机制保持。正式结果见[登记](../../evals/02-current-case-inventory.md#2026-10-08-选证状态修复后的正式入口结果)。
+后续正式来源消费已到达，两次Finalv6的段落、原文与来源身份逐字核对成立，未复现旧错页归属；完整用户结果0/1仍保留。[规范性限定取证](../completed/source-proof-boundary-isolation.md#生产接入与真实消费)拥有新确定的章节层级缺口，当前页面绑定机制保持。正式结果见[登记](../../evals/02-current-case-inventory.md#2026-10-08-选证状态修复后的正式入口结果)。

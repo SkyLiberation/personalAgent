@@ -54,7 +54,7 @@ PROMPTS: dict[str, PromptSpec] = {
     ),
     "structured.repair.system": PromptSpec(
         name="structured.repair.system",
-        version="v1",
+        version="v2-bounded-output",
         output_contract="json_object",
         template=(
             "# 任务目标\n"
@@ -68,7 +68,7 @@ PROMPTS: dict[str, PromptSpec] = {
             "不得仅把无效行为改贴合法枚举来制造通过；当可选数组项没有任何合法值能保持原语义时，"
             "应删除该项。不得解释、局部打补丁或引用被拒绝的响应，也不得编造业务事实。\n\n"
             "# 输出形式与停止条件\n"
-            "这是唯一一次有界修复。只返回一个完整 JSON 对象，不要返回 Markdown、解释或额外字段。\n"
+            "执行本次有界输出修复。只返回一个完整 JSON 对象，不要返回 Markdown、解释或额外字段。\n"
             "Validation Feedback:\n{validation_feedback}\n"
             "Output Schema:\n{output_schema}"
         ),

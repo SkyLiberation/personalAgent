@@ -4,6 +4,11 @@
 
 | 已解决的问题 | 固化记录 |
 | --- | --- |
+| Coverage 的引用存在性在结构恢复后才检查，非法坐标触发入口 422；局部恢复 2/2 已接入 | [同一 typed 校验与有界引用恢复](coverage-reference-recovery.md) |
+| 来源模型借用未绑定原文支撑引用，或误判已返回证据缺失；统一六类已接入 | [统一核验的证据边界与历史取舍](source-proof-boundary-isolation.md#统一核验的局部问题关闭) |
+| 来源支持把未排除的相邻关系当必要疑点，或把全部返回资料代替本条引用 | [证据用途与必要澄清](source-evidence-purpose.md) |
+| 来源核验混淆引用子集、返回全集与稿件限定范围 | [引用支持与实际返回范围](source-cited-returned-scope.md) |
+| 来源反馈扩大性质或字段身份，类别正确却说明失真 | [来源核验的直接分类与反馈忠实性](source-feedback-classification.md) |
 | 可读性优先级与 Code Agent 局部阅读边界未明确，模型响应解析与调用装配混装 | [可读性优先与功能模块化](code-readability-modularity.md) |
 | 无研究稿时选证Schema允许无效answered身份 | [按实际状态呈现选证契约](research-selection-state-contract.md) |
 | 目录拒绝抢先绕过反馈、非法 JSON 没有进入已有一次纠正 | [Conversation 动作协议恢复](conversation-action-protocol-recovery.md) |

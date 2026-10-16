@@ -62,6 +62,12 @@ def diagnose_earliest_failure(
             reason_code=error_type,
         )
 
+    if delivered:
+        return EarliestFailureDiagnostic(
+            status="delivered",
+            reason_code="user_outcome_delivered",
+        )
+
     inputs = interaction_trace.get("inputs")
     if not isinstance(inputs, (list, tuple)):
         return EarliestFailureDiagnostic(
@@ -114,11 +120,6 @@ def diagnose_earliest_failure(
         ):
             successful_observation_seen = True
 
-    if delivered:
-        return EarliestFailureDiagnostic(
-            status="delivered",
-            reason_code="user_outcome_delivered",
-        )
     if required_source_groups and _source_groups_observed(
         inputs,
         required_source_groups,

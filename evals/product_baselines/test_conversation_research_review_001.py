@@ -20,13 +20,14 @@ pytest_plugins = (
 
 REVIEW_SCENARIO = _Scenario(
     scenario_id="tool-protocol-explicit-review",
-    dataset_revision="conversation-research-mcp-cooperation-review-zh-v2",
+    dataset_revision="conversation-research-mcp-cooperation-review-zh-v3",
     reference_path=TOOL_PROTOCOL_REFERENCE_PATH,
     outcome_contract=RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME,
     request=(
         "请实际查阅 OpenAI 官方工具文档和 MCP 官方 tools 规范，"
         "说明 OpenAI 模型通过 MCP 使用工具时，模型、宿主应用（含 MCP 客户端）"
         "和 MCP 服务器怎样协作。"
+        "请讲清工具请求和结果如何在这三方之间传递；不要求限定某种 OpenAI API 或产品实现。"
         "验收要求：解释工具由谁选择和调用、权限由谁检查、结果由谁校验及受什么约束，"
         "区分模型能力、应用实现与协议要求；"
         "相关结论给出能支持它的官方 URL；不要把资料没有保证的事情写成保证。"

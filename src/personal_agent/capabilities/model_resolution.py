@@ -35,7 +35,7 @@ class ModelInvocationAudit:
 
 
 class ModelInvocationAdmission:
-    def __init__(self, *, max_output_tokens: int = 32_768) -> None:
+    def __init__(self, *, max_output_tokens: int = 131_072) -> None:
         self.max_output_tokens = max_output_tokens
 
     def grant(

@@ -64,7 +64,7 @@ HTTP 直接执行通过 `invoke_direct()` 复用 Gateway；它有独立的身份
 
 `web_search(query, limit)` 返回发现摘要；`web_read(url)` 返回指定来源正文。长结果卸载到 Artifact，模型以 `search_action_output` 定位、`read_artifact` 读取同一正文坐标。后端固定调用 `rg`，模型只指定授权资源及读取参数。原 `read_action_output` 保留实现但不投影，准入拒绝；正文和引用契约见 [Context](context-engineering.md#网页来源正文保留与重读)及 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
 
-语义核验注册为 `workflow_activity`，由运行系统在适用提交后调用，不进入普通模型可见工具面。研究 claims、来源核验、覆盖、独立汇总与最终核验继续由 Conversation 的既有责任链消费，见[核验专题](verification-and-completion.md)。
+普通整稿核验注册为 `workflow_activity`，由运行系统在适用提交后调用。研究模型提交 claims 与最终回答，Conversation 沿 Model Port 进行一次统一核验，再由 Completion 交付；两者都不进入普通模型可见工具面，见[核验专题](verification-and-completion.md)。
 
 ## 证据入口
 

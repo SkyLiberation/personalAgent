@@ -10,9 +10,9 @@
   -> search_personal_knowledge 或受治理只读工具
   -> 按身份与作用域执行读取
   -> bounded Observation 与可引用原文
-  -> 研究任务按 claims 核验、覆盖和独立汇总
-  -> 唯一 FinalMessage
-  -> 适用的 Verification 与 Completion
+  -> 研究生成同版本 claims 与最终回答；普通任务生成 FinalSubmission
+  -> 各自适用的单次语义核验与 Completion
+  -> 交付确切通过的 FinalMessage
 ```
 
 个人资料通过 `ConversationKnowledgeReadPort.select_personal_evidence()` 进入，真实适配器复用 `KnowledgeService.select_evidence()`。它按责任主体、相关性、生命周期和支持状态选择 Claim，再恢复对应原文与冲突关系。事实与读写契约见 [Memory](memory.md)，产品链路与检查点见 [Capture 与 Conversation Grounded Answer](../workflow/capture-ask-model-flow.md)。

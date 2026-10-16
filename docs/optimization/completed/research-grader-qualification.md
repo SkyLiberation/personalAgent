@@ -35,11 +35,21 @@
 
 ## 实际引用页面与版本的参考资格
 
-`RESEARCH-GRADER-MCP-REFERENCE-001` 已解除本次已定位的依据缺口。唯一[参考fixture](../../../evals/e2e_quality/fixtures/research_answer_official_references.json)保留原七页，补入独立抓取的 OpenAI `/api/docs/mcp` 相关完整读窗及答案实际引用的2025-06-18版 MCP tools 全文，当前参考身份为 `official-sealed-excerpts-20261008-exact-citations-v5`。来源 URL、抓取正文和版本分别有身份；新旧规范页不能互相替代精确引用依据。参考继续属于评测输入，不进入生产研究，也不证明作者已读到相应内容。v8 Prompt、Schema、用户契约和控制标签保持。
+`RESEARCH-GRADER-MCP-REFERENCE-001` 已解除本次已定位的依据缺口。唯一[参考fixture](../../../evals/e2e_quality/fixtures/research_answer_official_references.json)保留原七页，补入独立抓取的 OpenAI `/api/docs/mcp` 相关完整读窗及答案实际引用的2025-06-18版 MCP tools 全文，当时参考身份为 `official-sealed-excerpts-20261008-exact-citations-v5`。来源 URL、抓取正文和版本分别有身份；新旧规范页不能互相替代精确引用依据。参考继续属于评测输入，不进入生产研究，也不证明作者已读到相应内容。v8 Prompt、Schema、用户契约和控制标签保持。
 
 固定既有完整正例与客户端校验缺失反例各一次，资格 **2/2**；原实际完整答案重评一次，引用缺口解除、findings为空。三项共192,273已完成tokens，实际请求、绑定和成本见[资格归档](../../../.tmp/research-reference-version-gap-20261008/qualification-result.json)。这是新参考身份下的条件Offline证据；原正式失败、旧评分和未知费用保留，正式用户结果由[评测登记](../../evals/02-current-case-inventory.md#2026-10-08-精确引用版本与评分资格复核)拥有。不将原13/13算作新参考版本执行通过，也不据两个固定控制估计判决稳定性。
 
 失败尝试保留两条边界：只追加指南整页时未保留初始r2负标签，原参考资格0/1；指南改为相关完整读窗后，又发现旧版规范缺页，原资格仍0/1。精确引用缺页由独立版本抓取和明确正反控制解决；r2原单次“核心关系缺失”标签在补齐依据后不再稳定，按完整用户问题、各方已交付职责和允许未知的范围复核，未据该标签接入新的覆盖Schema。不能通过要求保证未经取证的内部衔接来迎合旧拒绝。
+
+## 2026-10-14 完整实际引用页的参考资格
+
+新真实 E2E 引用 OpenAI 页第 2527 行，旧 r4 仅保留三个早期读窗；评分正确报告 evidence_gap，原 pytest 0/1 保留。本轮只将 r4 替换为正式执行保存的该官方页全部 2558 行，保留行号，其他八份参考逐字保持。当前身份为 `official-sealed-references-20261014-complete-mcp-v6`，v8 Prompt、Schema、答案、模型及生产代码保持。
+
+固定两份完整真实答案各一次：本次正式答案无 findings，passed；旧实际答案把 function calling 四步归到 MCP architecture 页，仍以 citation_mismatch 判 failed。资格 **2/2**，实际请求、原生参数及原文绑定通过，原样迁入唯一 fixture。见[资格与迁移密封](../../../.tmp/research-grader-full-cited-page-20261014/REPORT.json)。这不是新的 Product E2E，原 13/13、旧 v5 资格和正式失败均不改身份；后续正式入口由[剩余验收](../to_verify/normative-context-acquisition.md#下一次正式验收)拥有。
+
+两逻辑／物理、270,181 新已知 tokens、127.37 秒，零恢复、重试或新增未知；累计 13,558,050、未知十七次。原 250,000-token 成本计划超出 20,181，成本门槛未达；第二个原子样本结束即停止新增调用，没有回写旧预算。估算遗漏逐行 JSON 投影开销，后续正式评分按实际输入规模预留；本轮没有成本改善主张。原方案、实际响应及成本偏差保持，语义资格按两项既定判据关闭。
+
+重复缺页复审及时核对 ALCE 与 RAGAS 动态源码，保留评分依据必须实际到达的机制；不同评分集合不相互替代。此前补读窗只证明当时缺口解除，不能覆盖同页其他引用；本次补完整页面，未新增框架、字段、阶段或强迫合法结果通过的规则。
 
 ## 重新打开条件
 
