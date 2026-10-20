@@ -63,3 +63,17 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 - 任务是否真的要求响应后运行、跨进程或跨授权恢复；现有交互及领域生命周期能否满足同一交付契约。
 
 具体机制须按已定位的本地问题选择。重复研究或修订无效先审查模型决策与实际输入；中断丢失进度或重复副作用再审查对应恢复责任。新增机制的依据由 EVD 拥有，durable execution 的正式约束见[智能体决策与受治理执行](../devSpec/agentic-execution.md)。
+
+## 6. 长任务失败模式与评价边界
+
+2026-10-18 实际检索并读取以下一手资料。工程报告用于提出机制候选，原始研究用于界定测量含义；它们都不证明 personalAgent 已复现对应失败。检索范围与适用限制见[本次来源记录](../../.tmp/long-task-capability-review-20261018/external-review.json)。开源压缩装配另见[源码比较](context-engineering.md#5-压缩的实际装配消费与恢复)。
+
+| 一手来源 | 支持关注的问题 | 不能据此推出的结论 |
+| --- | --- | --- |
+| [Anthropic 长任务 Harness 实验](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)，2025-11-26 工程报告 | 跨窗口丢失工作背景、一次做太多留下半成品、局部进展后过早结束，以及缺少用户路径验证；压缩还需与增量成果及交接共同使用 | 全栈开发实验不证明研究场景相同收益，不要求复制 initializer、Git 或多 Agent 拓扑 |
+| [Anthropic Context 工程](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)，2025-09-29 工程报告 | 整体输入随动作增长，需组合按需读取、工具结果清理、压缩和外部工作记录；压缩存在遗漏关键细节的取舍 | 没有给所有任务统一的压缩阈值，也不证明扩大窗口能消除信息利用问题 |
+| [METR time-horizon 方法及 FAQ](https://metr.org/time-horizons/) | 连续复杂任务应消费前史并逐次解决依赖问题，不能用大量独立小题或大海捞针冒充；指标按人类专家耗时表示任务难度 | 人类任务时间不是 Agent 自主运行时间，不是 Harness 独立贡献；软件／ML／安全为主的任务分布不能外推本项目总体能力 |
+| [原始 τ-bench](https://arxiv.org/html/2406.12045v1)，§3、§5.2、§6 | 复合要求遗漏、工具与政策执行不一致；最终数据库奖励是必要而非充分条件，可能漏掉未经确认执行。`pass^k` 衡量多次全部成功 | 模拟零售／航空及历史模型结果不代表本项目失败率；不能把单次 E2E 或工具步骤通过率写成稳定性 |
+| [Lost in the Middle](https://aclanthology.org/2024.tacl-1.9.pdf)，TACL 2024，§2、§3 | 在所测模型中，输入容得下不等于模型能有效使用，相关信息位置影响静态问答与检索结果 | 它不是 compaction 实验，不证明当前模型仍有相同退化，也不直接准入历史摘要或专门埋针产品测试 |
+
+本地应分别核对容量、语义保留、目标覆盖、增量成果、执行失败、恢复、权限、预算及完成结果。后台运行、多 Agent 和跨天调度是否需要，仍由实际业务生命周期决定。研究场景的逐项审计和优先级由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#31-长任务问题逐项对照)拥有，参考页不另建产品待办。

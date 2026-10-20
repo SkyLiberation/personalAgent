@@ -4,7 +4,7 @@
 唯一机器可执行 owner 是
 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py)；当前架构、事实 owner
 和发布边界分别见
-[`core-architecture-current-state.md`](core-architecture-current-state.md) 与
+[`core-architecture-current-state.md`](../architecture/core-architecture-current-state.md) 与
 [当前评测用例盘点](../evals/02-current-case-inventory.md)。
 下文的 `TaskContract`、`TaskRuntimeProjection` 等只描述当时被测架构，不能外推为现状。
 

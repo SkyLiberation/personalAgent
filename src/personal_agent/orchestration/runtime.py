@@ -14,7 +14,7 @@ from personal_agent.kernel.models import (
     NoteSource,
     ReviewCard,
 )
-from personal_agent.kernel.observability import set_policy_decision_sink
+from personal_agent.kernel.observability import PolicyDecisionRecorder
 from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
@@ -102,28 +102,12 @@ from personal_agent.application.conversation import (
     FileInteractionJournal,
     LoopBudgetPolicy,
 )
-from personal_agent.application.conversation.models import (
-    PersonalKnowledgeCandidate,
-    PersonalKnowledgeEvidenceCitation,
-    PersonalKnowledgeEvidenceSnapshot,
+from personal_agent.application.conversation.knowledge_reading import (
+    ConversationKnowledgeReadAdapter,
 )
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.capability_inventory import (
     build_runtime_capability_inventory,
-)
-from personal_agent.orchestration.runtime_helpers import (
-    _annotate_answer,
-    _evidence_content,
-    _extract_question_keywords,
-    _format_graph_relation,
-    _graph_episode_uuids,
-    _graph_fact_lines,
-    _graph_facts_by_episode,
-    _merge_citations,
-    _merge_notes,
-    _split_sentences,
-    _tokenize_for_overlap,
-    _top_sentences,
 )
 from personal_agent.infra.runtime_llm import LlmClient
 from personal_agent.application.runtime_results import (
@@ -160,142 +144,6 @@ if TYPE_CHECKING:
     from personal_agent.application.capture import CaptureService
 
 logger = logging.getLogger(__name__)
-
-
-class _KnowledgeJsonResult:
-    def __init__(
-        self, payload: dict[str, object], *, ok: bool = True, error: str = ""
-    ) -> None:
-        self.ok = ok
-        self.error = error
-        self._payload = payload
-
-    def model_dump(self, mode: str = "python") -> dict[str, object]:
-        return dict(self._payload)
-
-
-class _KnowledgeConsolidationAdapter:
-    def __init__(self, runtime: "AgentRuntime") -> None:
-        self._runtime = runtime
-
-    def execute(self, *, topic: str, user_id: str = "default") -> _KnowledgeJsonResult:
-        return _KnowledgeJsonResult(
-            self._runtime.execute_consolidate(topic=topic, user_id=user_id)
-        )
-
-
-class _KnowledgeGapReport:
-    def __init__(self, *, text: str, gaps: list[dict[str, object]]) -> None:
-        self.text = text
-        self.gaps = gaps
-
-
-class _KnowledgeGapAdapter:
-    def __init__(self, runtime: "AgentRuntime") -> None:
-        self._runtime = runtime
-
-    def inspect(self, user_id: str) -> _KnowledgeGapReport:
-        result = self._runtime.knowledge_service.plan_review_and_gaps(
-            owner_id=self._runtime._owner_id(user_id),
-            limit=self._runtime.settings.knowledge_gap.max_gaps_per_run,
-        )
-        gaps = [gap.model_dump(mode="json") for gap in result.knowledge_gaps]
-        if gaps:
-            text = "\n".join(f"- {gap['question']}" for gap in gaps)
-        else:
-            text = "当前个人知识库 没有发现需要立即处理的知识缺口。"
-        return _KnowledgeGapReport(text=text, gaps=gaps)
-
-
-class _KnowledgeDigest:
-    def __init__(
-        self,
-        *,
-        text: str,
-        recent_notes: list[KnowledgeNote],
-        due_cards: list[ReviewCard],
-        sections: list[dict[str, object]],
-    ) -> None:
-        self.text = text
-        self.recent_notes = recent_notes
-        self.due_cards = due_cards
-        self.sections = sections
-
-
-class _KnowledgeReviewDigestAdapter:
-    formatter: "_KnowledgeReviewDigestAdapter"
-
-    def __init__(self, runtime: "AgentRuntime") -> None:
-        self._runtime = runtime
-        self.formatter = self
-
-    def generate(self, user_id: str) -> _KnowledgeDigest:
-        return self._runtime._knowledge_digest(user_id)
-
-    def to_text(self, digest: _KnowledgeDigest) -> str:
-        return digest.text
-
-
-class _ConversationKnowledgeReadAdapter:
-    def __init__(self, knowledge_service: KnowledgeService) -> None:
-        self._knowledge_service = knowledge_service
-
-    def list_personal_knowledge(
-        self,
-        *,
-        owner_id: str,
-        user_id: str,
-        limit: int,
-    ) -> tuple[PersonalKnowledgeCandidate, ...]:
-        items = self._knowledge_service.store.list_knowledge_items(
-            owner_id,
-            limit=500,
-        )
-        visible = tuple(
-            PersonalKnowledgeCandidate(
-                knowledge_item_id=item.knowledge_item_id,
-                title=item.title,
-                summary=item.summary,
-                state=item.state,
-            )
-            for item in items
-            if item.user_id == user_id and item.state not in {"deleted", "deprecated"}
-        )
-        return visible[:limit]
-
-    def select_personal_evidence(
-        self,
-        *,
-        question: str,
-        owner_id: str,
-        user_id: str,
-        limit: int,
-    ) -> PersonalKnowledgeEvidenceSnapshot:
-        selection = self._knowledge_service.select_evidence(
-            question,
-            owner_id=owner_id,
-            limit=limit,
-        )
-        return PersonalKnowledgeEvidenceSnapshot(
-            question=selection.question,
-            citations=tuple(
-                PersonalKnowledgeEvidenceCitation(
-                    evidence_span_id=item.evidence_span_id,
-                    quote=item.quote,
-                    locator=item.locator,
-                    claim_ids=tuple(item.claim_ids),
-                )
-                for item in selection.citations
-            ),
-            claim_summaries=tuple(
-                item.statement for item in selection.selected_claims
-            ),
-            conflicted_claim_ids=tuple(selection.conflicted_claim_ids),
-            potential_conflicted_claim_ids=tuple(
-                selection.potential_conflicted_claim_ids
-            ),
-            reason=selection.reason,
-        )
 
 
 def _policy_rules_from_settings(settings: Settings) -> PolicyRules:
@@ -350,10 +198,14 @@ class AgentRuntime:
         self.knowledge_lifecycle_service = KnowledgeLifecycleService(
             PostgresKnowledgeLifecycleStore(settings.postgres_url)
         )
-        # 让 gateway 与 facade 两条策略路径的决策都落库，调用点无需改签名。
-        set_policy_decision_sink(self.tool_governance_store.record_policy_decision)
+        self._policy_decisions = PolicyDecisionRecorder(
+            self.tool_governance_store.record_policy_decision
+        )
         self.memory = MemoryFacade(
-            store, graph_store, policy_engine=self._policy_engine
+            store,
+            graph_store,
+            policy_engine=self._policy_engine,
+            policy_decisions=self._policy_decisions,
         )
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
@@ -368,7 +220,6 @@ class AgentRuntime:
         # JSON-schema / Pydantic structured-output call.
         from personal_agent.infra.structured_model import (
             build_chat_model_client,
-            build_streaming_model_client,
         )
 
         self._model_client = build_chat_model_client(
@@ -388,16 +239,13 @@ class AgentRuntime:
             self.knowledge_service.claim_grounding_judge = LLMClaimGroundingJudge(
                 self._structured_client
             )
-        self._streaming_client = build_streaming_model_client(
-            settings.openai,
-            settings.langsmith,
-        )
         self._research_event_client = self._structured_client
         self._planner_client = self._structured_client
         self._tool_executor = ToolExecutor(
             audit_sink=self.tool_governance_store,
             idempotency_store=self.tool_governance_store,
             policy_engine=self._policy_engine,
+            policy_decisions=self._policy_decisions,
         )
         self.agent_run_store = PostgresAgentRunStore(settings.postgres_url)
         self._agent_gateway = AgentGateway(
@@ -414,7 +262,6 @@ class AgentRuntime:
         self._llm = LlmClient(
             settings,
             model_client=self._model_client,
-            streaming_client=self._streaming_client,
         )
         self._digest_formatter = DigestFormatter()
         self._review_digest_use_case = ReviewDigestUseCase(
@@ -483,12 +330,13 @@ class AgentRuntime:
         self._register_tools()
         self._conversation_service = ConversationService(
             self._structured_client,
+            policy_decisions=self._policy_decisions,
             tool_port=self._tool_executor,
             agent_port=self._agent_gateway,
             artifact_port=self.artifact_service,
             artifact_search=RipgrepArtifactSearch(),
             knowledge_writer=self.knowledge_service,
-            knowledge_reader=_ConversationKnowledgeReadAdapter(self.knowledge_service),
+            knowledge_reader=ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
             budget_policy=LoopBudgetPolicy(
                 **self.settings.interaction_loop.model_dump()
@@ -671,10 +519,6 @@ class AgentRuntime:
             build_enterprise_knowledge_search_tool(self._tool_executor)
         )
 
-    @property
-    def _web_search_available(self) -> bool:
-        return self.settings.web_search_available
-
     def list_tools(self, *, include_internal: bool = False) -> list:
         if include_internal:
             return self._tool_executor.list_tools()
@@ -722,12 +566,6 @@ class AgentRuntime:
 
     def audit_metrics(self, *, window_hours: int = 24):
         return self.tool_governance_store.audit_metrics(window_hours=window_hours)
-
-    def _generate_answer(self, prompt: str) -> str | None:
-        return self._llm.generate_answer(prompt)
-
-    def _generate_answer_stream(self, prompt: str):
-        return self._llm.generate_answer_stream(prompt)
 
     # ---- ingestion pipeline (capture → graph) ----
 
@@ -798,76 +636,6 @@ class AgentRuntime:
         return self.knowledge_service.plan_review_and_gaps(
             owner_id=self._owner_id(user_id),
             limit=self.settings.knowledge_gap.max_gaps_per_run,
-        )
-
-    def _knowledge_digest(self, user_id: str) -> _KnowledgeDigest:
-        owner_id = self._owner_id(user_id)
-        plan = self.knowledge_service.plan_review_and_gaps(
-            owner_id=owner_id,
-            limit=self.settings.knowledge_gap.max_gaps_per_run,
-        )
-        items = self.knowledge_service.store.list_knowledge_items(
-            owner_id,
-            state="active",
-            limit=20,
-        )
-        claims_by_id = {
-            claim.claim_id: claim
-            for claim in self.knowledge_service.store.list_claims(owner_id, limit=500)
-        }
-        recent_notes = [
-            KnowledgeNote(
-                id=item.knowledge_item_id,
-                user_id=item.user_id,
-                source=NoteSource(
-                    type="knowledge_item",
-                    metadata={
-                        "owner_id": owner_id,
-                        "claim_ids": list(item.claim_ids),
-                        "evidence_span_ids": list(item.evidence_span_ids),
-                    },
-                ),
-                body=NoteBody(
-                    title=item.title,
-                    content=item.summary,
-                    summary=item.summary,
-                ),
-            )
-            for item in items
-        ]
-        due_cards = [
-            ReviewCard(
-                note_id=item.claim_id,
-                prompt=item.prompt,
-                answer_hint=claims_by_id.get(item.claim_id).statement
-                if item.claim_id in claims_by_id
-                else item.prompt,
-                due_at=item.due_at,
-            )
-            for item in plan.review_items
-        ]
-        claim_lines = [f"- {item.summary}" for item in items[:8]]
-        gap_lines = [f"- {gap.question}" for gap in plan.knowledge_gaps[:8]]
-        text = "\n".join(
-            [
-                "个人知识简报",
-                "",
-                "活跃知识：",
-                *(claim_lines or ["- 暂无 active claim。"]),
-                "",
-                "待处理缺口：",
-                *(gap_lines or ["- 暂无高优先级缺口。"]),
-            ]
-        )
-        return _KnowledgeDigest(
-            text=text,
-            recent_notes=recent_notes,
-            due_cards=due_cards,
-            sections=[
-                {"title": "active_claims", "count": len(items)},
-                {"title": "review_items", "count": len(plan.review_items)},
-                {"title": "knowledge_gaps", "count": len(plan.knowledge_gaps)},
-            ],
         )
 
     def _owner_id(self, user_id: str | None) -> str:
@@ -1283,16 +1051,4 @@ __all__ = [
     "CaptureResult",
     "DigestResult",
     "ResetResult",
-    "_annotate_answer",
-    "_evidence_content",
-    "_extract_question_keywords",
-    "_format_graph_relation",
-    "_graph_episode_uuids",
-    "_graph_fact_lines",
-    "_graph_facts_by_episode",
-    "_merge_citations",
-    "_merge_notes",
-    "_split_sentences",
-    "_tokenize_for_overlap",
-    "_top_sentences",
 ]

@@ -15,7 +15,7 @@ HTTP / CLI / Message Adapter
        -> persistence adapters
 ```
 
-`AgentRuntime` 只集中创建依赖和 Adapter，不成为第二事实源。Application 只依赖 Port；PostgreSQL、Provider SDK、MCP、A2A 与 Artifact Store 位于外层实现。
+`AgentRuntime` 集中创建依赖和 Adapter，当前仍保留部分业务协调方法；业务事实继续由对应用例拥有。实际包布局和边界由[代码地图](../architecture/code-map.md)解释，不能把装配现状描述为已完全纯化。Application 通过 Port 消费外部依赖，具体存储和服务提供方实现由组合根注入。
 
 ## Conversation loop
 
@@ -28,11 +28,13 @@ messages + authenticated principal
   -> ActionObservation | DecisionFeedback
   -> returned source text opens research submission / model-selected prepare_final (within budget)
   -> 研究：同版本 claims 与 final_answer -> 统一核验 -> Completion
-  -> 普通：FinalSubmission -> 原整稿核验 -> Completion
+  -> 普通：FinalSubmission -> 冻结标准要求时执行整稿核验 -> Completion
   -> 交付确切通过的回答，或继续修订
 ```
 
 外部研究的 claims 与最终回答由同一版本和原 Interaction Journal 保存；模型自主取证和编辑，统一核验通过后直接经 Completion 交付确切回答。全部调用计入原预算，不再构造独立汇总或研究 Final。当前生产接入、例外范围及正式验收状态见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
+
+当前主循环仍直接编排研究局部步骤，代码职责混合见[架构现状](../architecture/core-architecture-current-state.md#31-当前主循环的职责混合)。[主循环边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md)拥有待验证整理方案；本页只说明现行行为。
 
 模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 

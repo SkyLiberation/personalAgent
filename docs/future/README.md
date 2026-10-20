@@ -6,7 +6,7 @@
 
 优化验收与重新打开由 [EVD](../devSpec/change-evidence.md#14-真实用例驱动优化与验收闭环)拥有；准入状态变化后按下表收敛活动文档。
 
-当前生产事实进入[当前核心架构](../summary/core-architecture-current-state.md)及对应专题或固定流程文档。验证优化过程和经验集中在 [optimization](../optimization/README.md)，原始证据独立封存，正式评测结果和发布门禁状态由评测权威文档拥有；这些历史记录不留在 Future 正文。
+当前生产事实进入[当前核心架构](../architecture/core-architecture-current-state.md)及对应专题或固定流程文档。验证优化过程和经验集中在 [optimization](../optimization/README.md)，原始证据独立封存，正式评测结果和发布门禁状态由评测权威文档拥有；这些历史记录不留在 Future 正文。
 
 ## 状态变化必须在同一变更收敛
 

@@ -17,4 +17,4 @@
 
 Conversation、知识生命周期和周期 Research 各自拥有合法写入口；Tool/Agent Gateway 产生执行事实。语义核验和最终完成由各自结果契约约束，不能从工具成功或子智能体终态推导。
 
-系统级边界见[当前核心架构](../summary/core-architecture-current-state.md)，工具协议见[工具专题](../topics/tools.md)，产品和发布证据见[评测盘点](../evals/02-current-case-inventory.md)。旧 Task/GoalGraph/Executive 总图和依赖它的专题已清理，迁移决定及有效历史证据保留在 ADR 与评测归档中。
+系统级边界见[当前核心架构](../architecture/core-architecture-current-state.md)，工具协议见[工具专题](../topics/tools.md)，产品和发布证据见[评测盘点](../evals/02-current-case-inventory.md)。旧 Task/GoalGraph/Executive 总图和依赖它的专题已清理，迁移决定及有效历史证据保留在 ADR 与评测归档中。

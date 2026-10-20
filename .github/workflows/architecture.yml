@@ -19,6 +19,8 @@ jobs:
           python-version: "3.12"
       - name: Enforce explicit package DAG (fail closed)
         run: python scripts/check_layers.py
+      - name: Validate development and architecture documents
+        run: python scripts/check_dev_spec.py
 
   lint-imports:
     name: Ruff + import health

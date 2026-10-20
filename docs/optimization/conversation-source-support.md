@@ -38,9 +38,9 @@
 
 来源核验的“引用不支持”检查必要前提是否进入本条已绑定引用，规范性质一致性比较有明确依据的性质归属，两项能力分别计分。引用不足不能证明规范性质比较正确，也不表示全部已返回资料没有该内容。N1 原预声明将两者合并；按实际能力解释，原始分数和封存记录保持原身份。反馈对实际断言的忠实解释是共同验收点，不因反馈提到某种性质就自动归为该性质比较失败。
 
-当前来源报告共用[唯一六类五字段契约](../topics/verification-and-completion.md)，不按类别分配调用。Source v31 单次输出直接交给 writer v23，自动反馈复核已删除；原文、类别及说明仍由各自责任主体拥有。历史分类、范围与证据用途的局部成绩按各自版本保留，当前生产接入和正式用户结果由[剩余设计](completed/source-proof-boundary-isolation.md#生产接入与真实消费)拥有。下一候选由同一研究模型生成 claims 与最终回答，以一次核验检查事实、融合及原目标，缺最终回答拦截完成，详见[统一设计](to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)；尚未接入，不改写既有成绩。
+当前研究报告采用[八类四字段契约](../topics/verification-and-completion.md)，每项仅 `category`、`target`、`error_description`、`evidence_ids`。同一研究模型生成 claims 与最终回答，唯一核验器一次检查来源支持、两稿一致性和最终回答对原目标的满足，反馈交回同一 writer；缺少最终回答不能完成。当前生产契约由 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有，接入与验收范围见[统一设计](to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)，不再保留独立 Coverage、汇总或研究 Final 阶段。
 
-统一六类已接入生产：citation_not_supported 检查本条引用支持，evidence_presence_conflict 检查实际返回证据是否被稿件说成没有；其余四类及五个字段保持。十项局部核验、P1／C7 真实修订和完整 Source／Coverage 均达到既定条件，见[固化证据](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)。U1 按实际同意确认范围允许忠实宽读法或空发现，旧成绩保持；剩余为原中文正式 E2E 用户结果验收。
+Source v31 单次输出交给 writer v23、移除自动反馈复核，以及当时六类来源报告的结论均保留历史身份，见[生产接入与真实消费记录](completed/source-proof-boundary-isolation.md#生产接入与真实消费)。十项局部核验、P1／C7 真实修订和完整 Source／Coverage 的原通过范围由[固化证据](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)拥有；U1 按实际同意确认范围允许忠实宽读法或空发现，原成绩不改写。统一链后续的正式用户结果另见[评测盘点](../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)，不能把旧成绩当作现行统一契约的完整证明。
 
 下表是现有职责与真实样本的唯一映射导航，不声明所有能力已通过。`M` 表示已封存正式中文 HTTP 运行 `irun_d46adae369924211`；数字是该运行 `product-model-calls/24340/` 的物理 SDK 请求编号。原始输入及同轨迹修订可以回放，回放属于 Offline Eval；原报告按原版本保留，新单点结果独立登记。没有资格充分的正反样本时，明确记为覆盖缺口，后续经正式入口取得。
 
@@ -55,8 +55,8 @@
 | 来源支持：规范性质一致性 | 在性质依据充分且原稿断言明确时，比较规范性条款、非规范性指导等归属是否一致 | M `0064` 真实修订；`0047` 为含混及缺前提边界；详见[原单点诊断](completed/source-feedback-classification.md#失败尝试与评测校准) | 正式充分性质冲突样本仍缺失；缺前提只计充分性，规则见[固化记录](completed/source-feedback-classification.md) |
 | 来源支持：义务强度 | 区分必须、推荐、允许与可能，保留条件，不把“应”夸大为“必须” | M `0064` 的真实 MUST／SHOULD 条款 | 已有合法真实稿；清晰强度错配负例待正式轨迹登记，历史人工负例不计覆盖 |
 | 来源支持：否定与认知限制 | 区分本条引用子集、实际返回范围与全文；缺证不能被反馈写成否定事实 | M `0027`／`0033` 局部否定范围反馈与 `0039` 修订；`0066`／`0074` 真实限制修订；新连续状态 Source c4 完整实发输入 S1 | 引用子集被误作全部返回集合，真实责任、S1 及既有 A5 正控制由[范围设计](completed/source-cited-returned-scope.md)拥有；原六项及范围四项成绩保留，v17最终四项4/4已固化；页面正文已实际补读，当前c4新增否定的澄清依据及实际接入由原设计拥有；独立缺项流程仍停用 |
-| 用户事实覆盖：现行 Coverage，候选与最终回答统一核验 | 对冻结原项判断完整研究是否回答所需内容，缺项按候选 `requirement_not_satisfied` 反馈原目标及必要缺口 | [正式覆盖消费及新真实衔接缺项](to_verify/research-goal-coverage.md#问题与责任边界) | 新统一任务待按真实 claims 与同轨迹最终回答验收；目标缺项、回答与 claims 不一致及引用不足分别分类 |
-| Final：当前稿忠实融合，现行仍含交付检查 | 保持已核验研究的实质内容、范围、出处及引用关系；实际汇总修复由汇总者消费 | M [真实拒稿、修订及接受](../../.tmp/research-selection-state-target-20261008/final-division-checkpoint.json)及[真实枚举扩大](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | v6 原检查点保持；候选删除独立 Final，由唯一核验器检查当前研究及最终回答，尚未接入 |
+| 用户事实覆盖：统一研究核验 | 以最终回答完整正文对照冻结原项，缺项用 `requirement_not_satisfied` 反馈原目标及必要缺口，claims 和资料不能补作已回答内容 | 历史 [Coverage 消费及真实衔接缺项](to_verify/research-goal-coverage.md#问题与责任边界)；统一链[正式验证](../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | 独立 Coverage 已退出；目标缺项、两稿不一致及引用不足在同一报告中分别分类，既定通过范围与剩余边界按统一设计记录 |
+| 最终表达保真：统一研究核验 | 对照同版本 claims 判断最终回答是否保留实质内容、范围、出处及引用关系，实质遗漏、改变或新增用 `answer_claim_mismatch`；反馈由同一 writer 消费 | 历史 M [真实拒稿、修订及接受](../../.tmp/research-selection-state-target-20261008/final-division-checkpoint.json)及[真实枚举扩大](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | v6 原检查点保留历史身份；现由唯一核验器检查研究及最终回答，同版本空报告才允许确切回答进入 Completion，现行契约见 [ADR 0032](../adr/0032-conversation-research-claims.md) |
 | 核验反馈：实际断言及依据忠实性 | 类别、说明、片段定位及引用解释同一实际关系；含混读法保持可能性限定，不新增确定性质、强度或具体身份，逐项按完整含义验收 | M `0049`／`0047`／`0058` 及原六项；10月13日 A6 原始额外反馈与原七项完整真实输入 | [原分类与形成后反馈核对](completed/source-feedback-classification.md)、[证明集合隔离](completed/source-proof-boundary-isolation.md)拥有规则、真实用例和证据边界 |
 
 每次未识别、误拒或反馈失真先绑定上述核验点及实际阶段。没有对应点时，在其既有责任主体内补充通用判据、边界和同轨迹完整用例，禁止按任务名称或答案关键词加例外。输入缺证、歧义和服务故障按真实依据归因，不自动算语义漏放。唯一设计预声明调用、标签、预算及停止条件，实际结果由[评测盘点](../evals/02-current-case-inventory.md)拥有；矩阵不自动新增生产阶段或字段。

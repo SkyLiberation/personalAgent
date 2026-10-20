@@ -47,3 +47,16 @@
 共同机制是已有 typed 执行事实向本轮模型消息的单向投影，没有必要为此新增第二份持久状态。窗口变化或重新执行后，说明随对应事实重新生成；权限检查仍在执行边界，格式化不扩大授权。执行失败保留失败身份，不能靠措辞变成成功；外部证据也不能因进入文字消息就获得指令权威。这些是本工程采纳时必须保留的边界，不能据上表推断两个项目的全部权限、取消、恢复或持久化语义相同。
 
 本工程反馈表达规则由 [CTX 第 1.1 节](../devSpec/context-memory-retrieval.md#11-模型输入优先表达语义机器消费保持结构化)拥有；具体读取问题与历史依据见[优化记录](../optimization/document-absence.md#104-按来源顺序返回缺项分类)。参考页不维护第二份生产缺口、采用状态或修订成功率。
+
+## 5. 压缩的实际装配、消费与恢复
+
+2026-10-18 核对两个独立开源实现的固定源码，以及 DeepAgents 锁定的 `langchain==1.4.6` 配对切割实现。共取得 27 个源码／依赖锁文件，见[来源及 SHA-256](../../.tmp/context-compaction-review-20261018/sources/source-manifest.json)和[校验记录](../../.tmp/context-compaction-review-20261018/sources/verification.json)。未运行第三方项目、模型或测试。以下是该版本机制，不代表当前所有部署配置。
+
+| 实现 | 实际生产调用链 | 触发、保留与失败边界 |
+| --- | --- | --- |
+| DeepSeek Harness `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e` | [`standard/agent.cordis.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/apps/cli/config/agent-presets/standard/agent.cordis.yml#L137)装配 basic compactor 及工具结果 pruner；agent loop 派发 pre-step，进入 [`compaction-basic`](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/compaction/compaction-basic/src/index.ts#L137)，先裁剪再选择历史区间，生成摘要并替换本轮 surface | 默认按窗口 80% 触发、保留 16% 尾部，token meter 使用实际请求锚点及变化估计。区间切割保持工具调用／结果配对；[`region.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/compaction/compaction-basic/src/region.ts#L98)要求替换后严格缩小，保留原事件及 `sourceEventSeqs`。空摘要、截断及错误拒绝提交；overflow 仅在实际缩减后有界恢复。Session 通过原日志及 surface 替换重放；未核实模型可直接按 seq 调工具召回原文 |
+| DeepAgents `fd3e64ab6b605450bed5a2c22ef2ec84cd40542e` | [`create_deep_agent`](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/graph.py#L918)为父级及默认子级装配 summarization middleware；[`wrap_model_call`](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/middleware/summarization.py#L1526)重建有效历史、裁剪旧参数、外置历史、生成摘要并记录 `_summarization_event`，后续请求消费摘要及近期尾部 | 有 profile 时默认 85% 触发、保留 10%；[`请求预算`](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/middleware/summarization.py#L1434)统计消息、system、工具，显式扣 configured output。配对切割委托给锁定 LangChain 实现。原始 messages 保留，历史有读取路径；外置失败会告警后继续摘要，不能据此保证原文可读。重启持久性依赖调用方 checkpointer/backend，不由 factory 默认保证 |
+
+两者都把摘要用于后续实际请求，而非只生成一段摘要后继续发送全部旧历史；也都没有用语义 Judge 保证摘要忠实。DeepSeek 本次未见与 DeepAgents 相同的显式输出预留，不能把阈值和安全保证合并描述。
+
+本工程可借鉴“按实际容量触发、保留配对尾部、原历史可追溯、后续真正消费压缩视图、失败有界”的责任划分。原目标、权限、预算、执行及批准仍从 canonical facts 恢复，摘要仅辅助理解。本工程若承诺原文可重读，外置或恢复失败时不能照搬继续有损压缩的降级。具体候选由[主循环 Context 设计](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)拥有；这里的源码不替代本地失败 baseline 或压缩后交付证据。

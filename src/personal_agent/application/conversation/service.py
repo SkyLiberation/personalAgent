@@ -37,7 +37,8 @@ from personal_agent.kernel.contracts.scope import (
     ExecutionScope,
     AuthenticatedPrincipal,
 )
-from personal_agent.kernel.observability import record_policy_decision
+from personal_agent.kernel.observability import PolicyDecisionRecorder
+from personal_agent.kernel.contracts.policy import PolicyDecisionEvent
 from personal_agent.kernel.logging_utils import log_event
 
 from .observation_bounds import (
@@ -179,8 +180,10 @@ class ConversationService:
         budget_policy: LoopBudgetPolicy | None = None,
         journal: InMemoryInteractionJournal | None = None,
         action_diagnostics_reveal_field_names: bool = False,
+        policy_decisions: PolicyDecisionRecorder | None = None,
     ) -> None:
         self._model_client = model_client
+        self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
         self._tool_port = tool_port
         self._agent_port = agent_port
         self._artifact_port = artifact_port
@@ -1115,8 +1118,8 @@ class ConversationService:
             )
         return trace
 
-    @staticmethod
     def _require_trace_scope(
+        self,
         trace: InteractionTrace,
         principal: AuthenticatedPrincipal,
         *,
@@ -1124,15 +1127,17 @@ class ConversationService:
     ) -> None:
         if trace.principal == principal:
             return
-        record_policy_decision(
-            action=action,
-            effect="deny",
-            rule="conversation_run_scope_mismatch",
-            reason="authenticated principal does not own the interaction run",
-            permission_scope="conversation_run:read",
-            resource=trace.interaction_run_ref,
-            user_id=principal.principal_id,
-            run_id=trace.interaction_run_ref,
+        self._policy_decisions.record(
+            PolicyDecisionEvent(
+                action=action,
+                effect="deny",
+                rule="conversation_run_scope_mismatch",
+                reason="authenticated principal does not own the interaction run",
+                permission_scope="conversation_run:read",
+                resource=trace.interaction_run_ref,
+                user_id=principal.principal_id,
+                run_id=trace.interaction_run_ref,
+            )
         )
         raise PermissionError("interaction run scope mismatch")
 

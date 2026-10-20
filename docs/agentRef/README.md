@@ -12,12 +12,13 @@
 | --- | --- | --- |
 | 指令层级、Prompt、Context、压缩、卸载、按需加载 | [Context Engineering](context-engineering.md) | 如何只把当前决策需要的信息送入模型 |
 | 跨轮状态、短期记忆、长期记忆、会话、用户画像 | [记忆与会话](memory-and-session.md) | 什么需要保留、由谁写入、何时召回或失效 |
-| Plan、Todo、任务分解、计划审批、计划修订 | [计划与任务管理](planning-and-task-management.md) | 如何把研究、计划、执行和完成分开 |
-| 工具调用、权限、审批、沙箱、Hook、副作用 | [工具执行与安全](tool-execution-and-safety.md) | 如何限制能力、准入动作并生成执行事实 |
+| Plan、Todo、任务分解、计划审批、计划修订、需求澄清与用户提问 | [计划与任务管理](planning-and-task-management.md) | 如何对齐目标、按需澄清，并把计划、执行和完成分开 |
+| 工具粒度、通用性、工具数量、按需暴露、工具调用、权限、审批、沙箱、Hook、副作用 | [工具执行与安全](tool-execution-and-safety.md) | 如何选择模型可见工具、限制执行边界并生成事实 |
 | Subagent、Handoff、并行、团队、委托 | [多智能体与委托](multi-agent-and-delegation.md) | 如何隔离角色与上下文，并明确最终结果 owner |
 | 长任务、增量进展、跨上下文接续、Checkpoint、resume、replay、durable execution | [运行恢复与长任务](runtime-recovery.md) | 如何保留目标与有效成果并收敛交付；跨恢复边界时如何避免丢失事实或重复副作用 |
 | Skill、Plugin、MCP、Extension、能力发现 | [技能与扩展](skills-and-extensibility.md) | 如何按需披露可复用流程与外部能力 |
 | Trace、Observation、Review、Verifier、评测 | [验证与可观测](verification-and-observability.md) | 如何区分运行记录、语义验证和用户完成 |
+| 用户任务、公开题目、附件、初始数据、参考答案及终态评分 | [任务与用例数据](task-benchmarks.md) | 怎样选取可审计材料，并区分原题、改编场景及本工程真实 E2E |
 
 ## 2. 参考对象与能力类型
 
@@ -50,6 +51,6 @@
 
 ## 4. 使用方式
 
-按[EVD 外部参考规则](../devSpec/change-evidence.md#6-外部参考的证据分级)完成目标版本复核、比较记录与采纳判断；本目录只帮助按组件定位来源，不另设准入流程。
+框架类设计先从命中的组件条目定位开源源码及正式调用链，再用官方文档补充说明；按 [EVD 外部参考规则](../devSpec/change-evidence.md#6-外部参考的证据分级)完成固定提交复核、独立实现比较与采纳判断。本目录只拥有来源导航与比较记录，不另设准入流程。
 
 新增参考对象须提供现有样本未覆盖的能力语义，或替换失效来源；只增加品牌数量而没有新机制的资料不收录。

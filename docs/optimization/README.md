@@ -4,7 +4,7 @@
 
 ## 目录分工与入口
 
-本目录拥有优化推进过程；[Future 队列](../future/design-optimization-backlog.md)唯一拥有问题准入状态，Future 专题拥有产品活动设计；尚未充分证明的机制候选正文由 [`to_verify/`](to_verify/README.md)按具体问题拥有，Future 只链接候选及其准入条件。正式用例结果与发布资格由[评测文档](../evals/02-current-case-inventory.md)拥有，当前生产行为由对应专题或摘要文档拥有。原始请求、响应、代码身份和校验和继续独立封存，不把大体积日志、密钥或私人数据复制进本目录。
+本目录拥有优化推进过程；[Future 队列](../future/design-optimization-backlog.md)唯一拥有问题准入状态，Future 专题拥有产品活动设计；尚未充分证明的机制候选正文由 [`to_verify/`](to_verify/README.md)按具体问题拥有，Future 只链接候选及其准入条件。正式用例结果与发布资格由[评测文档](../evals/02-current-case-inventory.md)拥有，当前生产行为由[工程架构](../architecture/README.md)及对应专题拥有。原始请求、响应、代码身份和校验和继续独立封存，不把大体积日志、密钥或私人数据复制进本目录。
 
 设计与验收顺序由 [EVD](../devSpec/change-evidence.md#7-强制开发与设计流程)拥有，用例来源、成功和重新打开由[闭环规则](../devSpec/change-evidence.md#14-真实用例驱动优化与验收闭环)拥有；本目录记录实际过程与取舍，不替代先行设计。
 
@@ -31,6 +31,9 @@
 
 | 阅读目的 | 入口 |
 | --- | --- |
+| 优秀 Agent 架构对照与 Runtime 装配边界整理 | [取舍与工程验收](completed/runtime-composition-boundary.md) |
+| 退役无消费者的模型 token 流链路 | [删除、正式 SSE 边界与工程证据](completed/model-streaming-retirement.md) |
+| 多 Runtime 策略审计归属修复 | [实际串库、显式绑定及原 target 剩余边界](to_verify/runtime-policy-audit-isolation.md) |
 | 可读性优先与功能模块化如何控制开发上下文 | [规范与响应解析职责整理](completed/code-readability-modularity.md) |
 | 近期候选如何开始验证 | [近期候选入口](to_verify/README.md#近期候选入口)；本轮预声明见[当前稿独立核验](claim-revision-nonconvergence.md#2026-10-08-当前稿独立核验的预声明) |
 | 当前还缺什么、哪些修复已有收益 | [问题总览](conversation-source-support.md#当前核心问题与责任边界) |

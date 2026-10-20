@@ -2,7 +2,7 @@
 
 > 适用于本仓库全部目录。`AGENTS.md` 是主规范，`CLAUDE.md` 是逐字一致的镜像；修改后同步两者。根入口保留全局门禁，任务细则与目录入口按需读取，正文归属见[开发细则索引](docs/devSpec/README.md)。
 
-本项目是 Python 3.11+ 的个人知识智能体 Runtime，处于正式上线前迭代期。源码在 `src/personal_agent/`，正式评测在 `evals/`，工程检查在 `scripts/`，文档导航见 [docs/README.md](docs/README.md)。依赖与 CLI 入口由 [pyproject.toml](pyproject.toml)定义，当前架构由[核心架构说明](docs/summary/core-architecture-current-state.md)拥有。
+本项目是 Python 3.11+ 的个人知识智能体 Runtime，处于正式上线前迭代期。源码在 `src/personal_agent/`，正式评测在 `evals/`，工程检查在 `scripts/`，文档导航见 [docs/README.md](docs/README.md)。依赖与 CLI 入口由 [pyproject.toml](pyproject.toml)定义，现行框架统一从[工程架构入口](docs/architecture/README.md)阅读。
 
 本规范覆盖设计、开发、修复、重构、评审、评测、文档与发布。“必须”“禁止”是工程门禁；实施例外按 [REL](docs/devSpec/migration-release.md#2-adr-准入)记录依据、防护、验证和退出条件，兼容例外有删除日期。
 
@@ -24,6 +24,7 @@
 - E2E 自动断言用户结果与必要反事实；对象、调用、Trace、状态或局部通过不能替代用户结果。原始用户结果与局部检查点分别计分，按最早责任与因果关系归因；内部路径只有属于公开契约时才能作为产品通过条件，独立后续失败不否定已成立机制。
 - 默认产品语言为中文。生产 Prompt 的任务逻辑，以及 Product E2E、Golden Set 与 Offline Eval 的用户输入、目标、成功标准、失败反馈和结果解释以中文为主。明确的多语言契约按相同语义建立自然表达镜像，分别验证与报告，不跨语言外推；代码、协议、命令与 URL 保留原文。
 - 模型语义设计或异常定位按 [CTX 输入审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)核对实际请求、构造链及同轨迹 think；决策依据仍不清楚时，按其规则进行中立追问或反问。依赖前置模型决策时，按 [EVD 连续验证](docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)消费实际输出。
+- 局部语义判断类修复须在执行前按 [QLT 重复验证](docs/devSpec/quality-security.md#13-局部语义判断类修复的重复验证)固定最低次数、通过判据及成本，完成整组验收后才可声明修复；单次命中不能替代重复验证。
 - 核验漏放按 [QLT](docs/devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)检查最小充分输入；按预声明判据仍不满足核验契约时，停止对应生产准入并重审任务设计。核验点通用，每次未识别归类到明确判据与真实轨迹用例。
 
 ### 2.2 一个事实只有一个 owner
@@ -37,6 +38,7 @@
 - 同一职责只保留一套现行设计与契约，迁移全部生产者、消费者和文档，删除旧路径；合法操作与适配器差异按 [ARC](docs/devSpec/architecture-ownership.md#11-同一职责采用唯一契约)界定。
 - 新结构有明确职责、正式入口、装配点、真实消费者和必要性依据，持久化事实有真实读写者。按 [ARC 可达性](docs/devSpec/architecture-ownership.md#7-生产可达性)检查，禁止为未来可能性预建结构。
 - 依赖方向为 `Interface -> Application Capability -> Domain/Product Aggregate`。Application 依赖 Port；外层实现 Port，在 Composition Root 装配。
+- 后续设计、开发、重构和评审必须以[工程架构](docs/architecture/README.md)为基线，按任务读取代码地图、横切机制及受影响契约；需要调整框架时，按 [ARC 架构演进](docs/devSpec/architecture-ownership.md#8-架构基线与持续演进)先更新唯一设计，同一变更维护架构、实现、检查与引用。
 - 正式兼容期前，内部 API、Schema、状态和调用链在同一变更破坏式替换并清理旧路径。真实外部契约、存量生产数据或混合版本部署的兼容按 [REL](docs/devSpec/migration-release.md#1-迁移与兼容边界)处理。
 
 ### 2.4 决策、执行与完成不得混装
@@ -52,7 +54,7 @@
 - 已有文字通过当前有效 typed 引用交回，由 Runtime 恢复原文；身份、定位与保真不依赖模型重抄。执行 [COD 文本引用](docs/devSpec/code-structure.md#21-已有文字通过引用传递)。
 - 生产、核验和评测 Prompt 是职责内通用、结果优先、最小充分的版本化契约；具体任务与材料来自当前输入。按 [COD](docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)设计，typed 输出只保证形状。
 - 同一事实只有一份权威文档，当前行为、历史诊断、候选与评测证据分开。契约变更同步正文；记录生命周期按 [DOC](docs/AGENTS.md)及[优化规则](docs/optimization/README.md)处理。
-- 设计说明问题、解决机制与具体防护，执行[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)。外部资料只解释机制，不替代工程失败证据；选型执行 [EVD 外部参考规则](docs/devSpec/change-evidence.md#6-外部参考的证据分级)。
+- 设计说明问题、解决机制与具体防护，执行[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)。框架类设计优先核对开源项目的实际装配与调用链，官方文档辅助说明；外部资料不替代工程失败证据，选型执行 [EVD 外部参考规则](docs/devSpec/change-evidence.md#6-外部参考的证据分级)。
 
 ### 2.6 E2E 与 Offline Eval 优先，停用单元测试
 
@@ -61,7 +63,9 @@
 ### 2.7 docs-first 与 e2e-first
 
 - 设计与优化项在候选实验或实现前按 [Spec 结构](docs/chinese-writing-spec.md#62-spec-结构与需求追溯)更新唯一设计文档；产品项同时固定正式入口、自然请求、用户结果、反事实与可执行验收，取得第 4 节依据后实施。会话计划和事后补文档不能替代。执行 [EVD 流程](docs/devSpec/change-evidence.md#7-强制开发与设计流程)。
-- 每轮方案、实现或证据改变时，同步设计与受影响权威正文，区分已实现、已验证和剩余条件，直接清理过期、重复与冲突内容。纯文档按 DOC 检查，只读分析按事实报告。
+- 设计讨论中新发现问题、澄清需求或改变方案、实现、证据时，当轮更新唯一设计及受影响权威正文，区分待证问题、决定、已实现、已验证和剩余条件，直接清理过期、重复与冲突内容；持续更新执行 [DOC](docs/AGENTS.md#1-文档是受治理的工程资源)。纯文档按 DOC 检查，只读分析按事实报告。
+- 方案讨论须独立判断，区分用户目标与候选手段；有依据时明确质疑、给出推荐及取舍，不因用户倾向直接改判。发现问题须深入定位、修正方案并落实验证闭环，不以“不能证明”结束；依据变化时说明修正理由，执行 [EVD 方案讨论](docs/devSpec/change-evidence.md#73-方案讨论中的独立判断与质疑)。
+- 关联设计改动累计形成完整切片、改变端到端前提或核心方案时，按 [EVD 整体 critic](docs/devSpec/change-evidence.md#74-累计设计改动后的整体-critic)复审价值、落地、架构、真实 E2E、评估、Harness 贡献及 Agent 的 agentic 能力；在依赖新方案的实验或实现前闭合阻断项，同轮更新唯一设计。
 
 ### 2.8 可读性优先，模块化控制开发上下文
 
@@ -69,7 +73,7 @@
 
 ### 2.9 清晰、简单、不冗余的表达
 
-所有文档和对用户的回答必须清晰、简单、不冗余。先直接回应核心问题，再补必要解释；具体要求由[写作规范](docs/chinese-writing-spec.md#1-目标与适用范围)拥有。
+所有基于本工程的回答和工程文档（含 `docs/**`）必须清晰直白、抓住重点，不滥用不确定措辞，不随意扩充或偏离关键点。先直接回应核心问题，再补必要解释；具体要求由[写作规范](docs/chinese-writing-spec.md#1-目标与适用范围)拥有。
 
 ## 3. 任务路由：按识别信号读取细则
 
@@ -77,14 +81,14 @@
 
 | 规范 | 适用任务与识别信号 | 必读细则 |
 | --- | --- | --- |
-| `EVD` | 新增功能、能力优化、缺陷修复、工程重构；制定设计项、优化项、docs-first、e2e-first、baseline、消融、target E2E；处理独立阻塞、重复阻塞、方案复审、方案一致性；审查模型依赖链、奥卡姆剃刀与复杂度准入 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
+| `EVD` | 新增功能、能力优化、缺陷修复、工程重构；制定设计项、优化项、docs-first、e2e-first、baseline、消融、target E2E；处理独立阻塞、重复阻塞、方案复审、方案 critic、方案一致性；审查模型依赖链、奥卡姆剃刀与复杂度准入 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
 | `REF` | 调研优秀智能体、外部智能体或 Agent Harness 比较；同类机制、重复阻塞复审中的外部方法检索；参考 Claude Code、GPT/Codex、OpenHands、DeepSeek Harness、Gemini CLI、Hermes Agent、Letta、LangGraph 的外部能力机制 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
-| `ARC` | 调整架构分层、业务事实与状态归属；设计 Schema、Model、Repository、Port、Adapter；核对 Application Capability、Product Aggregate、派生数据、缓存、物化投影和生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
+| `ARC` | 调整架构分层、维护架构基线、业务事实与状态归属；设计 Schema、Model、Repository、Port、Adapter；核对 Application Capability、Product Aggregate、派生数据、缓存、物化投影和生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | 修改 Proposal、Admission、ToolCall 协议；调整 Command、Approval、digest、Receipt 的执行绑定；设计 Execution、Verification、Completion、replay 与 durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
 | `CTX` | 审计 Context、System Prompt、模型输入、模型推理记录、中立追问和反馈执行异常；调整 Memory、RAG、Artifact、检索、权限过滤、预算物化；核对 Capability Projection 与服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
-| `COD` | 改善可读性、功能模块化与 Code Agent 开发上下文，进行类或模块拆分；修改内部类型、payload、依赖注入、错误分类、命名；设计生产 Prompt、文本引用、文字复述或 LangGraph、Router、Planner、Workflow 编排 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
-| `DOC` | 整理 Markdown、Mermaid、AGENTS.md、CLAUDE.md 与 ADR 正文；维护评测说明、架构说明、中文写作、文档索引；规范整理与引用清理 | [文档模块规范](docs/AGENTS.md) |
-| `QLT` | Real E2E、Offline Eval、Golden Set 与真实环境 smoke 的验证设计；解释停用范围与历史证据：单元测试、tests/、Contract、Integration；定位 E2E 阻塞、核验漏放、最小充分上下文；核对 Trace、安全、权限、审计与评测职责 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
+| `COD` | 改善可读性、功能模块化与 Code Agent 开发上下文，进行类或模块拆分；修改内部类型、payload、依赖注入、错误分类、命名；设计横切关注点、AOP、生产 Prompt、文本引用、文字复述或 LangGraph、Router、Planner、Workflow 编排 | [代码组织与实现约束](docs/devSpec/code-structure.md) |
+| `DOC` | Markdown、Mermaid、AGENTS.md、CLAUDE.md 与 ADR 正文；维护评测说明、架构说明、中文写作、文档索引；规范正文增补、规范整理与引用清理 | [文档模块规范](docs/AGENTS.md) |
+| `QLT` | Real E2E、Offline Eval、Golden Set 与真实环境 smoke 的验证设计；局部语义判断类修复、重复验证；解释停用范围与历史证据：单元测试、tests/、Contract、Integration；定位 E2E 阻塞、核验漏放、最小充分上下文；核对 Trace、安全、权限、审计与评测职责 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | 实施 Schema 迁移、协议迁移与兼容窗口；记录 ADR；执行发布评审、合并验收与完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |
 
 | 目标目录 | 修改前追加读取 |
@@ -120,7 +124,7 @@
 - 改公共模型、Schema、状态或入口前搜索全部调用方和权威文档。保留工作树用户改动，禁止破坏性 Git 操作覆盖。
 - 先删除被替代或冲突内容，再做最小修改；依赖注入与错误分类执行 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止以空结果、默认成功或模糊 fallback 掩盖失败。
 - 独立阻塞按 [EVD 第 7.1 节](docs/devSpec/change-evidence.md#71-独立阻塞优先解决并保持方案一致性)优先解决并保留原方案；同一阻塞完成一次有界修正后，按预声明判据仍未解除时，执行 [EVD 第 7.2 节](docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)，停止受影响路径的候选实验、生产补丁和整轮重跑。识别或报告重复阻塞时，须及时检索优秀智能体解决同类问题的机制，记录适用差异及取舍后再准入下一候选。修正计数与协议重试、样本重复区分，更换措辞、模块或版本不重置记录；隔离诊断和独立工作可继续。
-- 评审只报告可定位、可复现且影响正确性、安全性、性能或维护门禁的问题。结论不超过已执行证据，未执行的适用检查不得写成通过。
+- 代码与实现评审只报告可定位、可复现且影响正确性、安全性、性能或维护门禁的问题；方案 critic 按 EVD 区分设计缺口与待证风险。结论不超过已执行证据，未执行的适用检查不得写成通过。
 
 ## 6. 完成门禁
 

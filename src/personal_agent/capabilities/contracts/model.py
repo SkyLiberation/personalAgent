@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Generic, Iterator, Literal, Protocol, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -235,22 +235,11 @@ class StructuredModelResponse(Generic[StructuredOutputT]):
             )
 
 
-@dataclass(frozen=True, slots=True)
-class StreamChunk:
-    delta: str
-    accumulated: str
-    usage: dict[str, int] | None = None
-
-
 class StructuredModelClient(Protocol):
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
     ) -> StructuredModelResponse[StructuredOutputT]: ...
-
-
-class StreamingModelClient(Protocol):
-    def stream(self, request: StructuredModelRequest[Any]) -> Iterator[StreamChunk]: ...
 
 
 class ModelCallIntent(BaseModel):
@@ -306,7 +295,7 @@ __all__ = [
     "PROVIDER_DIAGNOSTIC_MAX_CHARS", "ProviderFailureDiagnostics",
     "StructuredOutputFailure", "StructuredOutputFailureCode",
     "ModelRequestKind",
-    "SkillActivationDecision", "SkillContextGrant", "StreamChunk", "StreamingModelClient",
+    "SkillActivationDecision", "SkillContextGrant",
     "StructuredModelClient", "StructuredModelRequest", "StructuredModelResponse", "StructuredOutputT",
     "sealed_context_projection_ref",
 ]

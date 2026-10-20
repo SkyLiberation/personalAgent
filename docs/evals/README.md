@@ -8,9 +8,11 @@
 | --- | --- |
 | 各类证据可以证明什么 | [证据分类](01-evidence-classes.md) |
 | 当前用例、横切套件、实际结果与历史证据 | [当前用例盘点](02-current-case-inventory.md) |
+| 删例依据、保留场景及替代验证边界 | [场景审查与清理](02-current-case-inventory.md#2026-10-17-场景审查与清理) |
 | 实现前失败依据与回归证据的区别 | [baseline-first 审计](03-baseline-first-audit.md) |
 | 收集、定向执行、归档和发布判断 | [运行与发布](04-running-and-release.md) |
 | 指标来源、缺失语义和比较身份 | [观测指标](05-observability-metrics.md) |
+| claim 机制的固定指标、历史基线与离线重算 | [指标规格](../ablation/claim-verifier.md#21-具体评估指标)、[运行命令](04-running-and-release.md#claim-指标持续评估) |
 | 2026-07-09 检索指标与旧 Ask 策略 | [Open / Galileo 历史检索报告](retrieval-benchmark-20260709.md) |
 
 ## 验证与结果边界

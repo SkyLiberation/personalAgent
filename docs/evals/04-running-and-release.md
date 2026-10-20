@@ -14,6 +14,21 @@ $env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "$evaluationEvidenceRoot/product"
 
 读取历史证据时使用其原真实目录，不移动或改写旧归档。需要共享或发布的证据另封存到可访问位置；本节路径设置不改变证据类别、输入、评分或发布门槛。
 
+## claim 指标持续评估
+
+指标定义与收益判据固定在[claim 指标规格](../ablation/claim-verifier.md#21-具体评估指标)，历史基线由[冻结计划](../ablation/claim-verifier-baseline.plan.json)标识。下列命令只读重算已裁判的完整阶段归档，零模型调用，不收集或运行测试：
+
+```powershell
+$claimMetricsOutput = ".tmp/claim-metrics-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
+.\.venv\Scripts\python.exe -X utf8 -m evals.e2e_quality.claim_ablation_metrics `
+  --plan docs/ablation/claim-verifier-baseline.plan.json `
+  --output-root $claimMetricsOutput
+```
+
+输出根必须尚不存在。每次归档保存源汇总、计划、报告、重算源码及校验和；源 SHA-256、完整配对、标签覆盖或任务映射不符时拒绝出具报告。该入口目前自动统计预设关系、任务均值与核验成本，缺少闭环或整例证据的指标保持未测。
+
+后续新模型、Prompt、Context 或修订链评估使用新冻结计划与真实产物，按指标规格连续消费实际输出；本命令不负责采样或生成语义裁判。旧结果不覆盖，跨评测身份不直接合并，阶段重算不计发布通过。
+
 ## 收集当前矩阵
 
 ```powershell
@@ -50,6 +65,25 @@ uv run pytest evals/e2e_quality --e2e-scope=release `
 共享 HTTP E2E fixture 默认连接本地 `15432` 的 `personal_agent_test` 数据库；主机端口不可用时，可显式设置 `PERSONAL_AGENT_E2E_POSTGRES_URL` 为真实隔离评测数据库的连接串。依赖检查与正式 HTTP 子进程消费同一地址，不使用模型或数据库替身。配置差异须进入本次运行身份；只覆盖该共享 fixture 的用例，其他支持用例的独立数据库配置不据此外推。
 
 ## 执行 diagnostic selection
+
+### Runtime 策略审计隔离的定向验证
+
+`AUD-001` 拥有独立数据库基础设施，不调用共享 `personal_agent_test` 清理。先将 `PERSONAL_AGENT_E2E_POSTGRES_URL` 指向可创建隔离库的真实本机 PostgreSQL，并显式设置上文两个归档目录；每次只创建和删除本轮 `pa_audit_` 随机库。模型、预算与成本预声明按[唯一规格](../optimization/to_verify/runtime-policy-audit-isolation.md)，不得为文档或静态修改启动模型。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest evals/e2e_quality/test_policy_audit_isolation.py --collect-only -q
+.\.venv\Scripts\python.exe -m pytest evals/e2e_quality/test_policy_audit_isolation.py -q -s
+```
+
+`AUD-001-REPLAY` 只消费 checksum 有效的正式 `AUD-001` baseline，并核对源 Journal 与该归档实际 owner HTTP Trace 相等。它恢复完整真实读取输入，经同一双应用 HTTP 进程验证 scope 与审计，零模型，属于 supporting boundary evaluation：
+
+```powershell
+.\.venv\Scripts\python.exe -m evals.e2e_quality.policy_audit_replay `
+  --source-archive <AUD-001-baseline-run-dir> `
+  --output-root "$evaluationEvidenceRoot/policy-audit-replay"
+```
+
+原始完整用户结果和阶段回放分别保存，不用回放替代产品通过；当前真实结果见[用例盘点](02-current-case-inventory.md#2026-10-16-runtime-策略审计隔离)。
 
 ```powershell
 uv run pytest evals/e2e_quality --e2e-scope=diagnostic -q -s

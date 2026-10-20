@@ -236,6 +236,40 @@ RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME = UserOutcomeContract(
 
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     EvidenceCase(
+        evidence_id="AUD-001-REPLAY.boundary",
+        case_id="AUD-001-REPLAY",
+        module="policy_audit_replay.py",
+        test_name="main",
+        layers=frozenset({EvidenceLayer.AUTHORITY_GATEWAY}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
+        raw_user_input=False,
+        real_model_required=False,
+        limitation="只恢复正式 baseline 的完整真实 Journal 并回放权限和审计读取边界，零模型；不提升产品结果。",
+        covered_invariants=frozenset({"policy_audit.runtime_isolation", "conversation.principal_scope"}),
+    ),
+    EvidenceCase(
+        evidence_id="AUD-001.product_http",
+        case_id="AUD-001",
+        module="test_policy_audit_isolation.py",
+        test_name="test_aud_001_policy_audit_stays_with_its_runtime",
+        layers=frozenset({EvidenceLayer.AUTHORITY_GATEWAY, EvidenceLayer.VERIFICATION_COMPLETION}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=UserOutcomeContract(
+            outcome_id="AUD-001.runtime-policy-audit-isolation",
+            persona="普通知识助手用户及负责其应用的管理员",
+            source_ref="docs/optimization/to_verify/runtime-policy-audit-isolation.md",
+            natural_goal="请帮我计算 17 加 25，直接告诉我结果。",
+            observable_result="用户得到正确答案；其他主体读取该运行被拒绝，管理员仅在所属应用查到同次拒绝。",
+            counterfactuals=("owner 正常读取不产生拒绝", "普通用户不能查管理员审计", "同进程另一应用不能得到该拒绝记录"),
+            baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+            baseline_ref="docs/optimization/to_verify/runtime-policy-audit-isolation.md",
+            assertion_owner="evals/e2e_quality/test_policy_audit_isolation.py",
+        ),
+        covered_invariants=frozenset({"policy_audit.runtime_isolation", "conversation.principal_scope"}),
+    ),
+    EvidenceCase(
         evidence_id="RESEARCH-ANSWER-OUTCOME-001.offline",
         case_id="RESEARCH-ANSWER-OUTCOME-001",
         module="test_research_answer_outcome.py",
@@ -611,6 +645,7 @@ def validate_catalog() -> None:
         )
     expected = {
         EvidenceClass.PRODUCT_E2E: {
+            "AUD-001",
             "E14",
             "E22",
             "ASK-001A",
@@ -631,7 +666,7 @@ def validate_catalog() -> None:
             "GOV-001", "DUR-001", "OBS-001",
         },
         EvidenceClass.CAPABILITY_PROFILE: {"E16", "E18", "E19", "E21"},
-        EvidenceClass.BOUNDARY_EVALUATION: {"RESEARCH-ANSWER-OUTCOME-001"},
+        EvidenceClass.BOUNDARY_EVALUATION: {"RESEARCH-ANSWER-OUTCOME-001", "AUD-001-REPLAY"},
     }
     for evidence_class, case_ids in expected.items():
         actual = {

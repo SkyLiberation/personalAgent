@@ -15,7 +15,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 2. **自动主题整理**（`consolidate_knowledge`）——按主题选择多条笔记并整理成综述，原笔记标记为已被取代。
 3. **简报知识增长 section**（`review/service`）——日报中展示笔记增长趋势与图谱概览。
 
-> 与本文相关的基础设施见 [review-digest.md](review-digest.md)；系统整体架构与 LLM/确定性分工见 [summary/core-architecture-current-state.md](summary/core-architecture-current-state.md)。
+> 与本文相关的基础设施见 [review-digest.md](review-digest.md)；系统整体架构与 LLM/确定性分工见 [architecture/core-architecture-current-state.md](architecture/core-architecture-current-state.md)。
 
 ---
 

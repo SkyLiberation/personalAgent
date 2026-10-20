@@ -118,4 +118,4 @@ Conversation turn
 
 Verification 和 Completion 的决策边界见
 [Verification 与 Completion](verification-and-completion.md)，当前顶层运行形态见
-[核心架构当前状态](../summary/core-architecture-current-state.md)。
+[核心架构当前状态](../architecture/core-architecture-current-state.md)。

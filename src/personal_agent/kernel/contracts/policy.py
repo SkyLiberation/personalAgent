@@ -33,6 +33,27 @@ PolicyAction = Literal[
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyDecisionEvent:
+    """One policy observation bound to its producer's Runtime recorder."""
+
+    action: str
+    effect: PolicyEffect
+    rule: str
+    reason: str = ""
+    tool_name: str | None = None
+    permission_scope: str | None = None
+    resource: str | None = None
+    risk_level: RiskLevel | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    source_platform: str | None = None
+    execution_mode: str | None = None
+    thread_id: str | None = None
+    run_id: str | None = None
+    langsmith_run_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyInput:
     """Normalized request for a policy decision.
 
@@ -137,6 +158,7 @@ class PolicyEvaluator(Protocol):
 __all__ = [
     "PolicyAction",
     "PolicyDecision",
+    "PolicyDecisionEvent",
     "PolicyEffect",
     "PolicyInput",
     "PolicyEvaluator",

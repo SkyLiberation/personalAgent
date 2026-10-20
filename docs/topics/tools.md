@@ -35,6 +35,10 @@ Application Service
 
 HTTP 直接执行通过 `invoke_direct()` 复用 Gateway；它有独立的身份及作用域入口，接口见 [API](../api.md#post-apitoolsnameexecute)。注册工具清单不等于普通模型可选工具清单。
 
+Conversation 还在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入自己的知识和 Artifact 操作；canonical 知识读取器存在时隐藏三个底层 note 读取工具。`_model_visible_capabilities_for_turn()` 再隐藏当前没有可读卸载资源的 Artifact 读取／搜索，以及本交互已成功消费的个人知识搜索。动作协议另加入工作清单、准备交付和配置的 Agent 委托；最终提交相位不提供这些动作定义。
+
+2026-10-19 的[静态审计](../../.tmp/tool-design-review-20261019/local-audit.json)记录依赖、配置及计数条件，未启动部署或取得本轮实际模型菜单。不能从注册总数直接判断模型输入过大。已有 `TurnContextComposition.model_action_definition_chars` 记录动作定义字符量；精确 tokens、误选及用户结果仍须从对应正式轨迹取得。
+
 ## 输入、结果与错误
 
 工具使用显式 Pydantic `ArgsSchema` 表达必填项、范围及字段说明。Conversation 在执行前校验工具名和参数；原生工具调用的形状合法后，仍须通过 Application 准入。

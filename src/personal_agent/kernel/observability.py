@@ -1,24 +1,14 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from time import perf_counter
 from typing import Any, Callable
 
 from personal_agent.kernel.logging_utils import log_event
+from personal_agent.kernel.contracts.policy import PolicyDecisionEvent
 
 logger = logging.getLogger(__name__)
-
-# Optional durable sink for policy decisions. Registered by the runtime so both
-# the tool gateway and the memory facade persist authorization outcomes without
-# changing their call sites. Failures here must never break the request path.
-_policy_decision_sink: Callable[[dict[str, Any]], None] | None = None
-
-
-def set_policy_decision_sink(sink: Callable[[dict[str, Any]], None] | None) -> None:
-    """Register (or clear) the durable sink for policy decisions."""
-    global _policy_decision_sink
-    _policy_decision_sink = sink
 
 
 def record_metric(
@@ -81,69 +71,45 @@ def record_tool_audit(event: Any) -> None:
     )
 
 
-def record_policy_decision(
-    *,
-    action: str,
-    effect: str,
-    rule: str,
-    reason: str = "",
-    tool_name: str | None = None,
-    permission_scope: str | None = None,
-    resource: str | None = None,
-    risk_level: str | None = None,
-    user_id: str | None = None,
-    session_id: str | None = None,
-    source_platform: str | None = None,
-    execution_mode: str | None = None,
-    thread_id: str | None = None,
-    run_id: str | None = None,
-    audit_required: bool = True,
-) -> None:
-    """Record why the policy engine allowed / denied / required confirmation.
+class PolicyDecisionRecorder:
+    """Emit policy observations through an explicitly owned optional sink."""
 
-    Non-allow decisions are always logged so authorization outcomes stay
-    queryable. Plain allows respect ``audit_required`` to avoid log noise.
-    """
-    if effect == "allow" and not audit_required:
-        return
-    payload = {
-        "action": action,
-        "effect": effect,
-        "rule": rule,
-        "reason": reason,
-        "tool_name": tool_name,
-        "permission_scope": permission_scope,
-        "resource": resource,
-        "risk_level": risk_level,
-        "user_id": user_id,
-        "session_id": session_id,
-        "source_platform": source_platform,
-        "execution_mode": execution_mode,
-        "thread_id": thread_id,
-        "run_id": run_id,
-        "langsmith_run_id": _current_langsmith_run_id(),
-    }
-    log_event(
-        logger,
-        logging.INFO if effect == "allow" else logging.WARNING,
-        "policy.decision",
-        **payload,
-    )
-    if _policy_decision_sink is not None:
-        try:
-            _policy_decision_sink(payload)
-        except Exception:  # pragma: no cover - persistence must never break the request
-            logger.exception("Failed to persist policy decision")
-    record_metric(
-        "policy.decision",
-        dimensions={
-            "action": action,
-            "effect": effect,
-            "rule": rule,
-            "tool_name": tool_name,
-            "risk_level": risk_level,
-        },
-    )
+    def __init__(
+        self,
+        sink: Callable[[PolicyDecisionEvent], None] | None = None,
+    ) -> None:
+        self._sink = sink
+
+    def record(
+        self,
+        event: PolicyDecisionEvent,
+        *,
+        audit_required: bool = True,
+    ) -> None:
+        if event.effect == "allow" and not audit_required:
+            return
+        event = replace(event, langsmith_run_id=_current_langsmith_run_id())
+        log_event(
+            logger,
+            logging.INFO if event.effect == "allow" else logging.WARNING,
+            "policy.decision",
+            **asdict(event),
+        )
+        if self._sink is not None:
+            try:
+                self._sink(event)
+            except Exception:  # pragma: no cover - optional persistence is isolated
+                logger.exception("Failed to persist policy decision")
+        record_metric(
+            "policy.decision",
+            dimensions={
+                "action": event.action,
+                "effect": event.effect,
+                "rule": event.rule,
+                "tool_name": event.tool_name,
+                "risk_level": event.risk_level,
+            },
+        )
 
 
 def record_verification_result(

@@ -1,8 +1,8 @@
 """Typed model ports and OpenAI-compatible adapters.
 
-The port (``StructuredModelClient`` / ``StreamingModelClient``) is the only LLM
-dependency application code is allowed to hold. Provider/model structured-output
-capabilities are selected at composition time: ``StrictJsonSchemaAdapter`` uses
+The ``StructuredModelClient`` port is the only LLM dependency application code
+is allowed to hold. Provider/model structured-output capabilities are selected
+at composition time: ``StrictJsonSchemaAdapter`` uses
 native strict ``json_schema`` while ``JsonObjectStructuredAdapter`` uses JSON
 mode plus the same Pydantic contract in the prompt. Application code is unaware
 of that transport distinction.
@@ -22,7 +22,7 @@ from dataclasses import replace
 from queue import Empty, Queue
 from threading import Thread
 from time import perf_counter, sleep
-from typing import Any, Callable, Iterator, Protocol
+from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from openai import APIError, APIStatusError, ContentFilterFinishReasonError, OpenAI
@@ -32,8 +32,6 @@ from personal_agent.capabilities.contracts.model import (
     PROVIDER_DIAGNOSTIC_MAX_CHARS,
     ModelInvocationUnavailable,
     ProviderFailureDiagnostics,
-    StreamChunk,
-    StreamingModelClient,
     StructuredModelClient,
     StructuredModelRequest,
     StructuredModelResponse,
@@ -598,37 +596,6 @@ class OpenAIModelClient:
             raise protocol_failure
         return result
 
-    # -- unified streaming entrypoint ------------------------------------
-
-    def stream(
-        self,
-        request: StructuredModelRequest[Any],
-    ) -> Iterator[StreamChunk]:
-        client = self._client()
-        stream = client.chat.completions.create(
-            **self._chat_kwargs(request, stream=True)
-        )
-        full_text = ""
-        usage: dict[str, int] = {}
-        for chunk in stream:
-            chunk_usage = getattr(chunk, "usage", None)
-            if chunk_usage is not None:
-                for key, attr in (
-                    ("input_tokens", "prompt_tokens"),
-                    ("output_tokens", "completion_tokens"),
-                    ("total_tokens", "total_tokens"),
-                ):
-                    value = getattr(chunk_usage, attr, None)
-                    if isinstance(value, int):
-                        usage[key] = value
-            choices = getattr(chunk, "choices", None)
-            delta = choices[0].delta.content if choices else ""
-            if delta:
-                full_text += delta
-                yield StreamChunk(delta=delta, accumulated=full_text)
-        if usage:
-            yield StreamChunk(delta="", accumulated=full_text, usage=usage)
-
 
 def _schema_repair_instruction(
     schema: dict[str, Any],
@@ -1081,74 +1048,6 @@ class ObservedStructuredModelClient:
             raise
 
 
-class ObservedStreamingModelClient:
-    """Tracing decorator for ``StreamingModelClient``.
-
-    Wraps the pure adapter's ``stream`` in a langsmith span and records
-    usage/latency after the stream completes. The adapter itself stays free of
-    any tracing concern — this decorator is the only place streaming
-    observability is wired.
-    """
-
-    def __init__(
-        self,
-        delegate: StreamingModelClient,
-        observability: LangSmithConfig,
-    ) -> None:
-        self._delegate = delegate
-        self._observability = observability
-
-    def stream(self, request: StructuredModelRequest[Any]) -> Iterator[StreamChunk]:
-        from personal_agent.kernel.langsmith_tracing import (
-            langsmith_llm_span,
-            report_usage_metadata,
-        )
-
-        start = perf_counter()
-        resolved_model = getattr(
-            self._delegate, "_resolved_model", request.metadata.get("model", "unknown")
-        )
-        run_ctx = {
-            "component": request.metadata.get("component", "stream"),
-            "prompt_name": request.operation,
-            "prompt_version": request.version,
-            "model": resolved_model,
-        }
-        with langsmith_llm_span(
-            self._observability,
-            name=f"llm.{request.operation}.stream",
-            metadata=run_ctx,
-            tags=["llm", "stream", request.operation],
-        ) as run:
-            full_text = ""
-            usage: dict[str, int] = {}
-            for chunk in self._delegate.stream(request):
-                full_text = chunk.accumulated
-                if chunk.usage:
-                    usage = chunk.usage
-                yield chunk
-            report_usage_metadata(run, usage)
-            latency_ms = round((perf_counter() - start) * 1000, 2)
-            record_llm_usage(
-                latency_ms=latency_ms,
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
-                total_tokens=usage.get("total_tokens"),
-            )
-            log_event(
-                logger,
-                logging.INFO,
-                "llm.stream",
-                prompt_name=request.operation,
-                model=resolved_model,
-                latency_ms=latency_ms,
-                response_chars=len(full_text),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
-                total_tokens=usage.get("total_tokens"),
-            )
-
-
 def build_structured_model_client(
     config: StructuredConfig,
     observability: LangSmithConfig,
@@ -1205,28 +1104,4 @@ def build_chat_model_client(
         client,
         provider="openai_compatible",
         model=model_override or config.model,
-    )
-
-
-def build_streaming_model_client(
-    config: OpenAIConfig,
-    observability: LangSmithConfig,
-) -> StreamingModelClient | None:
-    """Composition helper for streaming text generation."""
-    if not (config.api_key and config.base_url):
-        return None
-    client: StreamingModelClient = OpenAIModelClient(config)
-    observed: StreamingModelClient = (
-        ObservedStreamingModelClient(client, observability)
-        if observability.enabled
-        else client
-    )
-    from personal_agent.capabilities.model_resolution import (
-        GovernedStreamingModelClient,
-    )
-
-    return GovernedStreamingModelClient(
-        observed,
-        provider="openai_compatible",
-        model=config.model,
     )

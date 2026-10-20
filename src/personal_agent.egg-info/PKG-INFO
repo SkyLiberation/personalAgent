@@ -206,6 +206,6 @@ uv run ruff check .
 - [Memory 架构](docs/interview/04-memory-architecture.md)
 - [知识与领域流程](docs/interview/05-knowledge-and-domain-workflows.md)
 - [证据、指标与发布资格](docs/interview/06-evidence-and-release.md)
-- [当前核心架构](docs/summary/core-architecture-current-state.md)
+- [工程架构与开发入口](docs/architecture/README.md)
 - [接口说明](docs/api.md)
 - [文档总索引](docs/README.md)

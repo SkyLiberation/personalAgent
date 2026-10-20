@@ -41,6 +41,11 @@
       "id": "root_test_no_overlay",
       "path": "tests/test_api.py",
       "expected": null
+    },
+    {
+      "id": "docs_architecture_overlay",
+      "path": "docs/architecture/README.md",
+      "expected": "docs/AGENTS.md"
     }
   ],
   "cases": [
@@ -88,6 +93,16 @@
       "id": "evd_preserve_design_consistency",
       "task": "处理独立阻塞时，如何保证方案一致性并保留原方案的验收依据？",
       "expected": "EVD"
+    },
+    {
+      "id": "evd_cumulative_design_critic",
+      "task": "方案多次调整后执行方案 critic，整体检查落地、真实场景、评估、Harness贡献与Agent的自主决策。",
+      "expected": "EVD"
+    },
+    {
+      "id": "doc_critic_rule_edit",
+      "task": "整理 Markdown 中关于方案 critic 的规范正文，清理重复条款并修复文档索引与链接，不改产品行为。",
+      "expected": "DOC"
     },
     {
       "id": "ref_claude_context",
@@ -225,6 +240,16 @@
       "expected": "QLT"
     },
     {
+      "id": "qlt_local_semantic_repetitions",
+      "task": "局部语义判断类修复需要多少重复验证，怎样保留漏报、错误反馈和输出失败？",
+      "expected": "QLT"
+    },
+    {
+      "id": "doc_semantic_repetition_rule",
+      "task": "把局部语义判断类修复的重复验证要求写入 AGENTS.md 及其 Markdown 规范，并同步文档索引和镜像。",
+      "expected": "DOC"
+    },
+    {
       "id": "qlt_contract",
       "task": "单元测试停用后，Port 与 Adapter 的历史 Contract、Integration 证据怎样解释，后续验证如何选择？",
       "expected": "QLT"
@@ -353,6 +378,21 @@
       "id": "qlt_verifier_minimal_context",
       "task": "核验漏放时，如何在最小充分上下文识别错误并判断当前核验任务设计是否合理？",
       "expected": "QLT"
+    },
+    {
+      "id": "arc_architecture_evolution",
+      "task": "维护架构基线时，如何同步事实归属、装配点和依赖检查？",
+      "expected": "ARC"
+    },
+    {
+      "id": "cod_explicit_aop",
+      "task": "用 AOP 把模型调用的用量和追踪移出业务代码，如何明确包装顺序与异常传播？",
+      "expected": "COD"
+    },
+    {
+      "id": "doc_architecture_migration",
+      "task": "整理 docs/architecture 的 Markdown 架构说明，删除 summary 中的旧正文并更新文档索引。",
+      "expected": "DOC"
     }
   ]
 }

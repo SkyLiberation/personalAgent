@@ -79,6 +79,8 @@ Application 根据当前用户目标调用明确能力：
 ArtifactRef 或 source span 读取必要片段，不复制进 runtime state。最终 Prompt 只包含本次模型调用
 真正可见的内容。
 
+这是预算物化的通用职责，不代表所有 Conversation 路径已经接入统一 token 装箱器。当前的单条限制、请求级投影与整体窗口缺口分别见下文，不能用 ContextPack 类型存在证明整条调用链已受容量保护。
+
 ## Conversation 上下文
 
 Conversation 的短期事实由 Interaction journal 持有：
@@ -87,11 +89,19 @@ Conversation 的短期事实由 Interaction journal 持有：
 committed user/assistant messages
 + accepted ActionObservation / DecisionFeedback
 + current usage and action order
--> bounded model context
+-> 经单条限制及请求级投影的 model context
 ```
 
 历史 assistant reply 只用于指代和会话连续性，不能作为事实证据。Tool/Agent observation 必须保留
 typed status、artifact/receipt ref 和错误分类；不能只压成一段无法区分来源的自然语言。
+
+### 整体窗口与历史增长的当前边界
+
+2026-10-18 沿实际调用链核对：Conversation 的意图提取、动作／Final、研究选证、writer 和 verifier 各自构造输入，再经同一 Model Port 及 Provider Adapter 发出。已有外置、分页、去重和旧版本过滤，未找到覆盖全部路径的实际输入 token 窗口保护或 loop history compaction。已返回读取窗口仍会累积；同 run 恢复输入不等于压缩历史。
+
+关键坐标是 [Conversation 请求构造](../../src/personal_agent/application/conversation/service.py)的 `_research_selection_request()`／`_decide()`、[研究核验输入](../../src/personal_agent/application/conversation/research.py)的 `research_support_input()`，以及 [Provider 协议](../../src/personal_agent/infra/structured_model.py)：JSON mode 会追加完整 Schema，协议修复还会追加反馈。因此只测主循环原消息、单条字符数或输出 `max_tokens` 都不足以保护实际请求。构成度量在调用后记录，也不是窗口准入。
+
+`LoopBudgetPolicy.max_total_tokens` 检查已提交累计用量，不是本轮窗口；[模型 intent](../../src/personal_agent/capabilities/model_resolution.py)的 `max_input_tokens` 字段本身也没有实施实际请求计数。普通知识证据抽句、笔记摘要及 Graph 摘要不是正在执行的 loop history compaction。候选保留规则、容量责任及压缩后的完整交付验证由[主循环 §3.11](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)及[研究场景](../optimization/to_verify/knowledge-decision-delivery.md#31-长任务问题逐项对照)拥有，尚未据此修改生产。
 
 ### 单次 Observation 的体积边界
 
@@ -146,8 +156,7 @@ Admission 在同 capability 已有未读卸载结果时拒绝这种无进展 ref
 
 该证据只准入 Artifact-backed Observation 投影、“未重读不得 answer”和“未读结果不得由同资源 refetch
 冒充重读”。它**没有证明**普通 Conversation messages
-需要 segment index、滚动摘要、向量化历史或 Provider 原生 compaction，因此当前不实现这些机制。若未来同一自然
-用户目标在消息历史增长上失败，必须重新取得独立 baseline。
+需要 segment index、滚动摘要、向量化历史或 Provider 原生 compaction，当前仍未接入这些机制。长任务候选已纳入整体窗口和历史压力设计；实际实施仍须从同一自然目标取得对应 baseline，不能复用 CTX-001 冒充历史压缩收益。
 
 ### 拒稿后的完整基稿交接
 

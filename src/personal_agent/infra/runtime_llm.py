@@ -11,10 +11,9 @@ _LLM_FAILURE_COOLDOWN_SECONDS = 30.0
 
 
 class LlmClient:
-    """Answer-generation LLM client (sync + streaming).
+    """Answer generation through the governed model Port.
 
-    Depends on the unified ``StructuredModelClient`` / ``StreamingModelClient``
-    ports — never on ``OpenAI`` or ``traced_chat_completion`` directly. Owns its
+    Depends on ``StructuredModelClient`` instead of a provider SDK. Owns its
     own failure-cooldown state so transient provider outages don't cascade.
     """
 
@@ -22,11 +21,9 @@ class LlmClient:
         self,
         settings: Settings,
         model_client: "object | None" = None,
-        streaming_client: "object | None" = None,
     ) -> None:
         self.settings = settings
         self._model_client = model_client
-        self._streaming_client = streaming_client
         self._unavailable_until = 0.0
 
     def _in_cooldown(self) -> bool:
@@ -81,58 +78,6 @@ class LlmClient:
             self._mark_failure()
             logger.exception("Failed to generate answer from LLM")
             return None
-
-    def generate_answer_stream(self, prompt: str):
-        """Stream tokens from the LLM in real time via SSE-compatible chunks.
-
-        Yields (event_type, payload) tuples suitable for SSE streaming.
-        Completes with ('answer_complete', {'answer': full_text}).
-        On failure, yields ('answer_error', {'error': message}) and stops.
-        """
-        from personal_agent.capabilities.contracts.model import (
-            StructuredModelRequest,
-            sealed_context_projection_ref,
-        )
-        from pydantic import BaseModel
-
-        if self._streaming_client is None:
-            yield ("answer_error", {"error": "LLM not configured"})
-            return
-        if self._in_cooldown():
-            yield ("answer_error", {"error": "LLM temporarily unavailable"})
-            return
-        try:
-            answer_prompt = get_prompt("answer_generation.system")
-            messages = [
-                {"role": "system", "content": answer_prompt.template},
-                {"role": "user", "content": prompt},
-            ]
-            request = StructuredModelRequest(
-                operation="answer_generation_stream",
-                version=answer_prompt.version,
-                messages=messages,
-                output_type=BaseModel,
-                context_projection_ref=sealed_context_projection_ref(
-                    purpose="answer_generation_stream", messages=messages,
-                ),
-                temperature=0.3,
-                max_tokens=_max_tokens_for_prompt("answer_generation_stream"),
-                kind="text",
-                metadata={"component": "runtime_llm"},
-            )
-            full_text = ""
-            for chunk in self._streaming_client.stream(request):
-                full_text = chunk.accumulated
-                yield ("answer_delta", {"delta": chunk.delta, "answer": full_text})
-            if full_text.strip():
-                self._mark_success()
-                yield ("answer_complete", {"answer": full_text.strip()})
-            else:
-                yield ("answer_error", {"error": "LLM returned empty response"})
-        except Exception:
-            self._mark_failure()
-            logger.exception("Failed to stream answer from LLM")
-            yield ("answer_error", {"error": "LLM streaming failed"})
 
 
 def _max_tokens_for_prompt(prompt_name: str) -> int:

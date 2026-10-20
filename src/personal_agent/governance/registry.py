@@ -13,6 +13,7 @@ from personal_agent.governance.policy import PolicyEngine
 from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance, tool_schema
 from personal_agent.governance.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
 from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.observability import PolicyDecisionRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,13 @@ class ToolExecutor:
         *,
         idempotency_store: IdempotencyStore | None = None,
         policy_engine: PolicyEngine | None = None,
+        policy_decisions: PolicyDecisionRecorder | None = None,
     ) -> None:
         self._gateway = ToolGateway(
             audit_sink=audit_sink,
             idempotency_store=idempotency_store,
             policy_engine=policy_engine,
+            policy_decisions=policy_decisions,
         )
 
     def register(self, tool: BaseTool) -> None:

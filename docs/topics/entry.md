@@ -167,7 +167,7 @@ CLI command
 
 ### 1. 统一的是契约与边界，不是一个总编排图
 
-Conversation 使用统一消息、身份、scope 与结果契约；`digest`、capture 和周期 Research 拥有各自 Application 入口。依赖装配与状态责任见[当前核心架构](../summary/core-architecture-current-state.md)。
+Conversation 使用统一消息、身份、scope 与结果契约；`digest`、capture 和周期 Research 拥有各自 Application 入口。依赖装配与状态责任见[当前核心架构](../architecture/core-architecture-current-state.md)。
 
 ### 2. CLI 与 HTTP 的操作范围不同
 

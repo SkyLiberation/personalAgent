@@ -2,7 +2,7 @@
 
 **本文件唯一登记尚未解决的问题、准入级别与设计入口，数量以当前队列表为准。** 候选机制正文由对应 `optimization/to_verify/` 文档拥有；Future 专题只补充产品准入与剩余门禁，不复制第二份方案或状态队列。
 
-当前生产事实由[当前核心架构](../summary/core-architecture-current-state.md)和对应专题文档拥有；当前样本、结果与证据边界由[当前评测用例盘点](../evals/02-current-case-inventory.md)拥有；评测入口与发布门禁由[评测执行与发布](../evals/04-running-and-release.md)拥有。本文只引用这些事实，不建立第二份结果台账。
+当前生产事实由[当前核心架构](../architecture/core-architecture-current-state.md)和对应专题文档拥有；当前样本、结果与证据边界由[当前评测用例盘点](../evals/02-current-case-inventory.md)拥有；评测入口与发布门禁由[评测执行与发布](../evals/04-running-and-release.md)拥有。本文只引用这些事实，不建立第二份结果台账。
 
 表中的编号表示优化项；引用评测用例时必须写出具体场景，例如 `E2E-USER-OUTCOME-CONTRACT-001/ASK-001B`，避免把优化项闭环与单个 E2E case 混称。
 
@@ -10,10 +10,13 @@
 
 | 编号 | 尚未解决的问题 | 当前准入 | 设计与推进记录 |
 | --- | --- | --- | --- |
-| `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001` | 重复输入对实际费用和延迟的影响待证 | `A1`：扩预算已交付但评分 0/1，未耗尽新额度；先处理具体场景覆盖缺口，输入优化后置，无新生产候选 | [预算复审与扩预算验证](../optimization/to_verify/research-input-budget.md) |
+| `CONVERSATION-LOOP-BOUNDARIES-001` | 研究职责混合；普通提交、核验适用性及整体 Context 容量需分别取证 | `A0`：研究模块、携参提交及 Context 压力候选已区分；行为保持、成本／历史反例、实际输入压力及语义准入待补，未改生产 | [主循环与核验边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md) |
+| `KNOWLEDGE-DECISION-DELIVERY-001` | 检索实验及可编程候选交付、成果接续和必要压缩尚未验收 | `A0`：推荐共享程序产物写入和受控 Python 执行，固定基线及外部评分；E1 身份保留，P1 独立验编程。需求／环境／额度、baseline、代码隔离／终态、评分资格和真实压力待取得，未改生产 | [研究能力的实验推进与产物交付 Spec](../optimization/to_verify/knowledge-decision-delivery.md) |
+| `RUNTIME-POLICY-AUDIT-ISOLATION-001` | 审计绑定修复已接入且真实阶段回放通过，原完整对话 target 未交付 | `A2`：baseline 0/1、target 0/1、审计阶段反事实 1/1；完整产品验收未过，停止新增模型样本 | [修复证据与剩余边界](../optimization/to_verify/runtime-policy-audit-isolation.md) |
+| `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001` | 重复输入对实际费用和延迟的影响待证 | `A1`：统一链原目标扩预算续验已通过并停止新增调用；成本优化尚未开始，无新生产候选 | [预算复审与后续成本边界](../optimization/to_verify/research-input-budget.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001` | 模型服务失败的实际错误体诊断仍待真实条件验收 | `A2`：诊断链反事实 2/2，已接入唯一异常与日志路径；原 E2E 未复现服务错误，实际 MiMo 条件继续待验证 | [Provider 失败诊断交接](../optimization/to_verify/model-provider-diagnostics.md) |
 | `MODEL-PROVIDER-TRANSPORT-001` | 模型请求间歇传输失败或超过 deadline，具体原因尚未定位 | `A1`：c6 响应体中断已封存，同请求独立恢复得到完整报告；既有完成阶段未重做，间歇根因仍未知，无生产传输修补 | [真实失败与恢复入口](../optimization/model-provider-transport.md) |
-| `CONVERSATION-RESEARCH-STOP-001` | 原预算下取证与交付未收敛；宽预算已自主交付，但 Final 仍存在证据覆盖缺口、旧稿复用、无据结论与不完整产物 | `A2`：网页工具分离尚未闭环；已证实的 Loop 反馈与验证执行预算修复已接入，完整交付未通过；独立来源支持检查已接入，完整语义与修订仍待验证；独立评分资格见完成记录，原用户结果保持失败 | [网页工具分离](conversation-web-research-tools.md)、[来源语义与修订设计](conversation-verification-false-positive.md)、[验证推进记录](../optimization/conversation-source-support.md) |
+| `CONVERSATION-RESEARCH-STOP-001` | 网页工具分离及其他既定研究边界尚未全部闭环 | `A2`：统一链原研究目标正式续验已通过；网页工具分离、其他语义与修订边界分别验收，历史原始失败保持 | [网页工具分离](conversation-web-research-tools.md)、[来源语义与修订设计](conversation-verification-false-positive.md)、[验证推进记录](../optimization/conversation-source-support.md) |
 | `CONVERSATION-RESEARCH-SOURCE-AUTHORITY-001` | 官方正文抓取失败后，Final 把社区讨论引用为官方工具文档依据 | `A1`：取证后的来源判断与答案合成待归因，没有活动候选 | — |
 | `AGENT-DELEGATION-DELIVERY-001` | 用户明确要求委托外部研究智能体时，子级运行与父级最终交付都不稳定 | `A1`：子级超时与父级未交付是独立失败阶段；当前没有活动候选 | — |
 | `INTERACTION-INTENT-DELEGATION-BOUNDARY-001` | 当前响应内的前台委托仍可能被误判为响应后的后台持续工作 | `A1`：Provider 语义方差仍存在；当前没有活动设计 | — |
@@ -21,7 +24,7 @@
 | `E2E-USER-OUTCOME-CONTRACT-001` | `ASK-001B` 尚未验收回答是否基于官方来源解释工具使用机制 | `A1`：概率性语义 grader 按约定后置；当前没有活动候选 | [E2E 用户结果契约对齐方案](e2e-user-outcome-contract-alignment.md) |
 | `CITATION-SOURCE-ATTRIBUTION-001` | 来源绑定修复后的正式交付及因果回归尚未验收 | `A2`：确定性修复已接入目标代码；局部证据与原始 E2E 分开，完整门禁未过 | [引用来源修复的剩余验收](citation-source-binding.md)、[过程记录](../optimization/citation-source-attribution.md) |
 | `CITATION-COORDINATE-CONFUSION-001` | 新协议正式稿使用目录外编号；原文行号与临时引用号并存，同位置重读有多个引用身份 | `A2`：全部生成端引用已统一为文档行坐标并删除结果号，支持连续整行范围；仅 Offline 验证，按新代码身份累计的正常 E2E 观察仍为 0 | [统一坐标后的剩余验证](citation-coordinate-identity.md)、[问题记录](../optimization/citation-coordinate-confusion.md) |
-| `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` | 统一链原目标正式续验已通过；其余既定边界与新发生的 r11 反馈误读分别验收 | `A2`：C1、G2、正式原目标各 1/1，已通过边界关闭；剩余证据和原始失败分别保留，不追加稳定性采样 | [Conversation 核验活动边界](conversation-verification-false-positive.md)、[无法收敛的子问题](../optimization/claim-revision-nonconvergence.md)、[研究与最终回答统一核验设计](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
+| `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` | 统一链原目标正式续验已通过；其余边界、r11 误读与新增范围限定漏检分别验收 | `A2`：C1、G2、正式原目标各 1/1，已通过边界关闭；来源支持判据候选失败停止。最小输入下单稿来源任务可执行、现有类型足够；加回诊断的组级退化未一致复现，中性及定向追问未取得原漏检的可验证原因，均按计划结束，未证明完整阶段修复，无新生产候选 | [Conversation 核验活动边界](conversation-verification-false-positive.md)、[无法收敛的子问题](../optimization/claim-revision-nonconvergence.md)、[研究与最终回答统一核验设计](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
 | `RESEARCH-SELECTION-USAGE-COMMIT-001` | 已完成选证用量在 writer 或选证输出失败时未持久化，预算与恢复缺少该笔成本 | `A2`：及时提交及失败响应交接已接入；真实回放及恢复去重尚未验收 | [计量候选](../optimization/to_verify/research-selection-usage-commit.md)、[失败记录](../optimization/research-selection-usage-commit.md) |
 | `TOOL-MODEL-USAGE-HANDOFF-001` | 工具内部已完成模型用量未交回 Conversation 总账 | `A1`：终态逐分项差额已定位，尚未准入实现 | —；[责任边界与证据](../optimization/tool-model-usage-handoff.md) |
 | `ANSWER-NORMATIVE-SCOPE-001` | 自动复核已删除；原预算未交付，c9 具体出处与否定范围反馈未修 | `A2`：旧 9/10、真实修订及完整阶段通过保持；引用恢复局部已关闭，原正式 0/1 保留，先按用户要求扩预算验证交付，无 Source 二次复核 | [已验边界](../optimization/completed/source-proof-boundary-isolation.md)、[范围校准与真实消费](../optimization/to_verify/normative-context-acquisition.md#用户确认范围后的-c7-实际修订验收) |

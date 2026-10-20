@@ -91,6 +91,10 @@ flowchart TB
 
 **每组证据只支撑一项能力判断，详细归档和发布资格统一由证据文档负责。**
 
+单独删除知识适合说明明确操作的执行边界，不能独自证明复杂 Agent 任务能力。公开检索实验及可复现交付是研究扩展候选，尚无完整任务和长任务成绩，候选及准入见[研究能力的实验推进与产物交付 Spec](../optimization/to_verify/knowledge-decision-delivery.md)。面试主线需要由真实交付及相称证据展开，再解释必要机制和具体改进；不通过增加工具数量或包装既有状态弥补场景证据。
+
+非研究方向仍处于[任务比较与准入调查](../optimization/to_verify/non-research-task-directions.md)，不计入已交付能力。公开任务数据仅支持用例准备；实际完整任务与机制收益仍由正式入口证据判断。
+
 | 能力判断 | 代表证据 | 直接证明 |
 | --- | --- | --- |
 | 个人证据可以进入同一答案且默认零写入 | `ASK-001A/B` | 仅个人证据、个人证据结合官方网页的回答 |
@@ -101,4 +105,4 @@ flowchart TB
 
 ## 7. 当前实现坐标
 
-**类名只用于进入代码，不承担架构论证。** 一次模型语义建议和前台工作清单当前分别落在 `AgentTurnDecision` 与 `ConversationWorkingPlan`；完整实现关系以[当前架构说明](../summary/core-architecture-current-state.md)为准。
+**类名只用于进入代码，不承担架构论证。** 一次模型语义建议和前台工作清单当前分别落在 `AgentTurnDecision` 与 `ConversationWorkingPlan`；完整实现关系以[当前架构说明](../architecture/core-architecture-current-state.md)为准。

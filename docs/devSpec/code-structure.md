@@ -1,6 +1,6 @@
 # 代码组织与实现约束细则（COD）
 
-> 本细则适用于可读性、功能模块化、Code Agent 开发上下文、内部类型、payload、依赖注入、生产 Prompt、编排、错误分类、命名和编码智能体行为。事实与分层由[ARC](architecture-ownership.md)拥有；证据和复杂度准入由[EVD](change-evidence.md)拥有。
+> 本细则适用于可读性、功能模块化、Code Agent 开发上下文、内部类型、payload、依赖注入、横切关注点与 AOP、生产 Prompt、编排、错误分类、命名和编码智能体行为。事实与分层由[ARC](architecture-ownership.md)拥有；证据和复杂度准入由[EVD](change-evidence.md)拥有。
 
 ## 1. 不变量必须有唯一归属
 
@@ -76,6 +76,14 @@
 模型、Repository、工具、Policy 和外部服务提供方在真实依赖或信任边界通过既有 typed Port 注入。影响预算、过期、身份、幂等或恢复的时钟与 ID 来源须可注入；单一调用可使用语义明确的 typed callable，不为每个来源新增 Interface。纯内部确定性函数无需机械建立 Port；评测不得 monkey patch 生产规则来构造通过结果。
 
 命名须表达业务角色和生命周期。除非边界明确，禁止使用 `data`、`info`、`manager`、`processor`、`handler` 等泛化名称。
+
+### 5.1 横切关注点与显式组合
+
+横切关注点的修改必须遵守[横切机制与 AOP](../architecture/cross-cutting.md#4-横切实现的强制边界)的切入点、顺序、结果保真、重试 owner、证据与生命周期约束。实现前核对该文档中的现行工厂与消费者，在既有 typed Port、Middleware 或 Context Manager 上选择最小组合；不为应用 AOP 新建通用织入、容器或 Hook 框架。
+
+记录型机制与改变执行行为的机制按实际影响分类。依赖关系及装配可读不等于行为保持，验证执行 [EVD](change-evidence.md#12-按实际影响选择证据)，架构正文同步执行 [ARC 演进规则](architecture-ownership.md#8-架构基线与持续演进)。
+
+随 Runtime 或身份作用域变化的观测目的地必须由组合根按实例显式绑定，禁止用进程级 setter 替换所有调用方的存储。共享的无状态日志函数与有 owner 的持久化绑定分开；字段在内部以 typed 事件传递，具体机制与隔离证据见[横切机制](../architecture/cross-cutting.md#4-横切实现的强制边界)。
 
 ## 6. 生产 Prompt 是版本化代码契约
 

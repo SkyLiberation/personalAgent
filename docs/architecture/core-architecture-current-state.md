@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-> 本文说明生产代码的责任边界和主链。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。代码已接入与产品验收分别判断。
+> 2026-10-16 按生产代码核对。本文拥有全局责任和主链；实际包布局由[代码地图](code-map.md)拥有，横切实现见[横切机制](cross-cutting.md)。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。代码已接入与产品验收分别判断。
 
 ## 1. 核心判断
 
@@ -19,7 +19,9 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 
 ## 2. 分层与依赖方向
 
-稳定依赖方向是 `Interface -> Application Capability -> Domain/Product Aggregate`。Application 只依赖 Port，运行系统和服务提供方 Adapter 从外层实现 Port，`AgentRuntime` 在组合根集中装配。
+架构约束的依赖方向是 `Interface -> Application Capability -> Domain/Product Aggregate`。Application 在外部依赖与信任边界消费 Port，外层实现 Port，并在 Composition Root 装配；能力内部的确定性协作可以直接调用。
+
+当前装配从 `AgentService` 创建存储与 `AgentRuntime` 开始，Web 的 `build_web_app_context()` 继续装配渠道和调度器。`AgentRuntime` 是运行依赖的集中装配点，同时仍包含部分业务协调方法；不能将其现状描述为纯装配模块。`domain/` 当前只有包声明，领域模型与不变量主要位于对应 `application` 模块及 `kernel` 的现行共享模型，具体坐标和后续修改约束见[代码地图](code-map.md)。
 
 | 层次 | 当前责任 | 禁止承担 |
 | --- | --- | --- |
@@ -29,7 +31,9 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 | Runtime Mechanism | 执行 Tool/Agent、管理 queue/lease、checkpoint、Artifact 与 Trace | 决定用户意图、业务计划或完成结论 |
 | Projection / DTO | 从定义、可用性、曝光或资源可见性物化只读视图 | 成为定义或可用性的第二写入口 |
 
-`AgentService` 是外部入口使用的统一外观；`AgentRuntime` 是组合根，二者都不拥有业务事实。
+`AgentService` 是外部入口使用的统一外观。独立的业务事实仍归对应能力和存储契约；外观与装配代码中的协调方法不能因此成为第二写入口。
+
+Conversation 的个人知识读取投影由 Application 内的 `ConversationKnowledgeReadAdapter` 实现既有 Port，消费同一 `KnowledgeService`；组合根负责构造与注入。当前实现坐标见[代码地图](code-map.md#2-从功能进入代码)。
 
 ## 3. 正式入口与对话主链
 
@@ -49,9 +53,19 @@ Proposal 不是权限、Command、Receipt 或完成证明。工具返回成功�
 
 `ConversationWorkingPlan` 只协调当前对话的可验收工作项。模型可以根据用户调整提出新版本，Application 保护已完成事实和新旧版本边界。工作项清单不拥有 queue、lease、审批或 Agent 运行事实。
 
+### 3.1 当前主循环的职责混合
+
+上述主链是责任说明，当前实现尚未把这些责任完整隔离。`ConversationService.respond()` 在同一循环内直接处理研究选证、编辑、统一核验及最终交付；`_decide()` 同时构造普通和研究的 Prompt、Schema 与输入。最终交付又按当前是否存在 `ResearchClaims` 分别检查研究批准和普通核验。研究模块已有局部规则，但公共推进仍了解其编辑协议。
+
+当前进入研究还受 `finalization_pending`、冻结标准和已成功 Web 动作影响，不是一个独立的用户产品入口。周期 `ResearchService` 拥有订阅、调度与投递事实，与请求内研究有不同生命周期。不能把两者合称为同一后台研究循环。
+
+普通最终答案只有 `ReviewCriteria.requires_review` 成立才调用整稿核验；研究交付消费同版本统一报告。普通核验器固定追加通用来源标准，现有计算样本已出现无执行来源而拒绝正确答案的反馈；同轨迹根因仍待完整请求审计，见[现状与候选](../optimization/to_verify/conversation-loop-boundaries.md)。候选以研究子流程封装内部过程，各路径共享运行治理并按契约验收，允许模块内部循环；本轮未替换生产链。
+
 ## 4. 后台持续运行边界
 
-当前 Conversation 只在请求内执行 Tool 或委托 Agent；GPT Researcher 是 `AgentGateway` 后的执行资源，不拥有第二套业务 Plan、Completion 或研究循环。明确要求响应结束后继续运行、稍后查询、暂停或调整的输入，会在交互意图派生后返回 typed limitation，并记录 `capability_missing`，不会静默降级为前台成功。
+当前 Conversation 只在请求内执行 Tool 或委托 Agent；GPT Researcher 是 `AgentGateway` 后的执行资源，不拥有第二套业务 Plan、Completion 或研究循环。明确要求响应结束后继续运行、稍后查询、暂停或调整的输入，会在交互意图派生后返回 typed limitation，并记录 `capability_missing`。
+
+周期 Research、知识缺口提问和复习简报有各自的调度入口，由 Web Context 装配。它们执行已定义的业务任务，不意味着 Conversation 已支持任意目标的后台接续。
 
 旧后台调查的 Application、Aggregate、持久化、API 和 worker 已按 [ADR 0015](../adr/0015-withdraw-investigation-project.md)删除。普通 Conversation 研究仍有独立质量缺口；最新执行结果和失败边界只由[评测盘点](../evals/02-current-case-inventory.md)维护。
 
@@ -80,11 +94,11 @@ MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝�
 
 ## 7. 模型与服务提供方边界
 
-Application 只依赖 `StructuredModelClient`。组合根根据 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；两者都在调用边界携带 Schema，并将结果物化为同一 Pydantic 契约。
+模型调用的正式 Port 是 `StructuredModelClient`，由组合根注入，覆盖结构化、原生工具调用和文本请求。结构化工厂根据 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；两者都在调用边界携带 Schema，并将结果物化为同一 Pydantic 契约。
 
 模型适配的阅读入口按职责组织：`infra/structured_model.py` 拥有公开工厂、SDK 调用、超时、协议修复、重试与观测装配；`infra/model_response.py` 集中响应 envelope、流内容、原生动作调用和用量归一化。现有 Adapter 与计量包装器直接消费这些解析函数，业务准入仍由 Application 拥有。解析规则的局部修改从新模块及其 typed 契约进入，调用与恢复问题从原适配入口进入。
 
-当前本地模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索显式绑定 AnySearch，URL 正文读取绑定 builtin。配置只证明部署选择，不证明服务健康或产品结果。
+模型工厂以显式包装器组合单次调用准入、观测、用量和重试，实际顺序、SDK 流式 transport 与正式 SSE 的边界见[横切机制](cross-cutting.md#2-模型调用的实际组合)。模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索绑定与正文读取配置由[工具专题](../topics/tools.md)和[环境配置](../env.md)拥有。配置只证明部署选择，不证明服务健康或产品结果。
 
 GPT Researcher 在独立进程中运行，不会继承主工程的 `STRUCTURED_OUTPUT_TRANSPORT`。远端 `choose_agent()` 的自由文本 JSON 处理属于 GPT Researcher 调用边界，不能通过切换主工程 Adapter 修复。
 
@@ -95,6 +109,8 @@ PostgreSQL 保存业务 Aggregate 认可的 canonical facts、必要 journal、q
 恢复必须重放已冻结的 Command 和执行事实，不得重新调用模型生成 Command，也不得重复外部副作用。幂等 digest、submission key、Receipt 和 journal 只在确有审批、跨请求恢复或外部结果关联时使用。
 
 Trace、event、receipt 和评测归档记录事实，不改变生产决策。发布资格只由匹配代码身份、配置样本组、评测器、追踪记录和 checksum 的证据建立。
+
+策略决定以 `PolicyDecisionEvent` 传给所属 Runtime 的 `PolicyDecisionRecorder`，由组合根将本实例存储绑定到三个调用点；日志与可选持久化不再通过全局 setter 路由。可选 sink 错误隔离及实际验收边界见[横切机制](cross-cutting.md#4-横切实现的强制边界)和 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md)。
 
 ## 9. 当前不变量
 
@@ -109,7 +125,7 @@ Trace、event、receipt 和评测归档记录事实，不改变生产决策。�
 ## 10. 当前证据边界
 
 - Conversation、Memory、Tool 和多种治理机制已有各自限定范围的实际证据，不能拼成“所有智能体能力都已交付”。
-- 后台持续调查当前不是产品能力；普通 Conversation 的研究改动已进入工作树，完整用户结果仍须按对应证据验收。
+- Conversation 的任意目标后台持续调查当前不是产品能力；普通 Conversation 的研究链路已接入代码，完整用户结果仍须按对应证据验收。
 - 定向 E2E、Offline Eval 和历史回归只支持已声明范围；当前发布资格须绑定目标代码与完整产品矩阵。单元测试按 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)停用。
 
 证据结论、命令和归档坐标不在本文重复维护，统一见：

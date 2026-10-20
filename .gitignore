@@ -22,3 +22,6 @@ evals/galileo_ragbench/results/
 .pytest-tmp
 .tmp
 .reasonix
+
+# 消融实验测试数据
+/docs/ablation/**/*.json

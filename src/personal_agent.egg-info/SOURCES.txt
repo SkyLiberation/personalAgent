@@ -74,6 +74,7 @@ src/personal_agent/application/conversation/errors.py
 src/personal_agent/application/conversation/interaction_intent.py
 src/personal_agent/application/conversation/interaction_prompt.py
 src/personal_agent/application/conversation/journal.py
+src/personal_agent/application/conversation/knowledge_reading.py
 src/personal_agent/application/conversation/knowledge_save.py
 src/personal_agent/application/conversation/models.py
 src/personal_agent/application/conversation/observation_bounds.py
@@ -222,7 +223,6 @@ src/personal_agent/orchestration/__init__.py
 src/personal_agent/orchestration/capability_inventory.py
 src/personal_agent/orchestration/runtime.py
 src/personal_agent/orchestration/runtime_admin.py
-src/personal_agent/orchestration/runtime_helpers.py
 src/personal_agent/orchestration/service.py
 src/personal_agent/orchestration/worker.py
 src/personal_agent/planning/__init__.py

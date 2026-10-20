@@ -7,6 +7,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from personal_agent.kernel.contracts.tool import ToolInvocationEvent
+from personal_agent.kernel.contracts.policy import PolicyDecisionEvent
 from personal_agent.kernel.contracts.tool_runtime import (
     IdempotencyStore,
     ToolAuditSink,
@@ -313,7 +314,7 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                 )
             conn.commit()
 
-    def record_policy_decision(self, payload: dict[str, Any]) -> None:
+    def record_policy_decision(self, event: PolicyDecisionEvent) -> None:
         """Persist a policy decision so authorization outcomes stay queryable."""
         self.ensure_schema()
         with self._connect() as conn:
@@ -331,21 +332,21 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                     """,
                     (
                         datetime.now(UTC),
-                        payload.get("action", "unknown"),
-                        payload.get("effect", "unknown"),
-                        payload.get("rule", ""),
-                        payload.get("reason"),
-                        payload.get("tool_name"),
-                        payload.get("permission_scope"),
-                        payload.get("resource"),
-                        payload.get("risk_level"),
-                        payload.get("user_id"),
-                        payload.get("session_id"),
-                        payload.get("source_platform"),
-                        payload.get("execution_mode"),
-                        payload.get("thread_id"),
-                        payload.get("run_id"),
-                        payload.get("langsmith_run_id"),
+                        event.action,
+                        event.effect,
+                        event.rule,
+                        event.reason,
+                        event.tool_name,
+                        event.permission_scope,
+                        event.resource,
+                        event.risk_level,
+                        event.user_id,
+                        event.session_id,
+                        event.source_platform,
+                        event.execution_mode,
+                        event.thread_id,
+                        event.run_id,
+                        event.langsmith_run_id,
                     ),
                 )
             conn.commit()

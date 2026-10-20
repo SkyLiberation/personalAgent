@@ -14,6 +14,8 @@
 
 日志、追踪记录和归档可以通过稳定身份互相定位，但禁止用 listener 或 converter 在它们之间同步第二份业务状态。
 
+策略观测通过 immutable `PolicyDecisionEvent` 交给所属 Runtime 的 `PolicyDecisionRecorder`。组合根将同一实例注入工具网关、MemoryFacade 和 Conversation，存储目的地保持本实例绑定；管理员查询消费所属应用的既有存储。可选持久化失败仍记录异常并隔离，不提升为必需审计原子提交保证。决定及证据见 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md)，当前组合见[横切机制](../architecture/cross-cutting.md#4-横切实现的强制边界)。
+
 ## 2. LLM Trace 脱敏策略
 
 **LangSmith 默认关闭；启用后也只接收观测投影。** `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，模型调用只上传用途、模型参数、消息数量、字符数、延迟和 token 等摘要，不上传用户消息、模型正文、工具参数或工具结果正文。
@@ -32,7 +34,7 @@
 
 模型只能提出动作 `Proposal`。策略与 Admission 判断权限、风险、预算和确认要求，执行网关产生执行事实，Verifier 与 Completion Gate 分别判断语义满足和结果契约。观测组件只记录这些阶段的输入、输出和错误，不修改决策。
 
-工具的曝光、授权、结果结构、审计和幂等边界见 [工具设计](tools.md)。运行装配与 `InteractionTrace` 见 [当前 Runtime](runtime.md)。全局权力边界见 [当前核心架构](../summary/core-architecture-current-state.md)。
+工具的曝光、授权、结果结构、审计和幂等边界见 [工具设计](tools.md)。运行装配与 `InteractionTrace` 见 [当前 Runtime](runtime.md)。全局权力边界见 [当前核心架构](../architecture/core-architecture-current-state.md)。
 
 ## 5. 评测与发布
 

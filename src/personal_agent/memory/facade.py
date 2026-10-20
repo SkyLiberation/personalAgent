@@ -13,12 +13,13 @@ from personal_agent.kernel.models import (
     ReviewCard,
     local_now,
 )
-from personal_agent.kernel.observability import record_policy_decision
+from personal_agent.kernel.observability import PolicyDecisionRecorder
 from personal_agent.kernel.logging_utils import log_event
 from personal_agent.kernel.query_understanding import RetrievalFilters
 from personal_agent.kernel.contracts.policy import (
     PolicyAction,
     PolicyDecision,
+    PolicyDecisionEvent,
     PolicyEvaluator,
     PolicyInput,
 )
@@ -72,6 +73,7 @@ class MemoryFacade:
         graph_store: "GraphitiStore | None" = None,
         *,
         policy_engine: PolicyEvaluator,
+        policy_decisions: PolicyDecisionRecorder | None = None,
     ) -> None:
         self.local = local_store
         self.graph = graph_store
@@ -79,6 +81,7 @@ class MemoryFacade:
         # depends only on the ``PolicyEvaluator`` capability and the composition
         # root injects the real engine. Keeps memory free of an upward dependency.
         self._policy = policy_engine
+        self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
         self._session_key: str | None = None
 
     # -- policy enforcement -------------------------------------------------
@@ -105,15 +108,17 @@ class MemoryFacade:
             )
         )
         if not decision.allowed:
-            record_policy_decision(
-                action=action,
-                effect=decision.effect,
-                rule=decision.rule,
-                reason=decision.reason,
-                permission_scope=_MEMORY_SCOPES.get(action, "memory:access"),
-                resource=resource,
-                user_id=subject,
-                execution_mode="memory",
+            self._policy_decisions.record(
+                PolicyDecisionEvent(
+                    action=action,
+                    effect=decision.effect,
+                    rule=decision.rule,
+                    reason=decision.reason,
+                    permission_scope=_MEMORY_SCOPES.get(action, "memory:access"),
+                    resource=resource,
+                    user_id=subject,
+                    execution_mode="memory",
+                )
             )
         return decision
 

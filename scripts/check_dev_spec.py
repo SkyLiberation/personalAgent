@@ -245,6 +245,7 @@ def main() -> int:
         *MODULE_INSTRUCTIONS,
     ]
     link_sources.extend(sorted(SPEC_DIR.glob("*.md")))
+    link_sources.extend(sorted((ROOT / "docs" / "architecture").rglob("*.md")))
     link_sources.extend(sorted((ROOT / "docs" / "agentRef").glob("*.md")))
     checked_links, checked_anchors = check_links(link_sources)
 

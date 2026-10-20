@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Iterator
+from typing import Generic
 
 from personal_agent.capabilities.contracts.model import (
     ModelCallIntent,
@@ -15,8 +15,6 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
     StructuredModelResponse,
     StructuredOutputT,
-    StreamingModelClient,
-    StreamChunk,
 )
 
 
@@ -127,48 +125,7 @@ class GovernedModelClient(Generic[StructuredOutputT]):
         return response
 
 
-class GovernedStreamingModelClient:
-    """Streaming façade with the same one-call admission as structured calls."""
-
-    def __init__(
-        self,
-        delegate: StreamingModelClient,
-        *,
-        provider: str,
-        model: str,
-        admission: ModelInvocationAdmission | None = None,
-    ) -> None:
-        self._delegate = delegate
-        self.provider = provider
-        self.model = model
-        self._admission = admission or ModelInvocationAdmission()
-        self.last_audit: ModelInvocationAudit | None = None
-
-    @property
-    def transport(self) -> StreamingModelClient:
-        return self._delegate
-
-    def stream(self, request: StructuredModelRequest[Any]) -> Iterator[StreamChunk]:
-        intent = ModelCallIntent(
-            purpose=request.operation,
-            operation=request.operation,
-            context_projection_ref=str(request.context_projection_ref or ""),
-            sensitivity=request.sensitivity,
-            structured_output_contract=request.output_type.__name__,
-            max_input_tokens=max(1, int(request.metadata.get("max_input_tokens", 128_000))),
-            max_output_tokens=request.max_tokens,
-        )
-        skill_decision = SkillActivationDecision(
-            call_id=intent.call_id,
-            reason_codes=("no_contextual_skill_required",),
-        )
-        skill_grant = SkillContextGrant(call_id=intent.call_id)
-        grant = self._admission.grant(intent, provider=self.provider, model=self.model)
-        self.last_audit = ModelInvocationAudit(intent, skill_decision, skill_grant, grant)
-        yield from self._delegate.stream(request)
-
-
 __all__ = [
-    "GovernedModelClient", "GovernedStreamingModelClient", "ModelInvocationAdmission", "ModelInvocationAudit",
+    "GovernedModelClient", "ModelInvocationAdmission", "ModelInvocationAudit",
     "ModelInvocationDenied",
 ]

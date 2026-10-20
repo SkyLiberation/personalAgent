@@ -31,6 +31,7 @@
 | 工具调用协议踩过什么坑 | [Tool Calling 阻塞复盘](08-tool-calling-pitfall.md) | 统一结构化 Proposal 如何阻塞工具参数、为什么不是单纯 JSON 问题，以及如何撤回失败候选 |
 | 当前每条 E2E 分别验证什么 | [E2E 用例设计审视](09-e2e-case-design-review.md) | canonical 用例的分类、设计目的与关键验收点 |
 | Agent 常见错误怎样分类和排障 | [开发踩坑与优化经验 §15](10-development-pitfalls.md#15-agent-常见错误与排障) | 九类错误、Trace 与 Context 审计、真实案例的定位过程 |
+| 外部面经和 JD 暴露哪些工程差距 | [2026-10-16 工程审视](../summary/agent-engineering-gap-review-20261016.md) | 外部来源、本地依据与建议顺序；不代替主讲正文或 Future 状态 |
 | 如何维护本目录 | [写作规范](00-writing-spec.md) | 设计必要性、同契约方案比较、缺口处理、事实源与去重 |
 
 ## 关键能力唯一主讲位置
@@ -82,7 +83,7 @@
 
 ## 权威事实入口
 
-- 当前架构：[core-architecture-current-state.md](../summary/core-architecture-current-state.md)
+- 当前架构：[core-architecture-current-state.md](../architecture/core-architecture-current-state.md)
 - 端到端测试分类：[evidence_catalog.py](../../evals/e2e_quality/evidence_catalog.py)
 - 发布派生：[release_gate.py](../../evals/e2e_quality/release_gate.py)
 - 未落地候选：[design-optimization-backlog.md](../future/design-optimization-backlog.md)

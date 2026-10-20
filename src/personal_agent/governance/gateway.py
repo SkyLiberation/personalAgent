@@ -12,7 +12,7 @@ from langchain_core.tools import BaseTool
 
 from personal_agent.kernel.observability import (
     _current_langsmith_run_id,
-    record_policy_decision,
+    PolicyDecisionRecorder,
     record_tool_audit,
 )
 from personal_agent.kernel.rate_limit import InMemoryRateLimiter
@@ -27,6 +27,7 @@ from personal_agent.capabilities.contracts.grants import (
     ProcedureNodeGrant,
 )
 from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
+from personal_agent.kernel.contracts.policy import PolicyDecisionEvent
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -121,11 +122,13 @@ class ToolGateway:
         *,
         idempotency_store: IdempotencyStore | None = None,
         policy_engine: PolicyEngine | None = None,
+        policy_decisions: PolicyDecisionRecorder | None = None,
     ) -> None:
         self._tools: dict[str, BaseTool] = {}
         self.audit_sink = audit_sink
         self._idempotency = idempotency_store or InMemoryIdempotencyStore()
         self._policy = policy_engine or PolicyEngine()
+        self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
         self._rate_limiter = InMemoryRateLimiter()
         self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-gateway")
 
@@ -505,20 +508,22 @@ class ToolGateway:
         context: ToolGatewayContext,
         decision: PolicyDecision,
     ) -> None:
-        record_policy_decision(
-            action="tool_call",
-            effect=decision.effect,
-            rule=decision.rule,
-            reason=decision.reason,
-            tool_name=tool.name,
-            permission_scope=governance.permission_scope,
-            risk_level=governance.risk_level,
-            user_id=context.execution_scope.principal.principal_id,
-            session_id=context.execution_scope.principal.user_id,
-            source_platform=context.source_platform,
-            execution_mode=context.execution_mode,
-            thread_id=context.execution_scope.thread_id,
-            run_id=context.execution_scope.execution_id,
+        self._policy_decisions.record(
+            PolicyDecisionEvent(
+                action="tool_call",
+                effect=decision.effect,
+                rule=decision.rule,
+                reason=decision.reason,
+                tool_name=tool.name,
+                permission_scope=governance.permission_scope,
+                risk_level=governance.risk_level,
+                user_id=context.execution_scope.principal.principal_id,
+                session_id=context.execution_scope.principal.user_id,
+                source_platform=context.source_platform,
+                execution_mode=context.execution_mode,
+                thread_id=context.execution_scope.thread_id,
+                run_id=context.execution_scope.execution_id,
+            ),
             audit_required=governance.audit_required,
         )
 

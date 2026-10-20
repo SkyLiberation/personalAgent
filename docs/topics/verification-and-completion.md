@@ -15,6 +15,12 @@ Verification 是 Agent 内部元能力：
 用户显式要求“审查并修订一段文本”是 Conversation Review 产品能力，不是通用 Verification 的
 触发前提，也不代表普通知识任务已经自动验证。
 
+## 当前核验覆盖与适用边界
+
+当前普通回答通过冻结的 `ReviewCriteria.requires_review` 决定是否执行整稿模型核验；进入该工具后，会把通用来源支持标准追加到用户标准。研究则采用同版本统一核验，交付不再重复普通核验。工具授权、引用合法性、业务写入和 Completion 各有确定性边界，不能因为某条回答没有额外模型核验就省略。
+
+“所有流程都有验收责任”与“所有回答都另调一次模型核验”是不同要求。现行来源标准对计算答案造成过实际拒稿，完整请求审计仍待完成；适用性设计、外部实践及目标场景矩阵统一见[主循环与核验边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md#4-是否所有流程都需要答案核验)。该矩阵是候选，不改变本文的现行触发或标准。
+
 ## 决策所有权
 
 统一研究核验的类别、target 与引用在同一 typed 输出校验中绑定当前输入；非法输出进入 Model Port 已有有界恢复，最多两次，语义报告不额外复核。报告被接受后恢复 canonical 类型，内容不改写。旧 Coverage 的引用恢复保留为[历史证据](../optimization/completed/coverage-reference-recovery.md)。
@@ -81,16 +87,20 @@ Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构�
 
 ## Verification 与 Completion
 
-Verification 通过只说明某个候选结果满足相应语义标准。只有 required result contract 的全部
-义务、assessment evidence 和 Artifact 齐全后，Completion Gate 才能进入领域终态。
+**Verification 通过表示判断主体对当前候选给出了允许交付的判断，不能当作语义必然正确的证明。** Completion 检查任务契约所需的执行事实、适用判断及产物是否成立，并绑定当前交付；它不独立解释任意自然语言目标。普通直接回答使用 Conversation 的结果契约，个人知识读取只返回证据选择事实。
 
-普通直接回答使用 Conversation 的结果契约；个人知识读取返回证据选择事实。内部 assessment 和 Receipt 由适用核验阶段产生，Completion 校验它们与当前提交的一致性。
+当前门禁分布在 [ConversationService](../../src/personal_agent/application/conversation/service.py)和 [research.accepted_research](../../src/personal_agent/application/conversation/research.py)等原责任入口，并非一个能自动验收所有能力的通用引擎。下列代码关系分别只能证明自己的边界：
+
+- `_unread_offloaded_resources()` 在同一资源有成功补读后移除“从未查看”阻塞；读过一个窗口不能证明读全、证据充分或目标满足。
+- `accepted_research()` 要求当前完整非空回答、有适用且无 findings 的研究报告，并恢复合法引用；`respond()` 进一步要求交付 segments 等于当前已批准回答。它们能约束报告适用性和正文绑定，不能纠正报告本身的语义漏放。
+- `_verify_before_send()` 消费普通核验回执，检查通过结果及被评正文与当前提交一致；回执形状合法、条件枚举齐全，不等于判断正确。
+- `InteractionIntent` 的原文片段准入证明被引文字确实来自用户；条件提取是否完整、改写是否忠实仍属于语义边界。
+
+现行研究核验保留原会话、冻结 requirements、完整当前回答及实际资料，不能只凭提取条件列表或 Plan 完成状态交付。开放目标的解释和判断仍可能出错，已知标题被误判为完整正文的漏放见上文。设计中的依据归属、交付准入及停止分支由[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#41-完成依据从哪里来)拥有；本轮仅澄清事实和证明范围，未增加生产门禁或修改现行核验触发。
 
 ## 执行证据
 
 - `ASK-001A`：Conversation 逐项引用互斥个人资料并明确冲突，禁止 web、跨 principal 泄漏和知识写入；
 - `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；
 
-2026-10-01 引用继承契约：正文片段修订由 Runtime 保留目标 claim 已绑定引用；替换引用仅对新增坐标检查本轮选择，创建和增补的引用全部经过选择。正式写作者的引用原文目录从本轮选择与当前集合绑定的可见坐标恢复，合法编辑后的完整新版仍经过来源支持和事实覆盖。版本、claim 与片段范围、来源绑定及最终结果门禁继续由原责任主体拥有；本轮证据见[引用继承记录](../optimization/completed/claim-retained-references.md)。
-
-2026-10-01 来源报告消费契约：每次合法编辑先绑定当前所有引用，修改项核验整条正文；同次 `respond` 固定模型绑定范围内，未变正文、引用、原文与来源身份和判据版本的项消费原 Journal 最新适用报告，包括拒绝。新的调用边界及显式重验重新建立来源判断。全部项有适用通过后，仍核验当前完整事实覆盖；研究反馈不作为来源事实，修订补入的否定与解释同样须受原文支持。机制与验收分别见[来源报告复用固化记录](../optimization/completed/claim-source-review-reuse.md)和[支持范围修订候选](../optimization/to_verify/claim-supported-scope-repair.md)。
+引用继承的决定性证据见[引用继承记录](../optimization/completed/claim-retained-references.md)；旧逐项来源报告的适用性与复用经验见[来源报告复用记录](../optimization/completed/claim-source-review-reuse.md)。当前研究按完整版本统一核验，报告复用须保持任务、Prompt、版本、绑定原文、实际返回资料和读取状态等决定性输入不变，契约见 [ADR 0032](../adr/0032-conversation-research-claims.md#2026-10-16-当前决定)。旧逐项 Source、Coverage 和独立汇总不再是生产阶段。
