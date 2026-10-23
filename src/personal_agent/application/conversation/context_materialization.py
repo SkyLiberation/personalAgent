@@ -119,6 +119,7 @@ def select_visible_successful_observations(
         for item in materialize_interaction_inputs(inputs)
         if isinstance(item, ActionObservation)
         and item.status == "succeeded"
+        and item.evidence_eligible
         and item.capability_id not in excluded_capability_ids
     )
 

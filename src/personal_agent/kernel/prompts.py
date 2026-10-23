@@ -4,6 +4,7 @@ from typing import Any
 
 from personal_agent.kernel.prompt_registry import PromptSpec
 from personal_agent.kernel.prompt_templates.ask import PROMPTS as ASK_PROMPTS
+from personal_agent.kernel.prompt_templates.artifacts import PROMPTS as ARTIFACT_PROMPTS
 from personal_agent.kernel.prompt_templates.conversation import PROMPTS as CONVERSATION_PROMPTS
 from personal_agent.kernel.prompt_templates.graph import PROMPTS as GRAPH_PROMPTS
 from personal_agent.kernel.prompt_templates.interaction_verification import (
@@ -11,16 +12,25 @@ from personal_agent.kernel.prompt_templates.interaction_verification import (
 )
 from personal_agent.kernel.prompt_templates.runtime import PROMPTS as RUNTIME_PROMPTS
 from personal_agent.kernel.prompt_templates.research import PROMPTS as RESEARCH_PROMPTS
+from personal_agent.kernel.prompt_templates.retrieval_experiment import (
+    PROMPTS as RETRIEVAL_EXPERIMENT_PROMPTS,
+)
+from personal_agent.kernel.prompt_templates.python_execution import (
+    PROMPTS as PYTHON_EXECUTION_PROMPTS,
+)
 from personal_agent.kernel.prompt_templates.web_search import PROMPTS as WEB_SEARCH_PROMPTS
 
 
 _PROMPTS: dict[str, PromptSpec] = {
     **ASK_PROMPTS,
+    **ARTIFACT_PROMPTS,
     **CONVERSATION_PROMPTS,
     **GRAPH_PROMPTS,
     **INTERACTION_VERIFICATION_PROMPTS,
     **RUNTIME_PROMPTS,
     **RESEARCH_PROMPTS,
+    **RETRIEVAL_EXPERIMENT_PROMPTS,
+    **PYTHON_EXECUTION_PROMPTS,
     **WEB_SEARCH_PROMPTS,
 }
 

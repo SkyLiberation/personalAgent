@@ -4,6 +4,7 @@ from personal_agent.infra.artifact_ripgrep import RipgrepArtifactSearch
 
 import logging
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
@@ -53,6 +54,8 @@ from personal_agent.tools import (
     build_enterprise_knowledge_search_tool,
     build_graph_search_tool,
     build_inspect_artifact_tool,
+    build_write_artifact_tool,
+    build_retrieval_experiment_tool,
     build_inspect_knowledge_gaps_tool,
     build_verify_interaction_draft_tool,
     build_list_recent_notes_tool,
@@ -328,6 +331,59 @@ class AgentRuntime:
             build_research_verify_digest_tool(self._research_service)
         )
         self._register_tools()
+        conversation_journal = FileInteractionJournal(self.settings.data_dir / "interaction_runs")
+        experiment_deployment = None
+        experiment_completion = None
+        if self.settings.retrieval_experiment_config_path is not None:
+            from personal_agent.infra.retrieval_experiment.deployment import load_retrieval_deployment
+            from personal_agent.infra.retrieval_experiment.backend import DockerExperimentBackend
+            from personal_agent.application.retrieval_experiment.service import RetrievalExperimentService
+            experiment_deployment, experiment_environment = load_retrieval_deployment(
+                self.settings.retrieval_experiment_config_path)
+            experiment_service = RetrievalExperimentService(
+                artifacts=self.artifact_service, journal=conversation_journal,
+                execution=DockerExperimentBackend(deployment=experiment_deployment, environment=experiment_environment),
+                deployment=experiment_deployment,
+            )
+            self._tool_executor.register(build_retrieval_experiment_tool(experiment_service))
+            from personal_agent.application.python_execution.models import (
+                PythonExecutionLimits, PythonExecutionProfile,
+            )
+            from personal_agent.application.python_execution.service import PythonExecutionService
+            from personal_agent.infra.python_execution.backend import DockerPythonExecutionBackend
+            from personal_agent.tools.execute_python import build_execute_python_tool
+            candidate_limits = experiment_deployment.limits
+            python_profile = PythonExecutionProfile(
+                authorized_principal=experiment_deployment.authorized_principal,
+                deployment_digest=experiment_deployment.deployment_digest,
+                image_id=experiment_deployment.candidate_image_id,
+                limits=PythonExecutionLimits(
+                    timeout_seconds=candidate_limits.candidate_timeout_seconds,
+                    memory_mb=candidate_limits.candidate_memory_mb,
+                    cpus=candidate_limits.candidate_cpus,
+                    pids_limit=candidate_limits.candidate_pids,
+                    scratch_mb=candidate_limits.candidate_scratch_mb,
+                    stdout_bytes=candidate_limits.stdout_bytes,
+                    stderr_bytes=candidate_limits.stderr_bytes,
+                ),
+            )
+            python_service = PythonExecutionService(
+                artifacts=self.artifact_service, journal=conversation_journal,
+                execution=DockerPythonExecutionBackend(
+                    endpoint=experiment_environment.endpoint,
+                    work_root=self.settings.data_dir / "python_execution_jobs",
+                    profile=python_profile,
+                ),
+                profile=python_profile,
+            )
+            self._tool_executor.register(build_execute_python_tool(python_service))
+            from personal_agent.application.retrieval_experiment.delivery import RetrievalExperimentCompletionService
+            from personal_agent.application.conversation.research_delivery import ResearchExperimentCompletionUseCase
+            experiment_completion = ResearchExperimentCompletionUseCase(
+                experiments=RetrievalExperimentCompletionService(
+                    experiments=experiment_service,
+                ), artifacts=self.artifact_service,
+            )
         self._conversation_service = ConversationService(
             self._structured_client,
             policy_decisions=self._policy_decisions,
@@ -341,7 +397,15 @@ class AgentRuntime:
             budget_policy=LoopBudgetPolicy(
                 **self.settings.interaction_loop.model_dump()
             ),
-            journal=FileInteractionJournal(self.settings.data_dir / "interaction_runs"),
+            journal=conversation_journal,
+            experiment_deployment=experiment_deployment,
+            experiment_completion=experiment_completion,
+            experiment_model_capacity_valid=all(
+                config.capacity is not None
+                and config.capacity.provider_host == urlparse(config.base_url or "").hostname
+                and config.capacity.model == config.model
+                for config in (self.settings.openai, self.settings.structured)
+            ),
             action_diagnostics_reveal_field_names=(
                 self.settings.action_diagnostics_reveal_field_names
             ),
@@ -437,6 +501,7 @@ class AgentRuntime:
                 build_capture_upload_tool(self.capture_service, self.artifact_service)
             )
         self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service))
+        self._tool_executor.register(build_write_artifact_tool(self.artifact_service))
         if self._structured_client is not None:
             self._tool_executor.register(
                 build_verify_interaction_draft_tool(self._structured_client)

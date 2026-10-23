@@ -60,3 +60,16 @@
 两者都把摘要用于后续实际请求，而非只生成一段摘要后继续发送全部旧历史；也都没有用语义 Judge 保证摘要忠实。DeepSeek 本次未见与 DeepAgents 相同的显式输出预留，不能把阈值和安全保证合并描述。
 
 本工程可借鉴“按实际容量触发、保留配对尾部、原历史可追溯、后续真正消费压缩视图、失败有界”的责任划分。原目标、权限、预算、执行及批准仍从 canonical facts 恢复，摘要仅辅助理解。本工程若承诺原文可重读，外置或恢复失败时不能照搬继续有损压缩的降级。具体候选由[主循环 Context 设计](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)拥有；这里的源码不替代本地失败 baseline 或压缩后交付证据。
+
+## 6. 参数错误回传与工具历史配对
+
+2026-10-22 复核以下两份固定提交及当前 Provider 契约，源码快照与摘要见[来源归档](../../.tmp/action-parameter-repair-20261022/references/manifest.json)。没有运行第三方项目。源码是相应版本的 A 级机制证据，官方经验为 B 级；不证明本工程错误的唯一原因或候选收益。
+
+| 来源 | 实际调用链与可复用边界 |
+| --- | --- |
+| [OpenHands agent.py，6530325e](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/agent.py#L798) | 从 state view 形成消息，调用 `llm.generate`；`FunctionCallValidationError` 生成下一轮可见 MessageEvent。另一路 ActionEvent 保留原 tool_call 与错误。说明错误必须回到模型，不支持所有错误都必须放在同一种角色 |
+| [Gemini tool-executor.ts，ed96faed](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/scheduler/tool-executor.ts#L530)及 [client.ts](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/core/client.ts#L747) | 错误结果含原 call ID、工具名及错误消息；Client 在未决 functionCall 后暂停插入额外 IDE Context，保护相邻 functionResponse。说明原生历史投影必须处理整条配对关系 |
+| [DeepSeek Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/) | 官方示例保留模型原消息，再追加关联 `tool_call_id` 的工具结果后请求模型。Chat Completion 与其他 API 的中途插入支持不同；思考记录另有 Provider 契约。不能只新增一个无前置调用的工具角色消息。严格模式须beta端点及每个function的strict=true，且有Schema方言限制；只发送strict字段不证明启用了强约束 |
+| [Anthropic 工具设计经验](https://www.anthropic.com/research/writing-tools-for-agents) | 参数错误应提供具体、可行动的修正信息；工具返回格式及体量用本地评测选择，不能凭格式名称推断效果 |
+
+本工程本轮采用“明确缺失字段、保留被拒原提议、说明可修改范围”的最小反馈。完整原生历史作为独立架构候选，后续须核对 typed Port、Journal 到模型的重建、批量整批拒绝、跨 Provider 推理记录及压缩时的调用／结果配对，不借此次参数修复临时重排消息。采用状态与局部验收由[主循环唯一设计](../optimization/to_verify/conversation-loop-boundaries.md#2026-10-22-必填参数恢复候选)拥有。

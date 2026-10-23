@@ -25,11 +25,12 @@ from time import perf_counter, sleep
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
-from openai import APIError, APIStatusError, ContentFilterFinishReasonError, OpenAI
+from openai import APIError, APIStatusError, ContentFilterFinishReasonError, LengthFinishReasonError, OpenAI
 from pydantic import BaseModel
 
 from personal_agent.capabilities.contracts.model import (
     PROVIDER_DIAGNOSTIC_MAX_CHARS,
+    ModelCapacityRefused,
     ModelInvocationUnavailable,
     ProviderFailureDiagnostics,
     StructuredModelClient,
@@ -46,6 +47,7 @@ from personal_agent.infra.model_response import (
     _sum_usage,
     _usage,
 )
+from personal_agent.infra.model_capacity import check_model_capacity
 from personal_agent.kernel.config_models import (
     LangSmithConfig,
     OpenAIConfig,
@@ -235,6 +237,15 @@ class OpenAIModelClient:
         merged_extra = {**config_extra, **(request.extra_body or {})}
         if merged_extra:
             kwargs["extra_body"] = merged_extra
+        if (
+            request.kind == "tool_calling"
+            and request.action_choice == "required"
+            and urlparse(self._config.base_url or "").hostname == "api.deepseek.com"
+            and merged_extra.get("thinking") != {"type": "disabled"}
+        ):
+            # DeepSeek thinking rejects forced choice. The original required
+            # request still owns action validation and bounded protocol repair.
+            kwargs["tool_choice"] = "auto"
         return kwargs
 
     @staticmethod
@@ -324,9 +335,40 @@ class OpenAIModelClient:
         operation: str,
         kwargs: dict[str, Any],
     ) -> Any:
+        capacity = self._config.capacity
+        if capacity is not None:
+            try:
+                check = check_model_capacity(
+                    operation=operation,
+                    provider_host=urlparse(str(client.base_url)).hostname or "",
+                    model=self._resolved_model,
+                    kwargs=kwargs,
+                    capacity=capacity,
+                )
+            except ModelCapacityRefused as exc:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "llm.capacity.refused",
+                    operation=operation,
+                    reason_code=exc.reason_code,
+                    capacity_check=exc.check.model_dump(mode="json")
+                    if exc.check
+                    else None,
+                )
+                raise
+            log_event(
+                logger,
+                logging.INFO,
+                "llm.capacity.accepted",
+                capacity_check=check.model_dump(mode="json"),
+            )
+
         def invoke() -> Any:
             if kwargs.get("stream"):
-                stream_kwargs = {key: value for key, value in kwargs.items() if key != "stream"}
+                stream_kwargs = {
+                    key: value for key, value in kwargs.items() if key != "stream"
+                }
                 with client.chat.completions.stream(**stream_kwargs) as stream:
                     return stream.get_final_completion()
             return client.chat.completions.create(**kwargs)
@@ -338,9 +380,15 @@ class OpenAIModelClient:
                 operation=operation,
                 timeout_seconds=self._config.timeout_seconds,
             )
+        except LengthFinishReasonError as exc:
+            # The SDK rejects the terminal response before returning its usage.
+            # Keep the actual completion for the common typed failure path.
+            return exc.completion
         except ContentFilterFinishReasonError as exc:
             raise ModelInvocationUnavailable(
-                operation, "provider_rejected", model=self._resolved_model,
+                operation,
+                "provider_rejected",
+                model=self._resolved_model,
                 provider_host=urlparse(self._config.base_url or "").hostname,
                 retryable=False,
                 diagnostics=ProviderFailureDiagnostics(error_type="content_filter"),
@@ -376,6 +424,9 @@ class OpenAIModelClient:
                 )
                 response = self._create_structured_completion(client, chat_request)
                 responses.append(response)
+                if any(getattr(choice, "finish_reason", None) == "length"
+                       for choice in _require_chat_choices(response)):
+                    raise StructuredOutputFailure(request.operation, "provider response was truncated (finish_reason=length)")
                 content, parsed, parse_error = self._parse_typed_response(
                     request,
                     response,
@@ -406,7 +457,11 @@ class OpenAIModelClient:
                     version=request.version,
                     parse_error=parse_error[:500],
                 )
-        except (StructuredOutputFailure, ModelInvocationUnavailable) as exc:
+        except (
+            StructuredOutputFailure,
+            ModelInvocationUnavailable,
+            ModelCapacityRefused,
+        ) as exc:
             if responses:
                 usage = _aggregate_usage(responses)
                 if isinstance(exc, ModelInvocationUnavailable):
@@ -495,19 +550,32 @@ class OpenAIModelClient:
                     request.operation,
                     self._chat_kwargs(chat_request),
                 )
-            except ModelInvocationUnavailable as exc:
+            except (ModelInvocationUnavailable, ModelCapacityRefused) as exc:
                 if responses:
+                    usage = _aggregate_usage(responses)
+                    if isinstance(exc, ModelInvocationUnavailable):
+                        usage.pop("input_tokens", None)
+                        usage.pop("output_tokens", None)
                     exc.response = StructuredModelResponse(
                         value=None,
                         model=getattr(responses[-1], "model", None)
                         or self._resolved_model,
                         latency_ms=round((perf_counter() - start) * 1000, 2),
-                        total_tokens=_aggregate_usage(responses).get("total_tokens"),
-                        retry_attempts=attempt,
+                        input_tokens=usage.get("input_tokens"),
+                        output_tokens=usage.get("output_tokens"),
+                        total_tokens=usage.get("total_tokens"),
+                        retry_attempts=len(responses)
+                        - 1
+                        + int(isinstance(exc, ModelInvocationUnavailable)),
                         retry_errors=repair_errors,
                     )
                 raise
             responses.append(response)
+            if any(getattr(choice, "finish_reason", None) == "length"
+                   for choice in _require_chat_choices(response)):
+                protocol_failure = StructuredOutputFailure(request.operation,
+                    "provider response was truncated (finish_reason=length)")
+                break
             message = _require_chat_choices(response)[0].message
             try:
                 action_invocations = (
@@ -751,13 +819,23 @@ class RetryingStructuredModelClient:
                 observed = (
                     exc.response
                     if isinstance(
-                        exc, (StructuredOutputFailure, ModelInvocationUnavailable)
+                        exc,
+                        (
+                            StructuredOutputFailure,
+                            ModelInvocationUnavailable,
+                            ModelCapacityRefused,
+                        ),
                     )
                     else None
                 )
                 if attempt >= self._max_retries or not _is_retryable_model_error(exc):
                     if isinstance(
-                        exc, (StructuredOutputFailure, ModelInvocationUnavailable)
+                        exc,
+                        (
+                            StructuredOutputFailure,
+                            ModelInvocationUnavailable,
+                            ModelCapacityRefused,
+                        ),
                     ):
                         if observed is None and any(
                             item is not None for item in failed_responses
@@ -816,6 +894,8 @@ class RetryingStructuredModelClient:
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:
+    if isinstance(exc, ModelCapacityRefused):
+        return False
     if isinstance(exc, ModelInvocationUnavailable):
         return exc.retryable
     name = exc.__class__.__name__.lower()
@@ -965,7 +1045,11 @@ class UsageRecordingStructuredModelClient:
         response = None
         try:
             response = self._delegate.generate(request)
-        except (StructuredOutputFailure, ModelInvocationUnavailable) as exc:
+        except (
+            StructuredOutputFailure,
+            ModelInvocationUnavailable,
+            ModelCapacityRefused,
+        ) as exc:
             response = exc.response
             raise
         finally:

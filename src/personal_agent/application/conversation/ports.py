@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Protocol
 
 from personal_agent.application.knowledge.models import ConversationSolidifyResult
-from personal_agent.application.knowledge_lifecycle.models import KnowledgeDeleteOperationView
+from personal_agent.application.knowledge_lifecycle.models import (
+    KnowledgeDeleteOperationView,
+)
 from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.capabilities.contracts.interaction import (
     InteractionToolCallValidation,
@@ -22,6 +24,12 @@ from personal_agent.kernel.contracts.scope import (
 )
 
 from .models import PersonalKnowledgeCandidate, PersonalKnowledgeEvidenceSnapshot
+from personal_agent.application.artifacts.models import (
+    ArtifactTextSnapshot,
+    ArtifactResourceItem,
+    ArtifactWriteReceipt,
+    ArtifactWriteRequest,
+)
 
 
 class InteractionToolPort(Protocol):
@@ -49,6 +57,8 @@ class InteractionToolPort(Protocol):
         execution_scope: ExecutionScope,
         tool_call_id: str,
         source_platform: str,
+        allowed_resource_refs: tuple[ResourceRef, ...] = (),
+        accepted_request_digest: str | None = None,
     ) -> dict[str, object]: ...
 
     def invoke_workflow(
@@ -97,6 +107,31 @@ class InteractionAgentPort(Protocol):
 
 
 class InteractionArtifactPort(Protocol):
+    def recover_draft(
+        self,
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+        request: ArtifactWriteRequest,
+        allowed_resource_refs: tuple[ResourceRef, ...],
+    ) -> ArtifactWriteReceipt | None: ...
+
+    def read_snapshot(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> ArtifactTextSnapshot: ...
+
+    def resource_item(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> ArtifactResourceItem: ...
+
     def read_text(
         self,
         resource_ref: ResourceRef,
@@ -119,6 +154,7 @@ class InteractionArtifactPort(Protocol):
         evidence_refs: tuple[str, ...],
         limitations: tuple[str, ...] = (),
     ) -> ResourceRef: ...
+
 
 class ConversationKnowledgeWriter(Protocol):
     def solidify_conversation(

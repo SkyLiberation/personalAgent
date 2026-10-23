@@ -5,6 +5,9 @@ description = "A governed personal knowledge agent runtime."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "docker==7.1.0",
+  "pyarrow>=24.0.0",
+  "pywin32>=306; sys_platform == 'win32'",
   "beautifulsoup4>=4.12.0",
   "fastapi>=0.121.0",
   "graphiti-core>=0.29.0",
@@ -58,7 +61,6 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
-    "pyarrow>=24.0.0",
     "ruff>=0.15.12",
 ]
 

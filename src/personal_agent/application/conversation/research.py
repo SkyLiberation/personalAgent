@@ -455,9 +455,11 @@ def in_research_mode(
     *,
     finalization_mode: bool,
     requires_review: bool,
+    experiment_run: bool = False,
 ) -> bool:
     return (
-        finalization_mode
+        not experiment_run
+        and finalization_mode
         and (
             current_claims(inputs) is not None
             or (

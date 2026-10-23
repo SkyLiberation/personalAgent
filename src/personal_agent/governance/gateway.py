@@ -16,6 +16,7 @@ from personal_agent.kernel.observability import (
     record_tool_audit,
 )
 from personal_agent.kernel.rate_limit import InMemoryRateLimiter
+from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.contracts.tool_runtime import (
     IdempotencyStore,
     ToolAuditSink,
@@ -43,7 +44,11 @@ logger = logging.getLogger(__name__)
 
 _EXTERNAL_NETWORK_EFFECTS = frozenset({"external_network", "send_external"})
 # 异常类型 -> 错误分类的默认映射，用于未显式抛出 ToolError 的底层异常。
-_TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = (TimeoutError, ConnectionError, OSError)
+_TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = (
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
 
 
 def _classify_exception(exc: BaseException) -> str:
@@ -130,7 +135,9 @@ class ToolGateway:
         self._policy = policy_engine or PolicyEngine()
         self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
         self._rate_limiter = InMemoryRateLimiter()
-        self._executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-gateway")
+        self._executor = ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="tool-gateway"
+        )
 
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
@@ -151,7 +158,9 @@ class ToolGateway:
     ) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
-            return tool_failure(f"未找到工具：{name}", error_kind="invalid_param").model_dump(mode="json")
+            return tool_failure(
+                f"未找到工具：{name}", error_kind="invalid_param"
+            ).model_dump(mode="json")
 
         started = perf_counter()
         output: ToolArtifact
@@ -177,7 +186,8 @@ class ToolGateway:
             elif self._is_rate_limited(tool, context):
                 rate_limited = True
                 output = tool_failure(
-                    f"工具 {tool.name} 触发速率限制，请稍后再试。", error_kind="transient"
+                    f"工具 {tool.name} 触发速率限制，请稍后再试。",
+                    error_kind="transient",
                 )
             else:
                 idempotency_key, replayed_output = self._reserve_idempotency(
@@ -262,7 +272,8 @@ class ToolGateway:
                     continue
                 return last_output, attempt, timed_out
         return (
-            last_output or tool_failure(f"工具 {tool.name} 未执行。", error_kind="unrecoverable"),
+            last_output
+            or tool_failure(f"工具 {tool.name} 未执行。", error_kind="unrecoverable"),
             max_attempts,
             timed_out,
         )
@@ -277,12 +288,15 @@ class ToolGateway:
         governance = tool_governance(tool)
 
         def run_tool():
-            return tool.invoke({
-                "name": name,
-                "args": args,
-                "id": context.tool_call_id,
-                "type": "tool_call",
-            })
+            return tool.invoke(
+                {
+                    "name": name,
+                    "args": args,
+                    "id": context.tool_call_id,
+                    "type": "tool_call",
+                },
+                config={"configurable": {"__personal_agent_gateway_context": context}},
+            )
 
         if governance.timeout_seconds is None:
             message = run_tool()
@@ -323,7 +337,9 @@ class ToolGateway:
                     ToolMessage(
                         content="工具节点未收到待执行的工具调用。",
                         tool_call_id="",
-                        artifact=tool_failure("工具节点未收到待执行的工具调用。").model_dump(mode="json"),
+                        artifact=tool_failure(
+                            "工具节点未收到待执行的工具调用。"
+                        ).model_dump(mode="json"),
                     )
                 ]
             }
@@ -401,7 +417,9 @@ class ToolGateway:
         if context.execution_mode == "direct":
             return None
         if grant is None:
-            return _PolicyViolation("agent tool dispatch requires a leaf execution grant")
+            return _PolicyViolation(
+                "agent tool dispatch requires a leaf execution grant"
+            )
         tool_name = tool.name
         bound_name = grant.provider_binding_ref.rsplit(":", 1)[-1]
         if bound_name != tool_name:
@@ -418,14 +436,12 @@ class ToolGateway:
                 or context.execution_scope.task_id
             )
         ):
-            return _PolicyViolation("execution grant is bound to a different invocation")
-        if (
-            confirmation_required
-            and grant.required_confirmation_ref
-            != (
-                context.execution_scope.logical_subgoal_id
-                or context.execution_scope.task_id
+            return _PolicyViolation(
+                "execution grant is bound to a different invocation"
             )
+        if confirmation_required and grant.required_confirmation_ref != (
+            context.execution_scope.logical_subgoal_id
+            or context.execution_scope.task_id
         ):
             return _PolicyViolation(
                 "confirmed high-risk execution requires a confirmation-bound grant"
@@ -449,18 +465,30 @@ class ToolGateway:
         state: Any,
         step_id: str | None,
     ) -> AtomicCapabilityGrant | ProcedureNodeGrant | None:
-        invocations = getattr(getattr(state, "invocation_batch", None), "invocations", ())
-        invocation = next((item for item in invocations if item.step_id == step_id), None)
+        invocations = getattr(
+            getattr(state, "invocation_batch", None), "invocations", ()
+        )
+        invocation = next(
+            (item for item in invocations if item.step_id == step_id), None
+        )
         if invocation is None:
             react_step_id = getattr(getattr(state, "react", None), "step_id", "")
-            invocation = next((item for item in invocations if item.step_id == react_step_id), None)
+            invocation = next(
+                (item for item in invocations if item.step_id == react_step_id), None
+            )
         grant_ref = getattr(invocation, "execution_grant_ref", None)
         grant = getattr(state, "execution_grants", {}).get(grant_ref or "")
         if isinstance(grant, ProcedureNodeGrant) and invocation is not None:
-            node_id = getattr(invocation, "procedure_node_id", None) or invocation.step_id
+            node_id = (
+                getattr(invocation, "procedure_node_id", None) or invocation.step_id
+            )
             if grant.node_id != node_id:
                 return None
-        return grant if isinstance(grant, (AtomicCapabilityGrant, ProcedureNodeGrant)) else None
+        return (
+            grant
+            if isinstance(grant, (AtomicCapabilityGrant, ProcedureNodeGrant))
+            else None
+        )
 
     def _validate_idempotency(
         self,
@@ -469,7 +497,11 @@ class ToolGateway:
         args: dict[str, Any],
     ) -> _PolicyViolation | None:
         is_confirmed_execution = bool(args.get("confirmed"))
-        if not (governance.requires_confirmation and governance.risk_level == "high" and is_confirmed_execution):
+        if not (
+            governance.requires_confirmation
+            and governance.risk_level == "high"
+            and is_confirmed_execution
+        ):
             return None
         key = str(args.get("idempotency_key", "")).strip()
         if governance.idempotency_key_required and not key:
@@ -595,7 +627,10 @@ class ToolGateway:
         if self.audit_sink is not None:
             self.audit_sink.record(event)
         record_tool_audit(event)
-        logger.info("Tool invocation completed", extra={"tool_invocation": event.model_dump(mode="json")})
+        logger.info(
+            "Tool invocation completed",
+            extra={"tool_invocation": event.model_dump(mode="json")},
+        )
 
     def _context_from_state(self, state: Any, call_id: str) -> ToolGatewayContext:
         tracking = getattr(state, "tool_tracking", None)
@@ -620,6 +655,9 @@ class ToolGateway:
             tool_call_id=call_id,
             source_platform=source_platform,
             react_allowed_tools=frozenset(getattr(react, "allowed_tools", []) or []),
+            allowed_resource_refs=tuple(entry_input.artifacts)
+            if isinstance(entry_input, EntryInput)
+            else (),
         )
 
     @staticmethod

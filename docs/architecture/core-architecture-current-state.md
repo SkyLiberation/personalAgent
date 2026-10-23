@@ -46,7 +46,7 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
-6. 外部研究提交同版本 claims 与最终回答，由统一核验检查来源、两者一致性及目标满足；普通交付生成 typed `FinalSubmission`。
+6. 普通外部研究提交同版本 claims 与最终回答，由统一核验检查来源、两者一致性及目标满足；普通交付生成 typed `FinalSubmission`。部署绑定的检索实验首轮也使用 FinalSubmission，实际 SubmittedFinal 持久后检查引用与实验文件，再发布同稿产物；暂不接入 claim／语义 verifier，契约见 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)。
 7. 运行系统按各自路径完成语义核验和 Completion，仅交付确切通过的 `FinalMessage` 正文。
 
 当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。

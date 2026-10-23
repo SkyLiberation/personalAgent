@@ -18,6 +18,9 @@ ConversationUnavailableReason: TypeAlias = (
         "model_not_configured",
         "final_action_required",
         "dependency_unavailable",
+        "context_capacity_exceeded", "output_capacity_exceeded",
+        "capacity_profile_mismatch", "capacity_payload_unsupported",
+        "run_deadline_exceeded", "model_usage_unknown", "model_token_budget_exhausted",
     ]
 )
 ConversationFailureStage = Literal[
@@ -27,6 +30,8 @@ ConversationFailureStage = Literal[
     "provider_structured_decode",
     "provider_action_decode",
     "application_action_decode",
+    "model_capacity",
+    "application_budget",
 ]
 
 
@@ -49,6 +54,7 @@ class ConversationUnavailable(RuntimeError):
         field_paths: tuple[str, ...] = (),
         error_types: tuple[str, ...] = (),
         response: StructuredModelResponse[Any] | None = None,
+        prior_responses: tuple[StructuredModelResponse[Any], ...] = (),
     ) -> None:
         if len(field_paths) != len(error_types):
             raise ValueError("conversation diagnostic fields must align")
@@ -65,6 +71,7 @@ class ConversationUnavailable(RuntimeError):
         self.error_types = error_types
         # Internal billable response; public diagnostics never serialize it.
         self.response = response
+        self.prior_responses = prior_responses
         super().__init__(message)
 
 

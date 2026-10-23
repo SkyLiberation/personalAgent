@@ -3,63 +3,33 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.capabilities.contracts.model import (
+    ModelCapacityRefused,
+    ModelInvocationUnavailable,
+    StructuredOutputFailure,
     StructuredModelClient,
     StructuredModelRequest,
     StructuredModelResponse,
     sealed_context_projection_ref,
 )
 
+from personal_agent.kernel.prompts import get_prompt
+
 from .models import (
     ConversationMessage,
     DecisionFeedback,
     ReviewCriteria,
 )
+from .errors import ConversationUnavailable
 
 _FEEDBACK_ACTION_ID = "interaction_turn"
 # Thinking and the typed intent share the provider's completion budget.
 _INTENT_OUTPUT_TOKEN_LIMIT = 32_768
-
-_DERIVATION_INSTRUCTION = (
-    "First decide whether the latest user message explicitly requires work to continue "
-    "after this response and later be queried, paused, resumed, or steered. Set "
-    "background_continuation_requested=true only for that requirement, and copy the exact "
-    "proving substring into background_source_span. Otherwise return false and an empty "
-    "span. A background continuation request is not review_plan or deliver_final_result, "
-    "so interaction_phase MUST be ordinary and phase_source_span MUST be empty. Do not choose "
-    "tools, agents, plans, or implementation steps. "
-    "Derive one mutually exclusive interaction phase from the latest user message. Use "
-    "review_plan only when the latest message asks the Agent to return an intermediate plan, "
-    "checklist, proposal, draft, or staged analysis and then wait for the user to review, "
-    "confirm scope, supplement facts, or provide acceptance criteria. Use "
-    "deliver_final_result when the latest message asks to finish, complete, deliver, or close "
-    "out work that was previously staged for review. Otherwise use ordinary. Return "
-    "phase_source_span as the exact substring of the latest user message that establishes "
-    "review_plan or deliver_final_result; use an empty string for ordinary. Never use a span "
-    "from an earlier message. "
-    "Separately, return one requirement per acceptance condition the user states. For each "
-    "requirement, criterion is a single testable condition phrased as what the sent text must "
-    "or must not do, and source_span is the exact substring of a user message that states it. "
-    "Copy source_span character for character from that message: do not translate, "
-    "paraphrase, trim inner words, or merge two sentences. Every criterion must be "
-    "self-contained and judgeable without conversation history. Before returning, inspect "
-    "each criterion as if the reader cannot see any message. A criterion such as 'keep the "
-    "original scope', 'use the same sources', or 'cover the items above' is still an "
-    "acceptance condition and must not be omitted merely because the latest message does not "
-    "repeat its objects. Rewrite it by explicitly listing every referenced subject, source "
-    "type, and qualifier from the user's messages. Never return original scope, the above, "
-    "unchanged, the same, as before, a pronoun, or an unstated set as the only identity of a "
-    "required object. Preserve every proper noun and qualified product, project, organization, "
-    "and repository name exactly as written by the user; never shorten or broaden a name, such "
-    "as dropping a CLI, SDK, repository, or Agent qualifier. Return no requirement for a "
-    "condition the user did not state; never invent one. A request to answer, explain, look "
-    "something up, summarize, or save without explicit acceptance conditions has no "
-    "requirements."
-)
 
 
 class _StrictModel(BaseModel):
@@ -77,9 +47,9 @@ class InteractionIntentProposal(_StrictModel):
     """Model proposal for delivery requirements, interaction phase, and review criteria."""
 
     requirements: tuple[ReviewRequirement, ...] = ()
-    interaction_phase: Literal[
-        "ordinary", "review_plan", "deliver_final_result"
-    ] = "ordinary"
+    interaction_phase: Literal["ordinary", "review_plan", "deliver_final_result"] = (
+        "ordinary"
+    )
     phase_source_span: str = Field(default="", max_length=2_000)
     background_continuation_requested: bool = False
     background_source_span: str = Field(default="", max_length=2_000)
@@ -100,14 +70,11 @@ def admit_interaction_intent(
     messages: Sequence[ConversationMessage],
 ) -> AdmittedInteractionIntent:
     """Ground semantic decisions only in verbatim user-authored text."""
-    user_text = tuple(
-        message.content for message in messages if message.role == "user"
-    )
+    user_text = tuple(message.content for message in messages if message.role == "user")
     latest_user_text = user_text[-1:] if user_text else ()
     background_span = proposal.background_source_span.strip()
     background_requirement_grounded = (
-        not proposal.background_continuation_requested
-        and not background_span
+        not proposal.background_continuation_requested and not background_span
     ) or (
         proposal.background_continuation_requested
         and proposal.interaction_phase == "ordinary"
@@ -116,8 +83,7 @@ def admit_interaction_intent(
         and _appears_in(background_span, latest_user_text)
     )
     background_continuation_requested = bool(
-        proposal.background_continuation_requested
-        and background_requirement_grounded
+        proposal.background_continuation_requested and background_requirement_grounded
     )
 
     criteria: list[str] = []
@@ -132,9 +98,7 @@ def admit_interaction_intent(
             and _appears_in(phase_span, latest_user_text)
         )
     )
-    interaction_phase = (
-        proposal.interaction_phase if phase_grounded else "ordinary"
-    )
+    interaction_phase = proposal.interaction_phase if phase_grounded else "ordinary"
     if proposal.interaction_phase != "ordinary" and not phase_grounded:
         ungrounded.append(phase_span or "<missing phase source>")
     for requirement in proposal.requirements:
@@ -161,38 +125,79 @@ def derive_interaction_intent(
     model_client: StructuredModelClient,
     *,
     messages: Sequence[ConversationMessage],
+    require_complete_usage: bool = False,
+    deadline_at: datetime | None = None,
+    remaining_tokens: int | None = None,
 ) -> tuple[
     AdmittedInteractionIntent,
     tuple[StructuredModelResponse[InteractionIntentProposal], ...],
     tuple[DecisionFeedback, ...],
 ]:
     """Derive one intent, revising an ungrounded background requirement at most once."""
+    intent_prompt = get_prompt("conversation.interaction_intent")
     prompt_messages = [
-        {"role": "system", "content": _DERIVATION_INSTRUCTION},
+        {"role": "system", "content": intent_prompt.template},
         *(message.model_dump(mode="json") for message in messages),
     ]
-    response = model_client.generate(StructuredModelRequest(
-        operation="interaction_intent",
-        version="v2",
-        messages=prompt_messages,
-        output_type=InteractionIntentProposal,
-        context_projection_ref=sealed_context_projection_ref(
-            purpose="interaction_intent", messages=prompt_messages,
-        ),
-        temperature=0,
-        max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
-        metadata={"component": "conversation_intent_admission"},
-    ))
+    response = model_client.generate(
+        StructuredModelRequest(
+            operation="interaction_intent",
+            version=intent_prompt.version,
+            messages=prompt_messages,
+            output_type=InteractionIntentProposal,
+            context_projection_ref=sealed_context_projection_ref(
+                purpose="interaction_intent",
+                messages=prompt_messages,
+            ),
+            temperature=0,
+            max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
+            metadata={"component": "conversation_intent_admission"},
+        )
+    )
     admitted = admit_interaction_intent(response.value, messages=messages)
     if admitted.background_requirement_grounded:
         return admitted, (response,), ()
 
     feedback = background_requirement_revision_feedback()
+    if require_complete_usage and (
+        response.input_tokens is None or response.output_tokens is None
+    ):
+        raise ConversationUnavailable(
+            "模型消费尚有未知量，已停止新增付费调用；本次研究未完成。",
+            reason_code="model_usage_unknown",
+            failure_stage="application_budget",
+            prior_responses=(response,),
+        )
+    if deadline_at is not None and datetime.now(UTC) >= deadline_at:
+        raise ConversationUnavailable(
+            "本次实验运行时限已到；已保留实际成果，本次研究未完成。",
+            reason_code="run_deadline_exceeded",
+            failure_stage="application_budget",
+            prior_responses=(response,),
+        )
+    consumed = response.total_tokens
+    if (
+        consumed is None
+        and response.input_tokens is not None
+        and response.output_tokens is not None
+    ):
+        consumed = response.input_tokens + response.output_tokens
+    if (
+        remaining_tokens is not None
+        and consumed is not None
+        and consumed >= remaining_tokens
+    ):
+        raise ConversationUnavailable(
+            "本次研究的已知模型消费达到额度，已停止新增付费调用。",
+            reason_code="model_token_budget_exhausted",
+            failure_stage="application_budget",
+            prior_responses=(response,),
+        )
     revision_messages = [
         {
             "role": "system",
             "content": (
-                f"{_DERIVATION_INSTRUCTION}\n\n"
+                f"{intent_prompt.template}\n\n"
                 "The previous background requirement proposal was rejected by deterministic "
                 "Admission. Revise only background_continuation_requested, background_source_span, "
                 "interaction_phase, and phase_source_span. Requirements remain frozen "
@@ -207,33 +212,45 @@ def derive_interaction_intent(
         *(message.model_dump(mode="json") for message in messages),
     ]
     try:
-        revision = model_client.generate(StructuredModelRequest(
-            operation="interaction_intent",
-            version="v2",
-            messages=revision_messages,
-            output_type=InteractionIntentProposal,
-            context_projection_ref=sealed_context_projection_ref(
-                purpose="interaction_intent_revision",
+        revision = model_client.generate(
+            StructuredModelRequest(
+                operation="interaction_intent",
+                version=intent_prompt.version,
                 messages=revision_messages,
-            ),
-            temperature=0,
-            max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
-            metadata={
-                "component": "conversation_intent_admission",
-                "revision_attempt": 1,
-            },
-        ))
+                output_type=InteractionIntentProposal,
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose="interaction_intent_revision",
+                    messages=revision_messages,
+                ),
+                temperature=0,
+                max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
+                metadata={
+                    "component": "conversation_intent_admission",
+                    "revision_attempt": 1,
+                },
+            )
+        )
+    except ModelCapacityRefused as exc:
+        exc.prior_responses = (response, *exc.prior_responses)
+        raise
+    except (ModelInvocationUnavailable, StructuredOutputFailure) as exc:
+        if require_complete_usage:
+            exc.prior_responses = (response, *exc.prior_responses)
+            raise
+        return admitted, (response,), (feedback,)
     except Exception:
         return admitted, (response,), (feedback,)
 
-    revised_proposal = response.value.model_copy(update={
-        "background_continuation_requested": (
-            revision.value.background_continuation_requested
-        ),
-        "background_source_span": revision.value.background_source_span,
-        "interaction_phase": revision.value.interaction_phase,
-        "phase_source_span": revision.value.phase_source_span,
-    })
+    revised_proposal = response.value.model_copy(
+        update={
+            "background_continuation_requested": (
+                revision.value.background_continuation_requested
+            ),
+            "background_source_span": revision.value.background_source_span,
+            "interaction_phase": revision.value.interaction_phase,
+            "phase_source_span": revision.value.phase_source_span,
+        }
+    )
     return (
         admit_interaction_intent(revised_proposal, messages=messages),
         (response, revision),

@@ -153,3 +153,38 @@ BEIR 在统一协议下比较 18 个数据集与 10 种检索方法，支持可�
 | [DeepResearch Bench 作者项目页](https://deepresearch-bench.github.io/)，本次按页面声明核对 | 原始用户查询用于主题分布分析，公开研究任务由领域专家另行设计 | 专家任务可以贴近真实需求，但不等于未经改写的用户记录，也不能用其详细题面推断用户实际输入程度 |
 
 这些资料只提供输入形态的实例与来源限制。自然输入、必要澄清及评测义务怎样设计，由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#23-输入不明确时怎样澄清)拥有，不在参考页复制生产规则或新增任务准入。
+
+## 10. LongDS 长程数据分析评测
+
+2026-10-23 核对 LongDS 固定源码和已发布任务，保存 10 份来源共 206,885 字节，清单含 URL、提交及 SHA-256，见[来源清单](../../.tmp/longds-design-20261023/source-manifest.json)。这是外部源码／数据结构审计，零模型、零业务执行；没有下载输入 CSV 或运行第三方 runner。取舍及本工程候选只由[整体研究 Spec §9](../optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计)拥有。
+
+### 10.1 固定版本、原题与适用差异
+
+数据固定为 `zjunlp/LongDS@6b448459c333ecc050a2e89fcc65c0e044d763ac`，代码为 `zjunlp/DataMind@a814927159470ad1624602d233f57b7c0be5882e`。作者推荐 v1.1 Lite，含 24 个完整任务、777 轮；Full 含 68 个任务、2,225 轮。Lite 只选择完整任务，未裁短其中对话；v1 与 v1.1 分开报告。[数据卡](https://huggingface.co/datasets/zjunlp/LongDS)、[固定 README](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/README.md)
+
+| 候选 | 原始任务特点 | 本次选择依据 |
+| --- | --- | --- |
+| [LongDS](https://arxiv.org/abs/2605.30434) | 多轮请求依赖既有定义、计算结果、临时假设及历史版本 | 选作长期分析状态用例；固定问题序列不代表自主选题，交互轮数不等于模型工作轮数 |
+| [DABstep](https://huggingface.co/blog/dabstep) | 结构化数据与业务文档的多步计算，有参考答案 | 适合计算正确性；大量独立题目不能拼成同一长期状态任务 |
+| [DiscoveryBench](https://github.com/allenai/discoverybench) | 由数据和目标出发发现、验证假设 | 可覆盖开放研究，但不单独保证跨轮状态和自然窗口压力 |
+| [DSBench](https://github.com/LiqiangJing/DSBench) | 现实数据分析和建模，包含多表及多模态背景 | 范围较广，所需执行环境须逐题核对；本轮不将其建模能力并入目标 |
+
+选定 `business/netflix_movies_and_tv_shows/task3`，v1.1 Lite 的完整 36 轮。直接读取任务、metadata 和输入目录 API，核实 16 个 CSV、3,454,619 字节、最大标注依赖跨度 30 轮，见[任务审计](../../.tmp/longds-design-20261023/task-audit.json)。目录包含 Netflix 主目录和各国每周搜索热度；仅核实可见文件尺寸，不宣称已适配执行环境。
+
+原题逐轮要求清洗、国家归属、搜索动量、成熟度、类别、供应延续、片长等分析，后期回滚或组合历史口径并形成市场推荐。第 32 轮标注依赖第 2 轮等历史，第 36 轮依赖第 25、26、27、34、35 轮；这些标签仅供评测分析，不能提供给解题 Agent。来源是从真实 Kaggle 分析工作流构造并审查的公开题目，不称为本工程原始用户记录。[原题](https://huggingface.co/datasets/zjunlp/LongDS/resolve/6b448459c333ecc050a2e89fcc65c0e044d763ac/task/longds_v1.1/business/netflix_movies_and_tv_shows/task3/task.json)、[依赖](https://huggingface.co/datasets/zjunlp/LongDS/resolve/6b448459c333ecc050a2e89fcc65c0e044d763ac/task/longds_v1.1/business/netflix_movies_and_tv_shows/task3/metadata.json)
+
+### 10.2 实际调用、隔离与评分
+
+固定源码核对为 A 级实现证据：`run_custom_longds.py` 加载任务并逐轮发送，`worker.py` 每任务创建一个 Agent 实例，调用 `respond(message)`，只组合当前 `context`／`question`；Agent 自己拥有历史及工具。参考答案写在评测结果中交 Judge，不传给 respond。作者允许自定义 Agent，不要求用其示例 ReAct 替换已有生产循环。[runner](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/custom/run_custom_longds.py)、[worker](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/custom/worker.py)
+
+逐轮原题含 `turn_id`、`context`、`question`、`code`、`answer`；只有当前题面可交被测 Agent。正式环境还须隔离参考脚本、notebook、metadata 和未来题面，不能因为 runner 接口不传答案就推定文件系统也无泄漏。
+
+官方 Judge 输入为当前题面、参考答案、实际回答，输出 0／1 和理由。必需内容全部正确计 1，任意缺失或错误计 0；数字仅忽略无意义尾零，明确容差除外；排序按所问内容核对，数值完全并列时接受不同顺序。标签归一化规则较宽，实际错判须保留原始判分并审查，不能把模型 Judge 称为确定性事实检查。[Judge](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/src/judge.py)、[评分 Prompt](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/src/judge_prompt.py)
+
+单任务分数是正确轮数除以该任务总轮数，task3 分母为 36；原论文和官网整套分数采用任务准确率的宏平均。固定 runner 的原始聚合字段仍须按实际代码解释，不凭 `overall_accuracy` 名称推断口径；单任务评分不受不同任务轮数加权差异影响。每轮默认超时为 3,600 秒；原论文使用每用户轮最多 40 个推理／动作步骤，二者都不是整任务预算。[论文评测协议](https://arxiv.org/html/2605.30434v1#S3.SS4)、[自定义 runner](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/custom/run_custom_longds.py)
+
+### 10.3 公开比较的范围
+
+固定 README 给出 v1.1 Lite 的组合系统成绩：GPT-6 Astra／Codex 78.17%，Claude Fable 5.1／Claude Code 76.53%，GPT-5.6-sol／Codex 70.71%。这是整套 24 任务的宏平均，未查到所选 task3 的单独公开结果；不作本工程通过阈值，也不能单独归功于模型或 Harness。[官方结果说明](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/README.md#longds-v11-lite-leaderboard)
+
+英文原题的公开成绩与中文改编分别报告。跨模型、任务版本、预算或工具环境的差异必须注明；本工程若只跑 task3，就报告单任务及逐轮结果，不填 Lite 榜单成绩。外部代码存在不证明 personalAgent 的跨轮引用、授权、预算或压缩已经通过。

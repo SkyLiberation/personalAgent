@@ -18,6 +18,9 @@ from personal_agent.tools.consolidate_knowledge import build_consolidate_knowled
 from personal_agent.tools.enterprise_knowledge import build_enterprise_knowledge_search_tool
 from personal_agent.tools.graph_search import build_graph_search_tool
 from personal_agent.tools.inspect_artifact import build_inspect_artifact_tool
+from personal_agent.tools.write_artifact import build_write_artifact_tool
+from personal_agent.tools.retrieval_experiment import build_retrieval_experiment_tool
+from personal_agent.tools.execute_python import build_execute_python_tool
 from personal_agent.tools.inspect_knowledge_gaps import build_inspect_knowledge_gaps_tool
 from personal_agent.tools.interaction_verifier import build_verify_interaction_draft_tool
 from personal_agent.tools.knowledge_lifecycle import (
@@ -76,6 +79,9 @@ __all__ = [
     "build_enterprise_knowledge_search_tool",
     "build_graph_search_tool",
     "build_inspect_artifact_tool",
+    "build_write_artifact_tool",
+    "build_retrieval_experiment_tool",
+    "build_execute_python_tool",
     "build_inspect_knowledge_gaps_tool",
     "build_verify_interaction_draft_tool",
     "build_list_recent_notes_tool",

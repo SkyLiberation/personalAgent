@@ -6,6 +6,11 @@
 | --- | --- |
 | [额外 claim 对核验器的作用](claim-verifier.md) | 11个主配对、4个聚焦配对与1次中立核对已执行；[评估指标](claim-verifier.md#21-具体评估指标)区分收益与负担，[机制诊断](claim-verifier.md#22-机制诊断与因果边界)定位重复输入、额外对齐及判据取舍 |
 | [指标快照](claim-verifier-metrics.json) | `claim-verifier-metrics:v1` 对既有归档的只读重算；保留局部关系分母及未测原因 |
+| [完整 AI 初审](claim-complete-review-20261020.md)、[逐行数据](claim-complete-review-20261020.json) | 覆盖 11 份输入、22 份报告、23 条反馈；事后答案问题分母下完整组 10/25、移除组 8/25，含版本重复。非盲、未独立人工复核；旧成绩保持，该次初审零新增被测模型调用，不测实际修复与用户结果 |
+| [N2 恢复预检](claim-n2-continuation-preflight-20261020.md)、[结果数据](claim-n2-continuation-preflight-20261020.json) | 首稿完整输入、实际 writer 准入和原选证请求可还原；140 个来源文件及 262 个源码身份核对通过。预检当时零新增模型调用，续跑器及 A4／A5 尚未执行；后续真实续跑另列 |
+| [N2 条件续跑](claim-n2-continuation-20261021.md)、[结果数据](claim-n2-continuation-20261021.json) | 两臂各续跑一次并交付；完整组消除初始问题 3/4、移除组 2/4，但完整组新增一项支持缺口，两组终稿均仍缺证。23 次物理调用、1,236,604 tokens，完整组新增 tokens 高 74.9%；非盲 AI 初审、未独立人工复核，未证明净收益，A5 未执行 |
+| [claim 价值复核](claim-verifier.md#223-claim-收益价值复核)、[派生数据](claim-value-analysis-20261021.json) | 零新增模型调用：增量发现集中 N2，费用差额约 61% 来自后续路径；定位到局部修订后未处理反馈退出模型输入。研究资源纠错与用户收益分开，现有移除组未检验整个 claim 工作表示的必要性 |
+| [历史反馈交接续验](claim-verifier.md#224-历史反馈交接的真实续验)、[结果数据](claim-feedback-handoff-20261021.json) | 历史实际进入选证与 writer，区域排序在新核验前修复；转载归属仍漏修。基线内容过滤中断，独立候选第 8 版因下一核验预留不足停止，均未交付。34 次派发、已知 1,769,824 tokens，另 1 次未知；不构成完整配对或净收益证据，无生产改动 |
 | [固定基线计划](claim-verifier-baseline.plan.json) | 冻结 `v1`、源校验和、主配对和任务映射；[正式离线重算命令](../evals/04-running-and-release.md#claim-指标持续评估)输出独立归档 |
 | [Context 定向删除结果](claim-verifier.md#23-context-定向删除验证)、[结果数据](claim-context-deletion-results.json) | 两组目标识别均 0/1，2 次模型调用、110,298 tokens；候选停止，N2 两次调用按预声明未执行。[输入归属审计](claim-verifier.md#24-持续漏检的输入归属审计)另发现稿件与证据混用，未新增模型调用或生产改动 |
 | [输入归属与去重对照](claim-verifier.md#25-输入归属与去重对照)、[结果数据](claim-input-provenance-results.json) | 标清字段归属与仅去重均未识别海岸，各 0/1；2 次调用、126,595 tokens，N2 两次按计划未执行，不接入生产 |

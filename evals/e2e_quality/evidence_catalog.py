@@ -234,7 +234,51 @@ RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME = UserOutcomeContract(
 )
 
 
+# 阶段0独立能力准入，不加入默认release矩阵；源码/成绩仍由ProductEvidenceRecorder拥有。
+RETRIEVAL_EXPERIMENT_OUTCOMES = {
+    key: UserOutcomeContract(
+        outcome_id=case_id,
+        persona="在许可测试环境验证检索方案的中文开发者",
+        source_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划",
+        natural_goal=goal,
+        observable_result="自主完成实际实验、消费结果并作必要选择，冻结后test并提交有依据的完整回答；原始结果供内部追溯，不要求用户下载或打包。",
+        counterfactuals=("缺必要实际执行时不能以文字回答充当完成", "test标注不向生成侧开放", "不得修改当前知识库", "P1程序必须来自本轨迹模型并实际执行，允许无提升", "下载或打包失败不得计作Agent能力失败"),
+        baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+        baseline_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#72-完整落地-implementation-plan",
+        assertion_owner="evals/product_baselines/test_retrieval_experiment_001.py",
+    )
+    for key, case_id, goal in (
+        ("e1", "RETRIEVAL-EXPERIMENT-001", "用SciFact实际比较BM25与向量检索，分析错例和必要组合，冻结后独立评测并说明选择依据和限制。"),
+        ("p1", "RETRIEVAL-EXPERIMENT-PROGRAM-001", "模型自己实现并实测组合检索，消费开发结果选型，在独立test后说明实际结论与限制。"),
+    )
+}
+
+
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
+    EvidenceCase(
+        evidence_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001.native_start_http",
+        case_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001",
+        module="run_retrieval_acceptance.py",
+        test_name="run",
+        layers=frozenset({EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.AUTHORITY_GATEWAY}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
+        fault_mechanism=FaultMechanism.IN_PROCESS_HOOK,
+        limitation="CLI 仅限独立故障准备的 fault_boundary；真实 start 发送后响应读取前中断，安全与完整交付分别复核，不计产品成功。",
+        covered_invariants=frozenset({"retrieval.same_job_no_blind_restart", "retrieval.unknown_execution_truth"}),
+    ),
+    EvidenceCase(
+        evidence_id="RETRIEVAL-EXPERIMENT-SCOPE-001.initial_artifact_http",
+        case_id="RETRIEVAL-EXPERIMENT-SCOPE-001",
+        module="test_retrieval_scope_boundary.py",
+        test_name="test_retrieval_scope_boundary",
+        layers=frozenset({EvidenceLayer.AUTHORITY_GATEWAY}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
+        real_model_required=False,
+        limitation="真实 Runtime 在模型前拒绝无权初始 Artifact；不计完整研究交付或产品发布分子。",
+        covered_invariants=frozenset({"initial_artifact_owner_visibility", "denied_initial_input_has_no_model_or_execution"}),
+    ),
     EvidenceCase(
         evidence_id="AUD-001-REPLAY.boundary",
         case_id="AUD-001-REPLAY",
@@ -666,7 +710,10 @@ def validate_catalog() -> None:
             "GOV-001", "DUR-001", "OBS-001",
         },
         EvidenceClass.CAPABILITY_PROFILE: {"E16", "E18", "E19", "E21"},
-        EvidenceClass.BOUNDARY_EVALUATION: {"RESEARCH-ANSWER-OUTCOME-001", "AUD-001-REPLAY"},
+        EvidenceClass.BOUNDARY_EVALUATION: {
+            "RESEARCH-ANSWER-OUTCOME-001", "AUD-001-REPLAY", "RETRIEVAL-EXPERIMENT-SCOPE-001",
+            "RETRIEVAL-EXPERIMENT-START-RESPONSE-001",
+        },
     }
     for evidence_class, case_ids in expected.items():
         actual = {

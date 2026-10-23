@@ -1,5 +1,170 @@
 # 当前评测用例盘点
 
+## 2026-10-22 Agent能力验收收回下载与打包
+
+用户明确当前E2E验证Agent能力，用户资源下载及打包结果不属于目标。已从生产完成与恢复链删除自动清单／ZIP／报告副本发布，以及正式采集器逐资源下载；模型和工具继续使用内部Artifact，保留原执行、权限、冻结/test、输入及引用校验。既有通用资源路由与历史离线读取者保持，当前研究回答resources为空。
+
+真实原E1的0140提交后／发布前及0145已完成两份完整阶段输入，分别通过生产Web恢复：2/2 HTTP200、同一回答原字节、resources=0、生成Artifact变化0、模型与实验新增0，原用量和执行记录相等，进程均停止。两阶段耗时11.625／10.375秒；它们是确定性完成与恢复的Offline回放，不计新自然任务E2E。最初清理误删两项Journal注入导致两次零模型启动失败，已保留并恢复，最终两个执行服务的构造调用AST与改前相同。
+
+按新明确范围对旧封存采集另行审计，实际Final成立，user_delivery=present_unscored；原下载失败与旧判据不覆盖改写，33份响应和3,178,471tokens不重复计费。下载429不构成Agent能力失败；原SQL健康闭合证据仍缺失，语义仍暂放，长任务能力未证明。设计由[整体Spec §8.5](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)拥有，代码、验证与限定结论见[本轮记录](../../.tmp/agent-capability-scope-20261022/report.md)。
+
+## 2026-10-22 Python新接口接回生产与正式续验
+
+用户明确模型自主选择其他工具不是问题，并授权接回生产继续验证。新接口`code`／`program_ref`／`input_files`已恢复五份生产文件及一个有效Offline消费者，与先前已审查候选逐字节一致；native声明三键必填及字段说明、真实原5735字节／5绑定请求校验、旧形状拒绝均通过，lint及依赖分层通过。复用首轮两模式实际执行及恢复证据，不重复派发容器；首轮20次原判据、结果、回撤事实及534文件封存保持，不把合法选择其他动作计参数错误，也不把5/5扩大为总体稳定率。
+
+新身份`.tmp/python-schema-production-20261022/`；准备及零模型F1授权检查通过，唯一正式E1已经结束。模型连续完成7份train结果、冻结、3份test结果和Final报告，POST／Trace均200；33物理／33完整响应、3,178,471已知tokens、未知0，采集1132.234秒。新接口5份合法参数均进入执行，4成功、1份读取未绑定文件失败；另2份多余JSON结束括号被拒，后继模型自行换程序和绑定成功继续。漏填input_files本轮未复现；stdout预览进入后继实际请求，完整原件随包交付，不据此宣称统计解释已正确。
+
+| 检查点 | 实际结果 |
+| --- | --- |
+| 原采集及下载 | 110资源在59份后触发429，finally的SQL观察关闭同样429；命令退出1，原审计user_delivery=missing保持 |
+| 独立认证只读续接 | 110/110资源、107包内原件；原59份逐字节一致，同一已完成Trace、模型0，按Retry-After等待，原942文件不变 |
+| 同稿／分析原件闭包 | 正式提交与报告原字节、冻结配置和结果绑定一致；5份Python执行含失败stderr闭包完整 |
+| 独立原排名复算 | 旧审计64位口径为9/10；定位query1003的32位同分转换后，修正既有审计，10/10及逐查询严格误差通过，原失败保留 |
+| 原生产CLI干净复现 | 首个长路径失败保留；新短目录245.750秒退出0，4份train候选及3份test共7/7比较，排名分数最大差0 |
+| 知识与清理 | 21表前后行摘要无变化；原SQL日志132开始／132结束且无coverage issue，但缺关闭健康证明，不能宣称审计完整；服务及作业已停止 |
+
+五份生产文件及一个Offline消费者保持已审查实现，单独修正独立评分器的binary32排序口径，不修改报告、排名、生产scorer或误差门槛；原325源码采集身份及完整快照保留，新评测源码差异单列。启动／续接等临时脚本错误及修正只记工程执行，不改模型成绩。本轮生产接入和局部工具执行成立，**完整流程未通过**，剩余原SQL审计闭合缺口；研究语义仍暂放。最大prompt162,220tokens、自然压缩0，不能证明长任务或发布资格。依据、下一责任与停止线见[唯一Spec §3.3](../optimization/to_verify/python-data-analysis-tool.md#33-接回生产链路并继续正式流程验证)，完整命令及原始证据见[本轮报告](../../.tmp/python-schema-production-20261022/final-report.md)。
+
+## 2026-10-22 Python Schema候选实施与覆盖不足
+
+依[唯一工具Spec §3.2](../optimization/to_verify/python-data-analysis-tool.md#32-本次实施与局部验收计划)，实施直接code／program_ref／input_files接口和字段说明，迁移五份生产文件及一个Offline消费者。真实E1原5735字节程序、5份绑定经过生产工具及Docker执行：内联／已有程序引用2/2成功，两份stdout与原结果逐字节一致，共1.266秒；新实例恢复额外作业0，不可见版本引用拒绝且零派发，容器均移除。首次准备漏诊断Profile限额，零模型／容器失败；修正装配后通过，不计生产失败。
+
+固定首个漏参阶段完整输入的10baseline＋10candidate组全部结束：113项Context、消息及其他19份工具声明保持，候选仅替换Python描述和Schema。两组各10/10动作协议合法；旧接口Python覆盖2/10、实际参数2/2合法，新接口覆盖5/10、实际参数5/5合法；其余都是合法改选其他动作，没有非法Python参数。没有达到预声明候选10/10实际覆盖，不把未覆盖当失败，也不更换分母宣称修复。20物理／20完整、2,406,780已知tokens、未知0、703.035秒监督、零工具／重试／补样；未执行0。
+
+因覆盖不足，六份候选文件已封存撤回，305份生产源码与本轮改前哈希全部一致，精确缺字段诊断及先前改动保持。新接口未被直接证伪，下一步先区分自主工具选择与条件参数生成的验收；原正式E1失败、统计语义及长任务结论不改。来源、实际命令、回撤、源码和SDK见[独立报告](../../.tmp/python-schema-implementation-20261022/final-report.md)，旧组未重开。
+
+## 2026-10-20 检索实验研究能力准入
+
+用户已授权按[研究能力增强 Spec](../optimization/to_verify/knowledge-decision-delivery.md#72-完整落地-implementation-plan)完整落地。E1／P1 正式 baseline 节点已收集 `2/2`，真实初始原件及许可清单的零模型预检通过；准备不计产品通过。两例各运行一次，均由 Web 将模型截止映射为 HTTP 503、pytest 失败、原整例归因 inconclusive。E1 约 800.14 秒，9 次物理请求中 4 成功、5 超时、已知 50,912 tokens；P1 约 689.687 秒，8 次物理请求中 4 成功、4 超时、已知 31,469 tokens。实际 Web 进程均已停止，无实验或用户交付，target 未执行。
+
+原成绩和归因不改；[同轨迹局部审查](../optimization/to_verify/knowledge-decision-delivery.md#t0-同轨迹局部准入复审)复核完整正式工具面、许可材料消费与实际装配，已证明 E1 缺合法实验执行入口，可准入对应最小切片，不能外推超时修复或完整预算。一次末阶段真实输入回放为零动作诊断，单物理请求 116.375 秒、34,272 tokens，仍寻找执行路径，不计 Product。累计已知 116,653 tokens，另 9 次失败调用费用未知；原始封存、P1局部取证和后续准入由 Spec 拥有。工程工具及权重搜索仍不转计 Agent 决策或产品通过。
+
+正式入口、独立角色及运行命令见[运行入口](04-running-and-release.md#检索实验研究能力准入)。该节点的阶段 0 判据只确定必要机器交付缺项，不以文本回答或文件存在接受完整交付；完整 target 的独立语义资格尚未取得。本次 `initial_closure` 的下载、复算和复现见下节，仍不形成发布资格。
+
+### 2026-10-21 DeepSeek 初步交付及语义失败
+
+一次新正式 E1 从原中文请求、真实模型与生产装配连续到报告和文件交付，归档 `.tmp/context-compression-research-20261021/e1-preparation-3/`。在原 1 小时截止及 20M 额度中扣除准备耗时、此前 6,178 已知 tokens 和一笔未知的 1M 保守占用，未重置任务额度。新采集耗时 1060.812 秒，POST／GET 200、实际进程停止，315 源码保持；[机械审计](../../.tmp/context-compression-research-20261021/after-run-1/capture-audit.json)为 25 物理／25 完整、2,576,142 已知 tokens、零新增未知。24 个逻辑模型调用含一次原有参数 JSON 修复，首响应及费用保留；原 DeepSeek 400 和更早 MiMo 未知仍按各自历史身份保留。
+
+| 证据 | 实际结果 |
+| --- | --- |
+| 开发及冻结后 test | BM25／dense／RRF 三组 train 各 809、三组 test 各 300；模型选择并冻结 RRF60，test 后未调参 |
+| 正式交付及独立复算 | 13,219 字符原报告、同版 Manifest／ZIP，包内 49 份原件；[六组原排名复算](../../.tmp/context-compression-research-20261021/after-run-1/original-ranking-audit.json)均通过，逐项最大误差约 1.11e-16 |
+| 干净生产 CLI 复现 | [三组 test 重跑](../../.tmp/ctx-repro-20261021-1/reproduction.json)各 300，最大得分差均为 0，Manifest digest 相同。两个启动环境错误已归因并保留，采用实际许可目录和短输出目录后成功，生产及评分未改 |
+| 知识与费用 | 21 表前后摘要保持，64 笔 SQL 观察知识行写入及相关未知均为 0；508 原采集文件保持 |
+| 真实发布检查点恢复 | [revision 75 回放](../../.tmp/ctx-resume-20261021-1/report.json)经新认证 Web Runtime 恢复同稿及文件，usage／deadline 保持，新增模型候选／HTTP／实验为 0；不是完整 F3 首次发布故障或 E2 |
+| 报告语义与用户结果 | [独立工程审读](../../.tmp/context-compression-research-20261021/delivery-independent-review.md)确认重要错误：dense 零召回实际 52，报告 38；共同失败实际 22，报告 30；独有失败实际 25／30，报告 17／8，并有无据机理断言及相反例子。原错例分析未满足，用户结果失败；原采集及完整语义 target 保持 `not_scored` |
+| Context | 25 份新实际请求最大 estimated 输入 524,658，无容量拒绝、无摘要请求；C6／E3 和多次压缩未覆盖 |
+
+之后按用户授权[ADR 0038](../adr/0038-history-compaction-before-natural-pressure.md)接入压缩并执行一次独立真实阶段 Offline；不修改上述 E1 成绩。摘要首请求 42.469 秒、113,273 已知 tokens，以 length 截断停止，未激活检查点、后续模型调用为 0；[结果及用量对账](../../.tmp/ctx-compact-20261021-1/report.json)明确保留失败。零模型[实际原件审计](../../.tmp/ctx-compact-20261021-1/export-audit.json)确认 95 项原始输入按序导出、296,851 字节摘要匹配、实际摘要请求的 35 个旧单元来自原件，近期动作／反馈保护及异主体拒绝成立，508 原采集文件保持。摘要消费、检查点恢复、多次压缩、自然压力及修正后的 SDK 费用异常实际回放均未覆盖；静态审查和事后费用对账不替代这些成绩。本轮按停止线不重跑、不扩大摘要输出或原付费截止。
+
+正确 dense 52 条结果与计数完整进入终稿实际请求；错误数值起于模型 Plan 自述，并被模型自写报告和最终回答沿用。未发现来源、ref、工具投影损坏或历史压缩。六组指标和有限证据驱动的追加组合观察成立，但不抵消报告错误，不证明 Harness 独立收益。首轮 claim／语义 verifier／grader 为 0 符合当前范围；后续局部尝试及取舍由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口)拥有，不改判原成绩。
+
+### 2026-10-22 参数恢复的局部对照失败
+
+基于下节正式E1的完整真实修复请求，按[主循环Spec](../optimization/to_verify/conversation-loop-boundaries.md#2026-10-22-必填参数恢复候选)准备10baseline＋10candidate，交错、零重试、零工具执行。候选只改变最新拒绝反馈的诊断位置、scope措辞和修订说明，前113项输入、用户请求、20个工具声明及模型配置保持；不是完整E2E。
+
+实际执行2／20：baseline 1/1协议合法，选择创建配置，未调用Python；candidate 0/1，6个文件绑定错放program.inputs，顶层inputs缺失并触发program oneOf拒绝。按预声明首个候选失败停止，18项未执行；2物理／2完整、246,709已知tokens、未知0、43.782秒。没有工具或知识写入，未执行完整E1，也没有完成10+10或证明相对改善。逐份原响应和审读见[报告](../../.tmp/action-parameter-repair-20261022/final-report.md)。
+
+撤回未通过的scope措辞与Prompt v2，只保留精确缺失字段诊断：18份真实原生响应每份在两种披露设置回放，改前／候选／最终版各36次，均12份接受、6份拒绝，合法提议一致；无新模型调用。该确定性信息修复不改变原E1失败或当前参数恢复未解决的结论。来源647份原封存文件与307份付费期间源码均保持；付费后只撤回上述两份生产文件，完整变化单列归档。
+
+### 2026-10-22 当前版本完整流程 E2E 失败
+
+按用户“语义先放下，先验完整流程”的要求，沿[研究 Spec §8.3](../optimization/to_verify/knowledge-decision-delivery.md#83-当前版本完整流程-e2e2026-10-22)预声明并执行当前工作树的一条 E1 `initial_closure`。沿用原中文请求、四份公开材料、真实生产 Web／模型／工具／Completion，未注入代码、结果或期待数字；主模型 deepseek-flash thinking enabled，保留1小时／20M原上限。本轮流程0／1通过；正式 capture 的 `product_result=not_scored`，报告语义未评分，旧 E1 成绩保持。
+
+正式运行524.688秒：19候选／19物理／19完整响应，1,174,922已知tokens，0未知。完成八项开发实验（BM25、dense、参考RRF、五次candidate）及一次自主Python执行；程序自选五份原件，退出0，耗时0.391秒，完整2,864字符stdout进入后续14份实际请求。后两次Python原始响应只交program、缺必填inputs，finish_reason均为tool_calls，非输出截断；两次均在准入前准确拒绝，重复无效动作规则返回limitation。第二次响应的可见记录已识别inputs必填，仍未提交；未发现传输丢字段或工具结果缺失，不能把缺少提示写成已证实唯一原因。
+
+未到冻结、test、SubmittedFinal、清单v3、发布、下载和干净复现，各项记未到达；不将HTTP200、正确拒绝或开发成功算作完整流程通过。最大实际prompt117,786tokens，未触发压缩；原截止及额度未耗尽，不归因预算或自然压力。实际Web解释器和已记录作业均终止，无监督错误；同主体21表业务行无变化，100笔SQL观察完整，知识写入及未知均0。325份源码和570份运行原件核对保持，原件绑定及机械审计见[本轮归档](../../.tmp/research-e2e-flow-20261022/final-report.md)。
+
+前置F1曾因评测启动器漏传RETRIEVAL_E2E_PROCESS_FILE而在HTTP前退出，模型0；原失败保持。启动器复用现有ActualWebProcess绑定、监督及停止实际解释器后，新准备e1-2按原200／404／404／404、零模型、原件不变与实际停止通过；未改变生产权限或业务规则。collect-only收集原E1／P1节点2／2，没有运行P1或单元测试。本次未实施模型填参候选或重跑整例，具体后续准入由唯一Spec拥有。
+
+本次漏参的后续只读输入审计确认：第一次Python拒绝反馈完整位于下一次实发请求的114／114项，与Journal一致；模型仍只交program。第二次拒绝写入Journal后按原停止规则结束，没有第三次请求。返回记录计划绑定的7份引用均可见，未发现反馈／Schema／引用缺失；诊断字段过粗及immutable inputs同名歧义是表达不足，尚非已验证原因。647份原归档保持，新增模型调用0；[审计与因果限制](../optimization/to_verify/knowledge-decision-delivery.md#inputs-漏参的-context-与反馈审计2026-10-22)不改判原E1。
+
+### 2026-10-22 非思考摘要的局部验证
+
+按[主循环 NS-1／2／3](../optimization/to_verify/conversation-loop-boundaries.md#非思考摘要的局部修正2026-10-22)和用户新授权，在原 E1 revision 70 的完整阶段输入上关闭摘要 thinking，保持模型、Prompt、Schema 及 8,192 输出上限，主调用保持原 thinking。首次目录初始化错误为 0 HTTP；其后零 HTTP 对照确认首发摘要只有 thinking 开关差异，独立审查的四项评测缺口在付费前闭合，来源／部署及 plan 身份保持。
+
+实际摘要 105,056 输入／1,059 输出／106,115 总 tokens，7.063 秒，HTTP 200／stop，正文 1,999 字符，无返回 reasoning_content；成功激活并覆盖 35 个闭合旧单元，原输入 96 项保持、投影 96→61。后继真实主决策消费逐字相同的摘要，57,473 输入／204 输出／57,677 总 tokens，2.516 秒，合法提出 prepare_final 但未执行。新 FileJournal／Artifact 实例恢复同检查点与投影，未增加调用。messages JSON 字符数 413,747→103,915，减少 74.884%；不含工具定义，也不等于实测 token 降幅。
+
+共 2 逻辑／2 物理、163,792 已知 tokens、0 新增未知，未触发格式修复，0 业务动作／新容器；原来源 252 份文件保持，费用与 Journal 累计相符。本例摘要生成、消费及恢复通过；[独立原件审读](../../.tmp/ctx-compact-no-thinking-20261022/manual-summary-review.json)发现摘要仍将 dense 零召回写 38，而实际摘要输入的工具计数为 52，未正确保留与旧模型自述的冲突。该语义限制单列，不追溯否定本次输出可用性机制，也不宣布语义保真或原研究报告修复。自然 C6／E3、多次压缩、其他供应商及完整交付仍未覆盖。原失败记录和付费截止未重开，完整范围见[本次报告](../../.tmp/ctx-compact-no-thinking-20261022/final-report.md)。
+
+### 2026-10-21 程序统计与成文自检的局部失败
+
+用户要求优化及局部验证后，按完整真实终稿阶段输入执行基线／候选交错组，计划各 10 次，预声明语义失败早停。[实际 group-3](../../.tmp/report-statistics-20261021/group-3/run-result.json)为 7／20 已执行、13 未执行；基线 4、候选 3，7 个物理调用、1,173,791 已知 tokens、0 未知、0 新业务执行。完整报告[独立工程审读](../../.tmp/report-statistics-20261021/sample-review.md)为基线 2／4、候选 2／3；不是资格 grader 或独立任务成功率。
+
+候选三份主计数与集合均正确；第 3 份把 query0 的 dense nDCG@10=0.4307 解释为“未进前10”，实际 gold 排名第 4，命中预声明的内部相反例子并停止。正确计数不能覆盖整稿判据失败。当前生产统计接入、模板及专用 runner 已撤回，[冻结源码](../../.tmp/report-statistics-20261021/group-3/source-snapshot.zip)和 398 份原始归档保持，原 508 份 E1 文件未变。未追加提示或付费样本，原用户结果、压缩、长任务及完整语义 target 的结论不升级。
+
+### 2026-10-21至22 模型自主Python执行的局部验证
+
+按[整体方案](../optimization/to_verify/knowledge-decision-delivery.md#12-整体架构增强顺序与本轮切片)及[Python工具Spec](../optimization/to_verify/python-data-analysis-tool.md)实施独立执行入口，旧固定统计／Context注入保持撤回。首次[真实工具边界旅程](../../.tmp/python-analysis-implementation-20261021/execution-boundary-verification.md)使用0056的57份实际原件，6个新容器、进程合计3.61秒、0模型；覆盖成功、异常、超时、stdout超限、非法UTF-8、权限／摘要拒绝、伪工具输出及接受／派发／发布恢复。两项长路径提前拒绝的评测误判保留原报告并零容器补验；额度拒绝反馈也已零派发核对。不同代码身份分别封存，不将修后代码重标旧容器结果。
+
+独立代码审查修正每轮工具可见性缓存及原实验unknown恢复两项问题；[恢复调度回放](../../.tmp/python-analysis-implementation-20261021/rs1/recovery-scheduling-report.json)实际调用Conversation恢复、FileJournal及ToolExecutor。Python与原BM25均从缺后端形成unknown，再核对同Command的真实终态；tool_calls分别31→31、4→4，原请求／Command及旧快照保持，额度释放后工具投影恢复，0新容器／0模型。它不证明活动进程真实崩溃或实发SDK消费。
+
+模型组`.tmp/python-analysis-20261021/group-1/`准备阶段被端点和工具面门禁拒绝，均0HTTP；恢复原Web装配及collector配置后，两个arm完整首SDK预检通过。过宽socket guard误挡asyncio的初次预检也保留并按已定位原因收窄；没有把准备拒绝算作模型样本，组时钟不重置。
+
+随后B1／C1各运行一份，均达到4次物理发送上限，形成完整报告JSON草稿，没有SubmittedFinal或正式发布报告。B1再次把dense52写38、共同22写30且query0前十判断相反。C1由模型主动选择5原件并编写Python，真实执行exit0／0.531秒；3223字节stdout完整进入后继3份实发请求，原计数及全部6例加paired1212排名在草稿中正确。但报告将两个方向各8条不交的融合损失合计写8，实际16；另有“只补召回”、test次序及极性因果解释问题。五关系判定为：计数通过、集合失败、例子排名通过、分析一致性失败、实际工具贡献成立。
+
+首次candidate明确失败即按原停止线关闭，原20样本的18份未执行，不补样、不改提示重跑。B1为646,282 tokens／119.017994秒，C1为643,153 tokens／108.703139秒，合计8物理发送、1,289,435已知tokens、0新增未知。实际自主计算与消费链已证明；没有完成各10次门槛，不声称52／38及排名判断稳定修复，更不计完整研究、长任务或压缩通过。独立审读见[C1全文核对](../../.tmp/python-analysis-20261021/C1.independent-review.md)，[关闭报告](../../.tmp/python-analysis-20261021/final-report.md)及[1556文件封存](../../.tmp/python-analysis-20261021/closed-group-seal.json)保留原身份与失败。
+
+本轮共6边界容器加1实际模型程序容器。未覆盖当前v3完整下载／干净复现、原候选评分执行、活动进程真实崩溃、专项OOM／子进程压力、完整V4及自然压力C6／E3；旧E1交付及复现仅按原身份保留。
+
+2026-10-22另按用户要求执行[一次中性追问](../../.tmp/python-decision-neutral-20261022/report.md)：完整保留C1报告生成输入、实际响应及写入回执，未提供期待数字，禁止工具执行。一次HTTP 200、26.522秒、145,651已知tokens、0未知；与原8次关闭组分开记录。模型解释为将单方向38−30=8扩大成整体损失，但仍错误声称无法判断两批是否重合；已有交集计数足以推出两批不交、总数16。事后自述只辅助诊断，不计修复验收或追加样本。
+
+### 本轮后续采集与边界验收
+
+v2 资格准备已结束：8 次实际模型请求、6 次完整，已知 86,820 tokens，另两次消费未知；BM25／dense 各完成 809 条开发查询，之后返回 limitation，未冻结／test／交付，原 not_scored 保留。配置对齐和参数反馈阶段诊断见唯一 Spec，不计完整研究成功。参数反馈 10+10 组在候选协议失败时按预声明早停：6／20 已执行、14 未执行，基线／候选各 2／3 协议通过，已知 115,290、未知 0；没有工具动作，不宣布修复。
+
+2026-10-21 原生对象协议的旧重复组为 2／20、基线 1／1、候选 0／1、18 未执行，35,165 tokens、未知 0，原失败保持。经独立审查改为仅实验工具的显式 `action` 结构投影后，零模型实际值反事实为 2 项实验／4 项普通读取；一个完整 Native 阶段通过，1 物理、0 修复、17,688 tokens、53.937 秒、零执行。生产候选回放与实际最终 SDK 一致，四次拒绝反馈／Journal 往返通过；不将这些局部值计独立用户任务或概率提升。完整 E1／P1、18 次评分资格和 target 仍待验收，方案与原始坐标见[主循环 Spec §3.15](../optimization/to_verify/conversation-loop-boundaries.md#315-显式业务载荷映射的审查候选)。
+
+v3 资格准备在前置意图判断结束：HTTP 200／limitation、33.641 秒、1 物理／3,028 tokens／未知 0，40.859 秒进程已停，源码保持。模型误将本轮自主推进及缺项追问判为后台任务，未到动作相位或实验，未取得资格材料；不改判旧成绩，不否定已成立的原生载荷局部证据。后续两个真实意图输入的基线／候选各 10 次已完整执行：40 逻辑／41 物理、85,982 已知 tokens、未知 0。前台基线整项 7／10、候选 10／10；后台基线 10／10，候选首响应可用 9／10、原一次来源修复后 10／10。生产接入回放覆盖 20 个真实结果／21 个完整 SDK body，限定审查无阻断项；不计完整产品通过或 RV-08 验收拆解改善。原计划和边界见[主循环 Spec §3.16](../optimization/to_verify/conversation-loop-boundaries.md#316-当前轮自主推进与响应后后台生命周期)，接续 E1 仍须完整用户结果验收。
+
+v4 新资格准备触及原整例硬截止，监督 902.078 秒后进程停止；九物理／八完整、386,479 已知 tokens、一笔在途未知，源码保持。BM25／dense／固定 RRF60 各完成 809 条 train 查询，nDCG@10 为 0.69427／0.66020／0.71222；一次错误结果引用由模型自行修复，RRF 成功。没有冻结、test、Final 或正式下载；POST 连接中断，原 capture 仍为 not_scored。[封存](../../.tmp/research-capability-20261020/t5/e1-v4-final-seal.json)保留所有原件，未知消费不以最后已提交 Trace 的 complete 标记抹除。下一既有截止投影候选由[主循环 Spec §3.17](../optimization/to_verify/conversation-loop-boundaries.md#317-已有运行截止的模型可见投影)拥有，尚未放行新整例。
+
+v5 已按独立准入执行并[封存](../../.tmp/research-capability-20261020/t5/e1-v5-final-seal.json)：9 物理／8 完整、344,967 已知 tokens、1 笔在途未知，902.047 秒原进程停止、308 项中准备时的 307 项源码保持。8 次实际动作输入均收到原截止快照，3 项开发实验及 RRF 冻结成功；未 test／Final／下载，不计完整通过。主任务累计已知 1,371,118、历史未知 16 笔；当前下一读取格式候选和重复阻塞复审由研究 Spec 拥有，不原样重跑。
+
+F1 `RETRIEVAL-EXPERIMENT-SCOPE-001` 已登记：唯一断言入口为 `evals/product_baselines/retrieval_scope_counterfact.py` 的 typed report，正式节点 `test_retrieval_scope_boundary.py::test_retrieval_scope_boundary` 已 collect-only。实际采用 CLI 对两个独立准备各执行一次；第一次四项 HTTP 均达标，但采集器停止后读取已清空的句柄，使原总体 false 保留。修正采集器后新身份通过 1／1（累计报告为 1 true／1 false，原报告不重评）。第二次 7.218 秒，所属用户原字节 GET 200，当前用户的同文件 GET／研究 POST／对应 run GET 均 404；0 模型候选／物理请求、0 Journal JSON、Artifact 前后 hash 相同，进程实际停止。只证明初始权限反事实，不计 E1／P1 或产品 release 成功。归档见[第二次 F1](../../.tmp/research-capability-20261020/t5/f1-preparation-2/scope/)。
+
+F2 `RETRIEVAL-EXPERIMENT-START-RESPONSE-001` 已登记为真实模型／正式 HTTP 的 boundary_evaluation，IN_PROCESS_HOOK 只关闭真实 start 的响应连接；实现与装配审查闭合。两项实际 CLI 身份混用均在业务连接前拒绝，零模型，见[身份检查](../../.tmp/research-capability-20261020/t5/f2-entry-preflight-1/report.json)。首次真实轨迹已按原截止结束，902.062 秒、8 物理／7 完整、182,652 已知 tokens／1 在途未知，源码和原 capture 校验和保持。原 BM25 作业真实启动后丢失响应，原控制器查询、停止并确认退出，恰好一次 create／start，无替代原作业；原失败如实传回模型。11 项执行安全检查点通过，模型之后对已确认失败另发新 action，不是未知作业盲重启。完整交付未到达，不计 E1 通过，见[安全审计](../../.tmp/research-capability-20261020/t5/f2-final-audit-1/report.json)和[实际反馈审读](../../.tmp/research-capability-20261020/t5/f2-final-audit-1/semantic-review.json)。主任务累计已知 1,553,770、历史未知 17 笔。
+
+逐查询分行格式已按先行设计实施：三个真实 worker 复算作业保留各 809 查询的原数值和顺序；四个同轨迹搜索与两项完整分页读取的 Offline Eval 通过，只证明可定位格式。原宿主依赖缺失和禁网完整构建失败均保留，实际使用固定旧镜像只复制评分模块的新镜像，未下载依赖。v6 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v6-final-seal.json)：7 物理／6 完整、147,838 已知 tokens／1 在途未知，902.046 秒、308 项准备源码保持，进程及实验容器均停。实际 SDK 收到前 120 行中的 119 条完整逐查询记录，后续 think 使用具体查询，格式局部目标成立。三项开发及可调 RRF 程序保存成功，候选未执行，未冻结／test／Final／下载；完整通过和资格仍未成立。主任务累计已知 1,701,608、历史未知 18 笔。真实结果引用混淆的审计与候选由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#业务结果与子文件的引用关系)拥有，当前不追加付费整例。
+
+资格材料及审读的 v2 契约已实现并经[限定审查](../../.tmp/research-capability-20261020/t5/qualification-consumers-migration-review-1.md)：来源审读绑定实际自然请求、完整材料与相邻控制，三态达标和取得资格分开，独立准确性审读消费全部 18 份原判断并绑定 Admission。原真实 v4／v5 缺交付输入均被构造器拒绝；新六项真实 CLI 拒绝为零模型／零业务连接、原 v6 文件不变，见[拒绝原件](../../.tmp/research-capability-20261020/t5/qualification-gate-preflight-3/report.json)。接受、控制语义和逐关系准确性仍待实际完整材料及真实 18 次组，不以静态或拒绝检查计通过。
+
+v7 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v7-final-seal.json)：902.047 秒，8 物理／7 完整、196,626 known／1 在途 unknown，310 项准备源码保持、进程和实验容器均停。两条 train 基线成功，publication 投影进入真实 SDK；模型把 rankings 子文件作为组合结果提交，业务来源检查在 Command 前拒绝，没有 RRF／冻结／test／Final／下载。原 capture 仍 not_scored，[独立机械审计](../../.tmp/research-capability-20261020/t5/e1-v7-mechanical-audit-1.json)确认缺交付与实际费用。主任务累计已知 1,898,234、历史未知 19 笔。工具定义已真实提供却在一轮生成中被误判为缺失的归因与继续条件由唯一 Spec 拥有，不原样追加整例。
+
+其后一次[中立依据诊断](../../.tmp/research-capability-20261020/t5/v7-basis-neutral-1-final-seal.json)正常结束：一物理／一完整、29,167 tokens、28.391 秒，零新增未知，312 份冻结源码与原 v7 证据保持。事后答复定位出原请求已声明的实验能力及原响应的相反推断；不能作为隐藏原因或修复证明，不补问或原样重跑。当时累计 1,927,401 known／19 历史 unknown。
+
+另一次[Provider 策略筛选](../../.tmp/research-capability-20261020/t5/native-thinking-policy-pilot-1-final-seal.json)保持完整原 7ac native 请求，仅切 thinking enabled→disabled；一物理／一完整、55,990 tokens、12.625 秒，313 份源码与原件保持，进程已停、零新增未知／业务执行。唯一输出为 wire Schema 合法的 working_plan，未消费业务结果，引用判断未覆盖；不证明误用修复、策略收益或完整行为可用，不改生产或续组。当时累计 1,983,391 known／19 历史 unknown。
+
+随后单独准入的新配置能力探索 v9 已[结束封存](../../.tmp/research-capability-20261020/t5/e1-v9-final-seal.json)：332.140 秒、9 物理／9 完整、341,484 tokens、零新增未知，314 源码／ZIP 保持，进程及实验容器均停。实际成功 BM25、dense、两次相同 RRF60 开发；无冻结／test，Final 为 limitation。[缺交付汇总](../../.tmp/research-capability-20261020/t5/e1-v9-missing-delivery-result-1.json)在原 not_scored 身份下确认 Journal 缺 answer、报告、manifest、bundle；已有下载索引不等于完整交付。累计 **2,324,875 known／19 历史 unknown**。7f／fae 是同一逻辑轮的结构修复，整例只有 7 个动作决策轮；未声明动作被正确整批拒绝，原停止成立。该配置同向整例重跑保持关闭，无资格／target 或策略收益。
+
+未知动作名称反馈的[同轨确定性切片](../optimization/completed/unknown-action-name-feedback.md)已闭合：原实现／当前实现各回放两份真实坏响应，完整生产物化、SDK 请求及原生结构修复仅改变具体动作名，typed Trace 往返和第 7 轮停止保持；零模型／业务准入／执行。该结果不计模型自纠错、整例通过或评分资格。
+
+另行[模型消费阶段组](../../.tmp/research-capability-20261020/t5/unknown-action-consumption-group-1-final-seal.json)已按候选失败停止：4／20 项、16 未执行，基线 2／2、候选 1／2 协议合法；5 物理／5 完整、295,576 tokens、零新增未知，112.890 秒，314 源码保持且进程停止。候选第二项再发出同一未知名称／字符串参数；零业务执行，不计自纠错、完整交付或资格通过。累计 **2,620,451 known／19 历史 unknown**，停止边界和后续准入见[唯一设计](../optimization/to_verify/conversation-loop-boundaries.md#具体未知名反馈的模型消费验收)。
+
+随后[一次同轨中立诊断](../../.tmp/research-capability-20261020/t5/unknown-action-basis-neutral-2-final-seal.json)正常结束：1 物理／1 完整、66,257 tokens、28.563 秒、零新增未知、314 源码保持、进程已停；原件保持。答复定位名称／类型差别，但“缺完整 Schema”的自述与原目录矛盾，未定位新输入缺项，不计自纠错或隐藏原因证明；依一次上限关闭。此前准备 1 因完整容量估算超限在零模型阶段拒绝，保留原身份；设计先修正后准备 2，没有增加调用次数。累计 **2,686,708 known／19 历史 unknown**。
+
+一次[Pro 原生协议筛选](../../.tmp/research-capability-20261020/t5/native-model-protocol-screen-1-final-seal.json)只切模型及容量身份，1 物理／1 完整、58,159 tokens、36.781 秒、零新增未知，314 源码及原件保持、进程已停；三个合法业务提议通过当前 decoder，未执行业务，也未覆盖 Plan 控制或完整研究交付。按一次边界关闭，仅保留为下一能力探索候选。累计 **2,744,867 known／19 历史 unknown**，新配置整例仍须配置准备及独立整体 critic 后另行准入。
+
+完成配置准备及独立 critic 后，单次 [Pro 完整能力探索 v10](../../.tmp/research-capability-20261020/t5/e1-v10-final-seal.json)已在 902.047 秒硬截止结束：11 物理／11 完整、393,457 known／零新增未知，314 源码保持；三轮同配置 BM25／dense，前五条有成功回执，末条仍 dispatching，无 RRF／冻结／test／Final／下载。[缺交付汇总](../../.tmp/research-capability-20261020/t5/e1-v10-missing-delivery-result-1.json)零模型运行，用户结果 failed，原 qualification_preparation 保持 not_scored。累计 **3,138,324 known／19 历史 unknown**，同配置不自动重跑。末 worker 截止后自行退出并按真实身份清理，原 Journal 不补业务成功；同批用量／Plan／Context 提交缺口及后续准入由[唯一设计](../optimization/to_verify/knowledge-decision-delivery.md#决策状态先于持久接受)拥有，不计 E2／F2 通过。
+
+接受前决策状态的确定性修复已完成[同轨反事实](../../.tmp/research-capability-20261020/t5/model-checkpoint-candidate-2/report.json)：相同真实响应和正式 Conversation 前缀，两个接受切点均从旧 44,634／Plan1／Context3 改为接受前后已提交 61,802／Plan2／Context4，原请求／完整 SDK 保持，零模型网络或业务。两切点不计独立模型样本；实际旧结果的完整值 writer 只证明赋值及事实保持。独立实现审查无阻断，不改旧 v10 原件，不计完整 E2 或研究交付。
+
+首次重复实验的[一次中立诊断](../../.tmp/research-capability-20261020/t5/repeated-experiment-basis-neutral-1-final-seal.json)已结束：1 物理／1 完整、54,314 tokens、26.157 秒、零新增未知；314 源码、ZIP、原件保持，进程已停、零业务。答复援引旧 Plan 状态，又声称缺具体 Plan Schema，与完整声明矛盾；未定位新输入缺项，不计隐藏因果或修复通过，按一次边界关闭。此时累计 **3,192,638 known／19 历史 unknown**。
+
+独立复审、零模型真实 Adapter 预检和 root 单独准入后，[Pro／enabled 单阶段可行性筛选](../../.tmp/research-capability-20261020/t5/pro-thinking-feasibility-1-final-seal.json)已关闭：完整原790请求仅改变 thinking.type；1 物理／1 完整、50,820 tokens、112.453 秒、零新增未知。三次读取提议整批协议合法，没有重复基线，业务结果消费未覆盖，业务准入／执行均为零；314 源码、ZIP及旧原件保持，进程已停。不计修复、收益或完整E1准入，不补样；此时累计 **3,243,458 known／19 历史 unknown**。
+
+另经独立复审，零模型准备从真实0018前缀录放唯一上游并执行三个原读取，实际反馈进入下一正式请求；随后单独准入的[一次后继观察](../../.tmp/research-capability-20261020/t5/pro-read-consumption-observation-1-final-seal.json)已关闭：1物理／1完整、75,708 tokens、159.453秒、零新增未知。整批协议合法，仅四次搜索和一次读取提议，业务结果消费仍not_covered；输出未执行、不再加阶段，不计修复或E1准入。父、Windows包装、实际解释器及补充监督均停止，原件和314源码／ZIP保持；正常退出不计超时清理通过。上游50,820不重复计费，累计 **3,319,166 known／19历史unknown**。
+
+2026-10-21预算切片已移除生产部署及正式采集器的统一900秒默认。下一完整用例显式1小时，轮数／工具额度由生效Settings拥有，不存在5次读搜产品限制；设计和实现见[长任务预算](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)。零模型材料、真实Web阶段、时间反事实、配置拒绝和采集收尾已核对，未增加known／unknown消费；这些均非新的Product E2E或target。旧900秒结果保持；后续新初步版本的实际结果见下段。
+
+2026-10-21 新初步E1已按1小时／20M、64模型轮／256工具／4委派及Pro/enabled冻结配置执行一次，见[原件封存](../../.tmp/research-initial-closure-20261021/e1-initial-1-seal.json)和[实际汇总](../../.tmp/research-initial-closure-20261021/after-run-2/report.json)。任务1801.641秒收尾，POST503／GET200，实际解释器和包装均停止、未到整任务截止，315源码保持。8物理／7完整、400,864 known／1新增unknown；累计 **3,720,030 known／20历史及本轮unknown**，未知不记零。两项开发基线与参考RRF成功，模型另写融合程序，18次工具调用；未执行候选、未冻结／test／Final／下载，用户结果failed、原采集not_scored，claim／语义verifier为0。最后请求480.016秒触发本地单次截止，未取得完整响应；现有观察不能判定此前无首字节或API本身故障，归因见[只读审计](../../.tmp/request-deadline-audit-20261021/diagnosis.md)。没有自然容量失败，不据此接入压缩。21表前后业务行摘要相同，56笔SQL覆盖完整、知识行写入及相关未知0；这只覆盖本次失败轨迹。新汇总器误比较未使用备用seal的缺陷已用同一真实归档修正并零模型复验，222原件保持；不覆盖原失败或补填交付成绩。后续按[Spec预算与诊断](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)先处理单次模型边界，不自动追加整例。
+
+机械采集审计及 21 表知识快照分别完成限定静态审查；知识诊断为真实只读空 scope，不能计 v7 before／零写入或非空分页。v7 封存后才装配 target 前后快照及唯一 typed capture DTO，四份实际历史对象 JSON 值保持；[新六条 CLI 拒绝](../../.tmp/research-capability-20261020/t5/qualification-gate-preflight-4/report.json)仍为零模型／零业务连接，原件保持。完整接受、跨证据汇总及 target 尚未通过。
+
+缺交付汇总入口已[回放真实 v6／v7](../../.tmp/research-capability-20261020/t5/missing-delivery-aggregation-2/report.json)：两条 CLI 正常退出，跨 capture 身份组合拒绝，零模型／业务执行；原件和已知／未知费用保持。只有绑定 Journal 明确缺 Final／必要角色才报告用户结果失败，HTTP／下载取证不足不单独判失败；语义、知识零写入、复算／复现、agency 与完整 target 仍未验证，不设空的通过分支。
+
+知识 SQL 取证的全进程 profile 两次启动失败后已停用；按独立 critic 改为专用进程局部方法观察。[真实诊断 3](../../.tmp/research-capability-20261020/t5/knowledge-write-web-diagnostic-3-final-seal.json)在 7.234 秒内完成正式 Web／claims 读取、401／200 观察关闭及停止：20 次真实 SQL、相关未知 0、313 源码保持、范围知识摘要一致，零模型／研究 turn。其他系统表的初始化 INSERT 如实保留，不称全部数据库零写入；取证工具可用不代表真实研究 target、知识 mutation 反例或整体交付已通过。
+
 ## 2026-10-17 场景审查与清理
 
 **`L02/L05/E12` 本轮保留。** 审查发现的是通过条件与验证职责的问题，尚不足以认定对应场景可以放弃。初次删除方案没有为并发安全、模型回合限额和图投影来源关联提供等价覆盖，因此已撤回源码、catalog 和影响路由的删除，恢复到本轮开始时的内容；历史归档与原始成绩保持。

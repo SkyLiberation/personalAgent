@@ -10,8 +10,8 @@
 
 | 编号 | 尚未解决的问题 | 当前准入 | 设计与推进记录 |
 | --- | --- | --- | --- |
-| `CONVERSATION-LOOP-BOUNDARIES-001` | 研究职责混合；普通提交、核验适用性及整体 Context 容量需分别取证 | `A0`：研究模块、携参提交及 Context 压力候选已区分；行为保持、成本／历史反例、实际输入压力及语义准入待补，未改生产 | [主循环与核验边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md) |
-| `KNOWLEDGE-DECISION-DELIVERY-001` | 检索实验及可编程候选交付、成果接续和必要压缩尚未验收 | `A0`：推荐共享程序产物写入和受控 Python 执行，固定基线及外部评分；E1 身份保留，P1 独立验编程。需求／环境／额度、baseline、代码隔离／终态、评分资格和真实压力待取得，未改生产 | [研究能力的实验推进与产物交付 Spec](../optimization/to_verify/knowledge-decision-delivery.md) |
+| `CONVERSATION-LOOP-BOUNDARIES-001` | 研究职责混合；普通提交、核验适用性及历史压缩需分别取证 | 模块抽取／携参提交仍按各自证据准入；历史压缩按用户授权 ADR 0038 提前接入，非思考摘要已有真实阶段生成／后继消费／检查点恢复证据，语义保真及自然压力、多次压缩、E3 尚未通过，不转计结构重构或完整研究结果 | [主循环与核验边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md) |
+| `KNOWLEDGE-DECISION-DELIVERY-001` | 研究成文仍有错误；受约束 E1 不足以验长期分析，跨轮授权、成果及额度接续待验证 | 既有切片 `A2` 保留：Python 新接口已接回生产，最新 E1 到 Final；LongDS 仅设计准备，生产适配未准入。下载／打包已移除，两份真实完成状态恢复成立，语义及自然压缩仍未验收。新增 LongDS v1.1 task3 的 36 轮设计和固定来源核查，L0—L3 未执行；先取正式入口 baseline，再按最早失败准入独立 Python 许可、历史原件及预算的最小适配。旧语义修复暂放，不重开封存或追加下载门槛 | [整体设计与验收](../optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计)、[Python 条件适配](../optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配) |
 | `RUNTIME-POLICY-AUDIT-ISOLATION-001` | 审计绑定修复已接入且真实阶段回放通过，原完整对话 target 未交付 | `A2`：baseline 0/1、target 0/1、审计阶段反事实 1/1；完整产品验收未过，停止新增模型样本 | [修复证据与剩余边界](../optimization/to_verify/runtime-policy-audit-isolation.md) |
 | `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001` | 重复输入对实际费用和延迟的影响待证 | `A1`：统一链原目标扩预算续验已通过并停止新增调用；成本优化尚未开始，无新生产候选 | [预算复审与后续成本边界](../optimization/to_verify/research-input-budget.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001` | 模型服务失败的实际错误体诊断仍待真实条件验收 | `A2`：诊断链反事实 2/2，已接入唯一异常与日志路径；原 E2E 未复现服务错误，实际 MiMo 条件继续待验证 | [Provider 失败诊断交接](../optimization/to_verify/model-provider-diagnostics.md) |

@@ -31,6 +31,8 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 pytestmark = [pytest.mark.integration, pytest.mark.product_e2e]
 pytest_plugins = ("evals.e2e_quality.test_release_user_outcomes",)
 
+from personal_agent.kernel.prompts import get_prompt
+
 _CASE_ID = "INTERACTION-INTENT-DELEGATION-BOUNDARY-001"
 _GRADER_VERSION = "interaction-intent-delegation-boundary-user-outcome-v1"
 _REQUEST_TEXT = delegation_request_text(16)
@@ -85,7 +87,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
             settings.structured.base_url or ""
         ).hostname,
         "structured_output_transport": settings.structured.output_transport,
-        "intent_contract": "interaction_intent:v2",
+        "intent_contract": f"interaction_intent:{get_prompt('conversation.interaction_intent').version}",
         "interaction_mode": "auto",
         "max_model_turns": 1,
         "max_tool_calls": 0,

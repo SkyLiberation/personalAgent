@@ -46,7 +46,7 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 拥有。模型不可用时只能返回 `insufficient_evidence`、暂停或请求缺失能力，不能用 fixture、
 关键词或回答组装器生成替代“通过”。
 
-外部研究采用同一版本的 claims 与最终回答。一个研究核验器检查来源支持、两份正文一致性及最终回答对原目标的满足，返回八类发现；用户要求只从原会话与冻结 requirements 取得，目标满足只能基于最终回答正文。Runtime 校验引用、版本与当前实际输入，缺少回答时继续研究；同版本空报告才允许确切回答进入 Completion。实际反馈交回同一 writer，不再有独立 Coverage、汇总、研究 Final 或反向重开。普通非研究草稿继续原提交依据核验。详细契约与接入范围见 [ADR 0032](../adr/0032-conversation-research-claims.md)，验收见[统一 Spec](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。
+普通外部研究采用同一版本的 claims 与最终回答。一个研究核验器检查来源支持、两份正文一致性及最终回答对原目标的满足，返回八类发现；用户要求只从原会话与冻结 requirements 取得，目标满足只能基于最终回答正文。Runtime 校验引用、版本与当前实际输入，缺少回答时继续研究；同版本空报告才允许确切回答进入 Completion。实际反馈交回同一 writer，不再有独立 Coverage、汇总、研究 Final 或反向重开。普通非研究草稿继续原提交依据核验。详细契约与接入范围见 [ADR 0032](../adr/0032-conversation-research-claims.md)，验收见[统一 Spec](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。
 
 普通非研究候选仍由 `verify_interaction_draft` 检查其实际提交原文、来源支持及冻结用户要求，Receipt 绑定确切正文和原标准；研究不再调用该工具的第二次判断。模板由注册表拥有，typed 参数序列化动态输入，外部内容作为数据。
 
@@ -71,7 +71,7 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |
 | Conversation grounded answer | personal/tool Observations 到达后 | source constraint、citation、conflict 与 required evidence | Conversation revision / FinalMessage |
-| Conversation 外部研究 | 同版本 claims 与最终回答已提交 | 来源支持、回答与研究一致性、回答满足原目标 | 原研究修订、补证或确切正文 Completion |
+| Conversation 普通外部研究 | 同版本 claims 与最终回答已提交 | 来源支持、回答与研究一致性、回答满足原目标 | 原研究修订、补证或确切正文 Completion |
 | Conversation Review | 用户显式要求审查文本时 | 最终文本是否满足冻结的用户明示判据 | revision loop / verified bytes |
 
 Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构性案例，但不能作为
@@ -99,6 +99,8 @@ Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构�
 现行研究核验保留原会话、冻结 requirements、完整当前回答及实际资料，不能只凭提取条件列表或 Plan 完成状态交付。开放目标的解释和判断仍可能出错，已知标题被误判为完整正文的漏放见上文。设计中的依据归属、交付准入及停止分支由[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#41-完成依据从哪里来)拥有；本轮仅澄清事实和证明范围，未增加生产门禁或修改现行核验触发。
 
 ## 执行证据
+
+研究实验完成按[ADR 0037](../adr/0037-experiment-submission-first-delivery.md)暂不接入claim／语义verifier：实际SubmittedFinal与usage先持久，确定性代码检查引用、原开发／最终执行、冻结及权限，缺口交回模型。通过后直接提交并返回同一Final，不创建清单、ZIP、报告副本或下载资源列表。Python原件仍由Artifact保存，终态和输入身份继续检查；Final、提交后恢复和已完成返回复用同一完成契约。入口为[research_delivery.py](../../src/personal_agent/application/conversation/research_delivery.py)，有效范围由[研究Spec §8.5](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)拥有。局部完成链通过不能替代研究语义或长任务证据。
 
 - `ASK-001A`：Conversation 逐项引用互斥个人资料并明确冲突，禁止 web、跨 principal 泄漏和知识写入；
 - `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；

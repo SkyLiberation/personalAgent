@@ -44,34 +44,41 @@ class ModelInvocationAdmission:
         model: str,
     ) -> ModelInvocationGrant:
         if not intent.context_projection_ref:
-            raise ModelInvocationDenied(ModelInvocationDenial(
-                call_id=intent.call_id,
-                reason_code="context_projection_missing",
-                message="model invocation requires a context projection reference",
-            ))
+            raise ModelInvocationDenied(
+                ModelInvocationDenial(
+                    call_id=intent.call_id,
+                    reason_code="context_projection_missing",
+                    message="model invocation requires a context projection reference",
+                )
+            )
         if (
             intent.max_output_tokens is not None
             and intent.max_output_tokens > self.max_output_tokens
         ):
-            raise ModelInvocationDenied(ModelInvocationDenial(
-                call_id=intent.call_id,
-                reason_code="output_budget_exceeded",
-                message="model invocation exceeds the configured output budget",
-            ))
+            raise ModelInvocationDenied(
+                ModelInvocationDenial(
+                    call_id=intent.call_id,
+                    reason_code="output_budget_exceeded",
+                    message="model invocation exceeds the configured output budget",
+                )
+            )
         if intent.sensitivity == "restricted" and provider != "local":
-            raise ModelInvocationDenied(ModelInvocationDenial(
-                call_id=intent.call_id,
-                reason_code="restricted_egress_denied",
-                message="restricted context cannot be sent to an external model provider",
-            ))
+            raise ModelInvocationDenied(
+                ModelInvocationDenial(
+                    call_id=intent.call_id,
+                    reason_code="restricted_egress_denied",
+                    message="restricted context cannot be sent to an external model provider",
+                )
+            )
         return ModelInvocationGrant(
             call_id=intent.call_id,
             purpose=intent.purpose,
             provider=provider,
             model=model,
-            allowed_egress="sensitive" if intent.sensitivity == "confidential" else "content",
+            allowed_egress="sensitive"
+            if intent.sensitivity == "confidential"
+            else "content",
             context_projection_ref=intent.context_projection_ref,
-            max_input_tokens=intent.max_input_tokens,
             max_output_tokens=intent.max_output_tokens,
         )
 
@@ -109,7 +116,6 @@ class GovernedModelClient(Generic[StructuredOutputT]):
             context_projection_ref=projection_ref,
             sensitivity=request.sensitivity,
             structured_output_contract=request.output_type.__name__,
-            max_input_tokens=max(1, int(request.metadata.get("max_input_tokens", 128_000))),
             max_output_tokens=request.max_tokens,
         )
         skill_decision = SkillActivationDecision(
@@ -118,7 +124,9 @@ class GovernedModelClient(Generic[StructuredOutputT]):
         )
         skill_grant = SkillContextGrant(call_id=intent.call_id)
         grant = self._admission.grant(intent, provider=self.provider, model=self.model)
-        self.last_audit = ModelInvocationAudit(intent, skill_decision, skill_grant, grant)
+        self.last_audit = ModelInvocationAudit(
+            intent, skill_decision, skill_grant, grant
+        )
         response = self._delegate.generate(request)
         if grant.call_id != intent.call_id or grant.purpose != request.operation:
             raise RuntimeError("model invocation grant scope mismatch")
@@ -126,6 +134,8 @@ class GovernedModelClient(Generic[StructuredOutputT]):
 
 
 __all__ = [
-    "GovernedModelClient", "ModelInvocationAdmission", "ModelInvocationAudit",
+    "GovernedModelClient",
+    "ModelInvocationAdmission",
+    "ModelInvocationAudit",
     "ModelInvocationDenied",
 ]

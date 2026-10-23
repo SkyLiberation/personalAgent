@@ -23,6 +23,8 @@ from personal_agent.capabilities.contracts.model import StructuredModelClient
 from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.kernel.config import Settings
 
+from personal_agent.kernel.prompts import get_prompt
+
 _CASE_ID = "INTERACTION-INTENT-DELEGATION-BOUNDARY-001"
 _DIAGNOSTIC_REVISION = "interaction-intent-delegation-boundary-v1"
 
@@ -103,7 +105,7 @@ def diagnose(
         "case_id": _CASE_ID,
         "diagnostic_revision": _DIAGNOSTIC_REVISION,
         "evidence_class": "provider_diagnostic_not_product_e2e",
-        "production_contract": "derive_interaction_intent:interaction_intent:v2",
+        "production_contract": f"derive_interaction_intent:interaction_intent:{get_prompt('conversation.interaction_intent').version}",
         "input_contract": input_contract or {"mode": "provided_requests"},
         "input_digest": canonical_evidence_digest([
             {"repetition": repetition, "text": text}

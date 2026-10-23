@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator, model_serializer
+from personal_agent.capabilities.contracts.model import ModelActionInvocation
+from personal_agent.capabilities.contracts.research import (
+    ResearchClaims,
+    ResearchReview,
+)
 from personal_agent.capabilities.contracts.verification import (
     ConversationAnswerSegment,
     ConversationEvidenceReference,
@@ -15,8 +19,25 @@ from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteOperationView,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.application.conversation.observation_bounds import ReadWindowRequest
+from personal_agent.application.artifacts.models import (
+    ArtifactResourceItem,
+    ArtifactWriteReceipt,
+    ContentDigest,
+)
+from personal_agent.application.retrieval_experiment.models import (
+    ExperimentToolArgs,
+    ExperimentRecord,
+)
+from personal_agent.application.python_execution.models import (
+    ExecutePythonArgs,
+    PythonExecutionCommand,
+    PythonExecutionFact,
+    PythonExecutionReceipt,
+)
+from .tool_requests import WriteArtifactArgs
+from .history_models import HistoryCompactionCheckpoint
 
 
 ConversationInteractionMode = Literal["default", "auto"]
@@ -318,11 +339,18 @@ class ReviewCriteria(_StrictModel):
         return self.interaction_phase == "deliver_final_result"
 
 
+class ActionProtocolDiagnostic(_StrictModel):
+    field_path: str
+    error_type: str
+
+
 class DecisionFeedback(_StrictModel):
     kind: Literal["decision_feedback"] = "decision_feedback"
     action_id: str
     action_name: str = ""
     reason_code: str
+    action_diagnostics: tuple[ActionProtocolDiagnostic, ...] = ()
+    rejected_action_invocations: tuple[ModelActionInvocation, ...] = ()
     working_plan_revision: int | None = Field(default=None, ge=1)
     decision_turn: int | None = Field(
         default=None,
@@ -351,6 +379,14 @@ class DecisionFeedback(_StrictModel):
 
 
 class ActionObservation(_StrictModel):
+    evidence_eligible: bool = True
+
+    @model_serializer(mode="wrap")
+    def serialize_evidence_boundary(self, handler):
+        serialized = handler(self)
+        if self.evidence_eligible:
+            serialized.pop("evidence_eligible", None)
+        return serialized
     kind: Literal[
         "context_evidence",
         "tool_result",
@@ -373,7 +409,65 @@ class ActionObservation(_StrictModel):
     )
 
 
-InteractionInput = DecisionFeedback | ActionObservation | SubmittedFinal | ResearchClaims | ResearchReview
+class ArtifactSourceInput(_StrictModel):
+    """Readable metadata only; no source line has been returned by this input."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["artifact_source"] = "artifact_source"
+    resource: ArtifactResourceItem
+
+
+class _AcceptedToolRequest(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    action_id: str = Field(min_length=1)
+    execution_scope: ExecutionScope
+    request_digest: ContentDigest
+    plan_step_id: str | None = None
+
+
+class AcceptedArtifactToolRequest(_AcceptedToolRequest):
+    tool_name: Literal["write_artifact"] = "write_artifact"
+    arguments: WriteArtifactArgs
+    receipt: ArtifactWriteReceipt | None = None
+    failure: ActionObservation | None = None
+
+
+class AcceptedExperimentToolRequest(_AcceptedToolRequest):
+    tool_name: Literal["retrieval_experiment"] = "retrieval_experiment"
+    arguments: ExperimentToolArgs
+
+
+class AcceptedPythonToolRequest(_AcceptedToolRequest):
+    tool_name: Literal["execute_python"] = "execute_python"
+    arguments: ExecutePythonArgs
+    command: PythonExecutionCommand | None = None
+    execution: PythonExecutionFact | None = None
+    receipt: PythonExecutionReceipt | None = None
+
+
+AcceptedToolRequest = Annotated[
+    AcceptedArtifactToolRequest | AcceptedExperimentToolRequest | AcceptedPythonToolRequest,
+    Field(discriminator="tool_name"),
+]
+
+
+class RunExecutionBudget(_StrictModel):
+    """Read-only projection of the run's existing execution facts and reservations."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    consumed_seconds: float = Field(ge=0, allow_inf_nan=False)
+    remaining_seconds: float = Field(ge=0, allow_inf_nan=False)
+    unsettled_action_ids: tuple[str, ...] = ()
+
+
+InteractionInput = (
+    DecisionFeedback
+    | ActionObservation
+    | SubmittedFinal
+    | ResearchClaims
+    | ResearchReview
+    | ArtifactSourceInput
+)
 
 
 class LoopBudgetPolicy(_StrictModel):
@@ -504,12 +598,38 @@ class TurnContextComposition(_StrictModel):
         )
 
 
+class ResearchExperimentDeliveryBinding(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    submission_ref: ResourceRef
+    body_digest: ContentDigest
+    frozen_ref: ResourceRef
+    final_result_refs: tuple[ResourceRef, ...] = Field(min_length=1)
+    candidate_development_refs: tuple[ResourceRef, ...] = ()
+    manifest_digest: ContentDigest | None = None
+
+
+class ResearchExperimentDelivery(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    binding: ResearchExperimentDeliveryBinding
+    reproduction_ref: ResourceRef | None = None
+    bundle_ref: ResourceRef | None = None
+    report_ref: ResourceRef | None = None
+
+
 class InteractionTrace(_StrictModel):
+    history_compaction: HistoryCompactionCheckpoint | None = None
     revision: int = Field(default=1, ge=1)
     interaction_run_ref: str
     conversation_id: str = Field(min_length=1)
     principal: AuthenticatedPrincipal
     messages: tuple[ConversationMessage, ...]
+    input_artifact_refs: tuple[ResourceRef, ...] = ()
+    accepted_tool_requests: tuple[AcceptedToolRequest, ...] = ()
+    experiment_records: tuple[ExperimentRecord, ...] = ()
+    research_experiment_delivery: ResearchExperimentDelivery | None = None
+    deployment_digest: ContentDigest | None = None
+    run_deadline_at: AwareDatetime | None = None
+    max_execution_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     inputs: tuple[InteractionInput, ...] = ()
     usage: CommittedUsage = Field(default_factory=CommittedUsage)
     execution_order: tuple[str, ...] = ()
@@ -523,6 +643,7 @@ class InteractionTrace(_StrictModel):
 
 
 class ConversationTurnView(_StrictModel):
+    resources: tuple[ArtifactResourceItem, ...] = ()
     interaction_run_ref: str = ""
     conversation_id: str
     disposition: Literal[

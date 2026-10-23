@@ -7,11 +7,12 @@ from io import BytesIO
 import json
 import logging
 import mimetypes
-import os
 from pathlib import Path
+import re
 from typing import Any
 
 from openai import OpenAI
+from pydantic import TypeAdapter
 
 from personal_agent.application.capture.utils import (
     TEXT_FILE_EXTENSIONS,
@@ -26,10 +27,22 @@ from personal_agent.kernel.contracts.resource import (
     ResourceEvidenceRef,
     ResourceRef,
 )
-from personal_agent.kernel.contracts.scope import (
-    ExecutionScope,
-    AuthenticatedPrincipal,
+from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
+
+from .models import (
+    ArtifactProducerBinding,
+    ArtifactRecord,
+    ArtifactResourceItem,
+    ArtifactTextSnapshot,
+    ArtifactWriteReceipt,
+    ArtifactWriteRequest,
+    CreateArtifact,
+    GeneratedArtifactPublication,
+    MachineArtifactPublication,
+    validate_display_filename,
 )
+from .storage import exclusive_artifact_lock, install_immutable
+from .text_coordinates import TextCoordinates
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,10 +55,20 @@ class StoredArtifact:
     storage_path: Path
 
 
-class ArtifactService:
-    """Owns artifact identity and private storage location resolution."""
+@dataclass(frozen=True, slots=True)
+class _PreparedDraft:
+    binding: ArtifactProducerBinding
+    record: ArtifactRecord
+    file_bytes: bytes
+    edits_applied: int
 
-    def __init__(self, settings: Settings, logger: logging.Logger | None = None) -> None:
+
+class ArtifactService:
+    """Owns immutable Artifact bytes, metadata and accepted producer requests."""
+
+    def __init__(
+        self, settings: Settings, logger: logging.Logger | None = None
+    ) -> None:
         self.settings = settings
         self.logger = logger or logging.getLogger(__name__)
 
@@ -60,33 +83,85 @@ class ArtifactService:
         owner: AuthenticatedPrincipal,
     ) -> ResourceRef:
         _authorize_principal(principal, owner)
-        normalized = normalize_upload_filename(filename)
-        artifact_id = _artifact_id(normalized, file_bytes)
-        resource_ref = ResourceRef(
-            resource_id=artifact_id,
-            resource_type="artifact",
-            owner=owner,
+        normalized = validate_display_filename(normalize_upload_filename(filename))
+        canonical_root = self.settings.data_dir / "uploads"
+        if uploads_dir.resolve() != canonical_root.resolve():
+            raise ValueError(
+                "uploads_dir must be the canonical Artifact upload directory"
+            )
+        identity = _canonical_bytes(
+            {
+                "owner": owner.model_dump(mode="json"),
+                "filename": normalized,
+                "content_type": content_type,
+                "content_digest": _digest(file_bytes),
+            }
         )
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        stored_path = uploads_dir / f"{artifact_id}_{normalized}"
-        temp_path = uploads_dir / f".{artifact_id}.uploading"
-        temp_path.write_bytes(file_bytes)
-        os.replace(temp_path, stored_path)
-        record = {
-            "resource_ref": resource_ref.model_dump(mode="json"),
-            "filename": normalized,
-            "content_type": content_type,
-            "source_type": source_type_from_upload(normalized, content_type),
-            "size_bytes": len(file_bytes),
-            "storage_name": stored_path.name,
-            "created_by_principal_id": principal.principal_id,
-            "artifact_kind": "upload",
-        }
-        sidecar = uploads_dir / f"{artifact_id}.json"
-        sidecar_tmp = uploads_dir / f".{artifact_id}.json.tmp"
-        sidecar_tmp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-        os.replace(sidecar_tmp, sidecar)
+        artifact_id = f"art_{_digest(identity)[:32]}"
+        resource_ref = ResourceRef(
+            resource_id=artifact_id, resource_type="artifact", owner=owner
+        )
+        record = ArtifactRecord(
+            resource_ref=resource_ref,
+            filename=normalized,
+            content_type=content_type,
+            source_type=source_type_from_upload(normalized, content_type),
+            size_bytes=len(file_bytes),
+            storage_name=f"{artifact_id}.bin",
+            created_by_principal_id=principal.principal_id,
+            artifact_kind="upload",
+            content_digest=_digest(file_bytes),
+            purpose="upload",
+        )
+        canonical_root.mkdir(parents=True, exist_ok=True)
+        with exclusive_artifact_lock(canonical_root / f".{artifact_id}.lock"):
+            self._commit_record(canonical_root, record, file_bytes)
         return resource_ref
+
+    def _load_record(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> tuple[ArtifactRecord, Path]:
+        _authorize_principal(principal, owner)
+        if resource_ref.resource_type != "artifact" or resource_ref.owner != owner:
+            raise PermissionError(
+                "Artifact reference is outside the authenticated owner"
+            )
+        if resource_ref.revision != 1:
+            raise ValueError("Artifact revision does not exist")
+        sidecar = self._sidecar(resource_ref.resource_id)
+        record = ArtifactRecord.model_validate_json(sidecar.read_bytes())
+        if record.resource_ref != resource_ref:
+            raise PermissionError(
+                "Artifact reference does not match its canonical record"
+            )
+        storage_path = (sidecar.parent / record.storage_name).resolve()
+        if storage_path.parent != sidecar.parent.resolve():
+            raise PermissionError(
+                "Artifact storage path escapes its canonical directory"
+            )
+        return record, storage_path
+
+    def _read_verified(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> tuple[ArtifactRecord, Path, bytes]:
+        record, path = self._load_record(resource_ref, principal=principal, owner=owner)
+        content = path.read_bytes()
+        if (
+            len(content) != record.size_bytes
+            or _digest(content) != record.content_digest
+        ):
+            raise RuntimeError(
+                "InvariantViolation: Artifact bytes differ from canonical metadata"
+            )
+        return record, path, content
 
     def resolve(
         self,
@@ -95,31 +170,10 @@ class ArtifactService:
         principal: AuthenticatedPrincipal,
         owner: AuthenticatedPrincipal,
     ) -> StoredArtifact:
-        if resource_ref.resource_type != "artifact":
-            raise ValueError("resource_ref is not an artifact")
-        _authorize_principal(principal, owner)
-        if resource_ref.owner != owner:
-            raise PermissionError("artifact belongs to a different security scope")
-        sidecar = self._sidecar(resource_ref.resource_id)
-        if not sidecar.exists():
-            raise FileNotFoundError(f"Artifact does not exist: {resource_ref.resource_id}")
-        payload = json.loads(sidecar.read_text(encoding="utf-8"))
-        stored_ref = ResourceRef.model_validate(payload["resource_ref"])
-        if stored_ref != resource_ref:
-            raise PermissionError("artifact reference does not match its canonical record")
-        if payload.get("created_by_principal_id") != principal.principal_id:
-            raise PermissionError("artifact principal is not authorized")
-        storage_path = sidecar.parent / str(payload["storage_name"])
-        if not storage_path.exists():
-            raise FileNotFoundError(f"Artifact content is missing: {resource_ref.resource_id}")
-        return StoredArtifact(
-            resource_ref=stored_ref,
-            filename=str(payload["filename"]),
-            content_type=payload.get("content_type"),
-            source_type=str(payload["source_type"]),
-            size_bytes=int(payload["size_bytes"]),
-            storage_path=storage_path,
+        record, path, _ = self._read_verified(
+            resource_ref, principal=principal, owner=owner
         )
+        return _stored_artifact(record, path)
 
     def read_upload(
         self,
@@ -128,12 +182,45 @@ class ArtifactService:
         principal: AuthenticatedPrincipal,
         owner: AuthenticatedPrincipal,
     ) -> tuple[StoredArtifact, bytes]:
-        record = self.resolve(
-            resource_ref,
-            principal=principal,
-            owner=owner,
+        record, path, content = self._read_verified(
+            resource_ref, principal=principal, owner=owner
         )
-        return record, record.storage_path.read_bytes()
+        return _stored_artifact(record, path), content
+
+    def read_snapshot(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> ArtifactTextSnapshot:
+        record, _, content_bytes = self._read_verified(
+            resource_ref, principal=principal, owner=owner
+        )
+        mime = (record.content_type or "").lower()
+        if not (
+            mime.startswith("text/")
+            or mime in {"application/json", "application/x-ndjson"}
+        ):
+            raise ValueError("Artifact is not directly readable UTF-8 text")
+        content = content_bytes.decode("utf-8", errors="strict")
+        return ArtifactTextSnapshot(
+            record=record,
+            content=content,
+            eof_position=TextCoordinates(content).eof_position,
+        )
+
+    def read_limitations(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> tuple[str, ...]:
+        record, _, _ = self._read_verified(
+            resource_ref, principal=principal, owner=owner
+        )
+        return record.limitations
 
     def read_text(
         self,
@@ -142,18 +229,27 @@ class ArtifactService:
         principal: AuthenticatedPrincipal,
         owner: AuthenticatedPrincipal,
     ) -> str:
-        """Read a text artifact through the canonical owner and scope checks."""
+        return self.read_snapshot(
+            resource_ref, principal=principal, owner=owner
+        ).content
 
-        record = self.resolve(
-            resource_ref,
-            principal=principal,
-            owner=owner,
+    def resource_item(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> ArtifactResourceItem:
+        record, _, _ = self._read_verified(
+            resource_ref, principal=principal, owner=owner
         )
-        if record.source_type != "generated" and not (
-            record.content_type or ""
-        ).startswith("text/"):
-            raise ValueError("artifact is not a directly readable text artifact")
-        return record.storage_path.read_bytes().decode("utf-8")
+        return ArtifactResourceItem(
+            resource_ref=record.resource_ref,
+            filename=record.filename,
+            content_type=record.content_type,
+            size_bytes=record.size_bytes,
+            content_digest=record.content_digest,
+        )
 
     def inspect_upload(
         self,
@@ -164,9 +260,7 @@ class ArtifactService:
         question: str = "",
     ) -> dict[str, Any]:
         record, file_bytes = self.read_upload(
-            resource_ref,
-            principal=principal,
-            owner=owner,
+            resource_ref, principal=principal, owner=owner
         )
         text = self._interpret_bytes(
             filename=record.filename,
@@ -175,7 +269,7 @@ class ArtifactService:
             file_bytes=file_bytes,
             question=question,
         )
-        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        content_hash = _digest(text.encode("utf-8"))
         evidence_ref = ResourceEvidenceRef(
             evidence_ref=f"ev_{content_hash[:16]}",
             resource_ref=resource_ref,
@@ -192,6 +286,134 @@ class ArtifactService:
             "evidence_refs": [evidence_ref.model_dump(mode="json")],
         }
 
+    def write_draft(
+        self,
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+        request: ArtifactWriteRequest,
+        allowed_resource_refs: tuple[ResourceRef, ...],
+    ) -> ArtifactWriteReceipt:
+        """Trusted Gateway values bind identity; the request contains model choices."""
+        prepared = self._prepare_draft(
+            execution_scope=execution_scope,
+            tool_call_id=tool_call_id,
+            request=request,
+            allowed_resource_refs=allowed_resource_refs,
+        )
+        self._commit_publication(prepared.binding, prepared.record, prepared.file_bytes)
+        return _draft_receipt(prepared.record, prepared.edits_applied)
+
+    def recover_draft(
+        self,
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+        request: ArtifactWriteRequest,
+        allowed_resource_refs: tuple[ResourceRef, ...],
+    ) -> ArtifactWriteReceipt | None:
+        """Read an already committed draft without completing a partial write."""
+        prepared = self._prepare_draft(
+            execution_scope=execution_scope,
+            tool_call_id=tool_call_id,
+            request=request,
+            allowed_resource_refs=allowed_resource_refs,
+        )
+        root, producer_path, lock_path = self._producer_paths(prepared.binding)
+        if not lock_path.exists():
+            if producer_path.exists():
+                raise RuntimeError(
+                    "InvariantViolation: Artifact producer lock is missing"
+                )
+            return None
+        with exclusive_artifact_lock(lock_path, create=False):
+            if not _producer_binding_exists(producer_path, prepared.binding):
+                return None
+            metadata_path = root / f"{prepared.record.resource_ref.resource_id}.json"
+            if not metadata_path.exists():
+                return None
+            try:
+                record, _, file_bytes = self._read_verified(
+                    prepared.record.resource_ref,
+                    principal=execution_scope.principal,
+                    owner=execution_scope.principal,
+                )
+            except FileNotFoundError:
+                return None
+            if record != prepared.record or file_bytes != prepared.file_bytes:
+                raise RuntimeError(
+                    "InvariantViolation: committed Artifact differs from its producer request"
+                )
+        return _draft_receipt(record, prepared.edits_applied)
+
+    def _prepare_draft(
+        self,
+        *,
+        execution_scope: ExecutionScope,
+        tool_call_id: str,
+        request: ArtifactWriteRequest,
+        allowed_resource_refs: tuple[ResourceRef, ...],
+    ) -> _PreparedDraft:
+        if not isinstance(execution_scope, ExecutionScope):
+            raise TypeError("write_draft requires a trusted typed ExecutionScope")
+        if not tool_call_id:
+            raise ValueError("write_draft requires a stable tool_call_id")
+        request = TypeAdapter(ArtifactWriteRequest).validate_python(request)
+        source_refs: tuple[ResourceRef, ...] = ()
+        edits_applied = 0
+        if isinstance(request, CreateArtifact):
+            filename, content_type, content = (
+                request.filename,
+                request.content_type,
+                request.content,
+            )
+        else:
+            if request.base_ref not in allowed_resource_refs:
+                raise PermissionError(
+                    "patch base is not in the current task readable set"
+                )
+            base = self.read_snapshot(
+                request.base_ref,
+                principal=execution_scope.principal,
+                owner=execution_scope.principal,
+            )
+            if (
+                base.record.purpose != "draft"
+                or base.record.execution_scope is None
+                or base.record.execution_scope.execution_id
+                != execution_scope.execution_id
+                or base.record.execution_scope.thread_id != execution_scope.thread_id
+            ):
+                raise PermissionError(
+                    "patch base is not a draft from this task execution"
+                )
+            filename = base.record.filename
+            content_type = base.record.content_type
+            if content_type not in {"text/x-python", "application/json"}:
+                raise ValueError(
+                    "patch base is not a supported program or configuration"
+                )
+            content = TextCoordinates(base.content).apply_edits(request.edits)
+            source_refs = (request.base_ref,)
+            edits_applied = len(request.edits)
+        binding = ArtifactProducerBinding(
+            producer_key=f"draft:{execution_scope.execution_id}:{tool_call_id}",
+            producer_ref=tool_call_id,
+            execution_scope=execution_scope,
+            purpose="draft",
+            request=request,
+        )
+        file_bytes = content.encode("utf-8")
+        record = self._publication_record(
+            binding=binding,
+            filename=filename,
+            content_type=content_type,
+            file_bytes=file_bytes,
+            kind="draft",
+            source_artifact_refs=source_refs,
+        )
+        return _PreparedDraft(binding, record, file_bytes, edits_applied)
+
     def write_generated(
         self,
         *,
@@ -207,91 +429,182 @@ class ArtifactService:
         limitations: tuple[str, ...] = (),
     ) -> ResourceRef:
         if execution_scope.principal != owner:
-            raise PermissionError("generated artifact execution scope mismatch")
-        actual_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        accepted_digests = {
-            actual_digest,
-            hashlib.sha256(
-                json.dumps(
-                    {"content": content},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest(),
-        }
-        if content_digest not in accepted_digests:
-            raise ValueError("generated artifact content digest mismatch")
-        for source_ref in source_artifact_refs:
-            if source_ref.owner != owner:
-                raise PermissionError("generated artifact source is cross-scope")
+            raise PermissionError("generated Artifact execution scope mismatch")
+        if _digest(content.encode("utf-8")) != content_digest:
+            raise ValueError("generated Artifact content digest mismatch")
+        publication = GeneratedArtifactPublication(
+            kind=kind,
+            content=content,
+            content_digest=content_digest,
+            source_artifact_refs=source_artifact_refs,
+            evidence_refs=evidence_refs,
+            limitations=limitations,
+        )
+        record = self._publish(
+            binding=ArtifactProducerBinding(
+                producer_key=producer_key,
+                producer_ref=producer_ref,
+                execution_scope=execution_scope,
+                purpose="generated",
+                request=publication,
+            ),
+            filename=validate_display_filename(normalize_upload_filename(f"{kind}.md")),
+            content_type="text/markdown",
+            file_bytes=content.encode("utf-8"),
+            kind=kind,
+            source_artifact_refs=source_artifact_refs,
+            evidence_refs=evidence_refs,
+            limitations=limitations,
+        )
+        return record.resource_ref
+
+    def publish_machine(
+        self,
+        *,
+        execution_scope: ExecutionScope,
+        producer_key: str,
+        producer_ref: str,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+        kind: str,
+        source_artifact_refs: tuple[ResourceRef, ...] = (),
+        evidence_refs: tuple[str, ...] = (),
+        limitations: tuple[str, ...] = (),
+    ) -> ResourceRef:
+        """Internal trusted machine producer API; never the model draft entry."""
+        publication = MachineArtifactPublication(
+            filename=filename,
+            content_type=content_type,
+            file_bytes=file_bytes,
+            kind=kind,
+            source_artifact_refs=source_artifact_refs,
+            evidence_refs=evidence_refs,
+            limitations=limitations,
+        )
+        return self._publish(
+            binding=ArtifactProducerBinding(
+                producer_key=producer_key,
+                producer_ref=producer_ref,
+                execution_scope=execution_scope,
+                purpose="machine",
+                request=publication,
+            ),
+            filename=publication.filename,
+            content_type=content_type,
+            file_bytes=file_bytes,
+            kind=kind,
+            source_artifact_refs=source_artifact_refs,
+            evidence_refs=evidence_refs,
+            limitations=limitations,
+        ).resource_ref
+
+    def _publish(
+        self,
+        *,
+        binding: ArtifactProducerBinding,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+        kind: str,
+        source_artifact_refs: tuple[ResourceRef, ...],
+        evidence_refs: tuple[str, ...] = (),
+        limitations: tuple[str, ...] = (),
+    ) -> ArtifactRecord:
+        record = self._publication_record(
+            binding=binding,
+            filename=filename,
+            content_type=content_type,
+            file_bytes=file_bytes,
+            kind=kind,
+            source_artifact_refs=source_artifact_refs,
+            evidence_refs=evidence_refs,
+            limitations=limitations,
+        )
+        self._commit_publication(binding, record, file_bytes)
+        return record
+
+    def _publication_record(
+        self,
+        *,
+        binding: ArtifactProducerBinding,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+        kind: str,
+        source_artifact_refs: tuple[ResourceRef, ...],
+        evidence_refs: tuple[str, ...] = (),
+        limitations: tuple[str, ...] = (),
+    ) -> ArtifactRecord:
+        owner = binding.execution_scope.principal
+        if any(ref.owner != owner for ref in source_artifact_refs):
+            raise PermissionError("Artifact source is cross-scope")
+        request_bytes = _canonical_bytes(binding.model_dump(mode="json"))
+        artifact_id = f"artg_{_digest(request_bytes)[:32]}"
+        return ArtifactRecord(
+            resource_ref=ResourceRef(
+                resource_id=artifact_id, resource_type="artifact", owner=owner
+            ),
+            filename=filename,
+            content_type=content_type,
+            source_type="generated",
+            size_bytes=len(file_bytes),
+            storage_name=f"{artifact_id}.bin",
+            created_by_principal_id=owner.principal_id,
+            artifact_kind=kind,
+            content_digest=_digest(file_bytes),
+            purpose=binding.purpose,
+            execution_scope=binding.execution_scope,
+            producer_key=binding.producer_key,
+            producer_ref=binding.producer_ref,
+            source_artifact_refs=source_artifact_refs,
+            evidence_refs=evidence_refs,
+            limitations=limitations,
+        )
+
+    def _producer_paths(
+        self, binding: ArtifactProducerBinding
+    ) -> tuple[Path, Path, Path]:
         root = self.settings.data_dir / "generated_artifacts"
+        producer_hash = _digest(binding.producer_key.encode("utf-8"))
+        return (
+            root,
+            root / f"producer_{producer_hash}.json",
+            root / f".producer_{producer_hash}.lock",
+        )
+
+    def _commit_publication(
+        self,
+        binding: ArtifactProducerBinding,
+        record: ArtifactRecord,
+        file_bytes: bytes,
+    ) -> None:
+        root, producer_path, lock_path = self._producer_paths(binding)
         root.mkdir(parents=True, exist_ok=True)
-        producer_hash = hashlib.sha256(producer_key.encode("utf-8")).hexdigest()
-        producer_sidecar = root / f"producer_{producer_hash}.json"
-        if producer_sidecar.exists():
-            existing = json.loads(producer_sidecar.read_text(encoding="utf-8"))
-            if (
-                existing.get("producer_key") != producer_key
-                or existing.get("content_digest") != content_digest
-            ):
-                raise RuntimeError(
-                    "InvariantViolation: producer key is bound to different content"
+        with exclusive_artifact_lock(lock_path):
+            if not _producer_binding_exists(producer_path, binding):
+                # The immutable accepted request precedes content and canonical metadata.
+                install_immutable(
+                    producer_path, _canonical_bytes(binding.model_dump(mode="json"))
                 )
-            return ResourceRef.model_validate(existing["resource_ref"])
-        identity_material = "\0".join((
-            owner.tenant_id,
-            owner.user_id,
-            producer_key,
-            content_digest,
-        ))
-        identity_digest = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()
-        artifact_id = f"artg_{identity_digest[:20]}"
-        resource_ref = ResourceRef(
-            resource_id=artifact_id,
-            resource_type="artifact",
-            owner=owner,
+            self._commit_record(root, record, file_bytes)
+
+    def _commit_record(
+        self, root: Path, record: ArtifactRecord, file_bytes: bytes
+    ) -> None:
+        if (
+            len(file_bytes) != record.size_bytes
+            or _digest(file_bytes) != record.content_digest
+        ):
+            raise RuntimeError(
+                "InvariantViolation: Artifact commit bytes do not match metadata"
+            )
+        content_path = root / record.storage_name
+        metadata_path = root / f"{record.resource_ref.resource_id}.json"
+        install_immutable(content_path, file_bytes)
+        install_immutable(
+            metadata_path, _canonical_bytes(record.model_dump(mode="json"))
         )
-        content_path = root / f"{artifact_id}.txt"
-        content_tmp = root / f".{artifact_id}.txt.tmp"
-        content_tmp.write_bytes(content.encode("utf-8"))
-        os.replace(content_tmp, content_path)
-        record = {
-            "resource_ref": resource_ref.model_dump(mode="json"),
-            "filename": f"{kind}.md",
-            "content_type": "text/markdown",
-            "source_type": "generated",
-            "size_bytes": len(content.encode("utf-8")),
-            "storage_name": content_path.name,
-            "created_by_principal_id": execution_scope.principal.principal_id,
-            "artifact_kind": kind,
-            "producer_key": producer_key,
-            "producer_ref": producer_ref,
-            "content_digest": content_digest,
-            "source_artifact_refs": [
-                item.model_dump(mode="json") for item in source_artifact_refs
-            ],
-            "evidence_refs": list(evidence_refs),
-            "limitations": list(limitations),
-        }
-        artifact_sidecar = root / f"{artifact_id}.json"
-        artifact_tmp = root / f".{artifact_id}.json.tmp"
-        artifact_tmp.write_text(
-            json.dumps(record, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        os.replace(artifact_tmp, artifact_sidecar)
-        producer_tmp = root / f".producer_{producer_hash}.json.tmp"
-        producer_tmp.write_text(
-            json.dumps(record, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        try:
-            os.replace(producer_tmp, producer_sidecar)
-        except Exception:
-            producer_tmp.unlink(missing_ok=True)
-            raise
-        return resource_ref
 
     def read_generated(
         self,
@@ -300,35 +613,50 @@ class ArtifactService:
         principal: AuthenticatedPrincipal,
         owner: AuthenticatedPrincipal,
     ) -> GeneratedArtifactContent:
-        record = self.resolve(
-            resource_ref,
-            principal=principal,
-            owner=owner,
-        )
-        if record.source_type != "generated":
-            raise ValueError("artifact is not generated content")
-        payload = json.loads(
-            self._sidecar(resource_ref.resource_id).read_text(encoding="utf-8")
-        )
+        snapshot = self.read_snapshot(resource_ref, principal=principal, owner=owner)
+        if snapshot.record.source_type != "generated":
+            raise ValueError("Artifact is not generated content")
         return GeneratedArtifactContent(
-            content=record.storage_path.read_bytes().decode("utf-8"),
-            content_digest=str(payload["content_digest"]),
-            evidence_refs=tuple(payload.get("evidence_refs") or ()),
-            limitations=tuple(payload.get("limitations") or ()),
+            content=snapshot.content,
+            content_digest=snapshot.content_digest,
+            evidence_refs=snapshot.record.evidence_refs,
+            limitations=snapshot.record.limitations,
         )
 
     def _sidecar(self, artifact_id: str) -> Path:
+        if not re.fullmatch(r"art(?:g)?_[0-9a-f]+", artifact_id):
+            raise ValueError("invalid Artifact identity")
         candidates = (
             self.settings.data_dir / "uploads" / f"{artifact_id}.json",
             self.settings.data_dir / "generated_artifacts" / f"{artifact_id}.json",
         )
-        return next((item for item in candidates if item.exists()), candidates[0])
+        existing = [path for path in candidates if path.exists()]
+        if len(existing) > 1:
+            raise RuntimeError(
+                "InvariantViolation: Artifact has multiple canonical records"
+            )
+        if not existing:
+            raise FileNotFoundError(f"Artifact does not exist: {artifact_id}")
+        sidecar = existing[0]
+        if sidecar.resolve().parent != sidecar.parent.resolve():
+            raise PermissionError(
+                "Artifact metadata path escapes its canonical directory"
+            )
+        return sidecar
 
-    def _interpret_bytes(self, *, filename, content_type, source_type, file_bytes, question) -> str:
+    def _interpret_bytes(
+        self, *, filename, content_type, source_type, file_bytes, question
+    ) -> str:
         suffix = Path(filename).suffix.lower()
         mime = (content_type or "").lower()
-        if suffix in TEXT_FILE_EXTENSIONS or mime.startswith("text/") or mime in {"application/json", "application/xml"}:
-            text = preprocess_uploaded_text(file_bytes.decode("utf-8", errors="replace").strip())
+        if (
+            suffix in TEXT_FILE_EXTENSIONS
+            or mime.startswith("text/")
+            or mime in {"application/json", "application/xml"}
+        ):
+            text = preprocess_uploaded_text(
+                file_bytes.decode("utf-8", errors="replace").strip()
+            )
             if text:
                 return f"Uploaded text artifact: {filename}\n\n{text[:12000]}"
         if source_type == "pdf":
@@ -336,21 +664,56 @@ class ArtifactService:
             if text:
                 return f"Uploaded PDF artifact: {filename}\n\n{text[:12000]}"
         if source_type == "image":
-            return self._describe_image(filename=filename, content_type=content_type, file_bytes=file_bytes, question=question)
+            return self._describe_image(
+                filename=filename,
+                content_type=content_type,
+                file_bytes=file_bytes,
+                question=question,
+            )
         if source_type == "audio":
-            return self._transcribe_audio(filename=filename, content_type=content_type, file_bytes=file_bytes)
-        return _metadata_only_context(filename, content_type, source_type, len(file_bytes))
+            return self._transcribe_audio(
+                filename=filename, content_type=content_type, file_bytes=file_bytes
+            )
+        return _metadata_only_context(
+            filename, content_type, source_type, len(file_bytes)
+        )
 
     def _describe_image(self, *, filename, content_type, file_bytes, question) -> str:
         model = self.settings.openai.vision_model or self.settings.openai.model
-        if not (self.settings.openai.api_key and self.settings.openai.base_url and model):
-            return _metadata_only_context(filename, content_type, "image", len(file_bytes))
+        if not (
+            self.settings.openai.api_key and self.settings.openai.base_url and model
+        ):
+            return _metadata_only_context(
+                filename, content_type, "image", len(file_bytes)
+            )
         mime = content_type or mimetypes.guess_type(filename)[0] or "image/png"
         encoded = base64.b64encode(file_bytes).decode("ascii")
-        prompt = "客观描述附件可见内容并回答用户问题；不要声称已保存。\n用户请求：" + (question or "请概述图片内容")
+        prompt = "客观描述附件可见内容并回答用户问题；不要声称已保存。\n用户请求：" + (
+            question or "请概述图片内容"
+        )
         try:
-            client = OpenAI(api_key=self.settings.openai.api_key, base_url=self.settings.openai.base_url, timeout=self.settings.openai.timeout_seconds, max_retries=self.settings.openai.max_retries)
-            response = client.chat.completions.create(model=model, messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}]}], max_tokens=900)
+            client = OpenAI(
+                api_key=self.settings.openai.api_key,
+                base_url=self.settings.openai.base_url,
+                timeout=self.settings.openai.timeout_seconds,
+                max_retries=self.settings.openai.max_retries,
+            )
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{encoded}"},
+                            },
+                        ],
+                    }
+                ],
+                max_tokens=900,
+            )
             content = (response.choices[0].message.content or "").strip()
             if content:
                 return f"Uploaded image artifact: {filename}\n\n{content}"
@@ -360,10 +723,19 @@ class ArtifactService:
 
     def _transcribe_audio(self, *, filename, content_type, file_bytes) -> str:
         model = self.settings.openai.transcription_model
-        if not (self.settings.openai.api_key and self.settings.openai.base_url and model):
-            return _metadata_only_context(filename, content_type, "audio", len(file_bytes))
+        if not (
+            self.settings.openai.api_key and self.settings.openai.base_url and model
+        ):
+            return _metadata_only_context(
+                filename, content_type, "audio", len(file_bytes)
+            )
         try:
-            client = OpenAI(api_key=self.settings.openai.api_key, base_url=self.settings.openai.base_url, timeout=self.settings.openai.timeout_seconds, max_retries=self.settings.openai.max_retries)
+            client = OpenAI(
+                api_key=self.settings.openai.api_key,
+                base_url=self.settings.openai.base_url,
+                timeout=self.settings.openai.timeout_seconds,
+                max_retries=self.settings.openai.max_retries,
+            )
             audio_file = BytesIO(file_bytes)
             audio_file.name = filename
             response = client.audio.transcriptions.create(model=model, file=audio_file)
@@ -375,12 +747,9 @@ class ArtifactService:
         return _metadata_only_context(filename, content_type, "audio", len(file_bytes))
 
 
-def _artifact_id(filename: str, file_bytes: bytes) -> str:
-    digest = hashlib.sha256(filename.encode("utf-8") + b"\0" + file_bytes).hexdigest()
-    return f"art_{digest[:16]}"
-
-
-def _metadata_only_context(filename: str, content_type: str | None, source_type: str, size_bytes: int) -> str:
+def _metadata_only_context(
+    filename: str, content_type: str | None, source_type: str, size_bytes: int
+) -> str:
     size_kb = max(1, size_bytes // 1024) if size_bytes else 0
     return f"Uploaded artifact: {filename}\nSource type: {source_type}\nMedia type: {content_type or 'unknown'}\nSize: {size_kb} KB\n\nThe artifact is available, but automatic content interpretation did not produce text."
 
@@ -389,8 +758,61 @@ def _authorize_principal(
     principal: AuthenticatedPrincipal,
     owner: AuthenticatedPrincipal,
 ) -> None:
-    if principal.tenant_id != owner.tenant_id:
-        raise PermissionError("principal tenant does not match security scope")
+    if principal != owner:
+        raise PermissionError("principal does not match Artifact owner")
+
+
+def _digest(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _producer_binding_exists(
+    producer_path: Path, binding: ArtifactProducerBinding
+) -> bool:
+    if not producer_path.exists():
+        return False
+    try:
+        accepted = ArtifactProducerBinding.model_validate_json(
+            producer_path.read_bytes()
+        )
+    except ValueError as error:
+        raise RuntimeError(
+            "Artifact producer replay refused: existing binding is incomplete or invalid"
+        ) from error
+    if accepted != binding:
+        raise RuntimeError(
+            "InvariantViolation: producer is bound to a different full request"
+        )
+    return True
+
+
+def _draft_receipt(record: ArtifactRecord, edits_applied: int) -> ArtifactWriteReceipt:
+    return ArtifactWriteReceipt(
+        resource_ref=record.resource_ref,
+        filename=record.filename,
+        content_type=record.content_type,
+        size_bytes=record.size_bytes,
+        content_digest=record.content_digest,
+        source_artifact_refs=record.source_artifact_refs,
+        edits_applied=edits_applied,
+    )
+
+
+def _canonical_bytes(payload: dict[str, Any]) -> bytes:
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _stored_artifact(record: ArtifactRecord, path: Path) -> StoredArtifact:
+    return StoredArtifact(
+        resource_ref=record.resource_ref,
+        filename=record.filename,
+        content_type=record.content_type,
+        source_type=record.source_type,
+        size_bytes=record.size_bytes,
+        storage_path=path,
+    )
 
 
 __all__ = ["ArtifactService", "StoredArtifact"]

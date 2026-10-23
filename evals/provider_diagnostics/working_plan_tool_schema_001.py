@@ -41,15 +41,14 @@ _MESSAGES = [
     {
         "role": "system",
         "content": (
-            "Call the only available action exactly once. Create a concise two-step "
-            "working plan. Use the schema exactly; do not add undeclared fields."
+            "只调用唯一可用动作一次，提出简洁的两项工作计划。"
+            "严格按当前 Schema 将控制字段放在 arguments 对象内，不添加声明外字段。"
         ),
     },
     {
         "role": "user",
         "content": (
-            "Plan how to compare two official protocol documents and then write a "
-            "short conclusion. Do not execute the plan."
+            "规划如何比较两份官方协议文档并写出简短结论。只提出计划，不执行。"
         ),
     },
 ]
@@ -84,7 +83,7 @@ def _schema_digest(definition: ModelActionDefinition) -> str:
 def _request(definition: ModelActionDefinition) -> StructuredModelRequest[_UnusedOutput]:
     return StructuredModelRequest(
         operation=_OPERATION,
-        version="v1",
+        version="v2-explicit-object-zh",
         messages=_MESSAGES,
         output_type=_UnusedOutput,
         context_projection_ref=sealed_context_projection_ref(

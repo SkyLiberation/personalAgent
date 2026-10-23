@@ -10,19 +10,33 @@ from personal_agent.capabilities.contracts.interaction import (
     InteractionToolDefinition,
 )
 from personal_agent.governance.policy import PolicyEngine
-from personal_agent.tools.base import ToolExposure, tool_failure, tool_governance, tool_schema
-from personal_agent.governance.gateway import IdempotencyStore, ToolAuditSink, ToolGateway, ToolGatewayContext
+from personal_agent.tools.base import (
+    ToolExposure,
+    tool_failure,
+    tool_governance,
+    tool_schema,
+)
+from personal_agent.governance.gateway import (
+    IdempotencyStore,
+    ToolAuditSink,
+    ToolGateway,
+    ToolGatewayContext,
+)
 from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.observability import PolicyDecisionRecorder
 
 logger = logging.getLogger(__name__)
 
-_PLANNING_EXPLORATION_EFFECTS = frozenset({
-    "none",
-    "read_local",
-    "read_longterm",
-    "external_network",
-})
+_PLANNING_EXPLORATION_EFFECTS = frozenset(
+    {
+        "none",
+        "read_local",
+        "read_longterm",
+        "external_network",
+    }
+)
+
 
 class ToolExecutor:
     """Registered LangChain tools and non-graph administrative invocation.
@@ -52,14 +66,13 @@ class ToolExecutor:
             logger.warning("Tool %s is already registered, overwriting.", tool.name)
         self._gateway.register(tool)
 
-    def list_tools(self, *, exposures: set[ToolExposure] | None = None) -> list[BaseTool]:
+    def list_tools(
+        self, *, exposures: set[ToolExposure] | None = None
+    ) -> list[BaseTool]:
         tools = self._gateway.list_tools()
         if exposures is None:
             return tools
-        return [
-            tool for tool in tools
-            if tool_governance(tool).exposure in exposures
-        ]
+        return [tool for tool in tools if tool_governance(tool).exposure in exposures]
 
     def get(self, name: str) -> BaseTool | None:
         return self._gateway.get(name)
@@ -83,21 +96,26 @@ class ToolExecutor:
         for tool in self.list_tools(exposures={"public_agent"}):
             governance = tool_governance(tool)
             side_effects = set(governance.side_effects) - {
-                "none", "read_local", "read_longterm",
+                "none",
+                "read_local",
+                "read_longterm",
             }
-            definitions.append(InteractionToolDefinition(
-                name=tool.name,
-                description=tool.description or tool.name,
-                input_schema=tool_schema(tool),
-                read_only=not side_effects,
-                planning_safe=(
-                    governance.risk_level == "low"
-                    and not governance.requires_confirmation
-                    and set(governance.side_effects) <= _PLANNING_EXPLORATION_EFFECTS
-                ),
-                safely_retryable=not side_effects,
-                emits_verified_artifact=governance.emits_verified_artifact,
-            ))
+            definitions.append(
+                InteractionToolDefinition(
+                    name=tool.name,
+                    description=tool.description or tool.name,
+                    input_schema=tool_schema(tool),
+                    read_only=not side_effects,
+                    planning_safe=(
+                        governance.risk_level == "low"
+                        and not governance.requires_confirmation
+                        and set(governance.side_effects)
+                        <= _PLANNING_EXPLORATION_EFFECTS
+                    ),
+                    safely_retryable=not side_effects,
+                    emits_verified_artifact=governance.emits_verified_artifact,
+                )
+            )
         return tuple(definitions)
 
     def validate_interaction_call(
@@ -183,6 +201,8 @@ class ToolExecutor:
         execution_scope: ExecutionScope,
         tool_call_id: str,
         source_platform: str,
+        allowed_resource_refs: tuple[ResourceRef, ...] = (),
+        accepted_request_digest: str | None = None,
     ) -> dict[str, Any]:
         """Execute an admitted ordinary-interaction action through ToolGateway."""
         return self._gateway.invoke(
@@ -193,6 +213,8 @@ class ToolExecutor:
                 execution_mode="direct",
                 tool_call_id=tool_call_id,
                 source_platform=source_platform,
+                allowed_resource_refs=allowed_resource_refs,
+                accepted_request_digest=accepted_request_digest,
             ),
         )
 

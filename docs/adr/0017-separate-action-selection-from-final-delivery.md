@@ -40,7 +40,7 @@ tool calls 时继续循环，并允许并行执行多个调用。Anthropic 的
 | 下一步执行哪些普通动作、是否并行 | 模型 | action phase 中的 Provider action calls；每个调用只表达一个具体动作或 Plan 控制 |
 | 是否已准备生成最终结果 | 模型 | 无 payload 的 `prepare_final` 控制；它不是答案，也不是完成证明 |
 | Action 与 Final 顶层互斥 | Conversation Application | action phase 不接受 typed Final；finalization phase 不暴露任何 action definitions |
-| Provider 是否返回合法 action envelope | Provider Adapter | `tool_choice=required` 下缺少 action 时只做一次同 Schema 协议修复；再次失败则返回稳定 typed failure |
+| Provider 是否返回合法 action envelope | Provider Adapter | 内部 `action_choice=required` 下缺少 action 时只做一次同 Schema 协议修复；再次失败则返回稳定 typed failure。实际服务端编码按已核协议，不能把不支持的强制参数当作保障 |
 | 草稿是否满足语义标准 | Verifier | Receipt 只聚合 `passed|failed`；逐判据诊断不得改写执行事实或选择工具相位 |
 | 下一轮进入哪个阶段 | Conversation Application | `passed` 进入 Completion；`failed` 把 feedback 交还智能体；预算耗尽直接停止，不通过隐藏工具强制选择 Final |
 | 用户可见最终文本 | `FinalMessage` / Completion 出口 | 只来自独占 finalization phase，通过适用门禁后提交 |
@@ -48,13 +48,13 @@ tool calls 时继续循环，并允许并行执行多个调用。Anthropic 的
 破坏式迁移如下：
 
 1. 从 Provider action definitions 删除携带答案的 `control_final_message`；
-2. 增加无参数 `prepare_final` 控制，只请求下一次独占 typed Final；
+2. 增加无业务载荷的 `prepare_final` 控制，只请求下一次独占 typed Final；当前传输按 [ADR 0036](0036-explicit-native-action-payload.md)统一为 `arguments={}`；
 3. `StructuredModelResponse` 禁止同时携带 typed value 与 action invocations；
 4. action phase 允许多个兼容 Tool/Agent/Plan actions，执行完后才按 `prepare_final` 进入 finalization；
 5. finalization phase 不投影工具、Agent 或 Plan actions，只接收 `FinalMessage`；
 6. Verifier 返回 `failed` 时只交付完整诊断，不根据失败类别选择下一阶段；
 7. 预算内由智能体选择修订、取证或 `prepare_final`；下一调用前已耗尽预算则返回 `limitation`，不提供强制 Final 宽限；
-8. Provider 在 required action phase 返回纯文本时，Adapter 使用同一 action schema 做一次协议修复，不把
+8. Provider 在内部 required action phase 返回纯文本时，Adapter 使用同一 action schema 做一次协议修复，不把
    纯文本猜成 Final，也不做无界重试。
 
 ## 4. 为什么保留 `prepare_final`
@@ -64,9 +64,9 @@ Schema 与工具列表重新放进同一次 `auto` 请求，会让模型在尚�
 均为零工具即提前交付，其中一次还编造了本地证据。`prepare_final` 只承担协议相位切换，不携带答案、
 步骤 ID、执行结果或完成结论，因此没有成为第二份业务事实。
 
-未采用“无 tool calls 自动视为 Final”的原因是当前 action phase 明确使用 `tool_choice=required`，且真实
+未采用“无 tool calls 自动视为 Final”的原因是当前 action phase 明确要求合法动作，且真实
 样本曾在 Plan 尚有 `in_progress` 与 `pending` 步骤时返回纯文本。把该违规响应静默解释为完成会绕过
-模型动作契约。若未来 Provider 能在不附加 Final Schema 的 `auto` 模式下稳定区分行动与结束，应以新的
+模型动作契约。DeepSeek思考模式的服务端auto编码仍保留内部required及修复，见[主循环Spec §3.18](../optimization/to_verify/conversation-loop-boundaries.md#318-deepseek-思考模式的原生动作编码)；它不接纳纯文本终止。若未来 Provider 能在不附加 Final Schema 的 `auto` 模式下稳定区分行动与结束，应以新的
 同输入 baseline 重新评估并删除 `prepare_final`，不能保留双轨终止协议。
 
 ## 5. 复杂度、验证与退出条件

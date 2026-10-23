@@ -20,6 +20,8 @@ Application Service
 
 模型原生动作由 [model_actions.py](../../src/personal_agent/application/conversation/model_actions.py)投影和解码。工具参数表达业务动作；工作进度通过独立 `control_working_plan` 提交，执行系统从已准入工作清单关联活动项。动作相位与 typed 最终提交分别调用模型，具体契约见 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)和 [ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)。
 
+当前全部原生动作使用唯一 `arguments` 对象，控制动作也遵守此结构；`prepare_final` 为 `arguments={}`。模型可见调用名来自本轮同一 `ModelActionDefinition.name`，内部 capability identity 只关联执行事实。完整 wire Schema 校验通过后才解码；仅实验工具的 frozen `payload_field="action"` 将原业务对象无损还原为 canonical `ExperimentToolArgs.action`，其余工具保持原业务对象，包括 `write_artifact.request`。原 Args、准入、权限、接受摘要和恢复不变，不接受旧直接控制形状或非法字符串。决定与验证范围见 [ADR 0036](../adr/0036-explicit-native-action-payload.md)。
+
 ## 注册与曝光
 
 `ToolExecutor` 在 [governance/registry.py](../../src/personal_agent/governance/registry.py)维护已注册工具，按调用入口生成只读定义。`ToolGovernance.exposure` 区分四种声明：
@@ -35,13 +37,15 @@ Application Service
 
 HTTP 直接执行通过 `invoke_direct()` 复用 Gateway；它有独立的身份及作用域入口，接口见 [API](../api.md#post-apitoolsnameexecute)。注册工具清单不等于普通模型可选工具清单。
 
-Conversation 还在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入自己的知识和 Artifact 操作；canonical 知识读取器存在时隐藏三个底层 note 读取工具。`_model_visible_capabilities_for_turn()` 再隐藏当前没有可读卸载资源的 Artifact 读取／搜索，以及本交互已成功消费的个人知识搜索。动作协议另加入工作清单、准备交付和配置的 Agent 委托；最终提交相位不提供这些动作定义。
+Conversation 还在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入自己的知识和 Artifact 操作；canonical 知识读取器存在时隐藏三个底层 note 读取工具。`retrieval_experiment` 只有在当前 run 已绑定实验许可时才投影；`execute_python` 还要求当前主体与部署绑定匹配、截止和共享执行额度可用、没有待对账执行。`_model_visible_capabilities_for_turn()` 从初始材料、实际写入／实验回执和卸载结果恢复当前合法资源，为读取参数投影确切引用；没有合法资源时隐藏 Artifact 读取／搜索，并隐藏本交互已成功消费的个人知识搜索。动作协议另加入工作清单、准备交付和配置的 Agent 委托；最终提交相位不提供这些动作定义。
 
 2026-10-19 的[静态审计](../../.tmp/tool-design-review-20261019/local-audit.json)记录依赖、配置及计数条件，未启动部署或取得本轮实际模型菜单。不能从注册总数直接判断模型输入过大。已有 `TurnContextComposition.model_action_definition_chars` 记录动作定义字符量；精确 tokens、误选及用户结果仍须从对应正式轨迹取得。
 
 ## 输入、结果与错误
 
 工具使用显式 Pydantic `ArgsSchema` 表达必填项、范围及字段说明。Conversation 在执行前校验工具名和参数；原生工具调用的形状合法后，仍须通过 Application 准入。
+
+原生动作协议拒绝通过 `DecisionFeedback.action_diagnostics` 返回解码器的字段位置及错误类型，通过 `rejected_action_invocations` 原样返回同批结构化调用；整批均未执行。未声明名称通过已有 `action_name` 指明首个具体拒绝对象，空诊断不代表该未知动作具有合法参数 Schema；重复未知名仍共用原协议错误族的修复额度，见[名称反馈保真](../optimization/completed/unknown-action-name-feedback.md)。允许范围仍由当前动作 Schema 拥有，不自动修正或解包。其余反馈边界与待验收条件见[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#312-动作协议拒绝的事实反馈)。
 
 工具契约的类型源是 [kernel/contracts/tool.py](../../src/personal_agent/kernel/contracts/tool.py)，包装函数由 [tools/base.py](../../src/personal_agent/tools/base.py)拥有。
 
@@ -58,6 +62,8 @@ Conversation 还在 [`_effective_capabilities()`](../../src/personal_agent/appli
 
 [governance/gateway.py](../../src/personal_agent/governance/gateway.py)消费 `ToolGatewayContext.execution_scope`、执行模式、调用 ID 和来源平台，统一处理 Policy、直接 URL 域名限制、限流、超时、分类重试及审计。`allowed_domains` 约束直接 URL 的域名后缀，网络重定向和地址安全仍按实际执行边界判断。
 
+Gateway 将 typed `ToolGatewayContext` 经 `RunnableConfig.configurable` 交给需要它的工具工厂；其中的 scope、合法资源及已接受请求摘要不属于模型参数。`write_artifact`、`retrieval_experiment` 和 `execute_python` 在派发前由原 Conversation Journal 保存确切请求，原 owner 保存回执后才形成 Observation。它们声明 `write_local`，不作为规划安全操作，也不由通用超时线程或自动重试启动第二次执行；恢复消费原请求和回执，未知实验先对账。该路径与通用工具的事后幂等缓存分别解释。
+
 确认且要求幂等的通用工具通过 `IdempotencyStore` 预占 key，成功后提交结果供重放；生产适配器是 [PostgresToolGovernanceStore](../../src/personal_agent/infra/storage/postgres_tool_governance_store.py)。账本只证明所覆盖调用的执行事实，跨系统副作用仍由相应业务契约约束。
 
 固定知识保存、删除和恢复由各自 Application 拥有 Command、确认、Receipt 与事务；工具层不复制这些状态。删除恢复链路见[固定流程](../workflow/delete-knowledge-workflow.md)，保存见 [ADR 0006](../adr/0006-conversation-governed-knowledge-save.md)。
@@ -69,6 +75,10 @@ Conversation 还在 [`_effective_capabilities()`](../../src/personal_agent/appli
 `web_search(query, limit)` 返回发现摘要；`web_read(url)` 返回指定来源正文。长结果卸载到 Artifact，模型以 `search_action_output` 定位、`read_artifact` 读取同一正文坐标。后端固定调用 `rg`，模型只指定授权资源及读取参数。原 `read_action_output` 保留实现但不投影，准入拒绝；正文和引用契约见 [Context](context-engineering.md#网页来源正文保留与重读)及 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
 
 普通整稿核验注册为 `workflow_activity`，由运行系统在适用提交后调用。研究模型提交 claims 与最终回答，Conversation 沿 Model Port 进行一次统一核验，再由 Completion 交付；两者都不进入普通模型可见工具面，见[核验专题](verification-and-completion.md)。
+
+研究实验的模型工具分别为 `write_artifact` 与 `retrieval_experiment`：前者创建或按确切快照补丁生成不可变程序／配置版本；后者执行开发实验、冻结确切结果或评测冻结方案。结果摘要从同一不可变原件只读投影 publication，表达业务结果与子文件的对应关系；组合和冻结继续消费原业务结果引用。模型可以根据真实指标及原件选择后续工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。程序用途、输入输出及交付契约由[研究设计](../optimization/to_verify/knowledge-decision-delivery.md#41-受限实验能力)拥有。当前工具已装配；能力验收核对实际执行、结果消费与回答，下载和打包不在范围，不能由注册事实推断研究语义通过。
+
+`execute_python` 与检索实验并列，当前显式接收同级 `code`、`program_ref` 和 `input_files`：新代码与已有程序引用恰一非 null，无文件也提供空列表；各绑定含确切文件名与 Artifact 引用。原 Artifact owner 保存确切源码、输入清单及 stdout／stderr，工具返回有界预览和原件引用；模型可以继续读取、修正程序或成文。它复用一次程序一个受限容器的技术沙箱，与检索实验共享当前 run 的执行额度，保持原 Journal 的不可变命令和未知终态对账。程序输出不变成可信指标或完成事实；分析原件保留内部引用，完成时不生成用户清单／ZIP或触发下载；历史清单和CLI读取保持原离线身份。工具由模型自主选择，不以调用频次验收参数能力；详细契约及验证边界由 [Python 工具 Spec](../optimization/to_verify/python-data-analysis-tool.md)拥有。
 
 ## 证据入口
 

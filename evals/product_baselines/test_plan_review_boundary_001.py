@@ -26,10 +26,8 @@ from evals.product_baselines.test_plan_replan_001_obligation_revision_baseline i
     _turn,
 )
 from evals.e2e_quality.test_release_user_outcomes import LiveWebProcess
-from personal_agent.application.conversation.interaction_intent import (
-    _DERIVATION_INSTRUCTION,
-)
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.prompts import get_prompt
 
 
 _CASE_ID = "PLAN-REVIEW-BOUNDARY-001"
@@ -63,9 +61,9 @@ def _capture(
             initial_state_digest=canonical_evidence_digest({"seeded_facts": ()}),
             config_cohort=canonical_evidence_digest({
                 "runtime_cohort": _config_cohort(server),
-                "review_contract_revision": "interaction_intent:v2",
+                "review_contract_revision": f"interaction_intent:{get_prompt('conversation.interaction_intent').version}",
                 "review_instruction_digest": canonical_evidence_digest(
-                    _DERIVATION_INSTRUCTION
+                    get_prompt("conversation.interaction_intent").template
                 ),
                 "turn_budget": {
                     "max_model_turns": _MAX_MODEL_TURNS,

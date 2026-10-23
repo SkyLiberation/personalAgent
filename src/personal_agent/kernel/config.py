@@ -39,6 +39,7 @@ class Settings(_StrictBase):
     max_verify_retries: int = 1
     url_capture_provider: Literal["firecrawl", "builtin"] = "builtin"
     action_diagnostics_reveal_field_names: bool = False
+    retrieval_experiment_config_path: Path | None = None
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)

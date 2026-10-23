@@ -385,6 +385,11 @@
       "expected": "ARC"
     },
     {
+      "id": "arc_design_before_code_placement",
+      "task": "设计方案时如何先做架构分析，再决定模块职责、依赖和代码落点？",
+      "expected": "ARC"
+    },
+    {
       "id": "cod_explicit_aop",
       "task": "用 AOP 把模型调用的用量和追踪移出业务代码，如何明确包装顺序与异常传播？",
       "expected": "COD"

@@ -12,8 +12,9 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：受限实验及可编程候选交付；固定基线、外部评分、成果接续和必要压缩分阶段验收 | [当前展示与证据边界](../../interview/01-project-story.md#6-证据如何支撑故事)；状态由 [Future 队列](../../future/design-optimization-backlog.md)拥有 | [研究能力的实验推进与产物交付 Spec](knowledge-decision-delivery.md) |
-| `RESEARCH-GOAL-COVERAGE-001`：统一链既有验收保持；claim 增量贡献先补完整标注与实际修订，再决定独立机制候选 | [正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [claim 评估与优化顺序](research-goal-coverage.md#当前推荐先补标注再比较实际修订)；[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析、长程状态及历史压缩的整体职责和验证关系 | [当前状态](knowledge-decision-delivery.md#8-当前状态与剩余决定)、[LongDS 36 轮设计](knowledge-decision-delivery.md#9-longds-长程数据分析设计)；新增用例尚未执行，准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有 | [研究能力增强与实验交付 Spec](knowledge-decision-delivery.md) |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主Python数据分析执行；旧自动统计方案已撤回 | [研究事实与范围](knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python数据分析工具Spec](python-data-analysis-tool.md)，已实施；自主计算链成立，局部整稿失败 |
+| `RESEARCH-GOAL-COVERAGE-001`：统一链既有验收保持；claim 增量贡献先补完整标注与实际修订，再决定独立机制候选 | [正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [claim 评估与优化顺序](research-goal-coverage.md#当前推荐复核标注再比较实际修订)；[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
 | `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入优化及实际成本收益尚待证明 | [预算事实与当前边界](research-input-budget.md) | [预算复审](research-input-budget.md) |
 | `ANSWER-NORMATIVE-SCOPE-001`：自动复核已删除，真实反馈继续修订；最新 target 原预算未交付 | [已验边界及 c4 闭环](../completed/source-proof-boundary-isolation.md) | [范围校准与真实反馈消费](normative-context-acquisition.md#用户确认范围后的-c7-实际修订验收) |
 | `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验与修订反馈分工](final-revision-comparison.md) |

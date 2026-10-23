@@ -6,6 +6,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from langchain_core.tools import BaseTool
+from langchain_core.runnables import RunnableConfig
+from personal_agent.kernel.contracts.tool_runtime import ToolGatewayContext
+
 
 # Tool governance/result contracts now live in the kernel so the infra and
 # governance layers can share them without importing the tools package. They are
@@ -23,12 +26,21 @@ from personal_agent.kernel.contracts.tool import (
 )
 
 
+def require_gateway_context(config: RunnableConfig) -> ToolGatewayContext:
+    context = config.get("configurable", {}).get("__personal_agent_gateway_context")
+    if not isinstance(context, ToolGatewayContext):
+        raise PermissionError("工具缺少受信执行上下文。")
+    return context
+
+
 def host_allowed(host: str, allowed_domains: tuple[str, ...]) -> bool:
     """Return whether host matches an exact or subdomain allow-list entry."""
     normalized_host = host.lower().strip(".")
     for allowed in allowed_domains:
         suffix = allowed.lower().strip().lstrip(".")
-        if suffix and (normalized_host == suffix or normalized_host.endswith("." + suffix)):
+        if suffix and (
+            normalized_host == suffix or normalized_host.endswith("." + suffix)
+        ):
             return True
     return False
 
@@ -87,8 +99,12 @@ def tool_success(data: Any = None, evidence: list | None = None) -> ToolArtifact
     return ToolArtifact(ok=True, data=data, error=None, evidence=evidence or [])
 
 
-def tool_failure(error: str, *, error_kind: ToolErrorKind = "unrecoverable") -> ToolArtifact:
-    return ToolArtifact(ok=False, data=None, error=error, error_kind=error_kind, evidence=[])
+def tool_failure(
+    error: str, *, error_kind: ToolErrorKind = "unrecoverable"
+) -> ToolArtifact:
+    return ToolArtifact(
+        ok=False, data=None, error=error, error_kind=error_kind, evidence=[]
+    )
 
 
 def _artifact_from(outcome: ToolArtifact | dict[str, Any]) -> ToolArtifact:
@@ -118,7 +134,9 @@ def tool_schema(tool: BaseTool) -> dict[str, Any]:
 def tool_governance(tool: BaseTool) -> ToolGovernance:
     payload = (tool.extras or {}).get("governance")
     if not isinstance(payload, dict):
-        raise ValueError(f"Tool {tool.name!r} is missing structured governance metadata.")
+        raise ValueError(
+            f"Tool {tool.name!r} is missing structured governance metadata."
+        )
     side_effects = payload.get("side_effects", ("none",))
     if isinstance(side_effects, list):
         side_effects = tuple(side_effects)
@@ -136,7 +154,9 @@ def tool_governance(tool: BaseTool) -> ToolGovernance:
         audit_required=bool(payload.get("audit_required", True)),
         timeout_seconds=payload.get("timeout_seconds", 30.0),
         max_retries=max(0, int(payload.get("max_retries", 0))),
-        retry_backoff_seconds=max(0.0, float(payload.get("retry_backoff_seconds", 0.2))),
+        retry_backoff_seconds=max(
+            0.0, float(payload.get("retry_backoff_seconds", 0.2))
+        ),
         rate_limit_per_minute=payload.get("rate_limit_per_minute"),
         allowed_domains=allowed_domains,
         emits_verified_artifact=bool(payload.get("emits_verified_artifact", False)),

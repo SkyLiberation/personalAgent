@@ -59,11 +59,14 @@ class ModelActionDefinition(BaseModel):
     target_name: str = Field(min_length=1)
     description: str = ""
     input_schema: dict[str, Any]
+    payload_field: Literal["action"] | None = None
 
     @model_validator(mode="after")
     def _requires_object_input(self) -> "ModelActionDefinition":
         if self.input_schema.get("type") != "object":
             raise ValueError("model action input_schema must have an object root")
+        if self.payload_field is not None and self.kind != "tool":
+            raise ValueError("only tool actions may declare a canonical payload field")
         return self
 
 
@@ -81,7 +84,9 @@ class ProviderFailureDiagnostics(BaseModel):
     """Bounded, redacted provider facts for internal failure observability."""
 
     model_config = ConfigDict(
-        extra="forbid", frozen=True, str_max_length=PROVIDER_DIAGNOSTIC_MAX_CHARS,
+        extra="forbid",
+        frozen=True,
+        str_max_length=PROVIDER_DIAGNOSTIC_MAX_CHARS,
     )
 
     error_code: str | None = None
@@ -120,6 +125,7 @@ class ModelInvocationUnavailable(RuntimeError):
         self.diagnostics = diagnostics
         # Completed responses before a later transport failure remain billable.
         self.response: "StructuredModelResponse[Any] | None" = None
+        self.prior_responses: tuple[StructuredModelResponse[Any], ...] = ()
         super().__init__(f"{operation} model provider unavailable ({category})")
 
 
@@ -149,7 +155,49 @@ class StructuredOutputFailure(ValueError):
         # A rejected provider response remains an observed, billable call.
         # Only the adapter attaches this; it contains no admitted actions.
         self.response: "StructuredModelResponse[Any] | None" = None
+        self.prior_responses: tuple[StructuredModelResponse[Any], ...] = ()
         super().__init__(f"{operation} structured parse failed: {reason}")
+
+
+class ModelCapacityCheck(BaseModel):
+    """Estimated final wire-body capacity, without changing its content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    operation: str
+    provider_host: str
+    model: str
+    payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    estimator_version: Literal["ascii_json_bytes_v1"] = "ascii_json_bytes_v1"
+    measurement_kind: Literal["estimated"] = "estimated"
+    serialized_body_bytes: int = Field(ge=0)
+    estimated_input_tokens: int = Field(ge=0)
+    requested_output_tokens: int | None
+    output_reserve_tokens: int = Field(gt=0)
+    protocol_reserve_tokens: int = Field(ge=0)
+    context_window_tokens: int = Field(gt=0)
+
+
+class ModelCapacityRefused(ValueError):
+    """A local deterministic refusal; completed earlier responses stay billable."""
+
+    def __init__(
+        self,
+        operation: str,
+        reason_code: Literal[
+            "context_capacity_exceeded",
+            "output_capacity_exceeded",
+            "capacity_profile_mismatch",
+            "capacity_payload_unsupported",
+        ],
+        *,
+        check: ModelCapacityCheck | None = None,
+    ) -> None:
+        self.operation = operation
+        self.reason_code = reason_code
+        self.check = check
+        self.response: StructuredModelResponse[Any] | None = None
+        self.prior_responses: tuple[StructuredModelResponse[Any], ...] = ()
+        super().__init__(f"{operation} model capacity refused ({reason_code})")
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +207,9 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     messages: list[dict[str, Any]]
     output_type: type[StructuredOutputT]
     context_projection_ref: str
-    sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
+    sensitivity: Literal["public", "internal", "confidential", "restricted"] = (
+        "internal"
+    )
     temperature: float = 0
     # None delegates the output limit to the provider's model default.
     max_tokens: int | None = None
@@ -176,7 +226,9 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
         if self.max_output_repairs < 0:
             raise ValueError("output repair budget must be nonnegative")
         if not self.context_projection_ref.strip():
-            raise ValueError("model request requires an explicit context projection reference")
+            raise ValueError(
+                "model request requires an explicit context projection reference"
+            )
         if self.context_projection_ref.startswith("inline:"):
             raise ValueError("inline model context bypass is forbidden")
         action_names = [item.name for item in self.action_definitions]
@@ -247,9 +299,10 @@ class ModelCallIntent(BaseModel):
     purpose: str
     operation: str
     context_projection_ref: str
-    sensitivity: Literal["public", "internal", "confidential", "restricted"] = "internal"
+    sensitivity: Literal["public", "internal", "confidential", "restricted"] = (
+        "internal"
+    )
     structured_output_contract: str
-    max_input_tokens: int = Field(ge=1)
     max_output_tokens: int | None = Field(ge=1)
 
 
@@ -277,7 +330,6 @@ class ModelInvocationGrant(BaseModel):
     region: str | None = None
     allowed_egress: Literal["none", "metadata", "content", "sensitive"] = "content"
     context_projection_ref: str
-    max_input_tokens: int
     max_output_tokens: int | None
     policy_revision: str = "v1"
 
@@ -289,13 +341,27 @@ class ModelInvocationDenial(BaseModel):
 
 
 __all__ = [
-    "ModelActionDefinition", "ModelActionInvocation", "ModelActionKind",
-    "ModelCallIntent", "ModelInvocationDenial", "ModelInvocationGrant", "ModelReasoningEffort",
-    "ModelInvocationFailureCategory", "ModelInvocationUnavailable",
-    "PROVIDER_DIAGNOSTIC_MAX_CHARS", "ProviderFailureDiagnostics",
-    "StructuredOutputFailure", "StructuredOutputFailureCode",
+    "ModelActionDefinition",
+    "ModelActionInvocation",
+    "ModelActionKind",
+    "ModelCallIntent",
+    "ModelInvocationDenial",
+    "ModelInvocationGrant",
+    "ModelReasoningEffort",
+    "ModelInvocationFailureCategory",
+    "ModelInvocationUnavailable",
+    "ModelCapacityCheck",
+    "ModelCapacityRefused",
+    "PROVIDER_DIAGNOSTIC_MAX_CHARS",
+    "ProviderFailureDiagnostics",
+    "StructuredOutputFailure",
+    "StructuredOutputFailureCode",
     "ModelRequestKind",
-    "SkillActivationDecision", "SkillContextGrant",
-    "StructuredModelClient", "StructuredModelRequest", "StructuredModelResponse", "StructuredOutputT",
+    "SkillActivationDecision",
+    "SkillContextGrant",
+    "StructuredModelClient",
+    "StructuredModelRequest",
+    "StructuredModelResponse",
+    "StructuredOutputT",
     "sealed_context_projection_ref",
 ]

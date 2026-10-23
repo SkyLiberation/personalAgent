@@ -14,6 +14,108 @@ $env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "$evaluationEvidenceRoot/product"
 
 读取历史证据时使用其原真实目录，不移动或改写旧归档。需要共享或发布的证据另封存到可访问位置；本节路径设置不改变证据类别、输入、评分或发布门槛。
 
+## 参数恢复的完整真实阶段回放
+
+2026-10-22 的一次性脚手架与封存规则由[主循环Spec](../optimization/to_verify/conversation-loop-boundaries.md#2026-10-22-必填参数恢复候选)拥有；来源是当前正式E1的实际SDK，而非重造短输入。实际命令如下，归档身份已关闭，不再执行或覆盖：
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 .tmp/action-parameter-repair-20261022/replay.py baseline
+.\.venv\Scripts\python.exe -B -X utf8 .tmp/action-parameter-repair-20261022/replay.py candidate
+.\.venv\Scripts\python.exe -B -X utf8 .tmp/action-parameter-repair-20261022/run_group.py prepare
+.\.venv\Scripts\python.exe -B -X utf8 .tmp/action-parameter-repair-20261022/run_group.py run
+.\.venv\Scripts\python.exe -B -X utf8 .tmp/action-parameter-repair-20261022/replay.py retained
+```
+
+prepare与replay零HTTP；run保留源模型／完整Context和Schema、零重试／工具执行，使用当前受信DeepSeek凭据且不落密钥。SDK调用后按生产解析器和decoder检查提议，不通过脚本执行或修订参数；原生调用／结果历史没有被重排。结果须逐份审读，Schema接受不代表执行或用户完成。本组按首个候选失败早停，未执行项与费用由[当前盘点](02-current-case-inventory.md#2026-10-22-参数恢复的局部对照失败)记录；后续任何候选须另有准入和独立身份。
+
+## Python结果分析的局部Offline回放
+
+当前Agent能力验收按[范围修正](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)不再打包或下载：正式采集只POST自然任务、GET当前Trace并封存SDK／执行／费用及适用安全观察；完成审计核对实际SubmittedFinal和Final，不要求report文件、manifest、ZIP、downloads/index或外部CLI。旧文件版封存按原代码身份读取，历史资格／交付命令不能作为当前能力门槛。
+
+本次确定性完成回放命令为`.venv/Scripts/python.exe -B -X utf8 .tmp/agent-capability-scope-20261022/replay.py`，实际两份完整历史阶段输入已执行并关闭；不在独占目录重跑。没有新增付费E1或语义组，原下载429、SQL审计缺口及旧退出码保留。旧capture按新范围单列审计，不能覆盖旧封存结果。
+
+
+用户随后授权将新接口接回生产并继续验证，执行前计划由[Spec §3.3](../optimization/to_verify/python-data-analysis-tool.md#33-接回生产链路并继续正式流程验证)拥有，新身份`.tmp/python-schema-production-20261022/`。正式准备、F1及initial_closure分别沿该目录的`launcher.py prepare`、`scope`、`verify`、`run`执行；运行已结束，原下载429及SQL关闭缺口保留。随后`continue_downloads.py`在独立目录通过认证GET取得同一110资源并按Retry-After等待，`audit.py`分别记录原采集与续接证据；旧64位评分审计失败后，经真实排名诊断修正正式delivery auditor，并单独生成`ranking-audit-binary32.json`。首次`launcher.py reproduce`长路径失败后，`reproduce_short.py`在`.tmp/py-prod-repro-20261022/`消费同一下载清单，以原生产CLI完成7项复现。当前原组已关闭，不可重跑或覆盖独占输出；后续需要新身份。使用本地`.venv`解释器，凭据只从既有受信配置读取、不打印；不强制Python或自然压缩，不因合法工具选择撤回接口。结果与完整流程尚缺的SQL审计关闭由[评测盘点](02-current-case-inventory.md#2026-10-22-python新接口接回生产与正式续验)拥有。
+
+2026-10-22的Schema候选实现与10+10阶段回放已关闭于`.tmp/python-schema-implementation-20261022/`；工具选择自由，Python覆盖不足，候选已撤回。原运行使用该目录的`offline.py prepare/execute`、`post_execution.py`及逐次`model_group.py next`，均须绑定归档代码身份；不可在当前旧契约下重跑已关闭目录或解析其新接受载荷。判据、费用及后续验收边界见[Spec §3.2](../optimization/to_verify/python-data-analysis-tool.md#32-本次实施与局部验收计划)，实际结果见[评测盘点](02-current-case-inventory.md#2026-10-22-python-schema候选实施与覆盖不足)。下面仍是此前自主分析旅程的入口，不能用它补本轮覆盖次数。
+
+[唯一工具Spec](../optimization/to_verify/python-data-analysis-tool.md#7-验收规格与费用边界)固定真实0056报告阶段、完整原任务与材料、10baseline＋10candidate及停止线。该回放经AgentService／AgentRuntime连续消费真实模型与工具输出；只将历史截止映射到当前，证据身份仍为Offline Eval，不计作完整研究或长任务E2E。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evals.provider_diagnostics.python_result_analysis --prepare --group-dir .tmp/python-analysis-20261021/group-1
+.\.venv\Scripts\python.exe -X utf8 -m evals.provider_diagnostics.python_result_analysis --validate-inputs .tmp/python-analysis-20261021/input-validation-2 --group-dir .tmp/python-analysis-20261021/group-1
+.\.venv\Scripts\python.exe -X utf8 -m evals.provider_diagnostics.python_result_analysis --run-next --group-dir .tmp/python-analysis-20261021/group-1 --input-validation .tmp/python-analysis-20261021/input-validation-2
+.\.venv\Scripts\python.exe -X utf8 -m evals.provider_diagnostics.python_result_analysis --record-review .tmp/python-analysis-20261021/group-1/B1.review.input.json --group-dir .tmp/python-analysis-20261021/group-1
+```
+
+先在当前进程绑定与源profile一致的受信端点及凭据，禁止dotenv覆盖；预检不打印或保存密钥。prepare零模型封存新组；validate-inputs经原Web Composition Root生成两个arm的真实首SDK并在HTTP前截断，只有声明变量可不同；示例group-1已用于本次归档，不能覆盖或重复准备。run-next一次只执行下一原子样本，必须独立审读全部实际成稿并登记绑定结果摘要的五项关系后才允许继续。程序／配置不能被文件名或关键词自动算成报告。每支最多4次物理发送，整组80次／20M已知tokens／2小时；逐次预留完整SDK输入、协议和最大输出，未知用量、费用不足或首次明确candidate语义失败停止全组，不补样。
+
+零模型工具边界入口为 `python -m evals.provider_diagnostics.python_execution_boundary --help`；它使用真实原件、原FileJournal／Artifact／ToolExecutor及既有Docker，不替代上述自主模型回放。实际样本、代码身份、费用和限制由[当前评测盘点](02-current-case-inventory.md)拥有。
+
+## 检索实验研究能力准入
+
+`RETRIEVAL-EXPERIMENT-001`（E1）与 `RETRIEVAL-EXPERIMENT-PROGRAM-001`（P1）的阶段 0 正式入口及预算由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#72-完整落地-implementation-plan)拥有。节点采用真实 Web 子进程、生产模型与 `POST /api/conversation/turn`，原件只经 Artifact owner 准备，不摄入知识，也不向模型提供预生成排名、候选代码或 test 标注。当前独立准入节点不加入默认 release 分母。
+
+先收集和零模型材料预检：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest --collect-only -q evals/product_baselines/test_retrieval_experiment_001.py
+.\.venv\Scripts\python.exe -m evals.product_baselines.retrieval_baseline --output-root .tmp/research-capability-20261020/material-preflight-new
+```
+
+本轮真实基线按 E1 后 P1 的顺序各一条，分别选择尚不存在的输出根；仅在 E1 是合格产品失败且未越预声明成本时继续 P1。wrapper 在当前已核实环境安全绑定既有 16432 评测数据库，进程内传递配置、不打印凭据；换环境须先核对实际连接，不能照搬端口：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.run_retrieval_baseline --case e1 --output-root .tmp/research-capability-20261020/e1-baseline-new
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.run_retrieval_baseline --case p1 --output-root .tmp/research-capability-20261020/p1-baseline-new
+```
+
+研究采集器 `run_retrieval_acceptance` 及评分资格入口保留 Settings 的实际 timeout/max_retries，并通过原子进程环境传入。任务总时间与单请求超时分开；新正式准备必须显式给出 `--run-timeout-seconds` 和 `--max-execution-seconds`，同一部署供Runtime、环境附件和采集监督读取。下一次1小时验收两项均设3600；轮数／工具／委派／tokens使用既有 `PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS`、`PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS`、`PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS`、`PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS`，此前零模型预算切片使用64／256／4／2000000；用户在调研后已选下一例累计20000000 tokens，其他为64／256／4；仅用于独立准备身份，旧配置原件保持，见同节的累计Token调研。现有dotenv会覆盖外层环境变量；需要覆盖时，先加载既有配置，再设置本例值并使用已有 `PYTHON_DOTENV_DISABLED=true` 进入入口，实际归档一致后才运行。新配置形成独立准备身份，具体实施与验证状态见[Spec预算切片](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)。旧T0／v1／v2的120秒评测profile和旧900秒运行保留原配置身份，不与新身份混算。structured／openai的实际单次超时由每次 `configuration.json` 拥有，不能将历史480／30当成任务总时限。
+
+正式采集监督绑定首份真实Journal截止，启动健康检查和Journal出现前的入口等待各最多30秒，收尾最多30秒，不增加模型额度；停止及终态核对实际Web解释器和包装进程，HTTP超时本身不算停止。旧T0节点仍沿原900秒监督身份。原始用户结果缺交付时保留pytest失败；环境／模型异常或未知生成产物不能当能力准入。初始材料、实际SDK输入／输出、完整源码身份、独立归档及用户结果分开保存；基线缺项检查不能接受完整target，后续完整评分资格及复算／复现仍按Spec执行。
+
+研究采集器消费 Settings 已有的 `STRUCTURED_MODEL_CAPACITY`、`OPENAI_MODEL_CAPACITY` JSON 配置，分别绑定该路径的实际 model／provider_host。任一路径显式配置时，两条都须提供有效 profile；缺一或身份不符会在准备／业务连接前拒绝。两条都未配置时保留原已核 Flash 缺省。更换模型须先核对公开规格、实际 endpoint 可用性及完整生效配置，不沿用其他模型的容量或评分资格；dotenv 的实际加载结果必须进入每次配置原件，不能仅以外层环境变量推定生效。新 Pro 准备的依据及准入边界见[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#新模型配置的正式评测准备)。
+
+当前设计先完成[初步闭环](../optimization/to_verify/knowledge-decision-delivery.md#11-当前先完成的闭环)，claim／语义 verifier 及新评分资格后置。`initial_closure`、SubmittedFinal／Manifest v2 绑定已由新 DeepSeek E1 到达真实交付、下载、复算及复现；独立审读发现错例分析错误，完整用户验收未通过。初步机械结果及语义审读单独记录，不使用下面的 target 准入冒充已取得完整语义资格；首次发布故障 F3 仍未覆盖。
+
+2026-10-22 的当前版本 E1 已按[§8.3流程计划](../optimization/to_verify/knowledge-decision-delivery.md#83-当前版本完整流程-e2e2026-10-22)执行一次并关闭：模型后续Python调用重复漏必填inputs，流程未到冻结、test、清单v3及下载复现；语义未评分，详见[本轮结果](02-current-case-inventory.md#2026-10-22-当前版本完整流程-e2e-失败)。归档 `.tmp/research-e2e-flow-20261022/` 已使用，不得重跑。F1启动器已对齐服务端进程记录参数并复用ActualWebProcess监督实际解释器，限定授权拒绝复验通过，原失败保持。
+
+前一次 Pro E1 的 480 秒截止与新 DeepSeek E1 的实际结果均保留于[评测盘点](02-current-case-inventory.md#2026-10-20-检索实验研究能力准入)。新归档汇总只绑定 auditor 实际消费的来源：正式 GET 已绑定 Trace 时，即使提供备用 `--trace-seal` 也不将它误作消费原件；只有正式 GET 未取回时才消费该 seal。旧封存与采集源码身份保持，不因 reader 修正重跑模型。
+
+后置的完整研究采集 `--phase target` 仍必须提供真实完成的 `--qualification <目录>` 及 `--qualification-review <独立准确性审读原件>`；入口会在任何业务连接前只读核对当前 grader identity、18 次判断、原请求／响应／引用、费用与逐关系审读，不接受单个分类达标标签。来源审读如实区分人和独立 agent；审读与评分原记录分别封存，Admission 绑定两者摘要。资格准备不接收这两个参数。只读核对已完成归档：
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.run_retrieval_grader_qualification verify --qualification <真实资格归档目录> --accuracy-review <独立准确性审读原件>
+```
+
+该命令不发模型请求；当前尚无合格完整资格归档。四个真实 CLI 拒绝已验证，接受分支待真实组，不能构造假通过档替代。
+
+资格材料构造入口为 `python -m evals.product_baselines.retrieval_qualification_materials --selection <独立审读选择表> --output <新目录>`。输入必须绑定实际已结束的 E1／P1 preparation、正式完整下载、原排名审计和干净 CLI 复现；缺材料会拒绝，不人工补稿。构造成功后才用原 qualification `collect`／`run`；来源和准确性审读的契约由[研究 Spec §6.1](../optimization/to_verify/knowledge-decision-delivery.md#61-资格材料与审读的实现契约)拥有，成功路径仍待真实材料。
+
+已停止采集的机械审计入口为 `python -m evals.product_baselines.retrieval_capture_audit --preparation <preparation.json> --capture <capture-result.json> --trace <最终Journal.json> --output <新报告.json>`；正式 GET 未取得 Trace 时另须 `--trace-seal <同run原seal.json>`，不能以未绑定的后读 Journal 补原 HTTP。只输出实际物理费用、终态及 `missing／present_unscored`，不代替语义、资格、独立复算／复现或产品 passed。
+
+缺交付汇总入口为 `python -m evals.product_baselines.retrieval_acceptance_result --preparation <preparation.json> --capture <capture-result.json> --trace <最终Journal.json> --output <新报告.json>`，同样按需提供 `--trace-seal`。它复用机械审计，只有绑定 Journal 明确缺 answer Final 或必要交付角色时才报告用户结果失败，保留原阶段、`not_scored` 与 known／unknown 费用；仅入口／下载取证不足不能判业务失败。完整交付会明确拒绝进入本路径，完整 target 的评分与全证据汇总仍待准入；不能把该报告当产品通过。v6／v7 两份真实归档回放与跨身份拒绝已验证，均未调用模型。
+
+知识快照独立入口为 `python -m evals.product_baselines.retrieval_knowledge_snapshot --preparation <preparation.json> --output <新快照.json>`，仅作当前主体真实只读取证。正式 target runner 已在进程开始前／实际停止后装配 before／after，含失败原件一起封存；资格门禁不满足时不会读取数据库或启动模型。独立命令不能补造旧 run 的 before，知识零写入仍须结合完整写入口审计，详见[同一任务证据汇总](../optimization/to_verify/knowledge-decision-delivery.md#62-同一任务的最终证据汇总)。
+
+SQL 观察审计入口为 `python -m evals.product_baselines.retrieval_knowledge_write_audit --directory <同轮knowledge-write-audit目录> --output <新审计.json>`。target 的专用 Web 进程透明记录原同步 SQL，collector 在原认证下关闭观察后停止进程；安装、日志和关闭回执随 capture 封存。CLI 只读原件，未知及关闭后日志变化不能计零写入；完整结论还须绑定同轮 before／after、源码覆盖、主体和实际停止。真实 Web／只读接口的零模型诊断已通过，不能替代完整 target。
+
+F1 初始 Artifact 权限反事实采用独立新 E1 preparation，配置／镜像沿同一准备命令，正式入口为：
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.retrieval_scope_counterfact --preparation <独立准备目录>/preparation.json --output <同一准备目录>/scope
+```
+
+输出必须尚不存在，不能复用已执行 E1／P1；零模型／零实验及 60 秒 Web 进程监督由 Spec 拥有。正式节点 `evals/e2e_quality/test_retrieval_scope_boundary.py::test_retrieval_scope_boundary` 复用同一入口；须显式设置 `PERSONAL_AGENT_RETRIEVAL_SCOPE_PREPARATION` 和 `PERSONAL_AGENT_RETRIEVAL_SCOPE_OUTPUT` 后执行，否则跳过。分类是 HTTP boundary_evaluation、real_model_required=false，不进产品 release 分母。本轮实际执行该 CLI；节点完成 collect-only，未把它记成一次额外执行。
+
+F2 原生 start 响应中断复用研究采集 CLI。按 Spec 单独准入后，用同一 `prepare` 命令的 `--case e1 --fault start_response_interrupt` 建新准备目录，再执行：
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.run_retrieval_acceptance run --preparation <F2独立准备目录>/preparation.json --phase fault_boundary
+```
+
+故障与普通准备不可混用。`fault_boundary/fault-configuration.json` 绑定实际部署，`fault-control/transport-observations.json` 保存真实 create／start／响应／查询及清理观察，SDK、HTTP、Journal 和终态沿原采集归档。canonical catalog 以 `RETRIEVAL-EXPERIMENT-START-RESPONSE-001` 登记此 CLI；它使用真实模型及进程内故障控制，分类 boundary_evaluation。真实到达、安全结论与完整交付分别报告，不凭注入次数计成功，不计产品发布分子。
+
 ## claim 指标持续评估
 
 指标定义与收益判据固定在[claim 指标规格](../ablation/claim-verifier.md#21-具体评估指标)，历史基线由[冻结计划](../ablation/claim-verifier-baseline.plan.json)标识。下列命令只读重算已裁判的完整阶段归档，零模型调用，不收集或运行测试：
@@ -448,6 +550,8 @@ gate 当前检查：
 gate 还会 fail closed 拒绝缺少 `UserOutcomeContract`、错层或使用 test double 的产品声明。重叠关系由 `evidence_audit` 输出；它不会只因共享断言就删除仍有独有不变量的用例。即便 trusted，也只证明该用户结果在固定 profile/revision 成立，不证明架构最初有产品必要性。
 
 ## 当前发布状态
+
+历史压缩的非思考局部回放按[主循环 NS-1／2／3](../optimization/to_verify/conversation-loop-boundaries.md#非思考摘要的局部修正2026-10-22)执行。先运行 `python -m evals.provider_diagnostics.history_compaction --prepare --output-dir .tmp/ctx-compact-no-thinking-20261022` 完成零 HTTP 原输入对照，再对同目录使用 `--run` 执行一次旅程；使用本地 `.venv` 解释器，来源 DeepSeek 凭据只从既有受信绑定读取。本次一次旅程已结束，生成／消费／恢复及摘要语义限制见[当前成绩](02-current-case-inventory.md#2026-10-22-非思考摘要的局部验证)。既有目录禁止重跑；后续新执行须有新的授权、归档和预声明，不运行单元测试或完整产品 E2E 来补本例次数。
 
 已有发布门禁记录曾因目标代码未提交、缺少同版本通过证据而拒绝，保留的原因包括：
 

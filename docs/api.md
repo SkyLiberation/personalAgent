@@ -301,11 +301,13 @@ LangGraph checkpoint。
 }
 ```
 
-响应由 `ConversationTurnView` 定义，包含 `interaction_run_ref`、`conversation_id`、
+Web 响应由 `ConversationTurnResponse` 定义，包含 `interaction_run_ref`、`conversation_id`、
 `disposition` 和一条 assistant `message`。保存或删除需要确认时返回 `pending_confirmation`。
 `disposition` 可能为 `answer`、`clarification_required`、`confirmation_required`、`plan_ready`、
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
+
+请求可附 `input_artifact_refs`（默认为空），仅接受当前认证主体拥有的确切 Artifact 引用；首次调用前验证，同 run 恢复要求主体、会话、messages 与有序引用全部一致。`resources` 每项为 `{resource, download_url}`：resource 是原 Artifact 元数据，download_url 是正式下载路径；内部 `ConversationTurnView` 保持原元数据类型。上传响应复用同一包装。鉴权关闭且主体非默认用户时，URL 带编码后的 user_id；鉴权开启时由请求凭据确定主体。文件引用不包含宿主路径。研究实验只在许可部署、主体和开发原件绑定后启用，生产实现及验收状态见[研究 Spec](optimization/to_verify/knowledge-decision-delivery.md)。
 
 知识读取与生命周期能力的部分入口：
 
@@ -347,9 +349,13 @@ Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/
   exact-span 保存 Command；path 中的 `interaction_run_ref` 与 authenticated principal 定位唯一
   operation，confirm 还必须提供 `confirmation_ref`。内部 digest 由服务端从 Command 读取。
 
+### Artifact 原件与成果内容
+
+`POST /api/artifacts/upload` 使用 multipart 的 `file`（认证关闭时可附 `user_id`）保存原件，返回 `resource` 元数据及 `download_url`，不摄入知识。`GET /api/artifacts/{resource_id}/revisions/{revision}` 按当前认证主体恢复确切引用，校验原始字节摘要／长度后下载；缺资源或非 owner 为404，非法引用或完整性失败为422。下载只返回已核验字节，不暴露存储路径。
+
 旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
 `POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用
-`POST /api/knowledge/ingest-upload`；Conversation 恢复事实由 Interaction journal 与公开
+`POST /api/knowledge/ingest-upload`，原件上传使用上述 Artifact 入口；Conversation 恢复事实由 Interaction journal 与公开
 `interaction_run_ref` 合约拥有，不再暴露 LangGraph run snapshot。
 
 ---

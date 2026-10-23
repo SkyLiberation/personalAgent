@@ -24,7 +24,7 @@ evidence_presence_conflict：稿件声称本次未取得、未返回或所查资
 """,
     ),
     "conversation.research.evidence_selection": PromptSpec(
-        name="conversation.research.evidence_selection", version="v9-unified-answer-owner", owner="conversation",
+        name="conversation.research.evidence_selection", version="v10-history-context", owner="conversation",
         output_contract="ResearchEvidenceSelection",
         template="""【目标】
 按原始用户目标与 requirements 逐项核对当前研究回答、适合的原文及必要缺口，选择下一步取证或写作。每个原验收项均须得到处理，不因本轮只修订一个 claim 而遗漏其他项。只返回 ResearchEvidenceSelection，不预写 claim 或期望结论。
@@ -41,7 +41,7 @@ write 表示已有原文能补入必要事实、收窄拒稿或改引，先提�
 """,
     ),
     "conversation.research.writer": PromptSpec(
-        name="conversation.research.writer", version="v25-research-with-final-answer", owner="conversation",
+        name="conversation.research.writer", version="v27-research-entry", owner="conversation",
         output_contract="InitialResearchSubmission | ResearchSubmission",
         template="""【目标与输出】
 依据原始用户问题、本轮 evidence_selection 所选原文及当前 claim 已绑定原文，维护同一研究版本的 claims 和准备交付的完整 final_answer。可以先提交中间研究；准备交付时必须有实际最终回答，不能用标题、计划或完成自述代替。不要自判核验通过。只返回 Schema 中一个 submission。
@@ -55,8 +55,8 @@ final_answer 是本次提交后的完整段落顺序。新写或确需改动的�
 【反馈与停止】
 一条 claim 可包含不同来源的说明或多来源共同支持的结论，具体来源归属必须清楚。局部修订前核对相邻句的来源名称与指代；前文变更使“其、该页、上述资料”等指向改变时，把受影响的指代句纳入最小必要修订范围。按实际原文写出具体来源，不将旧指代自动挂到新增来源上。
 研究选证的逐项状态是待验证判断。写作前核对所选原文中的必要主体、职责、条件和强度是否已被 claims 表达，补入遗漏并保留其余有据内容。requirement_not_satisfied 指向原 criterion_id，说明最终回答没有交付的必要内容或关系；结合原目标、当前 claims、最终回答及真实材料修订，必要时补读或增补研究，不把核验器的解释当作研究已经写出的事实。证据原文已经返回但尚未引用时，写作仍须本轮选证；必要原文尚未取得时沿原动作取证。最终呈现由同一提交的 final_answer 完成，按用户要求给出所需 URL；用户要求自检不等于展示自检过程。
-每次准备交付时，系统统一核验 claims 的引用支持与准确性、final_answer 与 claims 的一致性，以及最终回答是否满足原目标；缺少最终回答不能完成。research_review.report.findings 每项提供错误类别 category、目标或片段定位 target、单项说明 error_description 和相关 evidence_ids。只按实际发现修订，不新增未被断言的问题。answer_claim_mismatch 指回答相对 claims 的实质遗漏、改变或新增，按 target 修订实际回答并保留必要归属及限定，不把反馈当作新的来源事实。evidence_presence_conflict 指已返回原文明示所需内容，稿件却声称未取得、未返回或所查资料未说明，应核对该原文并修订缺证判断；本条引用不足仍须补入依据。citation_not_supported 表示本条已绑定引用不支持当前断言；核对原文后补齐必要引用，或按已有引用忠实修订；factual_conflict、source_attribution_conflict、normative_status_conflict、obligation_strength_conflict 分别指有明确反证的事实、具体出处、规范性质或义务强度冲突。原稿从当前 fragments 阅读，相关证据从 source_feedback 恢复，不把说明当作来源原文。分类和说明是模型判断，不是新增来源事实，不能将缺证改写为性质或强度冲突。先回到 source_feedback 和 citations 的原文核对，再决定收窄、删除无据部分、按实际支持改写、改引用或取证；保留未受影响的有据内容及用户仍需事实。缺少支持某个主体或范围的前提，不能推出相反事实或更广的不存在；不要把核验解释改写成新的来源归因。replacement 中每项新事实、否定和解释都须由原文支持，依据不足时表达本次无法确认，保持认知限制的实际范围。新稿由来源核验判断，不自报缺口已解决。同一研究版本经统一核验通过后即交付其中的确切最终回答，不再转交独立汇总或另一次最终核验，也不为形式上的细分继续改稿。
-需补资料时 return_to_actions，随后从正常动作阶段使用实际可用工具；取得可引用正文后系统重新选证，再返回当前研究版本。补读后可用 recheck_claims 复验。没有通过的版本不能直接作答。无法继续时 stop_research 如实说明限制，不声称完成。
+每次准备交付时，系统统一核验 claims 的引用支持与准确性、final_answer 与 claims 的一致性，以及最终回答是否满足原目标；缺少最终回答不能完成。research_review.report.findings 每项提供错误类别 category、目标或片段定位 target、单项说明 error_description 和相关 evidence_ids。只按实际发现修订，不新增未被断言的问题。answer_claim_mismatch 指回答相对 claims 的实质遗漏、改变或新增，按 target 修订实际回答并保留必要归属及限定，不把反馈当作新的来源事实。evidence_presence_conflict 指已返回原文明示所需内容，稿件却声称未取得、未返回或所查资料未说明，应核对该原文并修订缺证判断；本条引用不足仍须补入依据。citation_not_supported 表示本条已绑定引用不支持当前断言；核对原文后补齐必要引用，或按已有引用忠实修订；factual_conflict、source_attribution_conflict、normative_status_conflict、obligation_strength_conflict 分别指有明确反证的事实、具体出处、规范性质或义务强度冲突。原稿从当前 fragments 阅读，相关证据从 source_feedback 恢复，不把说明当作来源原文。分类和说明是模型判断，不是新增来源事实，不能将缺证改写为性质或强度冲突。先回到 source_feedback 和 citations 的原文核对，再决定收窄、删除无据部分、按实际支持改写、改引用或取证；保留未受影响的有据内容及用户仍需事实。缺少支持某个主体或范围的前提，不能推出相反事实或更广的不存在；不要把核验解释改写成新的来源归因。replacement 中每项新事实、否定和解释都须由原文支持，依据不足时表达本次无法确认，保持认知限制的实际范围。新稿由来源核验判断，不自报缺口已解决。同一研究版本经统一核验通过后，系统检查适用的实际执行和文件交付条件，发布其中的确切最终回答；缺少执行事实或必要文件时仍不能完成。无需另写汇总或追加同稿语义核验，也不为形式上的细分继续改稿。
+需补资料时 return_to_actions，随后从正常动作阶段使用实际可用工具；取得资料后，按当前运行的准备交付规则返回当前研究版本。补读后可用 recheck_claims 复验。没有通过的版本不能直接作答。无法继续时 stop_research 如实说明限制，不声称完成。
 """,
     ),
 }

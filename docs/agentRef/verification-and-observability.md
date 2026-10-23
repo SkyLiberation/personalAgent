@@ -86,3 +86,15 @@ ADK 的轨迹匹配可要求相同工具与参数顺序，LangSmith 示例也允
 同日针对核验再次漏放复核 [LangSmith RAG 评测](https://docs.langchain.com/langsmith/evaluate-rag-tutorial)：回答对问题的 relevance 与回答对原文的 groundedness 是不同比较，其示例分别使用对应输入；[Anthropic outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)把 rubric 应用于实际交付物并限制迭代次数。两者均为 A 级官方动态文档。采纳目标满足与事实有据分别校准、按交付物验收和有界纠正；不照搬多个评测调用或解释字段，也不据此认定“如实说明未知”自动满足本工程的核心目标。用户允许未知的具体边界仍由本任务要求及真实用例决定。
 
 上述资料均未直接规定本工程的统一产物、八类核验及完成契约。该候选依据真实失败和用户最新要求设计，唯一正文见[研究与最终回答统一核验](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。参考实现的模型输出只提供语义判断或正文；权限、原文身份、版本及完成条件仍由各自宿主负责，本工程不从参考架构继承权限或恢复保证。
+
+2026-10-21 针对“程序算对、最终报告仍写错”补充复核两个独立机制。smolagents 固定提交 `96f33faaf028479119ec8d34507b47694cf14e34` 的 [CodeAgent 执行返回](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L1720-L1764)与 [最终检查消费](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L577-L618)分别把代码结果交回模型、对拟交付答案调用可选检查；检查失败可反馈并继续，步数耗尽路径不据此保证检查通过。Anthropic [Programmatic Tool Calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)的官方动态契约支持代码筛选、聚合后回传结果；其 [Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)另以独立上下文 grader 核查实际产物并限制修订次数。以上均按 A 级解释，闭源部分仅证明公开契约，不推测内部实现。
+
+可借鉴的分工是“程序拥有计算事实，写作者组织论证，核验消费者判断实际成文与事实是否一致”。程序结果正确、引用存在或写作者自检都不能替代最后一个边界；增加 checker 也不自动证明它准确。是否复用当前核验器、输入是否充分、反馈能否驱动有界修订，仍须由本工程真实轨迹及既定判据验证，不照搬框架或增加按错误类别划分的多套核验。
+
+## 7. 数据库执行入口的局部观察
+
+2026-10-21 为研究验收取证的重复启动阻塞核对 OpenTelemetry Python contrib 固定提交 `de43f819a4a919213d246a23e62a1b256aeca7b9`，A 级源码；[两份原件及 SHA](../../.tmp/research-capability-20261020/t5/sql-observer-external-1/source-index.json)已封存，未安装或执行第三方项目。
+
+[`wrapped_connection`](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L324-L338)配置 cursor factory；其[同步 Cursor 子类](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L384-L418)将 execute／executemany 交给 `CursorTracer.traced_execution`。该[实际执行方法](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-dbapi/src/opentelemetry/instrumentation/dbapi/__init__.py#L867-L910)在未开启 SQL commenter 时调用原 query method 并保留其返回或异常，执行后记录观测。参数收集和 SQL commenter 为不同选项；该框架也支持保存查询文本，不能把使用它等同于已满足本工程隐私要求。
+
+可借鉴其把观察限定在真实数据库调用边界的取舍，不继承全进程 Python profile、连接代理、exporter 或新的持久总账。本工程若选择在专用评测进程透明包装现有 Cursor 方法，与上述 cursor factory 装配存在差异，须另核本地池、所有调用入口、实际参数／返回／异常保持和未知消费；不能只凭外部实现证明覆盖或省时。用途及重新准入由[研究交付 Spec](../optimization/to_verify/knowledge-decision-delivery.md#62-同一任务的最终证据汇总)拥有，执行记录不替代知识事实前后对照或产品结果。

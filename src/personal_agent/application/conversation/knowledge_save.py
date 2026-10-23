@@ -50,7 +50,7 @@ class ConversationKnowledgeSaveUseCase:
         if decision not in {"confirm", "reject"}:
             raise ValueError("decision must be confirm or reject")
         owner = principal
-        with self._confirmation_lock:
+        with self._journal.exclusive_run(interaction_run_ref), self._confirmation_lock:
             trace = self._journal.get(interaction_run_ref)
             if trace is None or trace.knowledge_save_operation is None:
                 raise ConversationOperationNotFound(

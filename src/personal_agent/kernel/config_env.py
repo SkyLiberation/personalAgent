@@ -22,6 +22,7 @@ from personal_agent.kernel.config_models import (
     MCPConfig,
     MCPServerConfig,
     MCPToolConfig,
+    ModelCapacityConfig,
     OpenAIConfig,
     PolicyConfig,
     ReflectionReplaySettings,
@@ -69,19 +70,29 @@ def settings_from_env(settings_cls: type):
         ),
         url_capture_provider=(
             os.getenv("PERSONAL_AGENT_URL_CAPTURE_PROVIDER")
-            or (
-                "firecrawl"
-                if os.getenv("FIRECRAWL_API_KEY")
-                else "builtin"
-            )
-        ).strip().lower(),
+            or ("firecrawl" if os.getenv("FIRECRAWL_API_KEY") else "builtin")
+        )
+        .strip()
+        .lower(),
         interaction_loop=InteractionLoopConfig(
-            policy_revision=os.getenv("PERSONAL_AGENT_INTERACTION_POLICY_REVISION", "interaction-loop-v1"),
-            max_model_turns=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS", "8")),
-            max_tool_calls=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS", "12")),
-            max_agent_calls=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS", "4")),
-            max_total_tokens=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS", "32000")),
-            max_concurrency=int(os.getenv("PERSONAL_AGENT_INTERACTION_MAX_CONCURRENCY", "4")),
+            policy_revision=os.getenv(
+                "PERSONAL_AGENT_INTERACTION_POLICY_REVISION", "interaction-loop-v1"
+            ),
+            max_model_turns=int(
+                os.getenv("PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS", "8")
+            ),
+            max_tool_calls=int(
+                os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS", "12")
+            ),
+            max_agent_calls=int(
+                os.getenv("PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS", "4")
+            ),
+            max_total_tokens=int(
+                os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS", "32000")
+            ),
+            max_concurrency=int(
+                os.getenv("PERSONAL_AGENT_INTERACTION_MAX_CONCURRENCY", "4")
+            ),
         ),
         graphiti=GraphitiConfig(
             uri=os.getenv("PERSONAL_AGENT_GRAPHITI_URI", "bolt://localhost:7687"),
@@ -93,12 +104,8 @@ def settings_from_env(settings_cls: type):
             search_strategy=os.getenv(
                 "PERSONAL_AGENT_GRAPH_SEARCH_STRATEGY", "hybrid_rrf"
             ),
-            search_max_hops=int(
-                os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_MAX_HOPS", "2")
-            ),
-            search_limit=int(
-                os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_LIMIT", "10")
-            ),
+            search_max_hops=int(os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_MAX_HOPS", "2")),
+            search_limit=int(os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_LIMIT", "10")),
             search_citation_limit=int(
                 os.getenv("PERSONAL_AGENT_GRAPH_SEARCH_CITATION_LIMIT", "20")
             ),
@@ -144,6 +151,11 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_GRAPHITI_CONTENT_FILTER_FALLBACK", "true")
             ),
         ),
+        retrieval_experiment_config_path=(
+            Path(os.environ["PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG"])
+            if os.getenv("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG")
+            else None
+        ),
         openai=OpenAIConfig(
             api_key=os.getenv("OPENAI_API_KEY") or structured_api_key,
             base_url=os.getenv("OPENAI_BASE_URL") or structured_base_url,
@@ -151,15 +163,14 @@ def settings_from_env(settings_cls: type):
             small_model=os.getenv("OPENAI_SMALL_MODEL") or structured_model,
             vision_model=os.getenv("OPENAI_VISION_MODEL", ""),
             transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1"),
-            embedding_model=os.getenv(
-                "OPENAI_EMBEDDING_MODEL", "BAAI/bge-m3"
-            ),
+            embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "BAAI/bge-m3"),
             timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS", "30")
             ),
             max_retries=int(os.getenv("PERSONAL_AGENT_OPENAI_MAX_RETRIES", "2")),
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
+            capacity=_parse_model_capacity_env("OPENAI_MODEL_CAPACITY"),
         ),
         structured=StructuredConfig(
             api_key=structured_api_key,
@@ -173,11 +184,10 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_STRUCTURED_MAX_RETRIES")
                 or os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")
             ),
-            output_transport=os.getenv(
-                "STRUCTURED_OUTPUT_TRANSPORT", "json_object"
-            ),
+            output_transport=os.getenv("STRUCTURED_OUTPUT_TRANSPORT", "json_object"),
             extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
             or _parse_json_env("ROUTER_EXTRA_BODY"),
+            capacity=_parse_model_capacity_env("STRUCTURED_MODEL_CAPACITY"),
         ),
         firecrawl=FirecrawlConfig(
             api_key=os.getenv("FIRECRAWL_API_KEY"),
@@ -185,8 +195,13 @@ def settings_from_env(settings_cls: type):
             timeout_ms=int(os.getenv("FIRECRAWL_TIMEOUT_MS", "60000")),
         ),
         gpt_researcher_a2a=GPTResearcherA2AConfig(
-            enabled=_as_bool(os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED", "false")),
-            endpoint=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT", "http://127.0.0.1:18001/a2a"),
+            enabled=_as_bool(
+                os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED", "false")
+            ),
+            endpoint=os.getenv(
+                "PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENDPOINT",
+                "http://127.0.0.1:18001/a2a",
+            ),
             agent_card_url=os.getenv(
                 "PERSONAL_AGENT_GPT_RESEARCHER_A2A_AGENT_CARD_URL",
                 "http://127.0.0.1:18001/.well-known/agent-card.json",
@@ -194,8 +209,12 @@ def settings_from_env(settings_cls: type):
             timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_TIMEOUT_SECONDS", "240")
             ),
-            report_type=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_TYPE", "research_report"),
-            report_source=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_SOURCE", "web"),
+            report_type=os.getenv(
+                "PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_TYPE", "research_report"
+            ),
+            report_source=os.getenv(
+                "PERSONAL_AGENT_GPT_RESEARCHER_A2A_REPORT_SOURCE", "web"
+            ),
             tone=os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_TONE", "Objective"),
             max_search_results=_parse_optional_int(
                 os.getenv("PERSONAL_AGENT_GPT_RESEARCHER_A2A_MAX_SEARCH_RESULTS", "")
@@ -211,12 +230,12 @@ def settings_from_env(settings_cls: type):
             provider=os.getenv("PERSONAL_AGENT_WEB_SEARCH_PROVIDER", "anysearch"),
             api_key=os.getenv("PERSONAL_AGENT_WEB_SEARCH_API_KEY"),
             base_url=os.getenv("PERSONAL_AGENT_WEB_SEARCH_BASE_URL"),
-            timeout_ms=int(
-                os.getenv("PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS", "60000")
-            ),
+            timeout_ms=int(os.getenv("PERSONAL_AGENT_WEB_SEARCH_TIMEOUT_MS", "60000")),
             allowed_domains=tuple(
                 d.strip()
-                for d in os.getenv("PERSONAL_AGENT_WEB_SEARCH_ALLOWED_DOMAINS", "").split(",")
+                for d in os.getenv(
+                    "PERSONAL_AGENT_WEB_SEARCH_ALLOWED_DOMAINS", ""
+                ).split(",")
                 if d.strip()
             ),
         ),
@@ -230,7 +249,9 @@ def settings_from_env(settings_cls: type):
             ),
         ),
         review_digest=ReviewDigestConfig(
-            enabled=_as_bool(os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_ENABLED", "false")),
+            enabled=_as_bool(
+                os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_ENABLED", "false")
+            ),
             user_id=os.getenv(
                 "PERSONAL_AGENT_REVIEW_DIGEST_USER_ID",
                 os.getenv("PERSONAL_AGENT_DEFAULT_USER", "default"),
@@ -239,7 +260,9 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_FEISHU_CHAT_IDS", "")
             ),
             schedule_time=os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_TIME", "09:00"),
-            timezone=os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE", "Asia/Shanghai"),
+            timezone=os.getenv(
+                "PERSONAL_AGENT_REVIEW_DIGEST_TIMEZONE", "Asia/Shanghai"
+            ),
             scheduler_enabled=_as_bool(
                 os.getenv("PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED", "false")
             ),
@@ -248,7 +271,9 @@ def settings_from_env(settings_cls: type):
             ),
         ),
         knowledge_gap=KnowledgeGapConfig(
-            enabled=_as_bool(os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_ENABLED", "false")),
+            enabled=_as_bool(
+                os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_ENABLED", "false")
+            ),
             schedule_time=os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_TIME", "20:00"),
             scheduler_enabled=_as_bool(
                 os.getenv("PERSONAL_AGENT_KNOWLEDGE_GAP_SCHEDULER_ENABLED", "false")
@@ -295,7 +320,9 @@ def settings_from_env(settings_cls: type):
         ),
         web=WebApiConfig(
             api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_API_KEYS", "")),
-            admin_api_keys=_parse_api_keys(os.getenv("PERSONAL_AGENT_ADMIN_API_KEYS", "")),
+            admin_api_keys=_parse_api_keys(
+                os.getenv("PERSONAL_AGENT_ADMIN_API_KEYS", "")
+            ),
             rate_limit_requests=int(
                 os.getenv("PERSONAL_AGENT_RATE_LIMIT_REQUESTS", "60")
             ),
@@ -321,25 +348,17 @@ def settings_from_env(settings_cls: type):
             sample_rate=float(os.getenv("PERSONAL_AGENT_TRACE_SAMPLE_RATE", "1.0")),
         ),
         langextract=LangExtractConfig(
-            api_key=os.getenv("PERSONAL_AGENT_EXTRACT_API_KEY")
-            or structured_api_key,
+            api_key=os.getenv("PERSONAL_AGENT_EXTRACT_API_KEY") or structured_api_key,
             base_url=os.getenv("PERSONAL_AGENT_EXTRACT_BASE_URL")
             or structured_base_url
             or "https://api.xiaomimimo.com/v1",
-            model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL")
-            or structured_model,
+            model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL") or structured_model,
             max_char_buffer=int(
                 os.getenv("PERSONAL_AGENT_EXTRACT_MAX_CHAR_BUFFER", "6000")
             ),
-            extraction_passes=int(
-                os.getenv("PERSONAL_AGENT_EXTRACT_PASSES", "1")
-            ),
-            max_workers=int(
-                os.getenv("PERSONAL_AGENT_EXTRACT_MAX_WORKERS", "4")
-            ),
-            min_doc_chars=int(
-                os.getenv("PERSONAL_AGENT_EXTRACT_MIN_DOC_CHARS", "200")
-            ),
+            extraction_passes=int(os.getenv("PERSONAL_AGENT_EXTRACT_PASSES", "1")),
+            max_workers=int(os.getenv("PERSONAL_AGENT_EXTRACT_MAX_WORKERS", "4")),
+            min_doc_chars=int(os.getenv("PERSONAL_AGENT_EXTRACT_MIN_DOC_CHARS", "200")),
             fallback_on_error=_as_bool(
                 os.getenv("PERSONAL_AGENT_EXTRACT_FALLBACK_ON_ERROR", "true")
             ),
@@ -348,16 +367,20 @@ def settings_from_env(settings_cls: type):
         enterprise_knowledge=EnterpriseKnowledgeConfig(
             raw_roots=tuple(
                 Path(item)
-                for item in _parse_csv(os.getenv(
-                    "PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_ROOTS",
-                    "D:/mySoft/workspace/personalWiki/raw",
-                ))
+                for item in _parse_csv(
+                    os.getenv(
+                        "PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_ROOTS",
+                        "D:/mySoft/workspace/personalWiki/raw",
+                    )
+                )
             ),
             raw_file_globs=_parse_csv(
                 os.getenv("PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_GLOBS", "*.md")
             ),
             raw_max_file_bytes=int(
-                os.getenv("PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_MAX_FILE_BYTES", "2000000")
+                os.getenv(
+                    "PERSONAL_AGENT_ENTERPRISE_KNOWLEDGE_RAW_MAX_FILE_BYTES", "2000000"
+                )
             ),
         ),
         ask=AskConfig(
@@ -419,7 +442,9 @@ def settings_from_env(settings_cls: type):
                 os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_DENSE_SPARSE_GAP", "8")
             ),
             llm_rerank_gated_min_support_coverage=float(
-                os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_MIN_SUPPORT_COVERAGE", "0.35")
+                os.getenv(
+                    "PERSONAL_AGENT_ASK_LLM_RERANK_GATED_MIN_SUPPORT_COVERAGE", "0.35"
+                )
             ),
             llm_rerank_gated_preserve_top_k=int(
                 os.getenv("PERSONAL_AGENT_ASK_LLM_RERANK_GATED_PRESERVE_TOP_K", "0")
@@ -428,8 +453,12 @@ def settings_from_env(settings_cls: type):
         policy=PolicyConfig(
             deny_users=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_USERS", "")),
             allow_users=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_ALLOW_USERS", "")),
-            deny_sources=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_SOURCES", "")),
-            allow_sources=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_ALLOW_SOURCES", "")),
+            deny_sources=_parse_csv(
+                os.getenv("PERSONAL_AGENT_POLICY_DENY_SOURCES", "")
+            ),
+            allow_sources=_parse_csv(
+                os.getenv("PERSONAL_AGENT_POLICY_ALLOW_SOURCES", "")
+            ),
             deny_tools=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_TOOLS", "")),
             deny_scopes=_parse_csv(os.getenv("PERSONAL_AGENT_POLICY_DENY_SCOPES", "")),
             require_confirmation_for_high_risk=_as_bool(
@@ -440,9 +469,7 @@ def settings_from_env(settings_cls: type):
             enabled=_as_bool(
                 os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_ENABLED", "true")
             ),
-            max_items=int(
-                os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_MAX_ITEMS", "3")
-            ),
+            max_items=int(os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_MAX_ITEMS", "3")),
             min_confidence=float(
                 os.getenv("PERSONAL_AGENT_REFLECTION_REPLAY_MIN_CONFIDENCE", "0.3")
             ),
@@ -471,6 +498,20 @@ def _parse_csv(raw: str) -> tuple[str, ...]:
     if not raw.strip():
         return ()
     return tuple(token.strip() for token in raw.split(",") if token.strip())
+
+
+def _parse_model_capacity_env(name: str) -> ModelCapacityConfig | None:
+    import os
+
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return ModelCapacityConfig.model_validate_json(raw)
+    except ValueError:
+        raise ValueError(
+            f"{name} must contain a valid model capacity JSON object"
+        ) from None
 
 
 def _parse_json_env(name: str) -> dict[str, Any]:
@@ -567,10 +608,14 @@ def _parse_mcp_config(raw: str) -> MCPConfig:
             if not isinstance(item, dict):
                 raise ValueError("MCP tool entry must be an object.")
             tools.append(MCPToolConfig.model_validate(item))
-        servers.append(MCPServerConfig.model_validate({
-            **server,
-            "tools": tuple(tools),
-        }))
+        servers.append(
+            MCPServerConfig.model_validate(
+                {
+                    **server,
+                    "tools": tuple(tools),
+                }
+            )
+        )
     return MCPConfig(
         enabled=_as_bool(str(parsed.get("enabled", False))),
         servers=tuple(servers),
@@ -647,7 +692,9 @@ def _github_mcp_server_from_env() -> MCPServerConfig | None:
             "GITHUB_PERSONAL_ACCESS_TOKEN": f"${{{token_env}}}",
             "GITHUB_READ_ONLY": os.getenv("PERSONAL_AGENT_GITHUB_MCP_READ_ONLY", "1"),
         },
-        timeout_seconds=float(os.getenv("PERSONAL_AGENT_GITHUB_MCP_TIMEOUT_SECONDS", "20")),
+        timeout_seconds=float(
+            os.getenv("PERSONAL_AGENT_GITHUB_MCP_TIMEOUT_SECONDS", "20")
+        ),
         tools=tools,
     )
 
@@ -665,10 +712,12 @@ def _github_mcp_tool_config(remote_name: str) -> MCPToolConfig:
             "operations": ("search",),
             "freshness_profile": "near_realtime",
             "provider_priority": 20,
-            "examples": ({
-                "user_task": "在 github/github-mcp-server 里 search_code 是在哪里实现的？",
-                "tool": "github.search_code",
-            },),
+            "examples": (
+                {
+                    "user_task": "在 github/github-mcp-server 里 search_code 是在哪里实现的？",
+                    "tool": "github.search_code",
+                },
+            ),
         },
         "get_file_contents": {
             "semantic_domains": ("codebase", "docs"),
@@ -676,10 +725,12 @@ def _github_mcp_tool_config(remote_name: str) -> MCPToolConfig:
             "operations": ("read",),
             "freshness_profile": "near_realtime",
             "provider_priority": 20,
-            "examples": ({
-                "user_task": "读取 github/github-mcp-server 的 README.md",
-                "tool": "github.get_file_contents",
-            },),
+            "examples": (
+                {
+                    "user_task": "读取 github/github-mcp-server 的 README.md",
+                    "tool": "github.get_file_contents",
+                },
+            ),
         },
         "search_repositories": {
             "semantic_domains": ("codebase", "repository_discovery"),
@@ -687,10 +738,12 @@ def _github_mcp_tool_config(remote_name: str) -> MCPToolConfig:
             "operations": ("search",),
             "freshness_profile": "near_realtime",
             "provider_priority": 30,
-            "examples": ({
-                "user_task": "搜索 GitHub 上 stars:>10000 topic:agent language:python 的仓库",
-                "tool": "github.search_repositories",
-            },),
+            "examples": (
+                {
+                    "user_task": "搜索 GitHub 上 stars:>10000 topic:agent language:python 的仓库",
+                    "tool": "github.search_repositories",
+                },
+            ),
         },
     }
     capability = capability_by_remote.get(remote_name, {})
@@ -755,7 +808,9 @@ def _notion_mcp_server_from_env() -> MCPServerConfig | None:
         env={
             "NOTION_TOKEN": f"${{{token_env}}}",
         },
-        timeout_seconds=float(os.getenv("PERSONAL_AGENT_NOTION_MCP_TIMEOUT_SECONDS", "20")),
+        timeout_seconds=float(
+            os.getenv("PERSONAL_AGENT_NOTION_MCP_TIMEOUT_SECONDS", "20")
+        ),
         tools=tools,
     )
 
@@ -775,26 +830,32 @@ def _notion_mcp_tool_config(remote_name: str) -> MCPToolConfig:
             "resource_types": ("page", "data_source"),
             "operations": ("search",),
             "provider_priority": 20,
-            "examples": ({
-                "user_task": "在 Notion 里搜索 Orion 项目的会议纪要",
-                "tool": "notion.search",
-            },),
+            "examples": (
+                {
+                    "user_task": "在 Notion 里搜索 Orion 项目的会议纪要",
+                    "tool": "notion.search",
+                },
+            ),
         },
         "API-retrieve-page-markdown": {
             "semantic_domains": ("personal_knowledge", "docs"),
             "resource_types": ("page",),
             "operations": ("read",),
             "provider_priority": 20,
-            "examples": ({
-                "user_task": "读取 Notion 页面并总结内容",
-                "tool": "notion.retrieve_page_markdown",
-            },),
+            "examples": (
+                {
+                    "user_task": "读取 Notion 页面并总结内容",
+                    "tool": "notion.retrieve_page_markdown",
+                },
+            ),
         },
     }
     capability = capability_by_remote.get(remote_name, {})
     return MCPToolConfig(
         remote_name=remote_name,
-        name=public_name_by_remote.get(remote_name, f"notion.{remote_name.replace('-', '_')}"),
+        name=public_name_by_remote.get(
+            remote_name, f"notion.{remote_name.replace('-', '_')}"
+        ),
         description=descriptions.get(remote_name),
         business_role="enterprise_knowledge_search",
         semantic_domains=capability.get("semantic_domains", ("personal_knowledge",)),
@@ -863,9 +924,7 @@ def _parse_api_keys(raw: str) -> dict[str, dict[str, str]]:
             or not isinstance(principal.get("user_id"), str)
             or not principal["user_id"]
         ):
-            raise ValueError(
-                "each API key must map to non-empty tenant_id and user_id"
-            )
+            raise ValueError("each API key must map to non-empty tenant_id and user_id")
         result[key] = {
             "tenant_id": principal["tenant_id"],
             "user_id": principal["user_id"],

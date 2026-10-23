@@ -38,7 +38,7 @@
 - 同一职责只保留一套现行设计与契约，迁移全部生产者、消费者和文档，删除旧路径；合法操作与适配器差异按 [ARC](docs/devSpec/architecture-ownership.md#11-同一职责采用唯一契约)界定。
 - 新结构有明确职责、正式入口、装配点、真实消费者和必要性依据，持久化事实有真实读写者。按 [ARC 可达性](docs/devSpec/architecture-ownership.md#7-生产可达性)检查，禁止为未来可能性预建结构。
 - 依赖方向为 `Interface -> Application Capability -> Domain/Product Aggregate`。Application 依赖 Port；外层实现 Port，在 Composition Root 装配。
-- 后续设计、开发、重构和评审必须以[工程架构](docs/architecture/README.md)为基线，按任务读取代码地图、横切机制及受影响契约；需要调整框架时，按 [ARC 架构演进](docs/devSpec/architecture-ownership.md#8-架构基线与持续演进)先更新唯一设计，同一变更维护架构、实现、检查与引用。
+- 设计方案时同样必须以[工程架构](docs/architecture/README.md)为基线，在确定模块、目录、调用关系或代码落点前完成 [ARC 架构分析](docs/devSpec/architecture-ownership.md#81-设计阶段的架构分析)，说明职责、事实归属、依赖、复用与装配依据，不得先安排代码再补理由。开发、重构和评审沿用该分析；需要调整框架时先更新唯一设计，同一变更维护架构、实现、检查与引用。
 - 正式兼容期前，内部 API、Schema、状态和调用链在同一变更破坏式替换并清理旧路径。真实外部契约、存量生产数据或混合版本部署的兼容按 [REL](docs/devSpec/migration-release.md#1-迁移与兼容边界)处理。
 
 ### 2.4 决策、执行与完成不得混装
@@ -54,7 +54,7 @@
 - 已有文字通过当前有效 typed 引用交回，由 Runtime 恢复原文；身份、定位与保真不依赖模型重抄。执行 [COD 文本引用](docs/devSpec/code-structure.md#21-已有文字通过引用传递)。
 - 生产、核验和评测 Prompt 是职责内通用、结果优先、最小充分的版本化契约；具体任务与材料来自当前输入。按 [COD](docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)设计，typed 输出只保证形状。
 - 同一事实只有一份权威文档，当前行为、历史诊断、候选与评测证据分开。契约变更同步正文；记录生命周期按 [DOC](docs/AGENTS.md)及[优化规则](docs/optimization/README.md)处理。
-- 设计说明问题、解决机制与具体防护，执行[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)。框架类设计优先核对开源项目的实际装配与调用链，官方文档辅助说明；外部资料不替代工程失败证据，选型执行 [EVD 外部参考规则](docs/devSpec/change-evidence.md#6-外部参考的证据分级)。
+- 设计说明问题、解决机制与具体防护，执行[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)。设计必须优先采用经核对且适用的优秀实践，以成熟机制和默认参数为起点；偏离须说明具体依据，后续根据真实问题调整，禁止无依据自行设计，执行 [EVD 初始采用规则](docs/devSpec/change-evidence.md#61-先参考采用再按实际调整)。框架类设计先核对开源项目的实际装配与调用链，官方文档辅助说明；外部资料不替代工程失败证据，来源分级执行 [EVD 外部参考规则](docs/devSpec/change-evidence.md#6-外部参考的证据分级)。
 
 ### 2.6 E2E 与 Offline Eval 优先，停用单元测试
 
@@ -63,7 +63,7 @@
 ### 2.7 docs-first 与 e2e-first
 
 - 设计与优化项在候选实验或实现前按 [Spec 结构](docs/chinese-writing-spec.md#62-spec-结构与需求追溯)更新唯一设计文档；产品项同时固定正式入口、自然请求、用户结果、反事实与可执行验收，取得第 4 节依据后实施。会话计划和事后补文档不能替代。执行 [EVD 流程](docs/devSpec/change-evidence.md#7-强制开发与设计流程)。
-- 设计讨论中新发现问题、澄清需求或改变方案、实现、证据时，当轮更新唯一设计及受影响权威正文，区分待证问题、决定、已实现、已验证和剩余条件，直接清理过期、重复与冲突内容；持续更新执行 [DOC](docs/AGENTS.md#1-文档是受治理的工程资源)。纯文档按 DOC 检查，只读分析按事实报告。
+- 代码落地必须与当前有效设计一致。设计讨论或落地中遇到需调整设计的问题、发现设计缺项、澄清需求，或方案、实现、证据发生变化时，先更新唯一设计及受影响权威正文，再继续依赖该调整的实验、实现与验证；不得只改代码或在落地后补设计。区分待证问题、决定、已实现、已验证和剩余条件，直接清理过期、重复与冲突内容；持续更新执行 [DOC](docs/AGENTS.md#1-文档是受治理的工程资源)。纯文档按 DOC 检查，只读分析按事实报告。
 - 方案讨论须独立判断，区分用户目标与候选手段；有依据时明确质疑、给出推荐及取舍，不因用户倾向直接改判。发现问题须深入定位、修正方案并落实验证闭环，不以“不能证明”结束；依据变化时说明修正理由，执行 [EVD 方案讨论](docs/devSpec/change-evidence.md#73-方案讨论中的独立判断与质疑)。
 - 关联设计改动累计形成完整切片、改变端到端前提或核心方案时，按 [EVD 整体 critic](docs/devSpec/change-evidence.md#74-累计设计改动后的整体-critic)复审价值、落地、架构、真实 E2E、评估、Harness 贡献及 Agent 的 agentic 能力；在依赖新方案的实验或实现前闭合阻断项，同轮更新唯一设计。
 
@@ -83,7 +83,7 @@
 | --- | --- | --- |
 | `EVD` | 新增功能、能力优化、缺陷修复、工程重构；制定设计项、优化项、docs-first、e2e-first、baseline、消融、target E2E；处理独立阻塞、重复阻塞、方案复审、方案 critic、方案一致性；审查模型依赖链、奥卡姆剃刀与复杂度准入 | [变更证据与设计准入](docs/devSpec/change-evidence.md) |
 | `REF` | 调研优秀智能体、外部智能体或 Agent Harness 比较；同类机制、重复阻塞复审中的外部方法检索；参考 Claude Code、GPT/Codex、OpenHands、DeepSeek Harness、Gemini CLI、Hermes Agent、Letta、LangGraph 的外部能力机制 | [优秀智能体能力组件参考](docs/agentRef/README.md) |
-| `ARC` | 调整架构分层、维护架构基线、业务事实与状态归属；设计 Schema、Model、Repository、Port、Adapter；核对 Application Capability、Product Aggregate、派生数据、缓存、物化投影和生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
+| `ARC` | 架构分析、调整架构分层、维护架构基线、业务事实与状态归属；设计 Schema、Model、Repository、Port、Adapter；核对 Application Capability、Product Aggregate、派生数据、缓存、物化投影和生产可达性 | [架构边界与事实归属](docs/devSpec/architecture-ownership.md) |
 | `EXE` | 修改 Proposal、Admission、ToolCall 协议；调整 Command、Approval、digest、Receipt 的执行绑定；设计 Execution、Verification、Completion、replay 与 durable execution | [智能体决策与受治理执行](docs/devSpec/agentic-execution.md) |
 | `CTX` | 审计 Context、System Prompt、模型输入、模型推理记录、中立追问和反馈执行异常；调整 Memory、RAG、Artifact、检索、权限过滤、预算物化；核对 Capability Projection 与服务提供方等价绑定 | [上下文、记忆与检索](docs/devSpec/context-memory-retrieval.md) |
 | `COD` | 改善可读性、功能模块化与 Code Agent 开发上下文，进行类或模块拆分；修改内部类型、payload、依赖注入、错误分类、命名；设计横切关注点、AOP、生产 Prompt、文本引用、文字复述或 LangGraph、Router、Planner、Workflow 编排 | [代码组织与实现约束](docs/devSpec/code-structure.md) |

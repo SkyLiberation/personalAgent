@@ -101,7 +101,11 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 
 关键坐标是 [Conversation 请求构造](../../src/personal_agent/application/conversation/service.py)的 `_research_selection_request()`／`_decide()`、[研究核验输入](../../src/personal_agent/application/conversation/research.py)的 `research_support_input()`，以及 [Provider 协议](../../src/personal_agent/infra/structured_model.py)：JSON mode 会追加完整 Schema，协议修复还会追加反馈。因此只测主循环原消息、单条字符数或输出 `max_tokens` 都不足以保护实际请求。构成度量在调用后记录，也不是窗口准入。
 
-`LoopBudgetPolicy.max_total_tokens` 检查已提交累计用量，不是本轮窗口；[模型 intent](../../src/personal_agent/capabilities/model_resolution.py)的 `max_input_tokens` 字段本身也没有实施实际请求计数。普通知识证据抽句、笔记摘要及 Graph 摘要不是正在执行的 loop history compaction。候选保留规则、容量责任及压缩后的完整交付验证由[主循环 §3.11](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)及[研究场景](../optimization/to_verify/knowledge-decision-delivery.md#31-长任务问题逐项对照)拥有，尚未据此修改生产。
+`LoopBudgetPolicy.max_total_tokens` 检查已提交累计用量，不是本轮窗口。2026-10-20 的研究实现已删除模型 intent／grant 中没有计数消费者的 `max_input_tokens` 镜像；[Provider 末端检查](../../src/personal_agent/infra/model_capacity.py)按显式 host／model 配置估算完整文本 body，加输出和协议预留后接受或拒绝，不改正文。Application 容量异常及费用保留链已接入。普通知识证据抽句、笔记摘要及 Graph 摘要与 loop history compaction 分属不同职责。
+
+2026-10-21 按[ADR 0038](../adr/0038-history-compaction-before-natural-pressure.md)的用户授权例外接入 [HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)，唯一设计由[主循环 §3.11](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)拥有。原容量 guard 拒绝后，协作者将已闭合旧 Observation／反馈导出为不可变 Artifact，以原 Journal 绑定覆盖；摘要只作工作上下文，读取历史原件也不取得来源证据资格。当前选证原文、最新核验反馈、当前稿和原始预算独立保留，恢复重新校验来源与快照。[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口)的首轮提交链已在真实 E1 到达下载、复算和复现。25 份新请求最大 estimated 输入 524,658，无容量拒绝；自然 C6／E3 及多次自然触发未覆盖。报告错例分析错误发生时正确记录仍完整可见，不归因为压缩丢失。
+
+2026-10-22 摘要请求单独通过原 `StructuredModelRequest.extra_body` 关闭 thinking，保留原 8,192 输出上限，主任务模型配置保持。DeepSeek 真实阶段的摘要生成、后继主决策消费及新 Journal／Artifact 实例恢复已局部到达；摘要仍沿用旧报告的错误统计，未证明语义保真。实际身份、用量和未覆盖范围由[当前评测盘点](../evals/02-current-case-inventory.md#2026-10-22-非思考摘要的局部验证)拥有，其他供应商和自然触发不从该例外推。
 
 ### 单次 Observation 的体积边界
 

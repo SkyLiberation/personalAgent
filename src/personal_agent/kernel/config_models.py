@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from personal_agent.kernel.contracts.capability_values import (
     AttestationStatus,
@@ -59,6 +59,31 @@ class GraphitiConfig(_StrictBase):
     parent_note_sync_foreground: bool = False
 
 
+class ModelCapacityConfig(_StrictBase):
+    """Explicit Provider/model capacity; independent of per-request policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    provider_host: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    context_window_tokens: int = Field(gt=0, strict=True)
+    max_output_tokens: int = Field(gt=0, strict=True)
+    protocol_reserve_tokens: int = Field(default=8192, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def require_input_capacity(self) -> ModelCapacityConfig:
+        if (
+            self.max_output_tokens + self.protocol_reserve_tokens
+            >= self.context_window_tokens
+        ):
+            raise ValueError("model capacity must reserve space for input")
+        if (
+            any(ch in self.provider_host for ch in "/:@?#")
+            or self.provider_host != self.provider_host.lower().strip()
+        ):
+            raise ValueError("capacity provider_host must be a lowercase hostname")
+        return self
+
+
 class OpenAIConfig(_StrictBase):
     api_key: str | None = None
     base_url: str | None = None
@@ -71,6 +96,7 @@ class OpenAIConfig(_StrictBase):
     max_retries: int = 2
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
+    capacity: ModelCapacityConfig | None = None
 
 
 class StructuredConfig(_StrictBase):
@@ -83,6 +109,7 @@ class StructuredConfig(_StrictBase):
     max_retries: int = 2
     output_transport: Literal["json_schema", "json_object"] = "json_object"
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    capacity: ModelCapacityConfig | None = None
 
     @property
     def small_model(self) -> str:
@@ -280,6 +307,7 @@ class LangExtractConfig(_StrictBase):
     min_doc_chars: int = 200
     fallback_on_error: bool = True
 
+
 class AskConfig(_StrictBase):
     graph_provider: Literal["graphiti", "structural", "hybrid"] = "graphiti"
     reranker: str = "support"
@@ -353,10 +381,9 @@ class ReflectionReplaySettings(_StrictBase):
     """
 
     enabled: bool = True
-    max_items: int = 3              # 每次回注最多注入的反思条数
-    min_confidence: float = 0.3     # 低于此置信度的反思不再回注
-    promote_step: float = 0.2       # 命中后 run 成功，confidence 增量
-    demote_step: float = 0.25       # 命中后 run 失败，confidence 减量
+    max_items: int = 3  # 每次回注最多注入的反思条数
+    min_confidence: float = 0.3  # 低于此置信度的反思不再回注
+    promote_step: float = 0.2  # 命中后 run 成功，confidence 增量
+    demote_step: float = 0.25  # 命中后 run 失败，confidence 减量
     promote_threshold: float = 0.8  # confidence 达到此值升为 confirmed
-    reject_floor: float = 0.2       # confidence 触及此值标记 rejected
-
+    reject_floor: float = 0.2  # confidence 触及此值标记 rejected

@@ -1,0 +1,18 @@
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+    OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HOME=/tmp/huggingface
+WORKDIR /opt/tool
+COPY scripts/retrieval_experiment/requirements-worker.txt /opt/tool/requirements-worker.txt
+RUN pip install --no-cache-dir -r requirements-worker.txt
+# BEIR's pinned Elasticsearch 7.9.1 client still imports numpy.float_.
+# Keep the compatible numerical ABI explicit in the execution image.
+RUN pip install --no-cache-dir numpy==1.26.4
+COPY src/personal_agent/__init__.py /opt/tool/personal_agent/__init__.py
+COPY src/personal_agent/application/__init__.py /opt/tool/personal_agent/application/__init__.py
+COPY src/personal_agent/application/retrieval_experiment/__init__.py src/personal_agent/application/retrieval_experiment/contracts.py src/personal_agent/application/retrieval_experiment/rules.py /opt/tool/personal_agent/application/retrieval_experiment/
+COPY src/personal_agent/infra/__init__.py /opt/tool/personal_agent/infra/__init__.py
+COPY src/personal_agent/infra/retrieval_experiment/__init__.py src/personal_agent/infra/retrieval_experiment/contracts.py src/personal_agent/infra/retrieval_experiment/file_io.py src/personal_agent/infra/retrieval_experiment/retrieval.py src/personal_agent/infra/retrieval_experiment/scoring.py src/personal_agent/infra/retrieval_experiment/worker.py /opt/tool/personal_agent/infra/retrieval_experiment/
+USER 65534:65534
+ENTRYPOINT ["python", "-m", "personal_agent.infra.retrieval_experiment.worker"]
