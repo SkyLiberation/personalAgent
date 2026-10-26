@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.application.artifacts.models import (
     ArtifactTextSnapshot,
     TextPosition,
@@ -17,7 +16,7 @@ from .source_reading import ReturnedSourceLine, SourceReadWindow
 
 class ReadArtifactArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    resource_ref: ResourceRef
+    resource_id: str = Field(min_length=1, description="当前可读文件的resource_id，来自材料或成功工具结果。")
     start_line: int = Field(
         default=1, ge=1, description="正文起始行，1 起计，与搜索返回的 line 相同。"
     )
@@ -45,7 +44,7 @@ def read_artifact_text(
     arguments: ReadArtifactArguments,
     max_chars: int = MAX_OBSERVATION_PAYLOAD_CHARS,
 ) -> ArtifactReadResult:
-    if snapshot.resource_ref != arguments.resource_ref:
+    if snapshot.resource_ref.resource_id != arguments.resource_id:
         raise ValueError("读取快照与请求引用不一致。")
     coordinates = TextCoordinates(snapshot.content)
     coordinates.offset(
@@ -53,7 +52,7 @@ def read_artifact_text(
     )
     lines = [line.text for line in coordinates.lines]
     result = ArtifactReadResult(
-        resource_ref=arguments.resource_ref,
+        resource_ref=snapshot.resource_ref,
         total_lines=len(lines),
         lines=(),
         next_read=None,

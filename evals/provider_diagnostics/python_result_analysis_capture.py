@@ -270,7 +270,7 @@ class SdkCapture:
     @contextmanager
     def installed(self) -> Iterator[SdkCapture]:
         import httpx
-        from personal_agent.infra.structured_model import OpenAIModelClient
+        from personal_agent.infra.structured_model import OpenAIModelClient, _ProviderCompletion
 
         original_create = OpenAIModelClient._create_chat_completion
         original_send = httpx.Client.send
@@ -306,7 +306,7 @@ class SdkCapture:
                 )
 
         @wraps(original_create)
-        def observed_create(adapter, client, operation, kwargs):
+        def observed_create(adapter, client, operation, kwargs, *, before_send=None) -> _ProviderCompletion:
             candidate_id = uuid4().hex
             payload = redact_payload(kwargs)
             self.candidate_bodies[candidate_id] = payload
@@ -331,8 +331,8 @@ class SdkCapture:
             with self.ledger.lock:
                 self.clients[client._client] = candidate_id
             try:
-                response = original_create(adapter, client, operation, kwargs)
-                raw = response.model_dump(mode="json")
+                completion = original_create(adapter, client, operation, kwargs, before_send=before_send)
+                raw = completion.payload.model_dump(mode="json")
                 (self.directory / f"{candidate_id}.candidate.response.json").write_text(
                     json.dumps(raw, ensure_ascii=False, indent=2),
                     encoding="utf-8",
@@ -370,7 +370,7 @@ class SdkCapture:
                     raise SampleStopped(
                         "provider_usage_exceeded_reserved_bound", stop_group=True
                     )
-                return response
+                return completion
             except SampleStopped:
                 raise
             except BaseException as error:

@@ -101,7 +101,7 @@ def required_plan_review_feedback() -> DecisionFeedback:
         immutable_fields=("messages", "interaction_mode", "inputs"),
         required_repair=(
             "If required evidence is not yet present, use only planning_safe actions. "
-            "Then return ContinueTurnProposal with the grounded working_plan, "
+            "Then call the working-plan action with the grounded plan, "
             "wait_for_user true, and no actions; do not place a prose plan in FinalMessage."
         ),
     )
@@ -164,7 +164,7 @@ def admit_working_plan(
     wait_for_user: bool = False,
     result_delivered: bool = False,
 ) -> tuple[DecisionFeedback | None, ConversationWorkingPlan | None]:
-    step_ids = tuple(step.step_id for step in proposal.steps)
+    step_ids = tuple(step.step_id for step in proposal.steps if step.step_id is not None)
     if len(step_ids) != len(set(step_ids)):
         return DecisionFeedback(
             action_id="working_plan",
@@ -202,35 +202,26 @@ def admit_working_plan(
         current,
     ):
         return None, current
-    successful_action_ids_by_step = {
-        step_id: tuple(
-            item.action_id
-            for item in inputs
-            if isinstance(item, ActionObservation)
-            and item.status == "succeeded"
-            and item.plan_step_id == step_id
-        )
-        for step_id in step_ids
-    }
-    current_by_id = (
-        {step.step_id: step for step in current.steps}
-        if current is not None and not starts_new_plan
-        else {}
-    )
+    current_by_id = ({step.step_id: step for step in current.steps if step.status != "superseded"}
+                     if current is not None and not starts_new_plan else {})
+    unknown = set(step_ids) - current_by_id.keys()
+    omitted = current_by_id.keys() - set(step_ids)
+    changed_bound = [step.step_id for step in proposal.steps if step.step_id in current_by_id
+                     and current_by_id[step.step_id].completion_action_ids
+                     and step.description != current_by_id[step.step_id].description]
+    if unknown or omitted or changed_bound:
+        return DecisionFeedback(action_id="working_plan", reason_code="working_plan_step_binding_invalid",
+            message=f"完整计划更新被拒：未知ID={sorted(unknown)}；漏项={sorted(omitted)}；已绑定项改义={changed_bound}。",
+            repairable_fields=("steps",), required_repair="新项省略或null step_id；保留当前全部有效ID及已绑定项职责。整批计划未改变。"), None
+
     def materialize_step(step):
-        existing = current_by_id.get(step.step_id)
-        if (existing is not None and existing.status == "completed"
-                and step.status == "completed"
-                and step.description == existing.description):
-            return existing
-        return ConversationWorkingPlanStep(
-            **step.model_dump(),
-            completion_action_ids=(
-                successful_action_ids_by_step[step.step_id]
-                if step.status == "completed"
-                else ()
-            ),
-        )
+        step_id = step.step_id or f"wstep_{uuid4().hex[:16]}"
+        existing = current_by_id.get(step_id)
+        execution_ids = tuple(item.action_id for item in inputs if isinstance(item, ActionObservation)
+                              and item.status == "succeeded" and item.plan_step_id == step_id)
+        historical = existing.completion_action_ids if existing else ()
+        return ConversationWorkingPlanStep(step_id=step_id, description=step.description, status=step.status,
+            completion_action_ids=tuple(dict.fromkeys((*historical, *execution_ids))))
     plan = ConversationWorkingPlan(
         plan_id=(
             current.plan_id
@@ -270,7 +261,7 @@ def admit_continue_turn_progress(
     observable progress.  Everything else would consume another model turn
     while presenting the next decision with the same execution state.
     """
-    if decision.actions or decision.wait_for_user or decision.finalization_requested:
+    if decision.actions or decision.wait_for_user:
         return None
     if decision.working_plan is not None and admitted_plan is not previous_plan:
         return None
@@ -288,12 +279,11 @@ def admit_continue_turn_progress(
             "actions",
             "working_plan",
             "wait_for_user",
-            "finalization_requested",
         ),
         immutable_fields=("messages", "inputs"),
         required_repair=(
             "Keep an unchanged plan unchanged and submit the next necessary concrete "
-            "action, a genuinely revised plan, wait for the user, or return FinalMessage."
+            "action, a genuinely revised plan, wait for the user, or call control_submit_final with the complete answer."
         ),
     )
 

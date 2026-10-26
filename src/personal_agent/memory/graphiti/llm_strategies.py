@@ -28,10 +28,6 @@ def _is_reasoning_model(model: str | None) -> bool:
     return name.startswith(("gpt-5", "o1", "o3"))
 
 
-def _supports_thinking_control(model: str | None) -> bool:
-    name = (model or "").lower()
-    return name.startswith(("kimi", "moonshot", "qwen"))
-
 ENTITY_TYPE_IDS: dict[str, int] = {name: idx for idx, name in enumerate(ENTITY_TYPES)}
 ENTITY_TYPE_NAME_LOOKUP: dict[str, int] = {
     name.lower(): idx for name, idx in ENTITY_TYPE_IDS.items()
@@ -346,9 +342,11 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
     provider-specific reasoning output so extraction remains machine-readable.
     """
 
-    def __init__(self, *args, upload_inputs_outputs: bool = False, **kwargs) -> None:
+    def __init__(self, *args, generation_extra_body: dict[str, Any],
+                 upload_inputs_outputs: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.upload_inputs_outputs = upload_inputs_outputs
+        self.generation_extra_body = dict(generation_extra_body)
 
     async def _generate_response(
         self,
@@ -394,11 +392,7 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
                 temperature=0.6,
                 max_tokens=self.max_tokens,
                 response_format=response_format,
-                extra_body=(
-                    {"thinking": {"type": "disabled"}}
-                    if _supports_thinking_control(model)
-                    else {}
-                ),
+                extra_body=dict(self.generation_extra_body),
                 response_model_name=response_model_name,
             )
         except openai.RateLimitError as exc:
@@ -562,4 +556,5 @@ def build_graphiti_llm_client(settings: Settings) -> GraphitiOpenAIClient:
             or settings.openai.small_model,
         ),
         upload_inputs_outputs=settings.langsmith.upload_inputs,
+        generation_extra_body=settings.structured.extra_body,
     )

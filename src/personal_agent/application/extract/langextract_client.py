@@ -29,6 +29,24 @@ class LangExtractMisconfiguredError(RuntimeError):
     """Raised when LangExtractConfig is enabled but missing required fields."""
 
 
+class _ConfiguredOpenAILanguageModel(OpenAILanguageModel):
+    """Keep configured provider options across LangExtract's SDK whitelist."""
+
+    def __init__(self, *args, extra_body: dict[str, Any], **kwargs) -> None:
+        self._provider_extra_body = dict(extra_body)
+        super().__init__(*args, **kwargs)
+
+    def _build_chat_completions_params(self, prompt: str, config: dict) -> dict:
+        params = super()._build_chat_completions_params(prompt, config)
+        extra = dict(self._provider_extra_body)
+        effort = extra.pop("reasoning_effort", None)
+        if "reasoning_effort" not in params and effort is not None:
+            params["reasoning_effort"] = effort
+        if extra:
+            params["extra_body"] = extra
+        return params
+
+
 def build_language_model(
     config: LangExtractConfig,
     *,
@@ -40,12 +58,13 @@ def build_language_model(
             "LangExtractConfig.api_key is empty; set STRUCTURED_API_KEY or "
             "PERSONAL_AGENT_EXTRACT_API_KEY in the environment."
         )
-    return OpenAILanguageModel(
+    return _ConfiguredOpenAILanguageModel(
         model_id=config.model_id,
         api_key=config.api_key,
         base_url=config.base_url,
         openai_schema=openai_schema or build_section_openai_schema(),
         max_workers=config.max_workers,
+        extra_body=dict(config.extra_body),
     )
 
 

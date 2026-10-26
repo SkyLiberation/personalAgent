@@ -141,4 +141,40 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 Anthropic的[工具设计经验](https://www.anthropic.com/research/writing-tools-for-agents)与[ACI附录](https://www.anthropic.com/research/building-effective-agents#appendix-2-prompt-engineering-your-tools)是B级建议：让参数名称、格式、示例和边界易于理解，并通过实际模型使用迭代；不将某个JSON布局当通用最佳格式。[DeepSeek工具契约](https://api-docs.deepseek.com/guides/tool_calls/)另规定strict模式需要beta端点及支持的Schema子集，minLength/maxLength和minItems/maxItems不在其对应支持范围；不能把本地类型严格校验、发送strict=true和服务端约束解码视为一回事。
 
-本工程的采用取舍与新候选由[Python唯一Spec](../optimization/to_verify/python-data-analysis-tool.md#31-schema与描述的外部对照复审2026-10-22)拥有：先审查模型参数是否迫使模型搬运内部来源结构，再补齐字段语义；保留文件授权、已有代码引用和实际执行事实。全局去封装、缩短ResourceRef、原生历史投影及Provider严格适配分别取证，不把这些同时塞入同一个改进主张。
+当时的采用取舍由[Python Spec §3.1](../optimization/to_verify/python-data-analysis-tool.md#31-schema与描述的外部对照复审2026-10-22)记录；原生历史接入后再次失败的新候选由 [§3.7](../optimization/to_verify/python-data-analysis-tool.md#37-code-agent-直接参数的接入与验证2026-10-24)拥有。保留文件授权、原程序字节引用和实际执行事实；新候选整体声明／解析迁移的效果须单独验证，不倒写旧依据，也不宣称各处调整已有独立收益。
+
+## 11. Code Agent 执行工具的最小输入与默认值
+
+2026-10-24 针对“补 program_ref 后丢 input_files”的真实新轨迹重新核对 Code Agent 源码，不再仅类比字段说明。来源与 SHA-256 见[固定清单](../../.tmp/code-agent-tool-design-20261024/source-manifest.json)；只读，未运行外部项目、模型、工具或测试。
+
+| 独立 A 级实现 | 声明、实际消费与采用边界 |
+| --- | --- |
+| Codex `398500106707f0a3217c7cf83edc2bf226cc342f`，复核当日 main 快照，非发布版声明 | [shell_spec.rs](https://github.com/openai/codex/blob/398500106707f0a3217c7cf83edc2bf226cc342f/codex-rs/core/src/tools/handlers/shell_spec.rs)的 exec_command 直接暴露 cmd、workdir 等，required 只有 cmd，strict=false；[ExecCommandArgs](https://github.com/openai/codex/blob/398500106707f0a3217c7cf83edc2bf226cc342f/codex-rs/core/src/tools/handlers/unified_exec.rs)用 serde default 解析可选项，工具说明的缺省行为有实际消费者。[add_shell_tools](https://github.com/openai/codex/blob/398500106707f0a3217c7cf83edc2bf226cc342f/codex-rs/core/src/tools/spec_plan.rs)按功能／策略选择并注册 handler，handler.spec 生成上述模型可见声明；[ExecCommandHandler](https://github.com/openai/codex/blob/398500106707f0a3217c7cf83edc2bf226cc342f/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs)沿原 session／环境确定 cwd、权限和 sandbox，再交 UnifiedExecProcessManager，实际输出／错误交回模型；one_shot 分支在超时／取消停止，不承诺会话续接。采用直接业务参数、最小必填及公开默认值；不照搬宿主 Shell、提升权限、PTY／交互进程或默认时限 |
+| OpenHands CodeAct `0.59.0 / d39f7ae0e66174c50bdc714304fed4078b5e3b72`，复用并重新校验已读发布源码，非当前 SDK | [IPythonTool](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/agenthub/codeact_agent/tools/ipython.py)直接暴露 code、security_risk，二者 required，不含 program_ref／input_files／arguments 外壳。[CodeActAgent._get_tools](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/agenthub/codeact_agent/codeact_agent.py)按 enable_jupyter 装入 self.tools，step 实际将 tools 交给 completion；[response_to_actions](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/agenthub/codeact_agent/function_calling.py)直接读取 arguments[code] 产生 IPythonRunCellAction。采用简单 Python 动作与统一文件／执行协作，不复制持久 kernel、magic 安装或模型自报风险；本轮未重新运行 OpenHands runtime |
+
+共同可采用的是将执行内容直接交给执行工具，不要求模型为不用的程序来源反复填写 null。两个项目的运行环境、权限及必填字段不同，不能宣称所有 Code Agent 都只有 code 或都关闭 strict。AutoGen 的单 code 工具继续作为 §10 补充，不用框架品牌代替 Code Agent 正式调用链。OpenCode 当前搜索还返回字段必填造成调用失败的 issue，但它仅为 C 级线索，本轮不以 issue 作生产方案依据。
+
+本工程的必要适配、标准参数迁移、既有程序复用与局部验收由[Python Spec §3.7](../optimization/to_verify/python-data-analysis-tool.md#37-code-agent-直接参数的接入与验证2026-10-24)拥有；这里不定义生产契约或主张已修复。
+
+## 12. 文件选择与运行环境分责
+
+2026-10-24 为简化模型文件引用，重新检查两个独立 A 级实现的文件定位及实际消费者，来源与 SHA-256 见[本轮固定清单](../../.tmp/resource-id-tool-production-20261024/source-manifest.json)。Codex 仍为 §11 的当日 main 快照，OpenHands 仍为已发布0.59.0；不声称是同一种权限或恢复契约。
+
+| 机制及源码 | 采纳与适用差异 |
+| --- | --- |
+| Codex [shell_spec.rs](https://github.com/openai/codex/blob/398500106707f0a3217c7cf83edc2bf226cc342f/codex-rs/core/src/tools/handlers/shell_spec.rs)将 workdir 声明为可选字符串；经已核对的 add_shell_tools 注册后，[ExecCommandHandler](https://github.com/openai/codex/blob/398500106707f0a3217c7cf83edc2bf226cc342f/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs)从 turn environment 取得原 cwd，解析模型 workdir，再构造实际 sandbox context 和执行请求 | 采用模型选择位置、运行侧解析环境和策略的分责；本工程使用已有 Artifact ID，继续拒绝任意宿主路径，不复制 Shell 权限或默认环境 |
+| OpenHands [str_replace_editor.py](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/agenthub/codeact_agent/tools/str_replace_editor.py)查看和编辑共用字符串 path；CodeActAgent._get_tools 装配后，[response_to_actions](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/agenthub/codeact_agent/function_calling.py)将 path 交 FileReadAction／FileEditAction；[ActionExecutionClient](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/runtime/impl/action_execution/action_execution_client.py)沿已配置服务发送真实 Action，[server](https://github.com/OpenHands/OpenHands/blob/d39f7ae0e66174c50bdc714304fed4078b5e3b72/openhands/runtime/action_execution_server.py)在已初始化用户／工作目录下装配 OHEditor 并读取／编辑 | 采用文件工具间一致的定位值，不让模型复述完整内部文件对象。OpenHands 的持久文件系统、编辑器及沙箱授权不同，不能据此删除本工程当前可见集合、不可变快照、版本、digest 或恢复检查；本轮未运行外部项目 |
+
+本轮不再为模型端复刻 ResourceRef 找理由，也不新造短引用注册表。逐项适配、唯一输入契约、事实归属和本地验证由[Python Spec §3.8](../optimization/to_verify/python-data-analysis-tool.md#38-文件选择只提交现有-id2026-10-24)拥有。根规范 EVD 的“先参考采用，再根据真实问题调整”已经适用于每项设计，无需另建重复规范。
+
+## 13. 分析自检与计算成文的交接
+
+2026-10-25 针对 LongDS 正确执行结果被报告错用、展示精度回流计算、程序排序规则错误，核对以下固定实现及实际消费者。[源码与 SHA-256](../../.tmp/research-answer-correctness-20261025/sources-manifest.json)保留只读快照；未执行第三方项目或发起新模型调用。这是机制参考，不是本工程效果证据。
+
+| 来源与调用链 | 可采用机制与适用边界 |
+| --- | --- |
+| smolagents，`96f33faaf028479119ec8d34507b47694cf14e34`：[执行器](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/local_python_executor.py#L1631)把 `final_answer(...)` 的实际值经异常返回执行结果；[CodeAgent](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L1723)执行模型代码并产生 ActionOutput；[主循环及检查](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L580)直接消费该值，再运行配置的 final_answer_checks，失败回到原循环 | 计算对象可以直接成为回答值，减少模型重抄。检查可在最终交接前拒绝不满足约束的结果；检查默认空集合，不会自动证明统计方法正确。本工程借用数据直交与失败反馈，不复制执行器直接宣告整个 Goal 完成的权限 |
+| Quarto，`5b2316316ab5cdd91edd882614dff929eeaec33c`：[Jupyter 执行与渲染](https://github.com/quarto-dev/quarto-cli/blob/5b2316316ab5cdd91edd882614dff929eeaec33c/src/execute/jupyter/jupyter.ts#L438)根据文档形成 notebook，调用实际 kernel，再读取执行后的 notebook，经 `quarto.jupyter.toMarkdown` 生成 Markdown；[官方 Python 文档](https://quarto.org/docs/computations/python.html)说明代码结果与内联表达式进入文档 | 计算结果和报告中的数字、表格可以共用执行对象，避免把展示数字重新当计算输入。借用执行与成文关联，不引入 Quarto 依赖，不将渲染成功视作业务正确 |
+| pandas，[多键排序契约](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.sort_values.html) | 模型可把用户要求写为明确的多键排序及升降序，随后由普通库确定执行。库保证执行给定规则，不替模型确定正确的过滤总体、公式或并列规则；无须为每种排名再造专用工具 |
+
+共同边界是：数据检查和结果直交可减少确定性传递错误，不能消除错误语义进入代码的问题。本工程的候选职责、取舍及验收由[研究 Spec §10](../optimization/to_verify/knowledge-decision-delivery.md#10-可执行分析自检与结果成文候选)唯一拥有；不把外部实现的可选检查推导为本工程已经具备或已经验证独立核验能力。

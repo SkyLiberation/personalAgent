@@ -5,6 +5,8 @@
 - 影响范围：Conversation 模型动作协议、Provider Adapter、Semantic Verification、FinalMessage 交付
 - 当前事实：[Runtime 与编排](../topics/runtime.md)
 
+2026-10-24：两步提交协议已由 [ADR 0045](0045-native-intent-loop-and-recorded-model-output.md)替换，源码已移除空准备动作及独立 Final JSON；真实生成与完整 E2E 待验收。本文保留旧决定及历史依据，不再拥有当前模型传输契约，旧 §3.10 也不作为并行候选。
+
 ## 1. 背景与目标
 
 普通 Conversation 原先把 `control_final_message` 与 Tool、Agent、Plan 控制都投影成同一组 Provider
@@ -56,6 +58,8 @@ tool calls 时继续循环，并允许并行执行多个调用。Anthropic 的
 7. 预算内由智能体选择修订、取证或 `prepare_final`；下一调用前已耗尽预算则返回 `limitation`，不提供强制 Final 宽限；
 8. Provider 在内部 required action phase 返回纯文本时，Adapter 使用同一 action schema 做一次协议修复，不把
    纯文本猜成 Final，也不做无界重试。
+
+2026-10-23 LongDS 正式首轮发现既有自动研究入口偏离上述责任：读到局部 Artifact 正文后，代码没有收到 `prepare_final` 就移除全部动作并要求最终成文。按[实际基线与验收](../optimization/to_verify/knowledge-decision-delivery.md#l1-结果与首个因果切片)删除该自动切换。普通工具结果只交回动作模型；外部研究在模型明确提交后仍走原研究及核验链。此修正不增加协议、持久字段或无核验出口；首轮结果与阶段检查点分别记录。
 
 ## 4. 为什么保留 `prepare_final`
 

@@ -3,9 +3,9 @@
 import json
 from dataclasses import replace
 from collections.abc import Generator, Sequence
-from typing import Annotated, Literal, Self, cast
+from typing import Annotated, Literal, cast
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model
 
 from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
@@ -45,6 +45,7 @@ from .models import (
     ConversationMessage,
     InteractionInput,
     ReviewCriteria,
+    ResearchEvidenceSelection,
 )
 from .source_reading import materialize_source_reading_state
 
@@ -68,60 +69,6 @@ def research_goal_requirements(
         for index, criterion in enumerate(criteria.criteria, start=1)
     )
 
-
-class ResearchInformationNeed(_Strict):
-    criterion_id: str = Field(pattern=r"^r[1-9][0-9]*$")
-    question: str = Field(min_length=1)
-    status: Literal["answered", "ready", "needs_evidence", "delivery_check"]
-    claim_ids: tuple[str, ...] = ()
-    references: tuple[ConversationEvidenceReference, ...] = ()
-    fit_reason: str = ""
-    gap: str = ""
-
-    @model_validator(mode="after")
-    def account_for_answer_or_gap(self) -> Self:
-        if self.status == "answered" and not self.claim_ids:
-            raise ValueError(
-                "answered research requirement must identify current claims"
-            )
-        if self.status == "needs_evidence" and not self.gap.strip():
-            raise ValueError(
-                "research evidence gap must explain the necessary missing information"
-            )
-        if len(set(self.claim_ids)) != len(self.claim_ids):
-            raise ValueError("research requirement must not repeat claim identities")
-        return self
-
-
-class ResearchEvidenceSelection(_Strict):
-    next_step: Literal["write", "acquire", "limit"]
-    needs: tuple[ResearchInformationNeed, ...] = Field(min_length=1)
-    reason: str = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def write_requires_selected_evidence(self) -> Self:
-        if self.next_step == "write" and not any(
-            need.references for need in self.needs
-        ):
-            raise ValueError(
-                "writing research claims requires selected returned evidence"
-            )
-        return self
-
-    @property
-    def references(self) -> tuple[ConversationEvidenceReference, ...]:
-        return tuple(reference for need in self.needs for reference in need.references)
-
-
-class InitialResearchInformationNeed(ResearchInformationNeed):
-    """No current claim exists to identify as an answered research requirement."""
-
-    status: Literal["ready", "needs_evidence", "delivery_check"]
-    claim_ids: tuple[str, ...] = Field(default=(), max_length=0)
-
-
-class InitialResearchEvidenceSelection(ResearchEvidenceSelection):
-    needs: tuple[InitialResearchInformationNeed, ...] = Field(min_length=1)
 
 
 def validate_research_selection(
@@ -199,25 +146,6 @@ class ReturnToActions(_Strict):
 class StopResearch(_Strict):
     kind: Literal["stop_research"]
     reason: str = Field(min_length=1)
-
-
-class InitialResearchSubmission(_Strict):
-    submission: Annotated[
-        CreateClaims | ReturnToActions | StopResearch, Field(discriminator="kind")
-    ]
-
-
-class ResearchSubmission(_Strict):
-    submission: Annotated[
-        ReviseClaimFragment
-        | ReplaceClaimReferences
-        | AddClaims
-        | DeleteClaim
-        | RecheckClaims
-        | ReturnToActions
-        | StopResearch,
-        Field(discriminator="kind"),
-    ]
 
 
 class EditableClaimFragment(_Strict):
@@ -333,10 +261,11 @@ class ResearchDocumentBounds(_Strict):
     partial_line_coordinates: tuple[str, ...]
 
 
-def research_submission_type(
+def research_operation_schema(
+    operation: type[BaseModel],
     current: ResearchClaims | None,
     inputs: Sequence[CitableInput],
-) -> type[InitialResearchSubmission] | type[ResearchSubmission]:
+) -> dict:
     """Project the current argument scope into the Provider's JSON Schema.
 
     Admission remains the sole owner of binding. The scoped type inherits the
@@ -390,50 +319,43 @@ def research_submission_type(
         if current
         else []
     )
-    base = InitialResearchSubmission if current is None else ResearchSubmission
-
-    class ScopedResearchSubmission(base):
-        @classmethod
-        def model_json_schema(cls, **kwargs):
-            schema = super().model_json_schema(**kwargs)
-            definitions = schema["$defs"]
-            for name in (
-                "ReviseClaimFragment",
-                "ReplaceClaimReferences",
-                "DeleteClaim",
-            ):
-                if name in definitions:
-                    definitions[name]["properties"]["claim_id"]["enum"] = claim_ids
-            if "ReviseClaimFragment" in definitions:
-                for field in ("start_fragment_id", "end_fragment_id"):
-                    definitions["ReviseClaimFragment"]["properties"][field]["enum"] = (
-                        fragment_ids
-                    )
-            reference = definitions["ConversationEvidenceReference"]["properties"][
-                "evidence_id"
-            ]
-            docs = "|".join(documents)
-            reference["pattern"] = (
-                rf"^(?:{docs}):[1-9][0-9]*(?:-[1-9][0-9]*|:[1-9][0-9]*-[1-9][0-9]*)?$"
-                if docs
-                else r"^(?!)$"
+    schema = operation.model_json_schema()
+    definitions = schema.get("$defs", {})
+    definitions[operation.__name__] = schema
+    for name in (
+        "ReviseClaimFragment",
+        "ReplaceClaimReferences",
+        "DeleteClaim",
+    ):
+        if name in definitions:
+            definitions[name]["properties"]["claim_id"]["enum"] = claim_ids
+    if "ReviseClaimFragment" in definitions:
+        for field in ("start_fragment_id", "end_fragment_id"):
+            definitions["ReviseClaimFragment"]["properties"][field]["enum"] = (
+                fragment_ids
             )
-            reference["description"] = (
-                "可见坐标来自本轮选择及当前集合已绑定引用。创建和增补只用本轮选择；正文修订的追加引用和引用替换均可保留目标 claim 已有坐标，新增坐标须本轮选中。完整行可选同一连续范围内的单行或子区间，不能跨缺行；"
-                "部分行只用原样坐标。当前范围："
-                + json.dumps(
-                    [bound.model_dump(mode="json") for bound in bounds],
-                    ensure_ascii=False,
-                )
-            )
-            if "ResearchAnswerTarget" in definitions:
-                definitions["ResearchAnswerTarget"]["properties"]["answer_segment_id"]["enum"] = (
-                    [f"a{index}" for index in range(1, len(current.final_answer or ()) + 1)]
-                    if current is not None else []
-                )
-            return schema
-
-    return ScopedResearchSubmission
+    reference = definitions.get("ConversationEvidenceReference", {}).get("properties", {}).get("evidence_id", {})
+    docs = "|".join(documents)
+    reference["pattern"] = (
+        rf"^(?:{docs}):[1-9][0-9]*(?:-[1-9][0-9]*|:[1-9][0-9]*-[1-9][0-9]*)?$"
+        if docs
+        else r"^(?!)$"
+    )
+    reference["description"] = (
+        "可见坐标来自本轮选择及当前集合已绑定引用。创建和增补只用本轮选择；正文修订的追加引用和引用替换均可保留目标 claim 已有坐标，新增坐标须本轮选中。完整行可选同一连续范围内的单行或子区间，不能跨缺行；"
+        "部分行只用原样坐标。当前范围："
+        + json.dumps(
+            [bound.model_dump(mode="json") for bound in bounds],
+            ensure_ascii=False,
+        )
+    )
+    if "ResearchAnswerTarget" in definitions:
+        definitions["ResearchAnswerTarget"]["properties"]["answer_segment_id"]["enum"] = (
+            [f"a{index}" for index in range(1, len(current.final_answer or ()) + 1)]
+            if current is not None else []
+        )
+    definitions.pop(operation.__name__, None)
+    return schema
 
 
 def current_claims(inputs: Sequence[InteractionInput]) -> ResearchClaims | None:
@@ -442,24 +364,14 @@ def current_claims(inputs: Sequence[InteractionInput]) -> ResearchClaims | None:
     )
 
 
-def has_research_source_text(inputs: Sequence[InteractionInput]) -> bool:
-    """A real returned source opens research submission, never approval or delivery."""
-    return any(
-        item.document_kind == "source_text" and item.citations
-        for item in materialize_citation_context(materialize_interaction_inputs(inputs))
-    )
-
-
 def in_research_mode(
     inputs: Sequence[InteractionInput],
     *,
-    finalization_mode: bool,
     requires_review: bool,
     experiment_run: bool = False,
 ) -> bool:
     return (
         not experiment_run
-        and finalization_mode
         and (
             current_claims(inputs) is not None
             or (
@@ -665,6 +577,7 @@ def research_request(
         version=prompt.version,
         messages=messages,
         output_type=output_type,
+        output_transport="native_tool",
         temperature=0,
         max_tokens=131_072,
         context_projection_ref=sealed_context_projection_ref(

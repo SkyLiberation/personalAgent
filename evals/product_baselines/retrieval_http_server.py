@@ -21,14 +21,14 @@ def redact_payload(value):
 
 
 def install_sdk_observer(directory: Path) -> None:
-    from personal_agent.infra.structured_model import OpenAIModelClient
+    from personal_agent.infra.structured_model import OpenAIModelClient, _ProviderCompletion
 
     original = OpenAIModelClient._create_chat_completion
     lock = Lock()
     directory.mkdir(parents=True, exist_ok=True)
 
     @wraps(original)
-    def observed_create(self, client, operation, kwargs):
+    def observed_create(self, client, operation, kwargs, *, before_send=None) -> _ProviderCompletion:
         call_id = uuid4().hex
         # SDK call bodies contain model input, never Authorization headers.
         body = redact_payload(kwargs)
@@ -37,9 +37,9 @@ def install_sdk_observer(directory: Path) -> None:
         started = monotonic()
         record = {"call_id": call_id, "completed": False}
         try:
-            response = original(self, client, operation, kwargs)
-            record.update(completed=True, response=response.model_dump(mode="json"))
-            return response
+            completion = original(self, client, operation, kwargs, before_send=before_send)
+            record.update(completed=True, response=completion.payload.model_dump(mode="json"))
+            return completion
         except BaseException as error:
             # Provider errors may contain URLs or headers; record type only.
             record["exception_type"] = type(error).__name__

@@ -10,12 +10,14 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 from zipfile import ZipFile
 
-from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from personal_agent.application.conversation.models import ActionObservation, InteractionTrace
 from personal_agent.application.conversation.research_delivery import experiment_submission
 from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
+from personal_agent.capabilities.contracts.model import (
+    ModelTransportDiagnostics, ProviderExceptionFrame, ProviderFailureDiagnostics,
+)
 
 from .retrieval_qualification_review import Digest
 from .run_retrieval_acceptance import (
@@ -40,6 +42,20 @@ class ObservedProviderUsage(BaseModel):
     total_tokens: int | None = Field(default=None, ge=0)
 
 
+class ObservedProviderMessage(BaseModel):
+    """Unmodified external SDK message; usage audit does not certify its role."""
+    model_config = ConfigDict(extra="allow", frozen=True)
+    role: str
+    content: str | None = None
+
+
+class ObservedProviderChoice(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+    index: int
+    finish_reason: str | None = None
+    message: ObservedProviderMessage
+
+
 class ObservedProviderCompletion(BaseModel):
     """Provider 拥有的完整响应；用量字段缺失时仍保留其余真实内容。"""
     model_config = ConfigDict(extra="allow", frozen=True)
@@ -47,7 +63,7 @@ class ObservedProviderCompletion(BaseModel):
     object: Literal["chat.completion"]
     created: int
     model: str
-    choices: tuple[Choice, ...]
+    choices: tuple[ObservedProviderChoice, ...]
     usage: ObservedProviderUsage | None = None
 
 
@@ -59,6 +75,7 @@ class SdkResponseObservation(_Strict):
     candidate_body_sha256: Digest | None = None
     response: ObservedProviderCompletion | None = None
     exception_type: str | None = None
+    provider_diagnostics: ProviderFailureDiagnostics | None = None
     reason_code: str | None = None
     body_observation_error: str | None = None
     wall_seconds: float = Field(ge=0, allow_inf_nan=False)
@@ -76,6 +93,8 @@ class HttpSendObservation(_Strict):
     request_body_bytes: int | None = Field(default=None, ge=0)
     status_code: int | None = None
     exception_type: str | None = None
+    exception_chain: tuple[ProviderExceptionFrame, ...] = ()
+    transport: ModelTransportDiagnostics | None = None
     body_observation_error: str | None = None
     wall_seconds: float = Field(ge=0, allow_inf_nan=False)
 

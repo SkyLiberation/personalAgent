@@ -7,7 +7,7 @@ native strict ``json_schema`` while ``JsonObjectStructuredAdapter`` uses JSON
 mode plus the same Pydantic contract in the prompt. Application code is unaware
 of that transport distinction.
 
-The adapter owns only Provider calls, extraction, and one bounded repair of a
+The adapter owns only Provider calls, extraction, and request-bounded repair of a
 malformed Provider protocol response. It never authorizes an action or invents
 Application semantics. Structured tracing and usage recording remain decorator
 responsibilities; the adapter emits only local diagnostics for repair boundaries.
@@ -17,19 +17,31 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from dataclasses import replace
+import os
+from dataclasses import dataclass, replace
 from queue import Empty, Queue
 from threading import Thread
 from time import perf_counter, sleep
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 from urllib.parse import urlparse
+from uuid import uuid4
 
-from openai import APIError, APIStatusError, ContentFilterFinishReasonError, LengthFinishReasonError, OpenAI
-from pydantic import BaseModel
+import httpx
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from openai import APIError, APIStatusError, APITimeoutError, OpenAI
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
+from pydantic import BaseModel, ValidationError
 
 from personal_agent.capabilities.contracts.model import (
-    PROVIDER_DIAGNOSTIC_MAX_CHARS,
+    ModelActionDefinition,
+    ModelActionInvocation,
+    ModelInvocationContinuation,
+    ModelResponseRecord,
+    ModelResponseSink,
+    ModelStreamProtocolFailure,
+    ModelToolExchange,
+    ModelToolResult,
     ModelCapacityRefused,
     ModelInvocationUnavailable,
     ProviderFailureDiagnostics,
@@ -40,7 +52,7 @@ from personal_agent.capabilities.contracts.model import (
     StructuredOutputT,
 )
 from personal_agent.infra.model_response import (
-    _aggregate_usage,
+    _restore_provider_response,
     _extract_action_invocations,
     _require_chat_choices,
     _structured_chat_message,
@@ -48,6 +60,12 @@ from personal_agent.infra.model_response import (
     _usage,
 )
 from personal_agent.infra.model_capacity import check_model_capacity
+from personal_agent.infra.model_transport import (
+    clean_provider_diagnostic,
+    model_http_client,
+    model_transport_snapshot,
+    provider_exception_chain,
+)
 from personal_agent.kernel.config_models import (
     LangSmithConfig,
     OpenAIConfig,
@@ -60,6 +78,70 @@ from personal_agent.kernel.prompts import get_prompt
 from personal_agent.kernel.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderCompletion:
+    payload: Any
+    stream_protocol_failures: tuple[ModelStreamProtocolFailure, ...] = ()
+
+
+def _aggregate_chat_chunks(chunks: Iterable[ChatCompletionChunk]) -> _ProviderCompletion:
+    """Keep role structural on SDK consumption copies and retain sticky errors."""
+    state = ChatCompletionStreamState(response_format={"type": "text"}, input_tools=[])
+    first_roles: dict[int, str] = {}
+    seen_choices: set[int] = set()
+    failures: dict[int, ModelStreamProtocolFailure] = {}
+    legal_roles = frozenset({"developer", "system", "user", "assistant", "tool"})
+    for chunk in chunks:
+        if chunk.object != "chat.completion.chunk":
+            continue
+        choices = []
+        copied = False
+        for choice in chunk.choices:
+            index = choice.index
+            seen_choices.add(index)
+            role = choice.delta.role
+            if role is None:
+                choices.append(choice)
+                continue
+            role_json = json.dumps(role, ensure_ascii=False, separators=(",", ":"))
+            first_role = first_roles.get(index)
+            if first_role is None:
+                first_roles[index] = role_json
+            valid = isinstance(role, str) and role in legal_roles
+            if index not in failures:
+                if not valid:
+                    failures[index] = ModelStreamProtocolFailure(
+                        choice_index=index, reason="role_invalid",
+                        observed_role_values_json=(role_json,),
+                    )
+                elif first_role is not None and first_role != role_json:
+                    failures[index] = ModelStreamProtocolFailure(
+                        choice_index=index, reason="role_conflict",
+                        observed_role_values_json=(first_role, role_json),
+                    )
+            if valid and first_role == role_json:
+                delta = choice.delta.model_copy(update={"role": None})
+                delta.model_fields_set.discard("role")
+                choices.append(choice.model_copy(update={"delta": delta}))
+                copied = True
+            else:
+                choices.append(choice)
+        consumed = chunk.model_copy(update={"choices": choices}) if copied else chunk
+        # Use the same SDK state/events as ChatCompletionStream, after changing
+        # only the repeated role field on this consumption copy.
+        for _ in state.handle_chunk(consumed):
+            pass
+    for index in sorted(seen_choices):
+        if index not in first_roles:
+            failures.setdefault(index, ModelStreamProtocolFailure(
+                choice_index=index, reason="role_missing",
+            ))
+    return _ProviderCompletion(
+        payload=state.current_completion_snapshot,
+        stream_protocol_failures=tuple(failures[index] for index in sorted(failures)),
+    )
 
 
 class ModelCallDeadlineExceeded(ModelInvocationUnavailable, TimeoutError):
@@ -139,19 +221,26 @@ def _is_reasoning_model(model: str) -> bool:
         or name.startswith("o1")
         or name.startswith("o3")
         or name.startswith("mimo")
+        or name.startswith("minimax-")
     )
 
 
-def _report_usage_to_run_tree(response: StructuredModelResponse[Any]) -> None:
-    usage = {
-        key: value
-        for key, value in {
-            "input_tokens": response.input_tokens,
-            "output_tokens": response.output_tokens,
-            "total_tokens": response.total_tokens,
-        }.items()
-        if value is not None
-    }
+def _report_usage_to_run_tree(
+    response: StructuredModelResponse[Any],
+    continuation: ModelInvocationContinuation | None = None,
+) -> None:
+    previous_ids = {
+        record.attempt_id for record in continuation.response_records
+    } if continuation else set()
+    if response.response_records:
+        usage = _sum_usage([
+            {name: value for name in ("input_tokens", "output_tokens", "total_tokens")
+             if (value := getattr(record, name)) is not None}
+            for record in response.response_records if record.attempt_id not in previous_ids
+        ])
+    else:
+        usage = {name: value for name in ("input_tokens", "output_tokens", "total_tokens")
+                 if (value := getattr(response, name)) is not None}
     if not usage:
         return
     try:
@@ -188,12 +277,20 @@ class OpenAIModelClient:
     def _resolved_model(self) -> str:
         return self._model_override or self._config.model
 
+    @property
+    def _provider_host(self) -> str:
+        # Match the SDK endpoint resolution before any protocol binding. The
+        # response's model name may be a resolved snapshot of our request alias.
+        endpoint = self._config.base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+        return urlparse(endpoint).hostname or ""
+
     def _client(self) -> OpenAI:
         return OpenAI(
             api_key=self._config.api_key,
             base_url=self._config.base_url,
             timeout=self._config.timeout_seconds,
             max_retries=0,
+            http_client=model_http_client(api_key=self._config.api_key, timeout=self._config.timeout_seconds),
         )
 
     def _chat_kwargs(
@@ -203,15 +300,21 @@ class OpenAIModelClient:
         stream: bool = False,
     ) -> dict[str, Any]:
         model = self._resolved_model
-        kwargs: dict[str, Any] = {"model": model, "messages": request.messages}
+        messages = list(request.messages)
+        host = self._provider_host
+        for exchange in request.model_history:
+            if exchange.assistant.provider_host != host or exchange.assistant.model != model:
+                raise ModelCapacityRefused(request.operation, "capacity_profile_mismatch")
+            messages.append(exchange.assistant.payload)
+            messages.extend({"role": "tool", "tool_call_id": result.call_id, "content": result.content}
+                            for result in exchange.results)
+        kwargs: dict[str, Any] = {"model": model, "messages": messages}
         if stream:
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}
         if _is_reasoning_model(model):
             if request.max_tokens is not None:
                 kwargs["max_completion_tokens"] = request.max_tokens
-            if request.reasoning_effort is not None:
-                kwargs["reasoning_effort"] = request.reasoning_effort
         else:
             kwargs["temperature"] = request.temperature
             if request.max_tokens is not None:
@@ -226,7 +329,7 @@ class OpenAIModelClient:
                         "name": definition.name,
                         "description": definition.description,
                         "parameters": definition.input_schema,
-                        "strict": True,
+                        "strict": definition.strict,
                     },
                 }
                 for definition in request.action_definitions
@@ -235,8 +338,17 @@ class OpenAIModelClient:
                 kwargs["tool_choice"] = request.action_choice
         config_extra = getattr(self._config, "extra_body", None) or {}
         merged_extra = {**config_extra, **(request.extra_body or {})}
+        configured_effort = merged_extra.pop("reasoning_effort", None)
+        if request.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = request.reasoning_effort
+        elif configured_effort is not None:
+            kwargs["reasoning_effort"] = configured_effort
         if merged_extra:
             kwargs["extra_body"] = merged_extra
+        if request.kind == "tool_calling" and urlparse(self._config.base_url or "").hostname in {
+            "api.xiaomimimo.com", "token-plan-cn.xiaomimimo.com",
+        }:
+            kwargs.update(stream=True, stream_options={"include_usage": True}, tool_choice="auto")
         if (
             request.kind == "tool_calling"
             and request.action_choice == "required"
@@ -259,10 +371,14 @@ class OpenAIModelClient:
         self,
         client: OpenAI,
         request: StructuredModelRequest[Any],
-    ) -> Any:
+        *,
+        before_send: Callable[[], None] | None = None,
+    ) -> _ProviderCompletion:
         kwargs = self._chat_kwargs(request)
         kwargs.update(stream=True, stream_options={"include_usage": True})
-        return self._create_chat_completion(client, request.operation, kwargs)
+        return self._create_chat_completion(
+            client, request.operation, kwargs, before_send=before_send
+        )
 
     def _provider_unavailable(
         self,
@@ -273,16 +389,16 @@ class OpenAIModelClient:
         retryable = (
             status_code in {408, 409, 429} or status_code is None or status_code >= 500
         )
-        category = (
-            "provider_rejected"
-            if status_code is not None and status_code < 500
-            else "provider_transport"
-        )
+        category = "provider_transport"
+        if isinstance(exc, (APITimeoutError, httpx.TimeoutException)):
+            category = "provider_timeout"
+        elif status_code is not None and status_code < 500:
+            category = "provider_rejected"
         return ModelInvocationUnavailable(
             operation,
             category,
             model=self._resolved_model,
-            provider_host=urlparse(self._config.base_url).hostname,
+            provider_host=self._provider_host,
             status_code=status_code,
             retryable=retryable,
             diagnostics=self._provider_diagnostics(exc),
@@ -299,23 +415,9 @@ class OpenAIModelClient:
         headers = response.headers if response is not None else {}
 
         def clean(value: object) -> str | None:
-            if not isinstance(value, (str, int)) or isinstance(value, bool):
-                return None
-            text = str(value)
-            if self._config.api_key:
-                text = text.replace(self._config.api_key, "[redacted]")
-            text = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "Bearer [redacted]", text)
-            text = re.sub(r"\b(?:sk|tp)-[A-Za-z0-9_-]{8,}", "[redacted]", text)
-            text = re.sub(r"https?://[^\s<>\"']+", "[url redacted]", text)
-            text = re.sub(
-                r"(?i)\b(api[_-]?key|access[_-]?token|authorization|cookie|password|secret)"
-                r"\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"']+",
-                r"\1=[redacted]",
-                text,
-            )
-            text = re.sub(r"[\x00-\x1f\x7f]", " ", text).strip()
-            return text[:PROVIDER_DIAGNOSTIC_MAX_CHARS] or None
+            return clean_provider_diagnostic(value, self._config.api_key)
 
+        transport = model_transport_snapshot(exc)
         diagnostics = ProviderFailureDiagnostics(
             error_code=clean(detail.get("code")),
             error_type=clean(detail.get("type")),
@@ -324,17 +426,22 @@ class OpenAIModelClient:
                 getattr(exc, "request_id", None)
                 or envelope.get("request_id")
                 or headers.get("x-request-id")
+                or (transport.provider_request_id if transport else None)
             ),
-            retry_after=clean(headers.get("retry-after")),
+            retry_after=clean(headers.get("retry-after") or (transport.retry_after if transport else None)),
+            exception_chain=provider_exception_chain(exc, self._config.api_key),
+            transport=transport,
         )
-        return diagnostics if diagnostics.model_dump(exclude_none=True) else None
+        return diagnostics if diagnostics.model_dump(exclude_none=True, exclude_defaults=True) else None
 
     def _create_chat_completion(
         self,
         client: OpenAI,
         operation: str,
         kwargs: dict[str, Any],
-    ) -> Any:
+        *,
+        before_send: Callable[[], None] | None = None,
+    ) -> _ProviderCompletion:
         capacity = self._config.capacity
         if capacity is not None:
             try:
@@ -364,14 +471,24 @@ class OpenAIModelClient:
                 capacity_check=check.model_dump(mode="json"),
             )
 
-        def invoke() -> Any:
+        # Application owns budget/deadline admission for a new paid request.
+        # Keep it outside provider exception translation and the worker thread.
+        if before_send is not None:
+            try:
+                before_send()
+            except Exception as exc:
+                exc.model_before_send_failed = True
+                raise
+
+        def invoke() -> _ProviderCompletion:
             if kwargs.get("stream"):
-                stream_kwargs = {
-                    key: value for key, value in kwargs.items() if key != "stream"
-                }
-                with client.chat.completions.stream(**stream_kwargs) as stream:
-                    return stream.get_final_completion()
-            return client.chat.completions.create(**kwargs)
+                # Collect every complete response before local Schema or finish
+                # validation. SDK get_final_completion rejects content_filter
+                # before handing us the original; its local rich parser can
+                # also fail before the terminal usage chunk arrives.
+                with client.chat.completions.create(**kwargs) as raw_stream:
+                    return _aggregate_chat_chunks(raw_stream)
+            return _ProviderCompletion(payload=client.chat.completions.create(**kwargs))
 
         try:
             return _run_with_deadline(
@@ -380,20 +497,7 @@ class OpenAIModelClient:
                 operation=operation,
                 timeout_seconds=self._config.timeout_seconds,
             )
-        except LengthFinishReasonError as exc:
-            # The SDK rejects the terminal response before returning its usage.
-            # Keep the actual completion for the common typed failure path.
-            return exc.completion
-        except ContentFilterFinishReasonError as exc:
-            raise ModelInvocationUnavailable(
-                operation,
-                "provider_rejected",
-                model=self._resolved_model,
-                provider_host=urlparse(self._config.base_url or "").hostname,
-                retryable=False,
-                diagnostics=ProviderFailureDiagnostics(error_type="content_filter"),
-            ) from exc
-        except (APIStatusError, APIError) as exc:
+        except (APIStatusError, APIError, httpx.TransportError) as exc:
             raise self._provider_unavailable(operation, exc) from exc
 
     # -- complete-response entrypoint ----------------------------------
@@ -401,88 +505,308 @@ class OpenAIModelClient:
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        *,
+        response_sink: ModelResponseSink | None = None,
+        continuation: ModelInvocationContinuation | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> StructuredModelResponse[StructuredOutputT]:
-        if request.kind == "structured":
-            return self._generate_structured(request)
-        return self._generate_chat(request)
+        invocation = continuation or ModelInvocationContinuation.for_request(
+            request, invocation_id=uuid4().hex
+        )
+        invocation.validate_request(request)
+        for record in invocation.response_records:
+            if (
+                record.provider_host != self._provider_host
+                or record.requested_model != self._resolved_model
+            ):
+                raise ValueError("model continuation provider binding mismatch")
+        records = list(invocation.response_records)
+        errors: list[str] = []
+        exchanges: list[ModelToolExchange] = []
+        try:
+            if request.kind == "structured":
+                return self._generate_structured(
+                    request, invocation, records, errors, exchanges, response_sink,
+                    before_send,
+                )
+            return self._generate_chat(
+                request, invocation, records, errors, exchanges, response_sink,
+                before_send,
+            )
+        except Exception as exc:
+            # Recording failures are local errors and keep their original type.
+            # Completed originals remain available even when no decode happened.
+            if records:
+                exc.response = self._response(
+                    request, records, retry_errors=errors,
+                    protocol_exchanges=exchanges,
+                )
+            raise
+
+    def _receive_response(
+        self,
+        request: StructuredModelRequest[Any],
+        chat_request: StructuredModelRequest[Any],
+        invocation: ModelInvocationContinuation,
+        records: list[ModelResponseRecord],
+        response_sink: ModelResponseSink | None,
+        before_send: Callable[[], None] | None,
+        *,
+        structured: bool,
+    ) -> Any:
+        client = self._client()
+        started = perf_counter()
+        if structured:
+            completion = self._create_structured_completion(
+                client, chat_request, before_send=before_send
+            )
+        else:
+            completion = self._create_chat_completion(
+                client, request.operation, self._chat_kwargs(chat_request),
+                before_send=before_send,
+            )
+        response = completion.payload
+        if isinstance(response, BaseModel):
+            payload = response.model_dump(mode="json", exclude_unset=True)
+        else:
+            payload = response
+        record = ModelResponseRecord.from_payload_json(
+            invocation_id=invocation.invocation_id,
+            attempt_id=uuid4().hex,
+            operation=request.operation,
+            request_digest=invocation.request_digest,
+            context_projection_ref=request.context_projection_ref,
+            provider_host=self._provider_host,
+            requested_model=self._resolved_model,
+            payload_json=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            latency_ms=round((perf_counter() - started) * 1000, 2),
+            stream_protocol_failures=completion.stream_protocol_failures,
+        )
+        records.append(record)
+        if response_sink is not None:
+            try:
+                response_sink(record)
+            except Exception as exc:
+                exc.model_response_recording_failed = True
+                raise
+        return response
+
+    def _response(
+        self,
+        request: StructuredModelRequest[Any],
+        records: list[ModelResponseRecord],
+        *,
+        value: Any = None,
+        content: str | None = None,
+        action_invocations: tuple[ModelActionInvocation, ...] = (),
+        retry_errors: list[str] | None = None,
+        protocol_exchanges: list[ModelToolExchange] | None = None,
+    ) -> StructuredModelResponse[Any]:
+        if content is None:
+            raw = records[-1].raw_response if records else None
+            choices = raw.get("choices") if isinstance(raw, dict) else None
+            message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+            body = message.get("content") if isinstance(message, dict) else None
+            content = body if isinstance(body, str) else ""
+        return StructuredModelResponse(
+            value=value,
+            model=records[-1].model if records else self._resolved_model,
+            latency_ms=0,
+            content=content,
+            response_records=tuple(records),
+            action_invocations=action_invocations,
+            assistant_message=records[-1].assistant_message if records else None,
+            retry_attempts=max(0, len(records) - 1),
+            retry_errors=list(retry_errors or []),
+            protocol_exchanges=tuple(protocol_exchanges or ()),
+        )
+
+    def _check_complete_response(
+        self, request: StructuredModelRequest[Any], response: Any,
+        *, stream_protocol_failures: tuple[ModelStreamProtocolFailure, ...] = (),
+    ) -> None:
+        try:
+            choices = _require_chat_choices(response)
+        except (AttributeError, RuntimeError) as exc:
+            raise StructuredOutputFailure(
+                request.operation, str(exc)
+            ) from exc
+        if any(getattr(choice, "finish_reason", None) == "content_filter"
+               for choice in choices):
+            raise ModelInvocationUnavailable(
+                request.operation, "provider_rejected",
+                model=self._resolved_model, provider_host=self._provider_host,
+                retryable=False,
+                diagnostics=ProviderFailureDiagnostics(error_type="content_filter"),
+                provider_response_complete=True,
+            )
+        if any(getattr(choice, "finish_reason", None) == "length"
+               for choice in choices):
+            raise StructuredOutputFailure(
+                request.operation,
+                "provider response was truncated (finish_reason=length)",
+            )
+        if any(not getattr(choice, "finish_reason", None) for choice in choices):
+            raise StructuredOutputFailure(
+                request.operation,
+                "provider response is incomplete: missing terminal finish_reason",
+            )
+        if any(getattr(choice, "message", None) is None for choice in choices):
+            raise StructuredOutputFailure(
+                request.operation, "invalid provider response: missing assistant message"
+            )
+        if stream_protocol_failures:
+            first = stream_protocol_failures[0]
+            raise StructuredOutputFailure(
+                request.operation,
+                f"provider stream role protocol failed at choice {first.choice_index}: {first.reason}",
+            )
+        if any(getattr(choice.message, "role", None) != "assistant" for choice in choices):
+            raise StructuredOutputFailure(
+                request.operation, "provider response requires the original assistant role"
+            )
 
     def _generate_structured(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        invocation: ModelInvocationContinuation,
+        records: list[ModelResponseRecord],
+        errors: list[str],
+        exchanges: list[ModelToolExchange],
+        response_sink: ModelResponseSink | None,
+        before_send: Callable[[], None] | None,
     ) -> StructuredModelResponse[StructuredOutputT]:
-        start = perf_counter()
-        client = self._client()
         schema = request.output_type.model_json_schema()
-        responses: list[Any] = []
-        retry_errors: list[str] = []
-        try:
-            for repair in range(request.max_output_repairs + 1):
-                chat_request = self._structured_chat_request(
-                    request,
-                    schema,
-                    parse_error=retry_errors[-1] if retry_errors else None,
+        native = request.output_transport == "native_tool"
+        output_definition: ModelActionDefinition | None = None
+        if native:
+            output_definition = ModelActionDefinition(
+                name="structured_output", kind="tool",
+                target_name=request.operation,
+                description="返回当前任务要求的完整结构化结果。",
+                input_schema=convert_to_openai_tool(
+                    request.output_type, strict=False
+                )["function"]["parameters"],
+                strict=False,
+            )
+            chat_request = replace(
+                request, kind="tool_calling", output_transport=None,
+                action_choice="required",
+                action_definitions=(output_definition,),
+            )
+        elif request.output_transport == "prompted_json":
+            instruction, prompt_metadata = _schema_instruction(schema, parse_error=None)
+            chat_request = replace(
+                request, kind="text", output_transport=None, response_format=None,
+                messages=[instruction, *request.messages],
+                metadata={**request.metadata, **prompt_metadata},
+            )
+        else:
+            chat_request = self._structured_chat_request(
+                request, schema, parse_error=None
+            )
+        for repair in range(request.max_output_repairs + 1):
+            if repair < len(records):
+                response = _restore_provider_response(records[repair])
+            else:
+                if request.output_transport == "prompted_json":
+                    for extra in (self._config.extra_body, request.extra_body):
+                        if extra and {"tools", "tool_choice", "response_format"}.intersection(extra):
+                            raise ValueError("prompted JSON cannot use tool or response format extra_body fields")
+                response = self._receive_response(
+                    request, chat_request, invocation, records, response_sink,
+                    before_send,
+                    structured=True,
                 )
-                response = self._create_structured_completion(client, chat_request)
-                responses.append(response)
-                if any(getattr(choice, "finish_reason", None) == "length"
-                       for choice in _require_chat_choices(response)):
-                    raise StructuredOutputFailure(request.operation, "provider response was truncated (finish_reason=length)")
-                content, parsed, parse_error = self._parse_typed_response(
-                    request,
-                    response,
-                    latency_ms=round((perf_counter() - start) * 1000, 2),
+            # The sink has already committed this complete original.
+            try:
+                self._check_complete_response(
+                    request, response,
+                    stream_protocol_failures=records[repair].stream_protocol_failures,
                 )
-                if parse_error is None:
-                    usage = _aggregate_usage(responses)
-                    return StructuredModelResponse(
-                        value=parsed,
-                        model=getattr(response, "model", None) or self._resolved_model,
-                        latency_ms=round((perf_counter() - start) * 1000, 2),
-                        content=content,
-                        input_tokens=usage.get("input_tokens"),
-                        output_tokens=usage.get("output_tokens"),
-                        total_tokens=usage.get("total_tokens"),
-                        raw_response=response,
-                        retry_attempts=len(responses) - 1,
-                        retry_errors=retry_errors,
+                if native:
+                    content, parsed, parse_error = self._parse_native_output(
+                        request, response
                     )
-                if repair == request.max_output_repairs:
-                    raise StructuredOutputFailure(request.operation, parse_error)
-                retry_errors.append(parse_error)
+                else:
+                    content, parsed, parse_error = self._parse_typed_response(
+                        request, response, latency_ms=records[repair].latency_ms
+                    )
+            except StructuredOutputFailure as exc:
+                if not native:
+                    raise
+                content, parsed, parse_error = "", None, str(exc)
+            if parse_error is None:
+                if repair != len(records) - 1:
+                    raise ValueError("model continuation contains responses after valid output")
+                return self._response(
+                    request, records, value=parsed, content=content,
+                    retry_errors=errors, protocol_exchanges=exchanges,
+                )
+            if repair == request.max_output_repairs:
+                raise StructuredOutputFailure(request.operation, parse_error)
+            errors.append(parse_error)
+            chat_request, exchange = self._structured_repair_request(
+                chat_request, schema, parse_error, records[repair],
+                output_definition=output_definition,
+            )
+            if exchange is not None:
+                exchanges.append(exchange)
+            if repair >= len(invocation.response_records):
                 log_event(
-                    logger,
-                    logging.WARNING,
-                    "llm.structured_schema_repair",
-                    operation=request.operation,
-                    version=request.version,
+                    logger, logging.WARNING, "llm.structured_schema_repair",
+                    operation=request.operation, version=request.version,
                     parse_error=parse_error[:500],
                 )
-        except (
-            StructuredOutputFailure,
-            ModelInvocationUnavailable,
-            ModelCapacityRefused,
-        ) as exc:
-            if responses:
-                usage = _aggregate_usage(responses)
-                if isinstance(exc, ModelInvocationUnavailable):
-                    # The failed transport did not provide complete usage.
-                    usage.pop("input_tokens", None)
-                    usage.pop("output_tokens", None)
-                exc.response = StructuredModelResponse(
-                    value=None,
-                    model=getattr(responses[-1], "model", None) or self._resolved_model,
-                    latency_ms=round((perf_counter() - start) * 1000, 2),
-                    input_tokens=usage.get("input_tokens"),
-                    output_tokens=usage.get("output_tokens"),
-                    total_tokens=usage.get("total_tokens"),
-                    raw_response=responses[-1],
-                    retry_attempts=len(responses)
-                    - 1
-                    + int(isinstance(exc, ModelInvocationUnavailable)),
-                    retry_errors=retry_errors,
-                )
-            raise
         raise AssertionError("structured repair loop must return or raise")
+
+    def _structured_repair_request(
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+        schema: dict[str, Any],
+        parse_error: str,
+        record: ModelResponseRecord,
+        *,
+        output_definition: ModelActionDefinition | None = None,
+    ) -> tuple[StructuredModelRequest[StructuredOutputT], ModelToolExchange | None]:
+        if output_definition is not None:
+            if request.action_definitions != (output_definition,):
+                raise ValueError("native output repair declaration mismatch")
+            instruction, prompt_metadata = _native_output_repair_instruction(
+                output_definition, parse_error
+            )
+        else:
+            instruction, prompt_metadata = _schema_repair_instruction(schema, parse_error)
+        assistant = record.assistant_message
+        exchange = None
+        messages = list(request.messages)
+        history = request.model_history
+        if assistant is not None and assistant.call_ids:
+            exchange = ModelToolExchange(
+                assistant=assistant,
+                results=tuple(
+                    ModelToolResult(call_id=call_id, content=instruction["content"])
+                    for call_id in assistant.call_ids
+                ),
+            )
+            history = (*history, exchange)
+        else:
+            if assistant is not None:
+                messages.append(assistant.payload)
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": json.dumps(
+                        {"材料类型": "先前未通过协议校验的模型原始输出，仅作待修复数据",
+                         "原始输出": record.raw_response},
+                        ensure_ascii=False, separators=(",", ":"),
+                    ),
+                })
+            messages.append(instruction)
+        return replace(
+            request, messages=messages, model_history=history,
+            metadata={**request.metadata, **prompt_metadata},
+        ), exchange
 
     def _structured_chat_request(
         self,
@@ -495,6 +819,23 @@ class OpenAIModelClient:
             "structured requests require an explicit structured-output adapter"
         )
 
+    def _parse_native_output(
+        self,
+        request: StructuredModelRequest[StructuredOutputT],
+        response: Any,
+    ) -> tuple[str, StructuredOutputT | None, str | None]:
+        try:
+            message = _require_chat_choices(response)[0].message
+            calls = _extract_action_invocations(message, request)
+            if len(calls) != 1 or calls[0].name != "structured_output":
+                raise StructuredOutputFailure(
+                    request.operation, "provider must return the single declared output tool"
+                )
+            content = json.dumps(calls[0].arguments, ensure_ascii=False)
+            return content, request.output_type.model_validate(calls[0].arguments), None
+        except (StructuredOutputFailure, ValidationError, AttributeError, RuntimeError) as exc:
+            return "", None, str(exc)
+
     def _parse_typed_response(
         self,
         request: StructuredModelRequest[StructuredOutputT],
@@ -502,12 +843,24 @@ class OpenAIModelClient:
         *,
         latency_ms: float,
     ) -> tuple[str, StructuredOutputT | None, str | None]:
+        prompted_json = request.output_transport == "prompted_json"
         try:
-            message = _structured_chat_message(response)
+            message = (
+                _require_chat_choices(response)[0].message
+                if prompted_json else _structured_chat_message(response)
+            )
         except Exception as exc:
             return "", None, str(exc)
-        content = (message.content or "").strip()
-        if not content:
+        if prompted_json:
+            calls = getattr(message, "tool_calls", None)
+            if calls is not None and (not isinstance(calls, list) or calls):
+                return "", None, "prompted JSON response must not include tool calls"
+            content = getattr(message, "content", None)
+            if not isinstance(content, str):
+                return "", None, "provider returned non-string prompted JSON content"
+        else:
+            content = (message.content or "").strip()
+        if not content.strip():
             choice = _require_chat_choices(response)[0]
             details: list[str] = []
             finish_reason = getattr(choice, "finish_reason", None)
@@ -518,15 +871,14 @@ class OpenAIModelClient:
                 details.append(f"output_tokens={output_tokens}")
             suffix = f" ({', '.join(details)})" if details else ""
             return "", None, "provider returned empty structured content" + suffix
-        if request.output_type is BaseModel:
+        if request.output_type is BaseModel and not prompted_json:
             return content, self._default_value(request), None
         parse_result = parse_structured(
-            content,
-            request.output_type,
-            operation=request.operation,
-            version=request.version,
+            content, request.output_type,
+            operation=request.operation, version=request.version,
             model_name=getattr(response, "model", None) or self._resolved_model,
             latency_ms=latency_ms,
+            allow_json_repair=not prompted_json,
         )
         if not parse_result.ok:
             return content, None, parse_result.error or "invalid structured response"
@@ -535,134 +887,107 @@ class OpenAIModelClient:
     def _generate_chat(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        invocation: ModelInvocationContinuation,
+        records: list[ModelResponseRecord],
+        errors: list[str],
+        exchanges: list[ModelToolExchange],
+        response_sink: ModelResponseSink | None,
+        before_send: Callable[[], None] | None,
     ) -> StructuredModelResponse[StructuredOutputT]:
-        start = perf_counter()
-        client = self._client()
-        responses: list[Any] = []
         chat_request = request
-        repair_errors: list[str] = []
-        protocol_failure: StructuredOutputFailure | None = None
-        action_invocations = ()
-        for attempt in range(2):
-            try:
-                response = self._create_chat_completion(
-                    client,
-                    request.operation,
-                    self._chat_kwargs(chat_request),
+        for repair in range(request.max_output_repairs + 1):
+            if repair < len(records):
+                response = _restore_provider_response(records[repair])
+            else:
+                response = self._receive_response(
+                    request, chat_request, invocation, records, response_sink,
+                    before_send,
+                    structured=False,
                 )
-            except (ModelInvocationUnavailable, ModelCapacityRefused) as exc:
-                if responses:
-                    usage = _aggregate_usage(responses)
-                    if isinstance(exc, ModelInvocationUnavailable):
-                        usage.pop("input_tokens", None)
-                        usage.pop("output_tokens", None)
-                    exc.response = StructuredModelResponse(
-                        value=None,
-                        model=getattr(responses[-1], "model", None)
-                        or self._resolved_model,
-                        latency_ms=round((perf_counter() - start) * 1000, 2),
-                        input_tokens=usage.get("input_tokens"),
-                        output_tokens=usage.get("output_tokens"),
-                        total_tokens=usage.get("total_tokens"),
-                        retry_attempts=len(responses)
-                        - 1
-                        + int(isinstance(exc, ModelInvocationUnavailable)),
-                        retry_errors=repair_errors,
-                    )
-                raise
-            responses.append(response)
-            if any(getattr(choice, "finish_reason", None) == "length"
-                   for choice in _require_chat_choices(response)):
-                protocol_failure = StructuredOutputFailure(request.operation,
-                    "provider response was truncated (finish_reason=length)")
-                break
+            self._check_complete_response(
+                request, response,
+                stream_protocol_failures=records[repair].stream_protocol_failures,
+            )
             message = _require_chat_choices(response)[0].message
+            assistant = records[repair].assistant_message
             try:
-                action_invocations = (
+                actions = (
                     _extract_action_invocations(message, chat_request)
-                    if request.kind == "tool_calling"
-                    else ()
+                    if request.kind == "tool_calling" else ()
                 )
-                break
+                if request.kind == "tool_calling" and assistant is None:
+                    raise StructuredOutputFailure(
+                        request.operation, "provider returned an invalid native assistant message"
+                    )
             except StructuredOutputFailure as exc:
                 if not (
-                    attempt == 0
+                    repair < request.max_output_repairs
                     and request.kind == "tool_calling"
                     and request.action_choice == "required"
-                    and exc.reason_code
-                    in (
+                    and exc.reason_code in {
                         "provider_action_missing",
                         "provider_action_arguments_invalid_json",
-                    )
+                    }
                 ):
-                    protocol_failure = exc
-                    break
-                repair_errors.append(exc.reason_code)
+                    raise
+                errors.append(exc.reason_code)
                 repair_prompt = get_prompt("action.repair.system")
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "llm.action_protocol_repair",
-                    operation=request.operation,
-                    version=request.version,
-                    reason_code=exc.reason_code,
-                    repair_prompt_name=repair_prompt.name,
-                    repair_prompt_version=repair_prompt.version,
+                repair_content = repair_prompt.render(validation_feedback=json.dumps(
+                    {"reason_code": exc.reason_code,
+                     "rejected_output": records[repair].raw_response},
+                    ensure_ascii=False,
+                ))
+                if assistant is None:
+                    # A missing/duplicate call ID has no legal native pairing.
+                    # Application owns that repair; never fabricate a call ID.
+                    raise
+                exchange = ModelToolExchange(
+                    assistant=assistant,
+                    results=tuple(
+                        ModelToolResult(call_id=call_id, content=repair_content)
+                        for call_id in assistant.call_ids
+                    ),
                 )
-                rejected_calls = [
-                    call if isinstance(call, dict) else call.model_dump(mode="json")
-                    for call in (getattr(message, "tool_calls", None) or [])
-                ]
+                exchanges.append(exchange)
                 chat_request = replace(
                     request,
-                    metadata={
-                        **request.metadata,
-                        "action_prompt_name": repair_prompt.name,
-                        "action_prompt_version": repair_prompt.version,
-                    },
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": repair_prompt.render(
-                                validation_feedback=json.dumps(
-                                    {
-                                        "reason_code": exc.reason_code,
-                                        "rejected_content": message.content,
-                                        "rejected_calls": rejected_calls,
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            ),
-                        },
-                        *request.messages,
-                    ],
+                    messages=[{"role": "system", "content": repair_content}, *request.messages],
+                    model_history=(*request.model_history, *exchanges),
+                    metadata={**request.metadata,
+                              "action_prompt_name": repair_prompt.name,
+                              "action_prompt_version": repair_prompt.version},
                 )
-        response = responses[-1]
-        message = _require_chat_choices(response)[0].message
-        latency_ms = round((perf_counter() - start) * 1000, 2)
-        content = (message.content or "").strip()
-        usage = _aggregate_usage(responses)
-        result = StructuredModelResponse(
-            value=(
-                None
-                if action_invocations or protocol_failure is not None
-                else self._default_value(request)
+                continue
+            if repair != len(records) - 1:
+                raise ValueError("model continuation contains responses after valid output")
+            return self._response(
+                request, records,
+                value=None if actions else self._default_value(request),
+                content=assistant.visible_text if assistant is not None else None,
+                action_invocations=actions, retry_errors=errors,
+                protocol_exchanges=exchanges,
+            )
+        raise AssertionError("chat repair loop must return or raise")
+
+
+def _native_output_repair_instruction(
+    output_definition: ModelActionDefinition,
+    parse_error: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    prompt = get_prompt("structured.native_tool.repair.system")
+    return (
+        {
+            "role": "system",
+            "content": prompt.render(
+                output_tool_name=output_definition.name,
+                validation_feedback=parse_error[:2000],
             ),
-            model=getattr(response, "model", None) or self._resolved_model,
-            latency_ms=latency_ms,
-            content=content,
-            input_tokens=usage.get("input_tokens"),
-            output_tokens=usage.get("output_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            raw_response=response,
-            action_invocations=action_invocations,
-            retry_attempts=len(repair_errors),
-            retry_errors=repair_errors,
-        )
-        if protocol_failure is not None:
-            protocol_failure.response = result
-            raise protocol_failure
-        return result
+        },
+        {
+            "structured_prompt_name": prompt.name,
+            "structured_prompt_version": prompt.version,
+        },
+    )
 
 
 def _schema_repair_instruction(
@@ -686,6 +1011,27 @@ def _schema_repair_instruction(
             "structured_prompt_name": prompt.name,
             "structured_prompt_version": prompt.version,
         },
+    )
+
+
+def _schema_instruction(
+    schema: dict[str, Any],
+    *,
+    parse_error: str | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    if parse_error is not None:
+        return _schema_repair_instruction(schema, parse_error)
+    prompt = get_prompt("structured.system")
+    return (
+        {
+            "role": "system",
+            "content": prompt.render(
+                output_schema=json.dumps(
+                    schema, ensure_ascii=False, separators=(",", ":"),
+                ),
+            ),
+        },
+        {"structured_prompt_name": prompt.name, "structured_prompt_version": prompt.version},
     )
 
 
@@ -727,27 +1073,7 @@ class JsonObjectStructuredAdapter(OpenAIModelClient):
         *,
         parse_error: str | None,
     ) -> StructuredModelRequest[StructuredOutputT]:
-        if parse_error is None:
-            prompt = get_prompt("structured.system")
-            instruction = {
-                "role": "system",
-                "content": prompt.render(
-                    output_schema=json.dumps(
-                        schema,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                ),
-            }
-            prompt_metadata = {
-                "structured_prompt_name": prompt.name,
-                "structured_prompt_version": prompt.version,
-            }
-        else:
-            instruction, prompt_metadata = _schema_repair_instruction(
-                schema,
-                parse_error,
-            )
+        instruction, prompt_metadata = _schema_instruction(schema, parse_error=parse_error)
         return replace(
             request,
             messages=[instruction, *request.messages],
@@ -780,113 +1106,72 @@ class RetryingStructuredModelClient:
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        *,
+        response_sink: ModelResponseSink | None = None,
+        continuation: ModelInvocationContinuation | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> StructuredModelResponse[StructuredOutputT]:
+        current = continuation or ModelInvocationContinuation.for_request(
+            request, invocation_id=uuid4().hex
+        )
+        current.validate_request(request)
         retry_errors: list[str] = []
-        failed_responses: list[StructuredModelResponse[Any] | None] = []
-        start = perf_counter()
 
-        def aggregate(response: StructuredModelResponse) -> StructuredModelResponse:
-            attempts = [*failed_responses, response]
-            usage = _sum_usage(
-                [
-                    {
-                        key: value
-                        for key in ("input_tokens", "output_tokens", "total_tokens")
-                        if (value := getattr(item, key, None)) is not None
-                    }
-                    for item in attempts
-                ]
-            )
+        def aggregate(
+            response: StructuredModelResponse[Any], technical_retries: int
+        ) -> StructuredModelResponse[Any]:
             return replace(
                 response,
-                latency_ms=round((perf_counter() - start) * 1000, 2),
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
-                total_tokens=usage.get("total_tokens"),
-                retry_attempts=response.retry_attempts
-                + len(failed_responses)
-                + sum(
-                    item.retry_attempts for item in failed_responses if item is not None
-                ),
+                retry_attempts=response.retry_attempts + technical_retries,
                 retry_errors=[*retry_errors, *response.retry_errors],
             )
 
         for attempt in range(self._max_retries + 1):
             try:
-                response = self._delegate.generate(request)
-                return aggregate(response)
-            except Exception as exc:
-                observed = (
-                    exc.response
-                    if isinstance(
-                        exc,
-                        (
-                            StructuredOutputFailure,
-                            ModelInvocationUnavailable,
-                            ModelCapacityRefused,
-                        ),
-                    )
-                    else None
+                response = self._delegate.generate(
+                    request, response_sink=response_sink, continuation=current,
+                    before_send=before_send,
                 )
+                return aggregate(response, attempt)
+            except Exception as exc:
+                observed = getattr(exc, "response", None)
+                if observed is not None and observed.response_records:
+                    current = current.model_copy(update={
+                        "response_records": observed.response_records,
+                    })
                 if attempt >= self._max_retries or not _is_retryable_model_error(exc):
-                    if isinstance(
-                        exc,
-                        (
-                            StructuredOutputFailure,
-                            ModelInvocationUnavailable,
-                            ModelCapacityRefused,
-                        ),
-                    ):
-                        if observed is None and any(
-                            item is not None for item in failed_responses
-                        ):
-                            previous = next(
-                                item
-                                for item in reversed(failed_responses)
-                                if item is not None
-                            )
-                            observed = StructuredModelResponse(
-                                value=None, model=previous.model, latency_ms=0
-                            )
-                        if observed is not None:
-                            exc.response = aggregate(observed)
+                    if observed is None and current.response_records:
+                        observed = StructuredModelResponse(
+                            value=None, model=current.response_records[-1].model,
+                            latency_ms=0, response_records=current.response_records,
+                        )
+                    if observed is not None:
+                        exc.response = aggregate(observed, attempt)
                     if retry_errors:
                         log_event(
-                            logger,
-                            logging.WARNING,
-                            "llm.retry.exhausted",
+                            logger, logging.WARNING, "llm.retry.exhausted",
                             prompt_name=request.operation,
-                            prompt_version=request.version,
-                            attempts=attempt + 1,
+                            prompt_version=request.version, attempts=attempt + 1,
                             retry_errors=retry_errors + [str(exc)[:240]],
                             provider_diagnostics=(
                                 exc.diagnostics.model_dump(exclude_none=True)
                                 if isinstance(exc, ModelInvocationUnavailable)
-                                and exc.diagnostics
-                                else None
+                                and exc.diagnostics else None
                             ),
                         )
                     raise
-                failed_responses.append(observed)
-                if observed is not None:
-                    retry_errors.extend(observed.retry_errors)
                 retry_errors.append(str(exc)[:240])
                 delay = self._backoff_seconds * (2**attempt)
                 log_event(
-                    logger,
-                    logging.WARNING,
-                    "llm.retry.scheduled",
-                    prompt_name=request.operation,
-                    prompt_version=request.version,
-                    attempt=attempt + 1,
-                    max_retries=self._max_retries,
+                    logger, logging.WARNING, "llm.retry.scheduled",
+                    prompt_name=request.operation, prompt_version=request.version,
+                    attempt=attempt + 1, max_retries=self._max_retries,
                     retry_delay_seconds=round(delay, 3),
                     retry_error=retry_errors[-1],
                     provider_diagnostics=(
                         exc.diagnostics.model_dump(exclude_none=True)
                         if isinstance(exc, ModelInvocationUnavailable)
-                        and exc.diagnostics
-                        else None
+                        and exc.diagnostics else None
                     ),
                 )
                 if delay > 0:
@@ -894,6 +1179,12 @@ class RetryingStructuredModelClient:
 
 
 def _is_retryable_model_error(exc: Exception) -> bool:
+    if (
+        isinstance(exc, StructuredOutputFailure)
+        or getattr(exc, "model_response_recording_failed", False)
+        or getattr(exc, "model_before_send_failed", False)
+    ):
+        return False
     if isinstance(exc, ModelCapacityRefused):
         return False
     if isinstance(exc, ModelInvocationUnavailable):
@@ -954,7 +1245,9 @@ class RedactedTracePayloadPolicy:
             "operation": request.operation,
             "version": request.version,
             "kind": request.kind,
-            "output_type": request.output_type.__name__,
+            "output_transport": request.output_transport,
+            "max_output_repairs": request.max_output_repairs,
+            "output_type": request.output_type.__name__ if request.kind == "structured" else None,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "message_count": len(messages),
@@ -995,8 +1288,10 @@ class FullTracePayloadPolicy:
             "operation": request.operation,
             "version": request.version,
             "kind": request.kind,
+            "output_transport": request.output_transport,
+            "max_output_repairs": request.max_output_repairs,
             "messages": request.messages,
-            "output_type": request.output_type.__name__,
+            "output_type": request.output_type.__name__ if request.kind == "structured" else None,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
             "action_definitions": [
@@ -1041,25 +1336,41 @@ class UsageRecordingStructuredModelClient:
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        *,
+        response_sink: ModelResponseSink | None = None,
+        continuation: ModelInvocationContinuation | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> StructuredModelResponse[StructuredOutputT]:
         response = None
         try:
-            response = self._delegate.generate(request)
-        except (
-            StructuredOutputFailure,
-            ModelInvocationUnavailable,
-            ModelCapacityRefused,
-        ) as exc:
-            response = exc.response
+            response = self._delegate.generate(
+                request, response_sink=response_sink, continuation=continuation,
+                before_send=before_send,
+            )
+        except Exception as exc:
+            response = getattr(exc, "response", None)
             raise
         finally:
             if response is not None:
-                record_llm_usage(
-                    latency_ms=response.latency_ms,
-                    input_tokens=response.input_tokens,
-                    output_tokens=response.output_tokens,
-                    total_tokens=response.total_tokens,
-                )
+                previous_ids = {
+                    record.attempt_id for record in continuation.response_records
+                } if continuation else set()
+                if response.response_records:
+                    for record in response.response_records:
+                        if record.attempt_id not in previous_ids:
+                            record_llm_usage(
+                                latency_ms=record.latency_ms,
+                                input_tokens=record.input_tokens,
+                                output_tokens=record.output_tokens,
+                                total_tokens=record.total_tokens,
+                            )
+                else:
+                    record_llm_usage(
+                        latency_ms=response.latency_ms,
+                        input_tokens=response.input_tokens,
+                        output_tokens=response.output_tokens,
+                        total_tokens=response.total_tokens,
+                    )
         assert response is not None
         return response
 
@@ -1078,7 +1389,12 @@ class ObservedStructuredModelClient:
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        *,
+        response_sink: ModelResponseSink | None = None,
+        continuation: ModelInvocationContinuation | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> StructuredModelResponse[StructuredOutputT]:
+        trace_options: dict[str, Any] = {}
         try:
             from langsmith import traceable
 
@@ -1088,22 +1404,26 @@ class ObservedStructuredModelClient:
                 process_inputs=self._payload_policy.inputs,
                 process_outputs=self._payload_policy.outputs,
             )(self._delegate.generate)
+            trace_options["langsmith_extra"] = {
+                "name": f"llm.{request.operation}",
+                "metadata": {
+                    "prompt_name": request.operation,
+                    "prompt_version": request.version,
+                    "output_type": request.output_type.__name__ if request.kind == "structured" else None,
+                },
+            }
         except Exception:
             traced = self._delegate.generate
 
         try:
             response = traced(
                 request,
-                langsmith_extra={
-                    "name": f"llm.{request.operation}",
-                    "metadata": {
-                        "prompt_name": request.operation,
-                        "prompt_version": request.version,
-                        "output_type": request.output_type.__name__,
-                    },
-                },
+                response_sink=response_sink,
+                continuation=continuation,
+                before_send=before_send,
+                **trace_options,
             )
-            _report_usage_to_run_tree(response)
+            _report_usage_to_run_tree(response, continuation)
             log_event(
                 logger,
                 logging.INFO,
@@ -1111,7 +1431,7 @@ class ObservedStructuredModelClient:
                 prompt_name=request.operation,
                 prompt_version=request.version,
                 model=response.model,
-                parse_schema=request.output_type.__name__,
+                parse_schema=request.output_type.__name__ if request.kind == "structured" else None,
                 parse_ok=True,
                 latency_ms=response.latency_ms,
                 retry_attempts=response.retry_attempts,
@@ -1125,7 +1445,7 @@ class ObservedStructuredModelClient:
                 "llm.parse",
                 prompt_name=request.operation,
                 prompt_version=request.version,
-                parse_schema=request.output_type.__name__,
+                parse_schema=request.output_type.__name__ if request.kind == "structured" else None,
                 parse_ok=False,
                 parse_error=str(exc)[:500],
             )

@@ -12,7 +12,8 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析、长程状态及历史压缩的整体职责和验证关系 | [当前状态](knowledge-decision-delivery.md#8-当前状态与剩余决定)、[LongDS 36 轮设计](knowledge-decision-delivery.md#9-longds-长程数据分析设计)；新增用例尚未执行，准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有 | [研究能力增强与实验交付 Spec](knowledge-decision-delivery.md) |
+| `CONVERSATION-LOOP-BOUNDARIES-001`：整个 Loop 的模型交互 Schema、原生动作与交付、错误和恢复 | [当前完成及证据边界](conversation-loop-schema.md#16-完整运行结果与实际边界)；完整36轮交付及17→18恢复成立，官方正确性27/36，未覆盖边界见正文 | [统一交互契约](conversation-loop-schema.md)，替代旧 §3.10 单独候选；[终答入口框架分析](conversation-loop-schema.md#17-终答入口的框架分析与职责收窄候选)，收窄候选未实施 |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析、长程状态及历史压缩的整体职责和验证关系 | [当前状态](knowledge-decision-delivery.md#8-当前状态与剩余决定)、[LongDS 36 轮设计](knowledge-decision-delivery.md#9-longds-长程数据分析设计)；执行事实由评测盘点拥有，准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有 | [研究能力增强与实验交付 Spec](knowledge-decision-delivery.md)；[可执行分析、自检与成文候选](knowledge-decision-delivery.md#10-可执行分析自检与结果成文候选)，尚未实施 |
 | `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主Python数据分析执行；旧自动统计方案已撤回 | [研究事实与范围](knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python数据分析工具Spec](python-data-analysis-tool.md)，已实施；自主计算链成立，局部整稿失败 |
 | `RESEARCH-GOAL-COVERAGE-001`：统一链既有验收保持；claim 增量贡献先补完整标注与实际修订，再决定独立机制候选 | [正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [claim 评估与优化顺序](research-goal-coverage.md#当前推荐复核标注再比较实际修订)；[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
 | `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入优化及实际成本收益尚待证明 | [预算事实与当前边界](research-input-budget.md) | [预算复审](research-input-budget.md) |

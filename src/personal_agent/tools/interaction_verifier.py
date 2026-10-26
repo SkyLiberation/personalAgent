@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from hashlib import sha256
 from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from personal_agent.capabilities.contracts.model import (
-    StructuredModelClient,
     StructuredModelRequest,
+    StructuredModelResponse,
     sealed_context_projection_ref,
 )
 from personal_agent.capabilities.contracts.verification import (
@@ -24,12 +26,14 @@ from personal_agent.capabilities.contracts.verification import (
     VerificationCriterionResult,
 )
 from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.tools.base import (
     ToolArtifact,
     governance_extras,
     tool_failure,
     tool_response,
     tool_success,
+    require_gateway_context,
 )
 
 
@@ -81,7 +85,7 @@ class VerifyInteractionDraftArgs(BaseModel):
 
 
 def build_verify_interaction_draft_tool(
-    model_client: StructuredModelClient,
+    generate: Callable[[ExecutionScope, StructuredModelRequest], StructuredModelResponse],
 ) -> BaseTool:
     @tool(
         "verify_interaction_draft",
@@ -99,7 +103,7 @@ def build_verify_interaction_draft_tool(
             risk_level="low",
             side_effects=("none",),
             permission_scope="interaction:verify",
-            timeout_seconds=480,
+            timeout_seconds=None,
             max_retries=0,
             rate_limit_per_minute=20,
             emits_verified_artifact=True,
@@ -108,9 +112,11 @@ def build_verify_interaction_draft_tool(
     def verify_interaction_draft(
         draft: str,
         success_criteria: tuple[str, ...],
+        config: RunnableConfig,
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
     ):
+        scope = require_gateway_context(config).execution_scope
         prompt = get_prompt("interaction_verification.system")
         support_prompt = get_prompt("interaction_verification.source_support")
         verification_criteria = tuple(
@@ -148,19 +154,23 @@ def build_verify_interaction_draft_tool(
             ],
         }
         cited_prompt = get_prompt("interaction_verification.cited_support")
-        for unit in units:
+        verification_key = sha256(verification_input.model_dump_json().encode("utf-8")).hexdigest()
+        for unit_index, unit in enumerate(units):
             if not unit.draft.strip():
                 continue
             cited_messages = [
                 {"role": "system", "content": cited_prompt.template},
                 {"role": "user", "content": unit.model_dump_json()},
             ]
-            support = model_client.generate(
+            support = generate(
+                scope,
                 StructuredModelRequest(
                     operation="interaction_cited_support",
+                    consumer_key=f"cited:{verification_key}:{unit_index}",
                     version=cited_prompt.version,
                     messages=cited_messages,
                     output_type=OverreachReport,
+                    output_transport="native_tool",
                     context_projection_ref=sealed_context_projection_ref(
                         purpose="interaction_cited_support",
                         messages=cited_messages,
@@ -202,15 +212,18 @@ def build_verify_interaction_draft_tool(
                 "content": json.dumps(verification_payload, ensure_ascii=False),
             },
         ]
-        response = model_client.generate(
+        response = generate(
+            scope,
             StructuredModelRequest(
                 operation="interaction_semantic_verification",
+                consumer_key="semantic:" + sha256(json.dumps(verification_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest(),
                 version=prompt.version,
                 messages=messages,
                 output_type=_bound_report_type(
                     SemanticVerificationReport,
                     criteria,
                 ),
+                output_transport="native_tool",
                 context_projection_ref=sealed_context_projection_ref(
                     purpose="interaction_semantic_verification",
                     messages=messages,
@@ -258,8 +271,7 @@ def build_verify_interaction_draft_tool(
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        normalized_draft = draft.strip()
-        draft_digest = sha256(normalized_draft.encode("utf-8")).hexdigest()
+        draft_digest = sha256(draft.encode("utf-8")).hexdigest()
         receipt = SemanticVerificationReceipt(
             **report.model_dump(mode="python", exclude={"criterion_results"}),
             criterion_results=tuple(
@@ -271,7 +283,7 @@ def build_verify_interaction_draft_tool(
             ),
             verdict=verdict,
             receipt_id=f"svr_{draft_digest[:20]}",
-            verified_draft=normalized_draft,
+            verified_draft=draft,
             draft_digest=draft_digest,
             success_criteria=tuple(success_criteria),
             criteria_digest=sha256(criteria_payload.encode("utf-8")).hexdigest(),

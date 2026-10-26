@@ -17,6 +17,8 @@ Verification 是 Agent 内部元能力：
 
 ## 当前核验覆盖与适用边界
 
+2026-10-23 已接入[可替换回答模块](../../src/personal_agent/application/conversation/answer_results.py)：部署分别选择 direct/claims writer 与 required/none 核验，默认 `claims + required`，下文描述此默认配置。`none` 不产生通过回执，仍检查真实引用、权限、执行及费用；当前仅在用户授权的独立 LongDS 流程诊断使用，不计完整产品 E2E。配置在 Journal 冻结且同对话不能切换；契约及临时例外见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
+
 当前普通回答通过冻结的 `ReviewCriteria.requires_review` 决定是否执行整稿模型核验；进入该工具后，会把通用来源支持标准追加到用户标准。研究则采用同版本统一核验，交付不再重复普通核验。工具授权、引用合法性、业务写入和 Completion 各有确定性边界，不能因为某条回答没有额外模型核验就省略。
 
 “所有流程都有验收责任”与“所有回答都另调一次模型核验”是不同要求。现行来源标准对计算答案造成过实际拒稿，完整请求审计仍待完成；适用性设计、外部实践及目标场景矩阵统一见[主循环与核验边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md#4-是否所有流程都需要答案核验)。该矩阵是候选，不改变本文的现行触发或标准。

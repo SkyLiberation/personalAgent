@@ -18,6 +18,7 @@ required result contract 关闭用户目标。普通用户只面对一套目标�
 | [`chinese-writing-spec.md`](chinese-writing-spec.md) | 所有工程文档和对用户回答的表达规范；拥有设计 Spec 结构、需求追溯、证据措辞和存量迁移门禁 |
 | [`devSpec/`](devSpec/README.md) | 根 `AGENTS.md` 与 `CLAUDE.md` 按任务渐进披露的开发、设计、测试、文档和发布细则 |
 | [`agentRef/`](agentRef/README.md) | 按组件组织的外部机制检索与分级参考；不定义本工程现状、路线或采用结论 |
+| [`experience/`](experience/README.md) | 已发生问题的快速识别与排查经验；标明适用范围、原始证据和结论边界，不替代生产契约或正式评测 |
 | [`architecture/`](architecture/README.md) | 现行全局架构、代码地图与横切机制的权威正文；作为后续设计和开发的框架基线 |
 | `topics/` | 当前入口、运行系统、工具、记忆、上下文、检索与验收的权威专题 |
 | `workflow/` | 端到端执行链路与 Governed Procedure 说明 |

@@ -1,6 +1,6 @@
 # 模型自主 Python 数据分析工具 Spec
 
-状态：2026-10-21至22 已实施并完成本轮有界局部验证；自主程序执行及后继消费成立，完整统计分析草稿未通过，不能声称稳定修复。归属 `KNOWLEDGE-DECISION-DELIVERY-001` 的自主计算切片；[整体研究 Spec](knowledge-decision-delivery.md#12-整体架构增强顺序与本轮切片)拥有增强顺序，正式历史结果由[评测盘点](../../evals/02-current-case-inventory.md#2026-10-21-程序统计与成文自检的局部失败)拥有。本轮不执行完整研究target或压缩实验。
+状态：截至 2026-10-24，自主程序执行、程序文件复用及独立对话许可已接入；有界局部执行、原件恢复和消费停止成立，完整统计回答及长任务结果仍未通过。归属 `KNOWLEDGE-DECISION-DELIVERY-001` 的自主计算切片；[整体研究 Spec](knowledge-decision-delivery.md#12-整体架构增强顺序与本轮切片)拥有增强顺序，[评测盘点](../../evals/02-current-case-inventory.md)拥有正式结果。LongDS 侧契约及验收范围见 §3.5，不从局部执行推断稳定修复。
 
 ## 1. 目标、依据与取舍
 
@@ -49,21 +49,20 @@
 
 ## 3. 模型可见契约
 
-只增加一个 `execute_python`，沿原 ToolCallProposal／Admission／Tool Port 调用；初次代码是模型新生成内容，不要求先经另一轮工具写盘。已有程序复用和修改继续使用 Artifact 引用及既有 patch 工具。
+`execute_python` 沿原 ToolCallProposal／Admission／Tool Port 调用，接收模型直接生成的完整代码和可选只读文件绑定。代码不要求先经另一轮工具写盘；已有程序通过 Artifact 绑定为文件，模型使用标准 Python 读取或运行。
 
 ```text
 ExecutePythonArgs
-  code: str | null
-  program_ref: ResourceRef | null
-  input_files: tuple[PythonInputBinding, ...]
-    PythonInputBinding(name: str, resource_ref: ResourceRef)
+  code: str
+  input_files: tuple[PythonInputBinding, ...] = ()
+    PythonInputBinding(name: str, resource_id: str)
 ```
 
-以上为本轮已接回生产的唯一契约，状态见§3.3。三个参数键显式必填，code与program_ref恰好一项不是null，空字符串仍是源码；无文件时input_files为空数组。新代码固化原UTF-8字节，已有程序引用恢复原文。首轮实施与撤回保留§3.2的历史身份，不再因模型合法选择其他工具而回撤。程序最多128 KiB。输入最多32项、合计最多64 MiB，绑定前检查实际原件大小；这是首期资源设计值，不是统计任务规则。上限及当前数据体量在V1准备中核对，超限明确拒绝。
+当前唯一生产契约由 §3.8 和 ADR 0044 拥有，直接代码／原生参数设计沿 §3.7 和 ADR 0043：code 唯一必填，input_files 省略默认为空列表，显式 null 拒绝；模型选择已有 resource_id，Runtime 从当前合法集合恢复完整引用。新代码固化原 UTF-8 字节，已有程序作为只读输入恢复原字节；Command／Receipt 中的 program_ref 属于实际执行身份，继续保留。§3.1—§3.7 按各自日期保留原协议的设计、失败与证据。程序最多128 KiB，输入最多32项、合计64 MiB；绑定前检查实际大小，超限明确拒绝。
 
 `name` 是模型选择的平面文件名，允许ASCII字母、数字、下划线、连字符、点，长度1—64；拒绝空名、`.`、`..`、末尾点、路径分隔符、绝对路径、大小写碰撞及Windows保留设备名（含带扩展名形式，如 `CON.json`）。`program.py` 和 `input_manifest.json` 保留。文件按原字节只读映射为 `/inputs/<name>`；不靠扩展名推断数据语义。代码可通过 `sys.argv[1]` 获取 `/inputs`，由模型决定解析格式、筛选、连接、统计和输出。
 
-工具参数不开放执行主体、run、容器参数、镜像、独立Shell入口或预算。Runtime 从认证及现行授权绑定这些字段。ResourceRef内仍包含用于原件身份校验的owner；它不是模型可设置的执行主体，也不能授予权限。程序可用镜像已有的 Python 标准库；首期复用现有固定候选镜像，不联网或安装依赖，不为单个错例预装分析函数。Python自行启动的子进程仍受同一容器、进程数及停止规则约束；固定入口不等于禁用Python的子进程能力。
+工具参数不开放执行主体、owner、资源类型／版本、run、容器参数、镜像、独立Shell入口或预算。Runtime 从认证、当前合法文件及现行授权绑定这些字段；内部 ResourceRef 继续记录完整身份。程序可用镜像已有的 Python 标准库；首期复用现有固定候选镜像，不联网或安装依赖，不为单个错例预装分析函数。Python自行启动的子进程仍受同一容器、进程数及停止规则约束；固定入口不等于禁用Python的子进程能力。
 
 stdout 为任意 UTF-8 文本，可用 `print` 输出数字、JSON或CSV，不固定业务字段；stderr 是执行诊断。工具运行脚本，不自动返回末尾表达式，也不保留解释器变量。首期只导出这两条流，容器内其他临时文件不自动发布。生成更多交付文件仍用已有 Artifact 工具；多文件导出须有真实需求后单独设计。
 
@@ -77,7 +76,7 @@ stdout 为任意 UTF-8 文本，可用 `print` 输出数字、JSON或CSV，不�
 
 最近实际候选已产生6份可见文件绑定，却放入program.inputs；仅在诊断副本移为同级后Schema合法。这支持审查“程序对象是否容易被理解为包含文件的整次作业”这一新假设，不证明嵌套是唯一原因。旧反馈修订没有改变这些声明，不能把它的失败外推为Schema调整必然失败或必然成功。
 
-**外部机制与取舍。** AutoGen和OpenHands均直接暴露带局部说明的code，把执行器或运行环境留给系统。采用这一直接代码参数的思路；本项目仍需显式输入绑定和已有程序原字节引用，因此不能复制一个只有code的接口。仅追加字段说明迁移最小，可作为说明不足的独立诊断，但不能减少program来源分支带来的层级。优先隔离比较下述单一模型可见契约，而不是继续向全局Prompt或错误反馈追加提醒。
+**当时的外部机制与取舍。** AutoGen和OpenHands均直接暴露带局部说明的code，把执行器或运行环境留给系统。当时以显式输入绑定和已有程序原字节引用为由，继续保留两种模型程序来源；§3.7 根据新失败及用户要求重新审查该取舍，不把它当作下一候选必须保留的前提。仅追加字段说明迁移最小，可作为说明不足的独立诊断，但不能减少program来源分支带来的层级。优先隔离比较下述单一模型可见契约，而不是继续向全局Prompt或错误反馈追加提醒。
 
 ```text
 候选 ExecutePythonArgs（native动作仍使用现行 arguments 对象）
@@ -164,15 +163,128 @@ Provider预检记录当前稳定端点不承诺beta strict，现存minLength／m
 
 ### 3.5 LongDS 用例的条件适配
 
-2026-10-23 新增[整体 Spec §9](knowledge-decision-delivery.md#9-longds-长程数据分析设计)的 LongDS task3；本节只拥有 Python 侧候选，未实施或运行。现有模型参数和一次有界执行契约继续沿用；数据源、逐轮问题、状态选择和评分由整体 Spec 及外部原题拥有。
+2026-10-23 新增[整体 Spec §9](knowledge-decision-delivery.md#9-longds-长程数据分析设计)的 LongDS task3；普通基线、相位 target 与独立能力 target 均已结束。本节拥有已接入的 Python 侧许可及局部执行边界；能力 target 首轮未交付，完整结果由整体 Spec 拥有。现有模型参数和一次有界执行契约继续沿用；数据源、逐轮问题、状态选择和评分由整体 Spec 及外部原题拥有。
 
-已核实 `orchestration/runtime.py` 在检索部署分支内构造 `PythonExecutionProfile`，Conversation 以检索材料绑定 run 后才曝光 `execute_python`。这是可定位的装配事实，尚不能代替新任务的正式失败 baseline。16 个源 CSV 合计约 3.45 MB，满足当前输入数量及总字节的静态上限；实际程序、派生输出、依赖、内存和时限仍须准备与执行核对。
+原 `orchestration/runtime.py` 在检索部署分支内构造 `PythonExecutionProfile`，Conversation 以检索材料绑定 run 后才曝光 `execute_python`；本次 L1 基线的实际能力表与该装配一致。16 个源 CSV 合计约 3.45 MB，满足当前输入数量及总字节的静态上限；实际程序、派生输出、内存和时限由新能力 target 核对。
 
-L1 若确认无法独立执行，最小候选为 Runtime 显式提供既有 Python 执行 profile，Conversation 按该许可、主体及剩余额度投影和接受 Python；检索专用部署和完成条件继续由检索 owner 管理。执行服务仍校验已接受请求、确切输入、冻结 Command、profile digest 和原 Receipt。当前 `code`／`program_ref`／`input_files` 不因数据领域变化新增参数或默认文件。
+L1 确认无法独立执行后，Runtime 已接入显式独立许可并映射既有 Python 执行 profile，Conversation 按该许可、主体及剩余额度投影和接受 Python；检索专用部署和完成条件继续由检索 owner 管理。执行服务仍校验已接受请求、确切输入、冻结 Command、profile digest 和原 Receipt。当前 `code`／`program_ref`／`input_files` 不因数据领域变化新增参数或默认文件。
 
 同一对话的新 run 复用已授权程序及输出时，合法引用由 Conversation 从原 Journal／Artifact 恢复，Python 只消费新 run 显式绑定的确切原件；权限不因旧调用成功自动继承。任务总预算及跨轮关系由整体 Spec 的 Conversation／Journal 接续负责，Python 保持共享执行额度和未知状态对账，不建立另一套分析状态或费用账本。
 
-实施前按 L1 实际失败固定调用方、必要 typed 授权绑定和 ADR，并同步本 Spec、装配及架构正文。替换相关检索许可耦合须同时覆盖工具曝光、请求接受、执行预算、恢复和完成适用性，不能只注册工具或在 evals 中补授权。原题参考代码与答案不进入 profile、工具说明、容器或生产 Context。
+实施依据为 L1 实际失败；typed 授权、调用方及责任已在本 Spec、ADR 和架构正文固定。替换相关检索许可耦合同时覆盖工具曝光、请求接受、执行预算、恢复和完成适用性，实际结果按下述 target 及反事实计分。原题参考代码与答案不进入 profile、工具说明、容器或生产 Context。
+
+原 L1 已证实当时动作投影没有 Python，且原候选镜像不含 pandas／NumPy；更早还存在取得样例正文即强制成文的 Conversation 缺陷，已按[整体 Spec 的因果切片](knowledge-decision-delivery.md#l1-结果与首个因果切片)修正并验局部检查点。分析库只准备固定基础镜像上的通用环境，不含解题逻辑或参考中间表。独立能力 target 已实际执行首轮，7 次 Python 均成功，包含两次原程序引用；最终因核验未过、达到主决策次数上限返回限制，第二轮未到达。局部反事实见下文，不把执行成功写成完整用户结果通过。
+
+#### 独立许可及接续的实施契约
+
+相位 target 已实际到达“读取后仍有动作”的检查点，原运行已以限制结束并封存。下列切片依[ADR 0040](../../adr/0040-scoped-python-analysis-authorization.md)定稿并接入，独立能力 target 已结束；跨用户轮的实质分析消费仍未验证。
+
+- Application 的 `PythonExecutionAuthorization` 拥有显式主体、专用 `conversation_id`、绝对 `expires_at`、单轮时限、任务总 tokens、任务执行秒数、固定镜像和原 `PythonExecutionLimits`。它从部署文件读取，不由模型提交。其规范摘要绑定既有 `PythonExecutionProfile.deployment_digest`，沿原 Command／Receipt 契约执行；Docker endpoint 是外层环境配置。授权没有数据集名、业务公式或分析程序。
+- Settings 增加 `python_execution_config_path`，环境变量为 `PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG`。Runtime 显式加载许可并装配原工具；与检索部署同时配置时拒绝，避免同一工具两个执行 owner。检索部署仍可映射为原 Profile，二者是同一执行契约的两种合法装配，不保留两套工具或分析实现。
+- `InteractionTrace.python_authorization_digest` 只保存本 run 接受的授权身份，继续与原 `deployment_digest` 区分；后者只用于检索领域完成。新 run 主体／对话须匹配、未过期，截止取单轮限额与授权绝对截止的较早者。同一授权下的新 run 保留各自真实 usage；原 Journal 按主体、对话和授权摘要聚合，不复制旧 usage、重置总额或从模型自述计费。授权变化后不能把同一对话静默当新任务扩额。
+- Journal 对获准分析对话持有现有跨进程文件锁，覆盖本次模型／执行的读取、准入与消费提交。任务内未知模型消费或未决执行阻止新增付费调用和新进程；同请求先恢复原接受事实。同 run 的原消息、输入和授权仍不可改写。额度及截止同时用于动作、意图、摘要和核验相关模型入口，模型可见剩余 token 由同一聚合投影派生。
+- Conversation 将同一授权／主体／对话的成功程序执行和工作产物观察、原件引用投影到后继 run；不继承其他对话、不按基准依赖标签挑历史、不复制压缩 checkpoint。引用经原 Artifact 当前校验后才物化为可读来源；原件缺失返回具名反馈，权限失败保持拒绝。程序、stdout 等仍由原 Artifact／Journal 拥有，读取和执行再次检查本 run 的获准引用集合。
+- 工具参数和沙箱协议不变，通用描述允许使用固定镜像已安装的第三方库、由程序检查版本；禁止安装依赖及网络。库版本在 L0 环境检查封存，不把 Netflix 公式或正确状态预置给模型。
+
+2026-10-23 集成审查确认五个未通过边界：Python 动作准入仍误查检索摘要；普通 Verifier 内部调用未写 run 用量；未交付 Plan 与分析历史重复投影同一观察；通用运行的已知异常响应可能内外重复计量；完整 Trace 提交还遗漏新增授权摘要。它们属于既有许可、计量及不可变绑定的实现缺口，不调整任务成功标准。修正分别使用原 `python_profile_digest`、按 action_id 合并同一观察、统一异常计量责任及保留授权字段。
+
+普通核验的逐调用 scope 绑定、同步装配及立即提交机制由[工具模型用量记录](../tool-model-usage-handoff.md#当前普通核验的机制与范围)唯一拥有；本许可沿同一 Journal 消费聚合及停止，不另建费用交接路径。原核验内容与稿件／回执绑定保持。
+
+本次 target 已实际产生模型自写代码、程序 Artifact、`program_ref` 复用和成功 Python 回执。其已提交 revision 100 的独立执行前缀用于零模型 Offline 回放，4/4 通过：确切请求恢复保留原 Receipt；同主体请求改到另一对话 scope 被 Journal 拒绝；移开真实 stdout 字节时物化具名缺失反馈且原请求恢复读取失败；恢复原字节后读取结果及摘要与原来一致。全部新增 `execute`／`reconcile` 为 0，原 Journal 未改写。证据在 `.tmp/longds-implementation-20261023/python-stage-boundaries/`，其源是实际执行阶段，不是完整回答或进程恢复结果。两轮正式回答及后继 run 的实质消费仍按整体 Spec 继续计分。
+
+核验停止边界另用该真实阶段中最新 `SubmittedFinal`、原 criteria 和完整引用输入，经原 workflow／Conversation 模型入口回放。只在独立分支的第一次真实核验响应交付后注入丢失，立即保留未知消费；再次核验必须在模型 Port 前拒绝。预算固定一个核验逻辑调用、至多两次原协议物理请求、100k 已知 tokens，未知后不再付费。只判计量和下一调用停止，不判该真实稿件语义正确性，不修改主运行或原授权。
+
+该核验分支已通过：实际 1 次物理模型请求、旁路已知 12,014 tokens、观察侧未知 0；生产 Journal 已保留未知消费，第二次核验在模型 Port 前拒绝，未增加请求。来源为 revision 100 中实际 `final-25`、原 criteria 和完整引用，不补造草稿。封存于 `.tmp/longds-implementation-20261023/verifier-stop-boundary/`；它验证核验调用的停止责任，不计正式回答通过或评分成功。
+
+验证：完成相位采集后，以新的代码／配置身份从空对话执行原 L1 最多两轮，主体及对话通过显式部署许可；模型自主计算、保存或复用程序并消费输出。每轮实际 Final 及后续原件可达分别检查，官方语义分数另列。取其真实状态检查其他对话未授权引用零执行、实际原件缺失及恢复、同请求恢复零重执行、总额度与未知消费零新增调用。正式 Dockerfile 在 `scripts/python_execution/`，本次构建并检查的分析镜像为 `sha256:510b3b843826cf0bb0684f73e33171ef96735856d2f6569c7a235a2426678755`，执行限制沿原默认 60 秒／512 MiB／1 CPU／64 进程／32 MiB 临时空间；L1 总许可 20M tokens、7,200 执行秒、绝对两小时，每轮至多 3,600 秒。必要用量达到停止线时保留结果；不以正确答案或预写代码修正运行。
+
+### 3.6 MiniMax 首轮的参数修复再次失败（2026-10-23）
+
+**此前改动已接入，但没有证明工具参数和修复在所有模型上可靠。** §3.1—3.3 修正原 `program／inputs` 的容器层级和字段说明，生产采用 `code／program_ref／input_files`。当时 DeepSeek 固定回放中实际生成的新参数为 5/5 合法；后续正式轨迹 7 次 Python 提议含 2 次非法 JSON，5 次合法参数执行为 4 成功／1 代码读取未绑定文件失败，没有再漏 `input_files`。这些事实保留，不概括为全部工具调用或所有拒绝恢复均已解决。
+
+本次 MiniMax 真实首轮的两份 Python 请求都带齐三个键及 16 份绑定，确认没有回退旧实现；两份均输出 `program_ref=""`，16 个 `resource_ref.revision` 均为字符串 `"1"`。实际 Schema 已声明新代码时 `program_ref=null`、revision 为 integer，输入 Artifact 的版本也是整数。首份拒绝的 17 项字段诊断、完整原提议及修复指引均进入末次实际请求，工具 Schema 与 SDK 到 HTTP 的投影相同，已发送 `strict=true`；不能再以开启 strict 或增加必填键作为已定位修复。
+
+同一末次响应的可见思考摘要已明确识别两个类型要求，最终工具参数却重复旧值。失败点至少已到参数输出，不能说模型完全没收到或没理解反馈；可见理由不证明完整隐藏原因。前后输出均正常以 `tool_calls` 结束，未达到 32,768 输出上限，也没有容量拒绝；不能归为输出截断。Runtime 在两次同类 Python 拒绝后按原停止线返回 limitation，Python 实际执行零。参数／拒绝恢复可靠性在当前模型身份下重新打开，原成功样本不追溯作废。
+
+**另发现一项适配差异，因果仍待验证。** MiniMax [官方工具循环](https://platform.minimax.cn/docs/guides/text-m3-function-call)要求保留完整 assistant 消息及 `reasoning_content／tool_calls`，再交回工具结果；本次五个决策请求均为 `system/user/system`，用 typed 状态快照表达执行与拒绝，没有原生 assistant／tool 历史。该差异由模型消息适配与 Context 物化边界负责，不属于 Python 执行器；此前独立 AutoGen／OpenHands 比较仍可复用。不得直接认定它造成这两项输出错误，或跳过架构分析改写整套历史。反馈当前只有字段路径及 `schema_type／schema_anyOf`，缺少就地的预期类型说明，但本次模型已识别要求，也不能据此认定单纯补错误文案必然有效。
+
+提高思考强度可作为独立假设，尚未做 low/high 对照，不能宣称能修复或没有作用。[官方深度参数](https://platform.minimax.cn/docs/api-reference/text-openai-api)确认 high 增加思考投入，不承诺 Schema 正确。后续先固定此完整失败请求及消费者：若测深度，只改变 `reasoning_effort`，其余完整消息、工具、输出额度及恢复策略保持，按 QLT 预声明每组至少十次及预算后执行；合法改选其他工具不算参数错误，也不外推 Python 覆盖。原生历史适配差异须作为另一变量单独诊断，禁止和深度同时修改后归因。该只读审计当时没有改部署、新增模型调用或重跑整轮；用户后续授权的实际续接与新轨迹按下段唯一规格执行。采集侧角色字段异常由独立收尾责任处理，不与本参数原因合并。输入身份、摘要和对照见[本次只读审计](../../../.tmp/minimax-tool-repair-audit-20261023/report.json)。
+
+用户随后授权按官方文档补齐原生工具历史。当前生产候选及真实阶段证据见[唯一续接规格](../model-provider-transport.md#2026-10-23-原生工具会话续接规格)：固定 low 的一次实际请求返回合法 Python 参数，36,568 tokens、未知零，未执行新程序。此前失败及旧 Schema 证据不改写；该单例不关闭参数可靠性缺口，不等同排序、报告或长任务已经正确。 随后的真实新轨迹交付前两轮后，在第 3 轮先漏 program_ref，收到完整原生 tool 拒绝后又漏 input_files，按原停止线结束；新执行总计 11 次 Python、10 成功／1 失败，两份回答官方标准评分为 0/2。参数生成和反馈恢复仍未满足完整流程，原生历史不是已证明的充分修复，详见[本轮结果](../../evals/02-current-case-inventory.md#2026-10-23-原生工具历史接入后的流程结果已停止)。
+
+### 3.7 Code Agent 直接参数的接入与验证（2026-10-24）
+
+本节保留该切片实施及验证身份；模型文件绑定的完整对象随后由 §3.8 的现有 ID 输入替代，原生参数、strict 选择及执行事实设计继续有效。
+
+**目标与准入。** 用户要求直接参考 Code Agent 相关工具设计，不再独立发明工具协议。设计核对完成后，用户授权接入生产接口并验证；本节进入实施阶段，完成情况按实际证据更新，决定见 [ADR 0043](../../adr/0043-direct-code-agent-tool-parameters.md)。本次原始源码、dirty patch、Journal 全量清单及执行账本保存在 [.tmp/code-agent-tool-production-20261024](../../../.tmp/code-agent-tool-production-20261024/progress.md)。新候选的真实依据是原生历史已接入的 LongDS 第 3 轮：第一次有 code／input_files=[] 却漏 program_ref，收到完整配对拒绝后，第二次有 code／program_ref=null 却漏 input_files，两次源码均为 1,147 字符、无执行。两个失败物理请求分别为 ab3f94abe6ca4526b00617aa6cf7305c、9d96e7fb646a42f4a329b6064bfefd69；首响应有可见思考，修复响应没有返回思考正文，未知部分不猜测。旧三键、字段文案和原生续接已实际到达，不能再以补一句“必须填”作为本轮方案。
+
+**选定来源与修正判断。** [Code Agent 固定源码对照](../../agentRef/tool-execution-and-safety.md#11-code-agent-执行工具的最小输入与默认值)拥有来源清单。以 OpenHands CodeAct 的直接 code 参数作为 Python 动作形式，以 Codex exec_command 的单必填执行内容、可选执行项及 strict=false 作为参数声明和默认值处理基准。OpenHands 0.59.0 还要求 security_risk，不能宣称它只有一个字段；本工程权限由现有确定性治理拥有，不要求模型再提交风险等级。此前只是借用 code 字段，却继续让模型搬运三键互斥／空值契约，采纳不充分；新设计不保留该程序来源二选一。
+
+**架构分析。** 原链为 Conversation → model_actions 原生声明／解码 → Tool Port → PythonExecutionService → 原 Docker Port；Artifact 与 Journal 仍分别拥有字节和执行事实。模型负责代码、文件选择和后续动作；运行系统负责身份、授权、额度、固定镜像及实际终态。新方案继续采用原独立执行工具，不新建 CodeAgent、Notebook、工具目录、代理桥或文件系统 owner。Code Agent 的长期 workspace／IPython 与本工程每次有界执行不同，不能因为照参考接口就扩大宿主 Shell、网络或可恢复解释器状态。唯一必要的参数适配是保留当前获准 Artifact 的可选文件绑定；省略表示不挂载文件，绝不自动从代码、任务或旧记录发现文件。
+
+候选模型契约：
+
+```text
+execute_python
+  code: str                              # 唯一必填，本次执行的完整 Python 代码
+  input_files: tuple[PythonInputBinding, ...] = ()
+```
+
+普通无文件调用只需提交 `{"code":"print(1)"}`。input_files 提交时保持既有 name／resource_ref、主体／版本、32 项及 64 MiB 检查；省略确定性解析为空列表，显式 null 则拒绝。默认值只在唯一 typed 输入解析边界按公开 Schema 应用，不在 Admission 补业务参数或替模型选数据。code 不再可为 null；删除模型参数 program_ref、来源互斥校验及两种来源分支。已有程序与数据一样，经现有 input_files 绑定为只读文件，由模型用标准 Python 的 runpy／文件读取执行，原字节由 Artifact 恢复；不要求重抄旧源码、不由 Runtime 生成包装程序。Command／Receipt 中表示实际固化程序的 program_ref 继续属于执行事实，不能与删除的模型来源字段混为一项。此路径增加一段模型选择的标准 Python 文件执行代码，换掉专有来源选择协议，须实测程序复用，不把设计写成已通过。
+
+**声明与 Adapter。** 原生 function.parameters 直接表达 canonical 业务参数，采用 Code Agent 的直接对象参数，不额外套通用 arguments 对象。该决定属于整个原生动作物化契约，不能加 execute_python 特例或保留两套可接受布局；受影响普通工具、Agent 与控制动作均须迁移生产者／解码／反馈及有效评测消费者。检索工具原 canonical action 对象也直接保留，不再先去 action 后套 arguments。工具定义携带标准 strict 选择；声明在 BaseTool.extras.strict，由 Registry、EffectiveToolCapability、ModelActionDefinition 逐层传递，缺省保持原 strict=true；可选参数的代码执行工具沿 Codex 声明 strict=false，Schema 保留 required=[code] 和默认空输入语义，Adapter 不再将其强制 strictify 成全部必填。其他既有严格 Schema 的选择保持。非 strict 只表示不宣称服务端约束解码，本地 Schema／typed 校验、拒绝和治理不放宽。实际采纳是整套声明／解析候选，不能分别声称去外壳、少字段或缩短说明的独立收益。
+
+**描述草案。** 总说明采用“执行你提交的 Python 代码并返回输出和执行状态”，随后仅补当前必要差异：每次独立执行、print 输出、只读输入目录、固定环境与输出原件；程序参数说明分别只解释本次代码和可选文件绑定。镜像、硬限、权限与完成事实由原 owner 执行，不再在字段中重复来源二选一指令。实际中文措辞与版本在实施前按此含义固化，不能把参考的 Shell 或持久 IPython 承诺写入当前工具。
+
+**迁移与删除。** 实施前核对全部 Args、工具工厂、原生声明／解码、已接受请求与 digest、Journal 恢复、Artifact 绑定、Command 冻结、当前 Offline 消费者及权威正文。Journal.conversation_traces 会枚举并用当前类型读取全部保留轨迹，已结算记录也在影响范围，不能只查 active／pending。此次[完整目录清单](../../../.tmp/code-agent-tool-design-20261024/journal-inventory.json)确认当前配置的 data/interaction_runs 没有轨迹快照；正式切换前必须重查全部保留快照和接受记录。已封存的 .tmp 评测根保留原源码与协议身份，由原版本只读消费；新验证采用独立空 Journal 根，不将旧快照接入新类型。若切换时发现正式根新增旧型记录，先按 REL 明确历史读取、迁移或根隔离边界，再准入对应变更；不得修改原始请求、Command、digest 或用猜补字段恢复。不在新生产接受旧三键／旧 arguments 包装。删除旧来源 XOR、重抄 null 说明、强制所有可选字段必填的受影响路径；不修改 structured response_format 的严格输出契约。跨模块协议替换须记录 ADR，本节设计不是迁移已完成的证明。
+
+**固定验收及接续。** 沿当前 MiniMax-M3.1-Flash／adaptive＋low、原 32,768 输出／480 秒及完整原生历史：
+
+1. 零付费准备：由正式定义链导出实际 Schema，检查 canonical 参数直达 SDK、required 仅 code、input_files 缺省／显式空列表等价、显式 null／未知字段／越权引用明确拒绝。消费原生历史首批实际并行工具、控制及 SDK 修复完整阶段，检查旧原文不改写、原调用结果配对、用量及完整组压缩不回归。此为完整实际阶段边界回放，不建立逐函数单元替代套件。
+2. 真实参数阶段：固定上述第 3 轮首次失败的完整请求和上游原件，原协议 baseline 与新定义候选各做 10 次独立连续旅程，先 baseline、后候选；历史两次失败不代替 baseline 的 10 次。每次从各自完整首请求开始，消费本次模型实际选择，若拒绝则由正式 validator 生成反馈、最多一次应用层实际修复，不能注入期望参数或借用另一旅程的反馈。首响应、SDK 协议修复和应用层参数修复分别记分。旧历史原调用形状保留为事实，不篡改成新协议；因此该输入同时覆盖历史与新声明的切换，不能外推为空会话同分布。单次旅程合法或一次恢复后合法为 pass，候选须 10/10 才通过；baseline 参数失败是待测结果，不触发候选停止线。模型合法选择其他工具不算漏参，实际 Python N/M 单列，未覆盖不能充当 Python 成功。实际 Python 调用还须审读代码明确需要的文件是否绑定，不把可选字段合法省略当作必需数据已取得。禁止补样、切换 think 或裁剪历史求通过。
+3. 执行阶段：使用既有成功程序／原件，沿新契约实际验证新代码、标准 Python 复用原文件、原字节与输入 manifest、原请求恢复零重执行，以及越权／原件缺失拒绝；不预写业务统计替模型作答。合法程序的执行与模型成文语义分开计分。原 11 次 Python 与两份错误回答保留，不转为新成功。
+4. 成本与停止：SDK 每次 generate 允许一次协议修复，应用层再修复一次最多产生 4 次物理请求；两组共 20 次旅程，物理请求上限为 80。原完整请求的零 HTTP [预约估算](../../../.tmp/code-agent-tool-design-20261024/budget-estimate.json)为输入 290,526 tokens，输出预留 32,768、协议预留 8,192；按最多四次的历史增长保守预约共 36,349,280 tokens，据此将整组上限固定为 37M 新已知 tokens、12 小时（每组固定18.5M／6小时，不跨组转移）、单请求原 480 秒，纳入整体剩余额度，不额外叠加。该数是准备整组的上限估算，不是实际消耗；实施后必须以两组完整 wire 重新核算，剩余额度不足则在 HTTP 前停止，不能少跑样本后宣称通过。候选首个旅程参数失败、任一组未知用量／服务失败／截断／身份漂移或额度触线均封存未执行项，不重开同组；baseline 参数失败正常记录并继续其余预定样本。第 1、3 项工程准备单独归档实际边界；设计阶段没有消费预算；本次实际消耗见下方状态。
+5. 完成原生接口与执行迁移、独立审查和局部验收后，才从正式自然首题恢复新身份流程；不直接再跑 36 轮。本次正式接续固定为原 LongDS 两轮 L1，通过生产 HTTP／Composition Root、新 principal／conversation／空 Journal、真实 MiniMax low、原分析镜像和 direct＋none，沿原 40 决策／10M 每轮、整例20M及每轮3600秒停止线执行一次；无参数协议终止、真实执行结果及最终交付分别记录，业务答案与参数检查分开。流程停止后只对实际 answer 沿现有 LongDS 官方固定 Judge 评分；复用已通过资格的原 Judge 根，沿原2M共享预算、每题最多3次协议尝试及480秒限制，不重评或替换旧回答。完整长任务、自然压缩、第 17→18 轮恢复及业务评分仍由整体 Spec 拥有。本候选只修工具使用契约，不接回 claim／核验、不调整评分答案或既有停止线。
+
+**引用字段事实澄清（2026-10-24）。** 这里的引用是输入CSV、生成程序与结果文件的Artifact定位，不是文献引用。PythonInputBinding直接复用内部ResourceRef，因而模型Schema同时出现resource_id、resource_type、owner与revision。ResourceRef.revision是默认1的正整数，不接受null；当前Artifact创建路径使用默认版本1，新内容通过新资源ID保存。execute_python的非strict声明保留该默认值，revision可省略；read_artifact的strict声明将其变为必填并去掉default。实际错误为字符串"1"，不是缺少研究数据。当前内部身份对象直接暴露给模型，增加了无业务选择的版本／主体重抄负担；文件选择属于模型，合法版本、主体和原字节绑定属于Runtime。这个边界澄清不改变当前接口，后续文件接口优化仍须按已核对Code Agent机制和原治理边界准入。[事实审计](../../../.tmp/resource-reference-audit-20261024/report.json)保留实际两份Schema及源码身份；旧封存中integer/null的解释文字不改写。
+
+**实施与验证状态。** 已迁移生产工具、参数模型、声明／解码、strict 传递、执行及 Journal；旧来源 XOR、payload_field 和统一包装已删除。真实执行边界 7 次容器执行通过，包含程序文件复用、原字节、权限拒绝和恢复零重执行。完整阶段模型组已完成：baseline 首响应 8/10、一次应用修复后 9/10，13 次物理请求／1,179,217 tokens；候选首响应 10/10，10 次物理请求／892,014 tokens；两组未知均零。候选实际 Python 参数 6/6 合法、引用均当前可读，其他三次 prepare_final 和一次双 read_artifact 合法；代码包含语法／潜在运行错误，不把参数合法计作执行或业务正确。实际报告及审读见[本轮归档](../../../.tmp/code-agent-tool-production-20261024/parameter-audit.json)。 正式两轮新身份流程完成 2/2 交付，23 次物理模型请求、1,299,152 tokens、未知零、316.843秒，进程已停止；11次Python执行8成功／3失败。实际 SDK 均为直参且 Python strict=false，prepare_final 直参已到达；原字节、完整原生配对、Journal恢复及压缩原始来源检查通过，无自然摘要激活。真实流程仍产生4次引用参数拒绝：两轮均把revision写成字符串，第二轮在反馈后再次输出同类错误，并改读其他原件后继续；不能写成参数错误已全部修复。独立官方标准评分0/2：第一轮混用电影与全部类型时长缺失，第二轮四个市场的延迟供给分量错误；排序、总分等正确不覆盖必需字段错误。新Judge2次、14,581 tokens、未知零。生产机制局部通过和两个原始错误回答分别保留，后续不原样追加整轮或把参数成绩替代业务结果。详见[同轨迹审计](../../../.tmp/code-agent-tool-production-20261024/flow-audit/report.json)与[剩余问题](../../../.tmp/code-agent-tool-production-20261024/remaining-issues.json)。
+
+**整体 critic 与退出。** 代码内容由模型生成，权限／事实／完成仍归原 owner；没有硬编码统计、自动补输入、提升风险权限或额外运行循环。代价是 native 动作协议迁移面广，以及已有文件程序需要标准 Python 调用；这两项都已列为验证对象，不能以工具字段变少替代可用性证据。若真实阶段仍在新契约下失败，停止本候选及依赖 E2E，保留已成立原生历史；按 EVD 复审取得新依据，不继续补提示词。独立 builder 提出的 baseline 样本、物理请求预算及全部保留轨迹读取三处缺项已补齐；生产已接入，模型验收状态见上段。
+
+### 3.8 文件选择只提交现有 ID（2026-10-24）
+
+**问题与重新准入。** §3.7 的新两轮轨迹有4次文件引用拒绝，第二轮曾收到反馈后再次把 revision 写成字符串；原生历史及直接参数已经成立，继续提醒整数不能消除不必要的填写责任。用户授权继续简化，并要求每项设计优先基于优秀实践。本节是模型可见工具协议变更，依据为同一真实轨迹，语义答案问题继续暂缓，不改变 direct／claim 可替换结果模块。实施与原始身份保存在 [.tmp/resource-id-tool-production-20261024](../../../.tmp/resource-id-tool-production-20261024/progress.md)。
+
+**逐项采用依据。** [固定源码比较](../../agentRef/tool-execution-and-safety.md#12-文件选择与运行环境分责)核对了声明、模型消费及实际运行链；成熟机制是起点，效果仍由本地验证决定。
+
+| 决定 | 优秀实践与本工程必要适配 |
+| --- | --- |
+| 模型只提交一个文件定位字符串 | OpenHands 文件工具提交 path，Codex exec_command 可提交 workdir；两者不要求复述文件 owner／版本。本工程复用已存在的 resource_id，不创造文件路径、短 ID、映射表或新的可写目录 |
+| Runtime 解析作用域和完整身份 | Codex 根据 turn environment 解析 cwd 并执行 sandbox policy；OpenHands 在已装配 Runtime／沙箱解析路径。本工程仍只从当前获准 Artifact 集合解析，不按任意 ID 搜索存储或猜测最新版本 |
+| 文件读、搜索、检查、补丁与 Python 共用定位方式 | OpenHands 的查看／编辑共用 path，执行与文件工具共用同一环境。本工程统一这些公开文件输入，执行依旧是一次性只读挂载，不能复制持久 workspace 的写权限 |
+| 原件、版本和执行事实仍由系统保存 | 参考运行侧负责实际读取／执行；本工程保留更严格的 ResourceRef、Command、digest、Receipt 与恢复要求，不能把外部源码当成恢复保证 |
+| 参数错误由正式反馈恢复 | 沿现有原生 assistant／tool 配对协议，不另造修复器、类型强转或正确参数注入；使用完整真实失败阶段连续回放 |
+
+**架构与唯一契约。** Artifact 继续拥有不可变文件和完整 ResourceRef；模型选择 ID、Python 文件名、代码及下一动作。`application/artifacts/models.py` 的一个 typed 解析函数从调用方已获准集合恢复唯一确切引用；未知、歧义、跨主体及非 Artifact 均明确拒绝。它不读全局索引、不新增持久化事实。Conversation 管理当前可读集合和动态合法 ID 枚举；各能力在执行前调用同一解析函数，ArtifactService 继续验证元数据、版本及原字节。Admission 不改写 payload 或替模型选文件。
+
+候选输入为 `execute_python(code, input_files=[{name, resource_id}])`、`read_artifact(resource_id, start_line, limit, start_column)`、`search_action_output(resource_id, keyword, regex, result_offset)`、`inspect_artifact(resource_id, question)`、`write_artifact(request={operation:patch, base_resource_id, edits})`；其他字段、默认值、strict 选择及硬限保持。动态 ID 枚举分别沿现有读取、检查与执行作用域；不把压缩历史变成可核验来源或 Python 新输入。工具结果及来源仍可携带完整 ResourceRef，供程序恢复和证据绑定；续读参数改用 resource_id，模型不再填写 owner／resource_type／revision。内部 capture_upload、检索实验的固定部署与结果协议不属于通用文件选择，不扩大迁移。
+
+当前 Artifact 创建与派生均使用不可变新 ID，版本固定为1；同一 ID 的多份不同完整引用仍拒绝，绝不取第一份或默认 revision=1。Python 已接受参数保存模型的确切 ID，Command 在首次派发前从当前合法集合固化完整引用；Journal 检查每个名称／ID 对应的确切 Command 引用，恢复保持原冻结身份。不可变 Artifact ID 已绑定内容／发布身份，因此没有新增“最新版本”语义；未来若引入可变 Artifact，须重新设计版本选择，不能沿用此假设。
+
+**迁移、删除和撤回。** 同一变更迁移上述 Args、生产工具、Context／Prompt、续读、Python Command 校验、Journal、当前正式评测消费者及权威正文，删除这些模型输入中的完整 ResourceRef，不保留旧对象解析或自动修正字符串 revision。正式数据根先查全部保留 Journal 和 Artifact 生产绑定；无旧型数据才切换，否则先按 REL 解决历史读取边界。历史 .tmp 全部按原代码／协议身份只读，新验证用空根，原请求／digest 不改写。跨模块决定见 [ADR 0044](../../adr/0044-model-artifact-id-selection.md)。失败只撤回本节变更，保留原生历史及 §3.7 已成立机制。
+
+**固定验证与预算。** ① 源码与生产 Schema 零 HTTP 核对，明确删掉5类模型文件输入中的内部身份字段；消费正式真实原件验证读／搜索、草稿补丁、Python 原字节及 Command、拒绝与恢复。既有无关输出／超时机制只在消费者行为不变时复用原身份，不重跑单元套件。② 固定首轮第一处 revision 失败请求 `de86ece1a4324e3faeab6fcbf7148f3a` 的全部消息、材料、工具、模型 MiniMax-M3.1-Flash、adaptive＋low、输出32768及480秒；baseline 与候选各10个独立连续旅程。仅替换上述工具声明与对应生产协议说明，历史事实不改写；每旅程最多一次应用修复，SDK 原修复另计。合法其他动作算参数合法，文件／Python 覆盖单列；候选须10/10，且实际文件 ID 必须可解析到当次可读原件，代码正确性另计。每组40次物理请求、3M已知 tokens、3600秒，两组共80次／6M／7200秒；逐次保守预约、未知用量、截断、费用不足或候选确定失败均停止，不补样。③ 局部成立后沿已有正式 LongDS Web 入口跑新的2轮直接回答流程，使用原20M任务预算／每轮最多40模型轮次／3600秒；只验流程交付、ID解析、真实程序和执行消费，保留参数／执行错误。原官方答案0/2不改写；本轮未重评则明确语义未验证，不以两轮流程证明36轮长任务或发布通过。
+
+**实施顺序与整体 critic。** 先冻结原源码／数据清单并执行 baseline；再按一个切片实现 Artifact ID 解析及5类消费者，同步唯一文档；完成阶段候选和实际执行检查后才跑2轮流程，最后独立整体评审与静态检查。共享边界为 ID→完整引用解析、获准集合及 Python Command 绑定，不分拆新的 Registry／Provider／工作区。价值是删除无必要的模型身份搬运；Agent 保留是否计算、文件选择和代码生成权，Harness 只拥有确定性身份和执行。待证项是实发参数和流程是否达到固定判据，语义答案、自然压缩及36轮持续性不作为本轮通过条件。
+
+文件交接的拒绝证据由正式 ToolExecutor→检查工具→Artifact 读取边界拥有；不能以直接调用解析函数的零散断言替代整条拒绝链。v3 的成功交接保留，v4 将相同真实文件的未知、歧义、跨主体及错误版本反事实送入该正式工具边界；原件及候选 seal 先核对。该评测收口不改变生产代码或真实模型组，不重算旧结果。
+
+状态：独立设计检查无阻断项；原协议完整回放10次，首次1/10、一次应用恢复后2/10，19次物理请求、329,286 tokens、未知0。候选首次10/10，10次请求、138,206 tokens、未知0；实际8次 Python／5次读取参数合法，32个 Python 文件绑定均在当次可见集合；未执行这8份模型程序，语法编译均成功不等于运行或分析正确。真实执行旅程 v2 完成7次进程及原件／恢复／拒绝检查；首轮另有2次实际进程，因拒绝场景构造误改不可变 Journal 输入而停止，原件保留；修正只在独立反事实初始快照加入冲突引用。文件交接旅程 v3 通过读／搜索／检查／创建／补丁及原字节恢复；前两次分别因评测漏带来源元数据、误认版本拒绝的异常类型停止，均为零新模型／零容器，生产契约未为其放宽。正式两轮随后完成，详见下段；整体研究与长任务保持未通过。
+
+**正式接续结果。** 两轮均交付 answer，按 planned_turns_finished 结束；21次物理请求、1,180,998 tokens、未知0，587.015秒，生成进程已停止。第一轮16次决策、1,010,210 tokens；第二轮3次决策、170,788 tokens。实际9次 Python，6成功／3失败；失败分别为模型代码读取不存在的 duration 字段、向只读输入目录写文件、后续独立执行读取已不存在的临时文件。另有2次参数集合拒绝：Egypt 文件 ID 多抄一字符，以及 write_artifact.create 提交当前不支持的 text/csv；均有后继合法工具执行并最终交付，原 revision 类型错误未出现。这不等于所有参数或程序已经可靠。
+
+[同轨迹审计](../../../.tmp/resource-id-tool-production-20261024/flow-audit/report.json)确认9份确切模型源码与 Command／Receipt 原字节一致，ID／文件名恢复到对应完整引用，新 SDK 五类工具不含 ResourceRef 输入，完整原生配对、Journal 重读及原始压缩导出保持，源码身份相同。未生成或激活压缩摘要。官方语义本轮未评分，旧0/2保持原身份，36轮中余34轮未执行。本切片完成既定参数、执行及两轮流程验收；ID 抄写、程序正确性和临时文件生命周期仍按实际问题保留，不扩建自动修复、持久工作区或语义核验。
 
 ## 4. 执行、事实与恢复
 
@@ -191,7 +303,7 @@ L1 若确认无法独立执行，最小候选为 Runtime 显式提供既有 Pyth
 
 ## 5. 环境、预算与Context
 
-当前研究装配复用部署的 candidate_image_id、Engine端点和 candidate 沙箱限额，默认单次60秒、512 MiB、1 CPU、64进程、32 MiB临时空间；stdout最多16 MiB、stderr捕获最多64 KiB。Composition Root 将这些执行字段映射为 typed `PythonExecutionProfile` 只读配置；Python请求、Command、Service及执行Port不依赖 `RetrievalDeployment`、评分模型或数据集类型，不另设可写配置来源。部署摘要只绑定本次授权身份，不把检索业务配置带入程序。所有实际值来自现有部署，写入Command，不让模型覆盖。stderr或失败stdout发生捕获截断时保存已捕获字节及明确限制，不声称完整原始流。
+检索研究装配复用部署的 candidate_image_id、Engine端点和 candidate 沙箱限额；通用许可的装配由 §3.5 拥有。默认单次60秒、512 MiB、1 CPU、64进程、32 MiB临时空间；stdout最多16 MiB、stderr捕获最多64 KiB。Composition Root 将获准执行字段映射为 typed `PythonExecutionProfile` 只读配置；Python请求、Command、Service及执行Port不依赖 `RetrievalDeployment`、评分模型或数据集类型，不另设可写配置来源。部署摘要只绑定本次授权身份，不把检索业务配置带入程序。所有实际值来自显式配置，写入Command，不让模型覆盖。stderr或失败stdout发生捕获截断时保存已捕获字节及明确限制，不声称完整原始流。
 
 Conversation Journal 以一个具名只读预算投影汇总现有实验记录和新Python记录的实际耗时及未知预留。原实验 `load` 与Python调用都消费该投影，不各建累计计数；两类Command绑定须在同一Journal锁内重新核对并原子预留，不能让并发调用消费同一份余量。新调用上限取部署单次限额、当前run剩余执行额度与绝对截止的最小值。准备、绑定和启动消耗同一截止；未知终态继续保留预留，并在核对完成前阻止该run启动另一执行作业，原件读取可继续。工具没有额度时不出现自动扩容、忽略deadline或新建run。
 

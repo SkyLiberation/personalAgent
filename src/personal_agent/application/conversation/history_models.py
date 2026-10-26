@@ -27,6 +27,7 @@ class HistoryCompactionCheckpoint(BaseModel):
     source_end: int = Field(ge=1)
     source_digest: ContentDigest
     covered_items: tuple[HistoryItemKey, ...] = Field(min_length=1)
+    covered_decision_turns: tuple[int, ...] = ()
     snapshot_ref: ResourceRef
     snapshot_digest: ContentDigest
     working_summary: str = Field(min_length=1, max_length=20_000)

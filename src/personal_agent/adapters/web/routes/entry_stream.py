@@ -9,7 +9,8 @@ from fastapi.responses import StreamingResponse
 from personal_agent.adapters.web.input_normalization import normalize_entry_text
 from personal_agent.adapters.web.routes._shared import resolve_requested_principal
 from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, sse_event
-from personal_agent.application.conversation import ConversationMessage, ConversationUnavailable
+from personal_agent.adapters.web.routes.conversation_errors import conversation_failure_detail
+from personal_agent.application.conversation import ConversationFailure, ConversationMessage
 from personal_agent.kernel.config import Settings
 from personal_agent.orchestration.service import AgentService
 
@@ -49,22 +50,17 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                     principal=principal,
                     source_platform="web",
                 )
-            except ConversationUnavailable:
-                yield sse_event("error", {
-                    "code": "conversation_model_unavailable",
-                    "message": "对话模型暂不可用。",
-                })
+            except ConversationFailure as exc:
+                yield sse_event("error", dict(conversation_failure_detail(exc)))
                 return
-            except Exception:
-                logger.exception(
-                    "Conversation stream failed user=%s session=%s",
+            except Exception as exc:
+                logger.error(
+                    "Conversation stream failed user=%s session=%s error_type=%s",
                     resolved_user,
                     session_id,
+                    type(exc).__name__,
                 )
-                yield sse_event("error", {
-                    "code": "conversation_execution_failed",
-                    "message": "请求执行失败，请稍后重试。",
-                })
+                yield sse_event("error", dict(conversation_failure_detail(exc)))
                 return
 
             answer = result.message.content

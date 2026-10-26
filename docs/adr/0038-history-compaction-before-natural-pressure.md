@@ -27,7 +27,7 @@
 
 既定通过条件要求实际摘要连续进入后续请求，并检查同 run 检查点恢复、原件读取、费用不重复及安全停止；2026-10-21 该轮未到达摘要激活，不能记这些条件通过。[实际原件审计](../../.tmp/ctx-compact-20261021-1/export-audit.json)只证明 95 项原始输入的按序导出及 296,851 字节保真、真实摘要输入的 35 个旧单元来自原件、近期动作／反馈保护和异主体读取拒绝；508 原采集文件保持。用量[事后对账](../../.tmp/ctx-compact-20261021-1/report.json)消费真实 SDK 异常中的已观察计数，通过原 Journal 用量合并入口补齐副本费用，明确不是原失败流程已自动计费成功。没有自然压力、整例续跑或重复压缩的部分分别记未覆盖。
 
-自然 C6／E3 仍按原设计验收。当前研究报告的统计错误独立保留，压缩不被用来修复或掩盖它。实现不新增数据库、通用 middleware、记忆平台、摘要 Judge 或生产开关；任务权限保持；2026-10-22 仅摘要请求级覆盖 thinking，详见[主循环 NS 设计](../optimization/to_verify/conversation-loop-boundaries.md#非思考摘要的局部修正2026-10-22)。
+自然 C6／E3 仍按原设计验收。当前研究报告的统计错误独立保留，压缩不被用来修复或掩盖它。实现不新增数据库、通用 middleware、记忆平台、摘要 Judge 或生产开关；任务权限保持。2026-10-22 曾在摘要请求级覆盖 thinking，历史证据见[主循环 NS 设计](../optimization/to_verify/conversation-loop-boundaries.md#非思考摘要的局部修正2026-10-22)；2026-10-23 用户改为 MiniMax 并要求统一开启思考、深度 `low`，摘要现继承[同一部署参数](../env.md#统一思考参数2026-10-23)，不再保留关闭覆盖。新的 SDK 阶段通过只证明参数兼容及该份合法摘要，原激活、恢复、语义和自然压力证据保持各自身份。
 
 失败阶段沿原语义区分：`StructuredOutputFailure` 属于 `provider_structured_decode`，已观察完整 usage 不因外层 transport 分支被改为 unknown；只有 `ModelInvocationUnavailable` 属于 `provider_request`。缺失 usage 的结构化失败仍由 canonical 用量合并置 incomplete，不补零。该区别适用于摘要，与既有普通请求一致。
 
@@ -49,3 +49,9 @@ git -c core.safecrlf=false diff --check
 ```
 
 依赖检查为 14 包／43 边、零环及零越层；规范路由为 69／69、目录覆盖 9／9，根入口逐字同步。上述为 2026-10-21 的静态检查记录。2026-10-22 的局部消费与恢复证据独立保存，不替代自然压力、长期任务和完整发布验收。原付费截止和本次截断停止线均已到达，未继续调用模型。
+
+## 2026-10-25 LongDS补充证据
+
+当前部署已继承统一medium思考参数，最新实现及输出策略由[Loop Schema](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)拥有。LongDS真实36轮已交付并完成较早的第17→18轮进程恢复；第30、31、34、35、36轮后续自然触发原1M配置的本地estimated容量门禁，摘要激活、原件保持、后继实际消费及单次计费已有[严格审计](../../.tmp/loop-schema-redesign-20261024/v4-natural-compaction-audit.md)。这些是新身份的实际证据，不改写旧DeepSeek非思考或MiniMax／low记录。
+
+触发不等于Provider真实token达到1M；本次最大实际输入298,355。官方答案27/36，不宣称全文语义保真或原E3完整业务结果通过；压缩后检查点跨进程复用和原C6未覆盖反事实仍单列。例外未据此自动退出，结果与限制由[当前评测盘点](../evals/02-current-case-inventory.md)拥有。

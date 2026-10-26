@@ -12,6 +12,7 @@
 | 模型调用准入 | [GovernedModelClient](../../src/personal_agent/capabilities/model_resolution.py)，由模型工厂装配 | 根据当前请求与 Context 引用建立单次调用 grant；语义结果仍由调用方消费和核验 |
 | 模型重试 | [RetryingStructuredModelClient](../../src/personal_agent/infra/structured_model.py) | typed 调用边界的暂时失败重试，汇总已知耗用；SDK transport 重试由 Adapter 禁用 |
 | 模型计量与观测 | 同文件的 `UsageRecordingStructuredModelClient`、`ObservedStructuredModelClient` | 记录实际响应、耗用、失败和追踪；不决定业务成功 |
+| 模型 HTTP 诊断 | [model_transport.py](../../src/personal_agent/infra/model_transport.py)，由 `OpenAIModelClient._client()` 为 SDK 默认 HTTPX Client 显式装配 hook | 请求内 recorder 记录响应头、原始正文块进度和实际连接对端；typed 快照随原异常传至 retry／Conversation 日志，不改变模型载荷、传输策略或用量 |
 | 请求内用量收集 | [collect_llm_usage](../../src/personal_agent/kernel/llm_telemetry.py) | `ContextVar` 与上下文管理器限定收集范围，退出时恢复；不作为身份或授权来源 |
 | 工具治理 | [ToolExecutor](../../src/personal_agent/governance/gateway.py) | 显式处理 grant、Policy、限流、幂等、执行和审计，不通过方法名匹配插入 |
 | 策略观测归属 | [PolicyDecisionRecorder](../../src/personal_agent/kernel/observability.py) 与 [PolicyDecisionEvent](../../src/personal_agent/kernel/contracts/policy.py)，由 `AgentRuntime` 注入三个调用点 | Runtime 实例绑定本实例存储；事件不决定授权，可选 sink 失败语义保持，见 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md) |
@@ -34,9 +35,21 @@ Application 调用 StructuredModelClient.generate(request)
 
 返回与异常沿相反方向传播。计量位于重试外层，消费重试器汇总的响应信息；观测开关决定追踪包装是否装配。输出协议修复与暂时失败重试是不同边界，额度由现行请求和配置约束，不能叠加为无界重试。
 
-模型调用统一消费完整的 `StructuredModelResponse`。Adapter 的 `_create_structured_completion()` 可用 SDK 流式 transport 取得最终完整响应；其上下文关闭、deadline、重试及耗用继续经过上述组合。
+Conversation 的普通核验工作流由 Runtime 注入按受信 `ExecutionScope` 绑定的模型调用方法；各次分段／整体核验分别执行当前 run 准入及 Journal 消费提交。工具同步执行，模型单请求超时及运行截止拥有停止责任，避免外层线程超时遗留继续消费的核验。该入口仍调用上述模型 Port 组合，任务额度由 Conversation／Journal 拥有，不由遥测收集器授权或计费。
+
+模型调用统一消费完整的 `StructuredModelResponse`。Adapter 的 `_create_structured_completion()` 可用 SDK 流式 transport 取得最终完整响应；MiMo 官方 API／中国区 Token Plan 的原生工具调用也使用 SDK 流式合并及完整用量，wire 选择为服务方支持的 `auto`，原请求的 required 校验与有界修复保持。工具流仅关闭 SDK 本地 strict 自动参数解析，完整参数交原解码器，部分增量不进入执行；其上下文关闭、deadline、重试及耗用继续经过上述组合。协议依据及验证边界见[传输规格](../optimization/model-provider-transport.md#2026-10-23-mimo-工具流式接入规格)。
+
+HTTPX 观测状态附着在单次 Request 的 extensions，随 deadline 工作线程中的实际请求建立，不从调用线程的 `ContextVar` 或共享“最后一次请求”取值。response hook 在正文读取前记录状态和白名单头；透明正文包装计数并转发原字节及关闭，失败快照保持原状态码与独立的 SDK 失败分类。`llm.http.headers`、`llm.http.failed`、`llm.http.body_closed` 通过请求内 `attempt_id` 关联；首末时间指 HTTPX 正文块交付，不能用来推算 tokens 或证明 SDK／任务完成。详细字段由[Runtime](../topics/runtime.md)拥有。
+
+原生工具续接通过原 Model Port 的 typed envelope／exchange 传递完整 assistant 字段及按原 ID 配对的 tool 结果。Adapter 绑定实际请求端点与请求模型，保留服务方回执的模型名及思考字段；非法原生消息不能执行，但完整回执的费用仍通过原 typed failure 交接。Conversation Journal 保存不可变决策响应，业务结果、拒绝及控制接纳仍由各自 owner 产生；派生消息不成为新执行事实。恢复与完整组压缩见 [ADR 0042](../adr/0042-native-model-tool-continuation.md)，局部验证不替代参数或用户结果验收。
+
+主循环允许完整可见assistant正文形成候选，工具与正文并存时优先处理工具；回答模块和原Completion仍决定能否交付。内部结果由typed Port声明请求级策略：意图判断的prompted_json在Infra映射为无工具／无API格式的文本请求，直接严格解析原content；其他native_tool的parameters仍用公共转换从原Pydantic类导出，canonical类型不变，修复声明由原逻辑request显式保留，不从已替换的chat_request猜承载，JSON消费者不切到另一传输。流式角色按结构元数据聚合，不能和正文一样累加；其sticky协议失败事实随原ModelResponseRecord／Journal保存，完整响应先记录再校验，恢复读取同一事实。SDK内部载体与观察器不另建响应库或收费账本，详见[统一契约](../optimization/to_verify/conversation-loop-schema.md#13-流式结构角色按元数据聚合)。
+
+Loop 已将逐响应记录和续接接入同一 Port：response_sink 在 typed 解码前交原 Journal 保存一次原件；before_send 只对新增物理发送执行原预算准入；continuation 先解码已付费原件。它们是具名记录／准入接口，不是通用业务 hook；包装器透明传递，不保存进程全局当前 run。主循环修复由 Application 唯一负责，内层原有限输出修复仍按请求计量；中性错误由 REST／SSE 统一安全投影。实现与未验收边界见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)。
 
 正式 [SSE 入口](../../src/personal_agent/adapters/web/routes/entry_stream.py)调用 `AgentService.converse()`，将 Conversation 已验收答案分块返回，协议见 [API](../api.md)。子 Agent 的事件流由 [AgentGateway](../../src/personal_agent/agents/gateway.py)承接。旧模型 token 流 Port 与包装器没有当前消费者，已退役，删除及行为保持证据见[完成记录](../optimization/completed/model-streaming-retirement.md)。
+
+生成式服务方附加参数由 `STRUCTURED_EXTRA_BODY` 唯一配置。配置加载器把同源参数投影到 `StructuredConfig`、`OpenAIConfig` 和 `LangExtractConfig`；Graphiti 工厂直接传递同一来源，现有图片附件描述消费 `OpenAIConfig.extra_body`。各 SDK Adapter 负责协议投影，应用层摘要不再自行关闭思考；调用方显式深度与输出额度仍由原 typed 请求拥有。LangExtract 包装沿 SDK 子类的参数构造点补入依赖白名单会过滤的扩展。当前 MiniMax 部署采用 `thinking.type=adaptive`、`reasoning_effort=medium`，详细契约和验证边界见[环境说明](../env.md#统一思考参数2026-10-23)。这不增加模型路由或新的横切服务。
 
 ## 3. 选择最小隔离机制
 

@@ -6,6 +6,7 @@ import shutil
 from typing import Any
 
 from dotenv import load_dotenv
+from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 
 from personal_agent.kernel.config_models import (
     DEFAULT_GENERATIVE_MODEL,
@@ -54,7 +55,15 @@ def settings_from_env(settings_cls: type):
         or os.getenv("ROUTER_MODEL")
         or DEFAULT_GENERATIVE_MODEL
     )
+    structured_extra_body = (
+        _parse_json_env("STRUCTURED_EXTRA_BODY")
+        or _parse_json_env("ROUTER_EXTRA_BODY")
+        or {}
+    )
     return settings_cls(
+        answer_result=AnswerResultConfig.model_validate_json(
+            os.getenv("PERSONAL_AGENT_ANSWER_RESULT", '{}')
+        ),
         data_dir=Path(os.getenv("PERSONAL_AGENT_DATA_DIR", "./data")),
         log_level=os.getenv("PERSONAL_AGENT_LOG_LEVEL", "INFO"),
         embedding_provider=os.getenv("PERSONAL_AGENT_EMBEDDING_PROVIDER", "local"),
@@ -156,6 +165,11 @@ def settings_from_env(settings_cls: type):
             if os.getenv("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG")
             else None
         ),
+        python_execution_config_path=(
+            Path(os.environ["PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG"])
+            if os.getenv("PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG")
+            else None
+        ),
         openai=OpenAIConfig(
             api_key=os.getenv("OPENAI_API_KEY") or structured_api_key,
             base_url=os.getenv("OPENAI_BASE_URL") or structured_base_url,
@@ -171,6 +185,7 @@ def settings_from_env(settings_cls: type):
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
             capacity=_parse_model_capacity_env("OPENAI_MODEL_CAPACITY"),
+            extra_body=structured_extra_body,
         ),
         structured=StructuredConfig(
             api_key=structured_api_key,
@@ -185,8 +200,7 @@ def settings_from_env(settings_cls: type):
                 or os.getenv("PERSONAL_AGENT_ROUTER_MAX_RETRIES", "2")
             ),
             output_transport=os.getenv("STRUCTURED_OUTPUT_TRANSPORT", "json_object"),
-            extra_body=_parse_json_env("STRUCTURED_EXTRA_BODY")
-            or _parse_json_env("ROUTER_EXTRA_BODY"),
+            extra_body=structured_extra_body,
             capacity=_parse_model_capacity_env("STRUCTURED_MODEL_CAPACITY"),
         ),
         firecrawl=FirecrawlConfig(
@@ -353,6 +367,7 @@ def settings_from_env(settings_cls: type):
             or structured_base_url
             or "https://api.xiaomimimo.com/v1",
             model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL") or structured_model,
+            extra_body=structured_extra_body,
             max_char_buffer=int(
                 os.getenv("PERSONAL_AGENT_EXTRACT_MAX_CHAR_BUFFER", "6000")
             ),

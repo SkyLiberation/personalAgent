@@ -254,6 +254,20 @@ RETRIEVAL_EXPERIMENT_OUTCOMES = {
 }
 
 
+LONGDS_OUTCOME = UserOutcomeContract(
+    outcome_id="LONGDS-NETFLIX-003",
+    persona="持续调整市场分析条件并回看历史口径的中文分析用户",
+    source_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计",
+    natural_goal="分析 Netflix 目录与各国搜索热度，连续处理 36 轮调整和历史比较，最终推荐三个市场。",
+    observable_result="逐轮从正式入口得到实际分析答案；按固定官方协议分别报告正确轮数、最终推荐和流程完成。",
+    counterfactuals=("未来问题和参考答案不进入生产输入", "未授权跨对话原件拒绝且零执行",
+                     "同请求恢复不重复执行", "总预算耗尽不新增付费调用，未知消费保留且不单独停止"),
+    baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+    baseline_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#96-分阶段验收与停止条件",
+    assertion_owner="evals/product_baselines/longds_judge.py",
+)
+
+
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
     EvidenceCase(
         evidence_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001.native_start_http",

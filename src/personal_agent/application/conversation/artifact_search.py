@@ -33,7 +33,7 @@ class ArtifactSearchPort(Protocol):
 
 class SearchActionOutputArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    resource_ref: ResourceRef
+    resource_id: str = Field(min_length=1, description="当前可读文件的resource_id，来自材料或成功工具结果。")
     keyword: str = Field(
         min_length=1, max_length=400, description="搜索正文的字面词或正则表达式。"
     )
@@ -48,6 +48,7 @@ class SearchActionOutputArguments(BaseModel):
 
 
 class SourceSearchResult(SearchActionOutputArguments):
+    resource_ref: ResourceRef
     content_digest: ContentDigest
     eof_position: TextPosition
     lines: tuple[ReturnedSourceLine, ...]
@@ -64,7 +65,7 @@ def search_artifact_text(
     matcher: ArtifactSearchPort,
     max_chars: int = MAX_OBSERVATION_PAYLOAD_CHARS,
 ) -> SourceSearchResult:
-    if snapshot.resource_ref != arguments.resource_ref:
+    if snapshot.resource_ref.resource_id != arguments.resource_id:
         raise ValueError("搜索快照与请求引用不一致。")
     text = snapshot.content
     coordinates = TextCoordinates(text)
@@ -96,6 +97,7 @@ def search_artifact_text(
     selected: list[ReturnedSourceLine] = []
     result = SourceSearchResult(
         **arguments.model_dump(),
+        resource_ref=snapshot.resource_ref,
         lines=(),
         content_digest=snapshot.content_digest,
         eof_position=snapshot.eof_position,

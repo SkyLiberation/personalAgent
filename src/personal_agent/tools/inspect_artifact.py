@@ -5,7 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.artifacts import ArtifactService
-from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.application.artifacts.models import resolve_artifact_ref
 from personal_agent.tools.base import (
     governance_extras,
     require_gateway_context,
@@ -16,7 +16,7 @@ from personal_agent.tools.base import (
 
 class InspectArtifactArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    resource_ref: ResourceRef
+    resource_id: str = Field(min_length=1, description="当前材料或成功结果提供的Artifact resource_id。")
     question: str = Field(
         default="", description="用户围绕该 artifact 的问题或总结要求。"
     )
@@ -25,7 +25,7 @@ class InspectArtifactArgs(BaseModel):
 def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
     @tool(
         "inspect_artifact",
-        description="按 application-owned ResourceRef 读取上传 artifact 并返回 typed EvidenceRef；不会写入长期知识库。",
+        description="读取当前可读文件，按问题提取内容并返回来源引用；不会写入长期知识库。",
         args_schema=InspectArtifactArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
@@ -39,11 +39,13 @@ def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
         ),
     )
     def inspect_artifact(
-        resource_ref: ResourceRef, config: RunnableConfig, question: str = ""
+        resource_id: str, config: RunnableConfig, question: str = ""
     ):
         context = require_gateway_context(config)
-        if resource_ref not in context.allowed_resource_refs:
-            raise PermissionError("该资源不在本任务当前可读集合中。")
+        resource_ref = resolve_artifact_ref(
+            resource_id, context.allowed_resource_refs,
+            principal=context.execution_scope.principal,
+        )
         result = artifact_service.inspect_upload(
             resource_ref=resource_ref,
             principal=context.execution_scope.principal,

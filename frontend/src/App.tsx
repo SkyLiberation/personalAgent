@@ -636,19 +636,25 @@ export default function App() {
       eventSourceRef.current = null;
     });
 
-    source.onerror = () => {
+    source.onerror = (streamEvent) => {
+      const payload = streamEvent instanceof MessageEvent
+        ? parseSsePayload<{ message?: unknown }>(streamEvent)
+        : {};
+      const message = typeof payload.message === "string" && payload.message.trim()
+        ? payload.message
+        : "流式返回被中断，请检查后端日志后重试。";
       setAskHistory((current) =>
         current.map((item) =>
           item.id === historyItem.id
             ? {
                 ...item,
                 status: "error",
-                error: "流式返回被中断，请检查后端日志后重试。",
+                error: message,
               }
             : item
         )
       );
-      setStatus("处理失败，请检查后端日志。");
+      setStatus(message);
       source.close();
       eventSourceRef.current = null;
     };

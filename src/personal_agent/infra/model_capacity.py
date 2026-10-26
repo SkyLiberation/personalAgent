@@ -44,6 +44,7 @@ def check_model_capacity(
     if "thinking" in extra and extra["thinking"] not in (
         {"type": "enabled"},
         {"type": "disabled"},
+        {"type": "adaptive"},
     ):
         raise ModelCapacityRefused(operation, "capacity_payload_unsupported")
     body.update(extra)
@@ -60,7 +61,7 @@ def check_model_capacity(
                 message.get("content") is not None
                 and not isinstance(message["content"], str)
             )
-            or any(key in message for key in ("audio", "image_url", "video"))
+            or any(message.get(key) is not None for key in ("audio", "image_url", "video"))
             for message in messages
         )
     ):

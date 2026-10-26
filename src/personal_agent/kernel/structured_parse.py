@@ -130,6 +130,7 @@ def parse_structured(
     version: str = "v1",
     model_name: str = "",
     latency_ms: float | None = None,
+    allow_json_repair: bool = True,
 ) -> StructuredParseResult[T]:
     """Parse ``content`` into a validated ``model`` instance, emitting uniform telemetry.
 
@@ -139,7 +140,11 @@ def parse_structured(
     """
     schema = model.__name__
     try:
-        data = load_json_lenient(content)
+        data = (
+            load_json_lenient(content)
+            if allow_json_repair
+            else json.loads(strip_json_fence(content))
+        )
         value = model.model_validate(data)
     except (json.JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
         log_llm_parse(

@@ -1,6 +1,6 @@
 # ADR 0036：原生动作使用明确对象载荷
 
-- 状态：Accepted，准入生产候选；完整研究与普通结果验收待执行
+- 状态：Superseded；模型可见协议已由 [ADR 0043](0043-direct-code-agent-tool-parameters.md) 替换，以下保留原决定与证据身份。
 - 日期：2026-10-21
 - 范围：Conversation 的模型可见动作、名称投影和解码
 - 唯一规格：[主循环 Spec §3.15](../optimization/to_verify/conversation-loop-boundaries.md#315-显式业务载荷映射的审查候选)

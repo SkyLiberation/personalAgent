@@ -11,7 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import re
-from typing import Any, Literal
+from typing import Any
 
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
@@ -29,13 +29,13 @@ from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_sc
 from .models import (
     AgentDelegationProposal,
     ContinueTurnProposal,
+    AnswerResultInvocation,
     EffectiveCapabilities,
     ToolCallProposal,
     WorkingPlanProposal,
 )
 
 _WORKING_PLAN_TARGET = "working_plan"
-_FINALIZE_TARGET = "prepare_final"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _RUNTIME_FIELD_NAMES = frozenset(
     {
@@ -68,84 +68,23 @@ def _schema_without_fields(
     return strictify_schema(projected)
 
 
-def _wrapped_schema(
-    field_name: str,
-    nested_schema: dict[str, Any],
-    other_properties: dict[str, Any],
-) -> dict[str, Any]:
-    """Embed one Pydantic schema while keeping its root-local references valid."""
-    nested = deepcopy(nested_schema)
-    definitions = nested.pop("$defs", None)
-    legacy_definitions = nested.pop("definitions", None)
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            field_name: nested,
-            **deepcopy(other_properties),
-        },
-    }
-    if isinstance(definitions, dict):
-        schema["$defs"] = definitions
-    if isinstance(legacy_definitions, dict):
-        schema["definitions"] = legacy_definitions
-    return strictify_schema(schema)
-
-
-def _tool_action_schema(
-    input_schema: dict[str, Any],
-    payload_field: Literal["action"] | None,
-) -> dict[str, Any]:
-    if payload_field is None:
-        return _wrapped_schema("arguments", input_schema, {})
-    properties = input_schema.get("properties", {})
-    if set(properties) != {payload_field}:
-        raise ValueError(
-            "canonical payload projection requires its single declared field"
-        )
-    payload = deepcopy(properties[payload_field])
-    definitions = input_schema.get("$defs", {})
-    branches = payload.get("oneOf", [])
-    if not branches or any(
-        not isinstance(branch.get("$ref"), str)
-        or not branch["$ref"].startswith("#/$defs/")
-        or definitions.get(branch["$ref"].removeprefix("#/$defs/"), {}).get("type")
-        != "object"
-        for branch in branches
-    ):
-        raise ValueError("canonical action payload requires declared object branches")
-    payload["$defs"] = deepcopy(definitions)
-    schema = _wrapped_schema("arguments", payload, {})
-    # This must follow the LAST strictify: a union has no local properties.
-    schema["properties"]["arguments"]["type"] = "object"
-    return schema
-
-
 def _working_plan_action_schema() -> dict[str, Any]:
     schema = deepcopy(WorkingPlanProposal.model_json_schema())
-    schema["properties"].update(
-        {
-            "wait_for_user": {"type": "boolean"},
-            "message": {"type": "string", "maxLength": 4_000},
-        }
-    )
-    return _wrapped_schema("arguments", schema, {})
-
-
-def _finalize_action_schema() -> dict[str, Any]:
-    return _wrapped_schema("arguments", {"type": "object", "properties": {}}, {})
+    schema["properties"]["wait_for_user"] = {"type": "boolean", "default": False}
+    # Optional business fields keep their declared defaults; Runtime does not
+    # infer waiting intent or new step identities from omitted values.
+    return schema
 
 
 def build_model_action_definitions(
     capabilities: EffectiveCapabilities,
     *,
     experiment_run: bool = False,
+    answer_actions: tuple[ModelActionDefinition, ...] = (),
 ) -> tuple[ModelActionDefinition, ...]:
     """Project each visible capability exactly once plus typed control actions."""
     definitions: list[ModelActionDefinition] = []
     for capability in capabilities.tools:
-        payload_field: Literal["action"] | None = (
-            "action" if capability.name == "retrieval_experiment" else None
-        )
         definitions.append(
             ModelActionDefinition(
                 name=_wire_name("tool", capability.name),
@@ -153,12 +92,11 @@ def build_model_action_definitions(
                 target_name=capability.name,
                 description=(
                     f"{capability.description} "
-                    "按当前 Schema 在 arguments 对象中提交业务参数；计划进度由独立控制动作管理。"
+                    "按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。"
                 ),
-                input_schema=_tool_action_schema(
-                    capability.input_schema, payload_field
-                ),
-                payload_field=payload_field,
+                input_schema=(strictify_schema(capability.input_schema)
+                              if capability.strict else deepcopy(capability.input_schema)),
+                strict=capability.strict,
             )
         )
     for capability in capabilities.agents:
@@ -180,20 +118,10 @@ def build_model_action_definitions(
             target_name=_WORKING_PLAN_TARGET,
             description=get_prompt("conversation.working_plan.description").render(),
             input_schema=_working_plan_action_schema(),
+            strict=False,
         )
     )
-    definitions.append(
-        ModelActionDefinition(
-            name=_wire_name("control", _FINALIZE_TARGET),
-            kind="finalize",
-            target_name=_FINALIZE_TARGET,
-            description=get_prompt(
-                "conversation.experiment.prepare_final.description"
-                if experiment_run else "conversation.prepare_final.description"
-            ).render(),
-            input_schema=_finalize_action_schema(),
-        )
-    )
+    definitions.extend(answer_actions)
     names = [definition.name for definition in definitions]
     if len(names) != len(set(names)):
         raise ValueError("model action wire-name collision")
@@ -207,7 +135,7 @@ def _agent_action_schema(
         schema,
         frozenset({"kind", "action_id", "agent_id"}),
     )
-    return _wrapped_schema("arguments", projected, {})
+    return projected
 
 
 def model_visible_capability_policy_json(
@@ -270,7 +198,7 @@ def _payload_failure_code(
         "working_plan": "provider_action_working_plan_payload_invalid",
         "tool": "provider_action_tool_payload_invalid",
         "agent": "provider_action_agent_payload_invalid",
-        "finalize": "provider_action_finalize_payload_invalid",
+        "answer_result": "provider_action_answer_result_payload_invalid",
     }[action_kind]
 
 
@@ -401,7 +329,7 @@ def _wire_payload(
             field_paths=tuple(path for path, _ in diagnostics),
             error_types=tuple(kind for _, kind in diagnostics),
         )
-    return invocation.arguments["arguments"]
+    return invocation.arguments
 
 
 def decode_model_action_invocations(
@@ -409,7 +337,7 @@ def decode_model_action_invocations(
     definitions: tuple[ModelActionDefinition, ...],
     *,
     reveal_invalid_action_field_names: bool = False,
-) -> ContinueTurnProposal:
+) -> ContinueTurnProposal | AnswerResultInvocation:
     """Decode provider actions without authorizing, repairing, or executing them."""
     if not invocations:
         raise StructuredOutputFailure(
@@ -433,10 +361,15 @@ def decode_model_action_invocations(
             reason_code="provider_action_unknown",
             action_name=unknown_names[0],
         )
+    answer_calls = [item for item in invocations if by_name[item.name].kind == "answer_result"]
+    if answer_calls and len(invocations) != 1:
+        raise StructuredOutputFailure(
+            "agent_interaction_turn", "提交、修订和研究操作必须独占本轮；整批动作未执行。",
+            reason_code="provider_action_answer_result_payload_invalid", action_kind="answer_result",
+        )
     working_plan: WorkingPlanProposal | None = None
     wait_for_user = False
-    message = ""
-    finalization_requested = False
+    working_plan_call_id = None
     actions: list[ToolCallProposal | AgentDelegationProposal] = []
     for invocation in invocations:
         definition = by_name[invocation.name]
@@ -446,15 +379,9 @@ def decode_model_action_invocations(
             reveal_invalid_action_field_names=reveal_invalid_action_field_names,
         )
         try:
-            if definition.kind == "finalize":
-                if finalization_requested:
-                    raise StructuredOutputFailure(
-                        "agent_interaction_turn",
-                        "a model turn may contain at most one finalization request",
-                        reason_code="provider_action_definition_invalid",
-                    )
-                finalization_requested = True
-                continue
+            if definition.kind == "answer_result":
+                return AnswerResultInvocation(call_id=invocation.call_id,
+                    operation=definition.target_name, arguments=payload)
             if definition.kind == "working_plan":
                 if working_plan is not None:
                     raise StructuredOutputFailure(
@@ -466,23 +393,18 @@ def decode_model_action_invocations(
                     {
                         key: value
                         for key, value in payload.items()
-                        if key not in {"wait_for_user", "message"}
+                        if key != "wait_for_user"
                     }
                 )
-                wait_for_user = payload["wait_for_user"]
-                message = payload["message"]
+                working_plan_call_id = invocation.call_id
+                wait_for_user = payload.get("wait_for_user", False)
                 continue
             if definition.kind == "tool":
-                arguments = (
-                    {definition.payload_field: payload}
-                    if definition.payload_field is not None
-                    else payload
-                )
                 actions.append(
                     ToolCallProposal(
                         action_id=invocation.call_id,
                         tool_name=definition.target_name,
-                        arguments=arguments,
+                        arguments=payload,
                     )
                 )
                 continue
@@ -507,7 +429,7 @@ def decode_model_action_invocations(
             field_paths, error_types = _validation_diagnostics(
                 exc,
                 definition=definition,
-                prefix=("arguments",),
+                prefix=(),
                 reveal_invalid_action_field_names=reveal_invalid_action_field_names,
             )
             raise _payload_failure(
@@ -522,8 +444,7 @@ def decode_model_action_invocations(
         actions=tuple(actions),
         working_plan=working_plan,
         wait_for_user=wait_for_user,
-        message=message,
-        finalization_requested=finalization_requested,
+        working_plan_call_id=working_plan_call_id,
     )
 
 

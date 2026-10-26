@@ -1,5 +1,155 @@
 # 当前评测用例盘点
 
+## 2026-10-25 Loop完整流程与提示式意图验证
+
+按[唯一Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)接入原生正文／动作、同承载反馈及按职责选择的内部typed输出。内部意图使用prompted_json，原类型、来源Admission、32,768输出和一次格式修复保持；本轮六文件+66／-35，审查Critical 0／Important 0。
+
+[固定40次组](../../.tmp/loop-schema-redesign-20261024/intent-generation-v4-01/report.json)为四份完整真实输入各10次，40/40全部首响应有效、0格式修复，313,228已知tokens／未知0／757.859秒，无补样或替换。[独立审计](../../.tmp/loop-schema-redesign-20261024/intent-generation-v4-audit.md)确认SDK／Journal／报告一致、源码无漂移，40份均非空对象；语义标签独立。原main10按[精确复用proof](../../.tmp/lv4/main10-reuse-v4-01/report.json)保留原身份／费用，当前正式Root首wire与原788,332字节逐字一致。
+
+[新完整LongDS采集与评分](../../.tmp/lv4/complete-audit/report.json)实际结束：36请求／36交付／0未执行，201次真实生成、26,423,421已知tokens／未知0，3,995.375秒。第17轮检查点封存，旧Web32500退出、新Web22592继续18—36轮；messages／许可／配置／源码一致。生成及观察进程均退出。全部36轮以普通assistant正文提交，Python41成功／22失败、参数拒绝3次，错误原件保留且流程继续。
+
+官方独立Judge为27/36正确（75%），失败轮次1、2、10、11、12、15、20、27、31；新增36次Judge／157,527已知tokens／未知0，历史资格5,735不计新增。流程通过不等于语义可靠，仍为unverified_flow_capture／release_eligible=false；本轮遵循用户先放下语义、使用direct／none的范围，不改成绩或接入claim／核验补过。
+
+自然本地预算压缩在30、31、34、35、36轮实际激活并消费；5个逻辑摘要共6次物理请求。第31轮[严格原件审计](../../.tmp/loop-schema-redesign-20261024/v4-natural-compaction-audit.md)确认ascii_json_bytes_v1估算总预算1,001,130超原1M，未发HTTP；真实摘要与快照被后继main精确消费、原件和未覆盖交换保留、费用一次。实际服务端最大单请求输入298,355 tokens，不能说达到1M真实容量。该组证明本地准入压力下续跑，不证明全文语义保真、净成本收益或压缩后检查点跨进程复用。下列历史失败保留原身份。
+
+## 2026-10-24 Loop原生交互首版与完整任务第17轮失败
+
+首版统一Schema已移除空prepare及独立Final JSON。原第14阶段固定baseline10／candidate10都完成交付；候选2次首响应提交、8次一次反馈后提交，23→18次物理请求、5,251,796→4,407,986已知tokens。该局部结果不证明提高成功概率，也不改写旧失败；[逐样本比较](../../.tmp/loop-schema-redesign-20261024/p1-comparison.json)保留原件。
+
+随后新身份LongDS中文完整36轮目标于北京时间20:06:33启动，以MiniMax-M3.1-Flash adaptive＋medium、direct＋none运行，在第17轮terminal_limitation停止：17请求、16交付、19未执行，115次物理生成／15,273,815已知tokens／未知0，2622.75秒。第14轮已交付，但第17轮两次Python成功后，两份完整普通正文均被强制工具终答协议拒绝；未到第17轮交付和17→18新进程恢复，无自然压缩。原始回答独立官方评分15/16正确，第5轮语义失败另计；新Judge16次／67,111已知tokens／未知0，复制历史资格不计新增。该运行仍为unverified_flow_capture、release_eligible=false，不能证明完整长任务。见[完整采集与评分](../../.tmp/loop-native-e2e-20261024/complete-audit/report.json)。
+
+独立来源协议组四个真实输入各10次，30/40通过，62次物理请求／453,671已知tokens／未知0。10个失败均未到Admission：首轮9项严格型别错误、1项无输出工具，修复后6项仍型别错误、4项返回正文JSON。实发修复提示要求正文JSON，与native_tool冲突；反馈已送达，不归为模型未收到错误。B1已接纳5/5非后台、B2已接纳6/6后台；异常样本的缺失值比较不计语义误判。见[原件及账本审计](../../.tmp/loop-schema-redesign-20261024/intent-generation-audit.md)。
+
+另一次授权raw SSE诊断新增1请求／1,737已知tokens，20个原delta.role均为assistant、SDK聚合成20次拼接，原HTTP body逐字节相同。诊断不计40样本或产品E2E，原件不修正，见[协议诊断](../../.tmp/loop-schema-redesign-20261024/intent-role-diagnostic-01/report.json)。修订由[唯一Loop Spec](../optimization/to_verify/conversation-loop-schema.md#11-第17轮后的终止协议复审与修订准入)拥有；当前代码及零模型辅助回放不提前计为新10／40生成或新36轮通过。
+
+## 2026-10-23 原生工具历史续接的局部验证
+
+按[唯一规格](../optimization/model-provider-transport.md#2026-10-23-原生工具会话续接规格)接入完整 assistant／tool 消息、思考字段、控制结果、恢复及完整交换压缩。最终完整真实阶段 5/5、SDK 四例 4/4；真实 prepare_final／压缩确定性激活及保护整组／恢复通过。独立审查四项均有先失败后通过的回放，费用保留和别名绑定反事实 5/5。全部局部回放新增付费模型、工具及 Judge 为零；工作清单和 save/delete 暂仅经代码审查，历史摘要回执的激活回放不证明新输入摘要语义或自然压力。
+
+另执行预声明的一次真实 MiniMax adaptive＋low 阶段续接：1 请求、36,568 tokens、未知零、18.359 秒，返回合法 Python 提议，15 文件引用可见，program_ref=null、版本为整数；工具执行零。只证明该完整失败输入的一次合法续接，不证明参数稳定性、业务计算或长任务通过。原件：[真实阶段](../../.tmp/native-tool-history-20261023/actual-stage/report.json)、[五阶段](../../.tmp/native-tool-history-20261023/offline-v5/report.json)、[控制及压缩](../../.tmp/native-tool-history-20261023/boundaries-v2/report.json)、[审查反事实](../../.tmp/native-tool-history-20261023/review-green/report.json)。新的完整流程已停止，结果见下节，不改写局部或此前失败身份。
+
+## 2026-10-23 原生工具历史接入后的流程结果（已停止）
+
+新轨迹于北京时间 21:43:50 启动，约 21:51:58 停止，21:52:43 完成评分。实际请求 3／回答 2／未执行 33，未到达第 17 轮检查点。第 3 轮先漏 program_ref，配对 tool 反馈实际送达后又漏 input_files，按连续非法动作停止；该轮新增工具执行零。先前两轮共 11 次 Python 为 10 成功／1 失败，已实际生成和复用程序；不能将程序执行成功等同于参数恢复和业务答案可靠。
+
+两份回答按官方标准独立评分为 0/2：首轮国家数 14／期望 15，电影时长缺失口径不符；第二轮前五市场与顺序正确，但需求缺口及机会分数不符。27 次生成请求合计 2,035,196 tokens，新增 Judge 2 次／10,818 tokens，未知均零；共享 Judge 累计 36,868。最大实际单请求输入 149,368 tokens，无自然压缩或进程恢复，本轮仍为 unverified_flow_capture、release_eligible=false，不能证明完整长任务。没有自动重跑。
+
+原件：[完整采集](../../.tmp/minimax-native-history-e2e-20261023/l2-prefix-17/report.json)、[最终审计及评分](../../.tmp/minimax-native-history-e2e-20261023/complete-audit/report.json)、[评分原件](../../.tmp/longds-implementation-20261023/judge/minimax-native-low-full-prefix/report.json)。三者及原局部档案 seal 在 2026-10-24 的只读状态核对中有效；后台生成与观察进程均已退出，运行中入口已同步为停止。本次查询没有新增模型、评分或工具执行，后续候选须以本次实际失败重新分析，不把原生协议局部成功撤销或当作参数可靠性通过。
+
+## 2026-10-23 MiniMax low 完整流程验证（已停止）
+
+按 [Spec §9.11](../optimization/to_verify/knowledge-decision-delivery.md#911-minimax-low-的完整流程验证)，新轨迹于北京时间 20:49:33 启动，约 20:51:03 已停止，实际生成 PID `4372` 已退出。16 份 CSV 上传成功后，第 1 轮连续提交同类非法 Python 工具参数，收到反馈后仍未修复，Runtime 返回 HTTP 200／`limitation`。实际请求 1 轮、回答 0 轮、余 35 轮未执行；6 次物理请求，原始 SDK usage 合计与 Journal 均为 113,642 tokens，Journal usage 完整。没有第 17 轮检查点、恢复或官方成绩；未自动重跑。
+
+另有独立采集缺口：收尾计量解析一份 SDK 归档时，其 `message.role` 是重复拼接的 `assistant`，不满足 typed 契约，导致正式 `report.json` 及 `checksums.json` 未生成；观察器随后因缺少封存文件拒绝收尾。该异常字段的形成边界尚未定位，不归因为供应商原始响应。评分调用零，旧 503 准入修正未被触发；本次是新的采集计量失败，不能将未封存原件写成完整采集通过。独立只读[停止审计](../../.tmp/minimax-longds-e2e-20261023/status-audit/report.json)已封存，原失败段保持。
+
+随后零模型核对完整请求、Schema、拒绝反馈和同轨迹思考，确认原新接口仍在使用，两次 Python 均带齐三键及 16 文件；失败为 `program_ref=""` 和字符串版本号重复，模型已识别修复要求但未落实到参数。当前输入有完整反馈，没有原生 assistant／tool 历史，与 MiniMax 官方工具循环要求存在适配差异；因果尚未验证，也未比较 low/high。历史修复边界、当前重新打开的责任及后续单变量规则见 [Python Spec §3.6](../optimization/to_verify/python-data-analysis-tool.md#36-minimax-首轮的参数修复再次失败2026-10-23)。
+
+启动前收尾准入各消费一份完整历史采集：成功两轮选出 `[1,2]`，503 失败段选出 `[]`，新增模型／Judge／工具调用均为零；独立复核无启动阻断，固定镜像存在，脚本静态检查及文档链接检查通过。观察器确已绑定实际生成 PID 并等到退出，但上述新采集缺口使本轮未进入评分；共享 Judge 历史消费仍为 26,050、未知零，原 2M 阈值保持。本轮统一 `adaptive + low`、`direct + none`，仍为 `unverified_flow_capture`、`release_eligible=false`。原件：[启动身份](../../.tmp/minimax-longds-e2e-20261023/l2-launch-identity.json)、[准入回放](../../.tmp/minimax-longds-e2e-20261023/admission-audit.json)、[新任务目录](../../.tmp/minimax-longds-e2e-20261023/)。
+
+## 2026-10-23 MiniMax 统一思考与 low 验证
+
+按用户后续指令及[参数契约](../env.md#统一思考参数2026-10-23)，当前 MiniMax 的生成式调用统一消费 `thinking.type=adaptive`、`reasoning_effort=low`，摘要和 Graphiti 的局部关闭逻辑已删除。候选前以既有完整 SDK 请求核对，新参数会触发 `capacity_payload_unsupported`，普通回答及 LangExtract 也没有参数投影；本次只补配置传递及已核对协议支持。独立评审另发现正式图片描述漏传，已在原 SDK 调用边界修复并复核关闭；没有新增生产模块或模型路由。
+
+配置构造检查核对同源设置、直接回答、Graphiti 工厂及 LangExtract 最终 SDK 参数，受管字段覆盖仍明确拒绝。随后按预声明各一次执行既有 MiniMax 连通性请求和完整真实历史摘要请求；实发消息分别与来源逐字相等，原输出额度分别为 4,096／8,192，零 SDK／服务／格式重试。两份实际 HTTP 正文均包含 `thinking.type=adaptive`、`reasoning_effort=low`，返回模型名均为 `MiniMax-M3.1-Flash`，typed 输出 2/2 合法，未截断。
+
+| 实际 SDK 阶段 | 消费与结果 |
+| --- | --- |
+| 连通性原请求 | 396 输入／7 输出，共 403 tokens，1,897.90 毫秒 |
+| 完整历史摘要原请求 | 98,087 输入／1,533 输出，共 99,620 tokens，18,691.64 毫秒；摘要正文 3,214 字符 |
+| 本轮合计 | 2 次物理请求、100,023 已知 tokens、未知零，20.609 秒；原件 seal 有效 |
+
+这是实际 SDK 阶段验证，`release_eligible=false`；只证明参数传递及这两份 typed 输出，不代表摘要已激活、后继已消费或语义保真，也不计 Graphiti／LangExtract／图片业务集成或完整 LongDS 通过。没有执行模型提议的工具或重跑 36 轮。原件：[候选前配置审计](../../.tmp/minimax-thinking-low-20261023/baseline-configuration-audit.json)、[配置构造](../../.tmp/minimax-thinking-low-20261023/configuration-audit.json)、[计划](../../.tmp/minimax-thinking-low-20261023/plan.json)、[真实结果](../../.tmp/minimax-thinking-low-20261023/report.json)。
+
+## 2026-10-23 MiniMax 配置切换与真实环境检查
+
+用户指定将生成式模型替换为 `MiniMax-M3.1-Flash`。本地 canonical 配置及直接回答、Graphiti、LangExtract 的解析身份已同步；中国区端点、参数及剩余兼容边界由[环境说明](../env.md#llm-配置)拥有，凭据仅在被 Git 忽略的 `.env`，归档不含密钥。现有生产模块与单请求预算保持，MiMo 原始失败和未知用量保留。
+
+预声明的一次真实环境检查经现有 `JsonObjectStructuredAdapter`、实际 SDK 和服务方，中文请求的 typed JSON 校验通过，返回模型名为 `MiniMax-M3.1-Flash`。实际 1 次请求、396 输入／7 输出、合计 403 tokens、未知零，2,229.82 毫秒；零 SDK／服务／结构重试，完整原件已 seal。它只证明凭据、配置解析和一次结构化调用，属于 `real_environment_smoke`，不能作为产品 E2E、所有 Adapter 集成或长任务通过。原件：[计划](../../.tmp/minimax-switch-20261023/plan.json)、[去密配置](../../.tmp/minimax-switch-20261023/configuration.json)、[真实结果](../../.tmp/minimax-switch-20261023/report.json)。
+
+首次切换没有重跑 36 轮。当时发现的压缩关闭思考与新模型冲突，已在后续[统一思考参数验证](#2026-10-23-minimax-统一思考与-low-验证)中处理；该次连通性原件保持，不能改写成压缩激活或长任务通过。
+
+## 2026-10-23 MiMo 工具流式接入后的完整流程验证
+
+按[传输规格](../optimization/model-provider-transport.md#2026-10-23-mimo-工具流式接入规格)，MiMo 工具调用已采用 SSE、完整用量及 `auto`，原 required 校验保持。完整真实 SDK 阶段的最终四例为 4/4：正常工具增量、历史非法 JSON 的原修复、真实 HTTP 断流、完整过滤拒绝；正常 SSE 关闭不再误记为网络失败。独立评审发现的过滤 usage 丢失已先失败后通过，正式 Web 外部过滤故障回放另为 1/1，Journal／SDK 的 31,352 tokens 是归档响应的回放计量，新增付费零；无未知、无工具接受／执行，公开 503 保持。该 Web 回放保持原代码身份，后续仅改可选关闭观测，计量及消费者契约未变；不充当真实模型 E2E。原始局部失败均保留，本轮局部累计本机 HTTP 22 次，另独立评审两次，付费模型／工具执行零。原件：[四例报告](../../.tmp/mimo-tool-stream-20261023/offline-v3/summary.json)、[正式 Web 故障回放](../../.tmp/mimo-tool-stream-20261023/web-filter/report.json)。
+
+**新的真实 MiMo 36 轮流程于 19:35 启动，19:39:46 已在第 1 轮因供应商 `content_filter` 停止，尚无完整成绩。** 实际请求 1 轮、回答 0 轮、余 35 轮未执行；3 次物理模型请求共 56,182 tokens，SDK 与 Journal 相等，未知零，采集记录耗时 250.594 秒。最后一次工具决策完整返回 31,505 tokens 和 `finish_reason=content_filter`，Adapter 按 `provider_rejected`、不可重试交接，Web 返回 503；本次未出现此前的断流异常，具体过滤原因未提供。已核对采集、局部报告和完成观察归档的 seal，生成源码漂移零。停止前已有两次成功的只读文件调用，Python 执行零，没有第 17 轮检查点或后段运行；不能将 `accepted_tool_requests` 为空解释为全部工具执行零。
+
+实发 HTTP 已确认 `mimo-v2.6-flash`，原生 19 工具请求为 `stream=true`、`stream_options.include_usage=true`、`tool_choice=auto`；新诊断确认本次连接经 `127.0.0.1:7892`，不追认为原故障时路由。启动器按首轮失败停止，未接续 18—36 轮。完成观察器虽已等待生成进程退出并通过 seal／消费核对，随后评分入口却把 503 错误正文当作成功的 `ConversationTurnResponse` 解析，另报 `ValidationError`；这是评分控制缺口，不是生产停止原因。新评分目录仅生成源码快照，新增 Judge 请求零，未取得分数。后续须先修正失败段的评分准入，不把错误正文交给评分器；本轮没有重跑或新增付费调用。
+
+原失败没有可用检查点且消费未知，本次按用户明确继续授权使用独立身份从第 1 轮开始；旧轨迹的 54,904 已知及一次未知保留，不作为新运行的完整账单，也不清除旧 Journal 门禁。新运行保持原 60M 停止阈值、36 小时许可、每轮 3600 秒及每 run 10M／40 主决策／256 工具／4 委派，direct+none，仍为 `unverified_flow_capture`、`release_eligible=false`。
+
+原件：[采集报告](../../.tmp/mimo-tool-stream-20261023/l2-prefix-17/report.json)、[停止后审计](../../.tmp/mimo-tool-stream-20261023/status-audit/report.json)、[完成观察失败](../../.tmp/mimo-tool-stream-20261023/complete-audit/failure.json)、[启动身份](../../.tmp/mimo-tool-stream-20261023/l2-launch-identity.json)。[过滤定位](../optimization/model-provider-transport.md#内容过滤的定位与既有反馈)已核对同轨迹请求、推理、SDK 透传及历史反馈，并修正前述工具计数；具体触发项仍未知。本次证明完整过滤响应的已知用量可交回实际 Journal，仍未证明完整长任务、自然压缩或第 17→18 轮恢复；不能以局部通过代替完整成绩。
+
+## 2026-10-23 模型传输诊断真实阶段回放
+
+按[诊断规格](../optimization/to_verify/model-provider-diagnostics.md#诊断补齐规格与架构分析)，固定 LongDS 第四次失败的完整 SDK kwargs 和 83,495 字节原 HTTP 请求，经真实 SDK、Adapter、Conversation 失败转换及日志消费；外部服务替换为本机 HTTP 服务，不恢复原任务准入或 Journal。最终三例分别为 200 后 chunked 正文中断、307 后 200 正文中断、已封存完整 SDK 响应正常返回。修改前为 1/3，候选 3/3；正常响应值及用量保持，两个版本发出的 body 均与原请求逐字节一致。
+
+候选断流例保留 200、37 字节／三块、首末块时间、实际 socket 对端、服务请求 ID，以及 `APIConnectionError → httpx.RemoteProtocolError → httpcore.RemoteProtocolError` 和 `incomplete chunked read` 消息。相同快照已到达 Conversation 日志及正式采集观察器的 typed 消费；公开错误、失败分类、SDK 零重试和关闭行为保持。它证明诊断交接，不能认定原 MiMo 断连方或长任务完成。
+
+首个有效组 `offline-v4` 为两例，修改前 1/2、候选 2/2；独立评审随后发现重定向时诊断错取初始 307。修正前源码 `redirect-red` 三例为 2/3，最终 `offline-v5` 两版本三例共八次本机 HTTP，候选 3/3，前一 307 不再混入最终读取失败。脚手架错误、首组有效结果和评审失败均保留；归档内累计本机 HTTP 24 次，另有独立评审复现两次，合计 26 次。新增付费模型、工具执行、Judge 均为零；原任务一次未知消费保持。[最终报告](../../.tmp/mimo-transport-diagnostics-20261023/offline-v5/summary.json)及[完整诊断归档](../../.tmp/mimo-transport-diagnostics-20261023/)独立于原生成轨迹，不进入发布成功分子。
+
+## 2026-10-23 MiMo 两轮流程及独立评分
+
+按[Spec §9.10](../optimization/to_verify/knowledge-decision-delivery.md#910-切回-mimo-的长任务验证)，生成调用已实际改为 `mimo-v2.6-flash`／中国区 Token Plan 端点。仍使用原中文两轮、16 CSV、真实 Web／Python、`direct + none` 和原 L1 预算；新模型为独立身份，不与 DeepSeek 轨迹合并或归因为机制收益。
+
+| 检查 | 实际结果与边界 |
+| --- | --- |
+| 流程与执行 | 请求 2／回答 2，余 34 轮未执行；14／6 次主决策，3 次新源码 Python 均成功，无原程序引用调用。第一轮发生 4 条参数／协议拒绝反馈，原协议内实际恢复；第二轮无动作反馈错误，Final 的一项空文本经原 Schema 修复后交付 |
+| 跨轮 | 同主体／对话／许可，第一轮确切回答进入第二轮请求及实际 SDK，接续 2 条先前成功观察，初始附件保持。没有实际跨轮原程序引用复用；不是共享 Notebook 内存或进程恢复 |
+| 模型与消费 | 22 次逻辑调用对应 28 次物理请求，全部使用 MiMo；其中 26 次主循环物理请求、2 次意图。总计 1,227,299 tokens，SDK 与 Journal 相等、未知 0；2,049.015 秒，实际进程已停止，705 文件 seal 有效、源码漂移 0；claim／核验调用 0，自然压缩 0 |
+| 独立官方评分 | 原固定官方 Prompt／解析／v4-pro 资格保持；两份实际 Final 各一次评分均得 1。质量统计、第二轮前五名排序和分数组件全部符合原答案。新增 2 次 Judge 请求、8,370 tokens、未知 0；26,050 为整个 Judge 根目录累计消费 |
+
+原件：[采集](../../.tmp/research-mimo-longds-20261023/l1-mimo-flow/report.json)、[审计](../../.tmp/research-mimo-longds-20261023/flow-audit.json)、[官方评分](../../.tmp/longds-implementation-20261023/judge/l1-mimo-flow/report.json)。两轮条件已达到，不追加稳定性采样；仍为 `unverified_flow_capture`、`release_eligible=false`。该成绩保持原身份，后续完整任务的独立失败不改写它。
+
+完整 36 轮于 18:27 按新 60M 停止阈值启动，**18:38 已因首轮模型响应传输中断停止**，当前没有仍在运行的生成或评分进程。
+
+| 完整任务边界 | 实际结果 |
+| --- | --- |
+| 原始用户结果 | 请求第 1 轮、完成回答 0，余 35 轮未执行，未产生 Final；总耗时 654.125 秒。一次自主 Python 执行成功，进程退出码 0；本次没有动作参数拒绝反馈 |
+| 最早失败 | 第 4 次 MiMo 请求：日志已记录 HTTP 200 响应头，读取完整响应时发生 `RemoteProtocolError`，HTTP 观察耗时 361.421 秒；应用归为 `provider_transport`，正式 Web 返回 503。异常类型尚不足以判定中断位于 MiMo 服务端、代理或网络，也未证明是配置的 480 秒超时 |
+| 消费与停止 | 4 次物理请求，前三次完成合计 54,904 已知 tokens；第 4 次无完整响应及用量，未知消费 1。Journal 的 `provider_usage_complete=false`，54,904 不能当作完整账单总量。按原停止线关闭；完整运行的生成进程已停止，498 文件 seal 有效 |
+| 未到达 | 第 17 轮检查点及第 18 轮接续均未建立；无自然压缩。失败请求的本地容量检查已接受，预估输入 104,633／1,000,000，输出预留 32,768、协议预留 8,192；未出现容量拒绝，也未达到任务额度或轮数上限。claim／核验继续关闭 |
+| 评分收尾 | 观察器因生成消费未知显式拒绝评分并退出，新增完整任务 Judge 请求 0；该拒绝是原停止契约生效，不是先前两项观察器统计缺陷再次发生。没有完整任务成绩 |
+
+原件：[完整任务停止报告](../../.tmp/research-mimo-longds-20261023/l2-prefix-17/report.json)、[失败物理请求](../../.tmp/research-mimo-longds-20261023/l2-prefix-17/sdk/a770bfc2799d487f8eed83a8e2f4915c.http.response.json)、[收尾停止](../../.tmp/research-mimo-longds-20261023/complete-audit/failure.json)。当前独立阻塞是模型请求的传输中断及其未知消费；未实施传输修补或清除未知状态，不将本次失败归为上下文压缩、排序或 claim 问题。
+
+## 2026-10-23 可替换回答模块与无核验两轮流程
+
+按用户明确授权及[Spec §9.9](../optimization/to_verify/knowledge-decision-delivery.md#99-可替换回答模块与无核验流程验证)，当前 LongDS 独立采集装配 `direct + none`。原中文两轮、16 CSV、真实 Web／模型／Python／Journal 及预算保持，核验和 claim 不接入；分类为 `unverified_flow_capture`、`release_eligible=false`，不计完整产品 E2E 或发布通过，不改原带核验 target 的失败。
+
+| 检查 | 实际结果与证据边界 |
+| --- | --- |
+| 流程 | 请求 2／回答 2；两轮均为模型实际 `answer`，余 34 轮未执行。6 次 Python 均成功，每轮 2 次新源码、1 次本轮原程序引用；13／9 次主决策。首轮出现一次参数拒绝及协议内 JSON 恢复，模型实际消费反馈后继续，失败与费用未删 |
+| 跨轮 | 同主体／对话／许可，第二轮请求及实发 SDK 带入第一轮确切回答，并接续 5 条先前成功观察；原初始附件相同。未发生第一轮程序引用的跨轮实际复用，不能把本轮证据称为 Notebook 内存或 L3 恢复 |
+| 核验与消费 | claim／语义核验调用 0。24 次逻辑调用对应 26 次物理请求，其中 24 次主循环物理请求、2 次意图派生；两轮共 1,321,809 已知 tokens，观察与 Journal 相等、未知 0，680.016 秒。实际进程停止、834 文件 seal 通过、源码漂移 0 |
+| 独立官方评分 | 复用原固定官方 Prompt／解析及 v4-pro 资格；对两份实际 Final 各一次评分，两轮均得 1。第 1 轮质量统计匹配原答案，第 2 轮前五名排序与分数组件匹配。新增 2 次 Judge 请求、9,410 tokens、未知 0；报告的 17,680 是含原资格及旧 target 的累计 Judge 消费，不当成本轮新增成本 |
+| 结构回放 | 原 LongDS final-25 和实际 claim 修订通过：直接正文保真、非法引用拒绝／修复 Context 到达模型 Port、绑定变更拒绝；claim required 请求及原报告消费保持，claim none 不生成核验。新增模型／执行 0，不是新语义判断 |
+| 完成恢复与配置拒绝 | 在实际完成的原 Journal 副本恢复相同配置，返回确切原答案；改变 writer 或核验装配的原 run 恢复与新 run 均拒绝，4/4 拒绝，JSON 状态不改写，新增模型／执行 0。不是进程中断后的 L3 分析接续 |
+
+原件：[采集](../../.tmp/answer-result-modules-20261023/l1-direct-flow/report.json)、[只读审计](../../.tmp/answer-result-modules-20261023/flow-audit.json)、[官方评分](../../.tmp/longds-implementation-20261023/judge/l1-direct-flow/report.json)、[阶段回放](../../.tmp/answer-result-modules-20261023/stage-replay-3/report.json)、[恢复及配置反事实](../../.tmp/answer-result-modules-20261023/composition-binding-boundary/report.json)。两轮流程与原官方答案标准达到既定条件后结束，不追加到稳定性组；尚未进行完整 36 轮、自然压缩、L3 或 claim 消融，不把关闭 claim 与核验的双变量采集作为 claim 独立收益证据。
+
+## 2026-10-23 LongDS 准备、正式失败与相位检查点
+
+固定 v1.1 Lite 的 Netflix task3，36 轮完整中文题面及 16 份 CSV 已准备；数据共 3,454,619 字节，逐文件字节／Git blob／SHA-256 校验通过。答案和参考代码只留评测私有目录。准备及非 root／禁网／只读条件下的分析镜像导入检查不调用模型、不执行业务程序；来源、规格与预算由[研究 Spec §9](../optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计)拥有。
+
+| 轨迹 | 真实结果与边界 |
+| --- | --- |
+| 原 L1 | 正式上传 16 份附件；请求第 1 轮后返回 `limitation`，第 2 轮未发送，未完成清洗及计数。4 次物理模型请求，62,748 已知 tokens、未知 0，113.109 秒；首次参数 JSON 错误经反馈自行修复，随后 3 次读取成功。Runtime 却在模型未选择提交时强制进入无工具 Final |
+| 相位 target | 删除取得正文即自动成文的条件后，26 份实际请求在读取后仍保留动作，检查点成立。模型最终明确无执行沙箱、实际明细内容及计数仍缺失，返回限制；请求 1 轮、完整回答 0，余 35 轮未请求。36 次物理请求，4,671,287 已知 tokens、未知 0，2,085.797 秒；完整任务失败保持，自然压缩 0 |
+| Judge 资格 | 固定官方 Prompt／解析规则、官方默认 `deepseek-v4-pro`。官方答案正例得 1，原 L1 限制答复负例得 0，资格 2/2；2 次实际请求共 5,735 tokens、未知 0。资格不计 Agent 成功，也没有对 36 轮 Agent 结果评分 |
+| 独立 Python 能力 target | 7 次自主 Python 均成功，其中 5 次新源码、2 次原程序引用。最终未交付：40 次主决策后返回限制；请求 1 轮、回答完成 0，第 2 轮未发送，完整任务余 35 轮未请求。80 次物理请求／76 次逻辑调用、4,879,140 tokens、未知 0，2,193.687 秒；进程停止、1,150 文件 seal 通过、采集中源码漂移 0 |
+| target 官方评分 | 实际限制 Final 得 0，未用草稿代答；1 次请求、2,535 tokens。连同原两例资格共 8,270 tokens、未知 0；第 2 轮未执行，未得到完整 36 轮成绩 |
+| 任务额度反事实 | 正式首题的真实意图调用消费 10,830 tokens 后达到独立许可停止阈值；同一对话的新 run 新增模型请求 0。1 次物理请求，观察侧未知 0，进程停止、439 文件校验通过；只证明达到阈值后的停止，不声称单调用严格不超额 |
+| 未知消费反事实 | 真实 Provider 响应在交付 Application 前丢失，原请求恢复和新 run 都新增模型请求 0；生产 Journal 保留未知。旁路观测 1 次物理请求、14,249 tokens、未知 0，未回填生产；进程停止、444 文件校验通过 |
+| Python 实际阶段 Offline | target 已提交 revision 100 的真实程序／Receipt／原件，4/4：同请求原回执恢复、另一对话 scope 拒绝、实际 stdout 缺失反馈、恢复字节后原结果可读。新增模型、execute、reconcile 均 0，Journal 未改写；该阶段不计完整回答或 L3 |
+| 核验停止 Offline | 同一实际阶段的 `final-25`、原 criteria 和完整引用，真实核验响应交付后丢失；1 次物理请求、旁路 12,014 tokens、观察侧未知 0。生产保留未知，下一次核验在模型 Port 前拒绝，新增请求 0；封存于 `verifier-stop-boundary/` |
+
+两份采集进程均已停止，封存校验通过，采集中生产源码无漂移。分别见[原 L1](../../.tmp/longds-implementation-20261023/l1-baseline/report.json)、[相位 target](../../.tmp/longds-implementation-20261023/l1-phase-target/report.json)、[相位审计](../../.tmp/longds-implementation-20261023/phase-audit.json)及[评分资格](../../.tmp/longds-implementation-20261023/judge/qualification/report.json)。
+
+独立 Python 许可、对话消费聚合及原件接续已接入；能力 target 已结束，原失败保持。10 次核验 workflow 均未过，最后整体核验 16/34 satisfied、18/34 insufficient_evidence：r32／r33 认可建表和质量统计，后续排名等条件规则却被要求在首轮展示，另有评级映射证据缺口。实际执行与完整用户结果分列，不认定单个语义问题是唯一原因，不据此改判或追加同组重跑。
+
+能力轨迹、用量等式、代码身份和评分分别见[采集](../../.tmp/longds-implementation-20261023/l1-python-target/report.json)、[审计](../../.tmp/longds-implementation-20261023/python-target-audit.json)、[评分](../../.tmp/longds-implementation-20261023/judge/l1-python-target/report.json)。局部反事实分别在 `model-budget-boundary/`、`model-unknown-boundary/`、`python-stage-source/`、`python-stage-boundaries/` 及 `verifier-stop-boundary/`，均位于本轮 `.tmp/longds-implementation-20261023/`；标准轨迹不受控制故障影响。L2／L3 未启动，恢复采集入口虽已接入仍缺真实检查点；自然压缩 0，不宣称长任务能力，不加入默认 release 分母。
+
 ## 2026-10-22 Agent能力验收收回下载与打包
 
 用户明确当前E2E验证Agent能力，用户资源下载及打包结果不属于目标。已从生产完成与恢复链删除自动清单／ZIP／报告副本发布，以及正式采集器逐资源下载；模型和工具继续使用内部Artifact，保留原执行、权限、冻结/test、输入及引用校验。既有通用资源路由与历史离线读取者保持，当前研究回答resources为空。
@@ -2364,3 +2514,71 @@ A6 正确报告回传步骤缺证，又将一般功能名称确定为对象绑�
 1,581 输入、555 输出，合计 2,136 tokens、10.75 秒，一物理、一个父记录排除，零重试及新增未知；累计 5,926,949 已知 tokens、十一次历史未知。本轮共三物理、16,887 新已知 tokens，唯一正式完整阶段回放 v14 为 0/1、其余五项未执行；v13 A2 的原 1/1 保持，不混算不同版本或诊断。实发与范围校验通过，生产和 `.env` 保持，没有 writer 消费、新 Product E2E 或单元测试。见[报告](../../.tmp/source-schema-minimal-context-20261011/REPORT.json)、[裁剪差异](../../.tmp/source-schema-minimal-context-20261011/input-diff.patch)、[实际响应](../../.tmp/source-schema-minimal-context-20261011/M1-response.json)、[实发审计](../../.tmp/source-schema-minimal-context-20261011/M1-sdk-audit.json)及[观察复核](../../.tmp/source-schema-minimal-context-20261011/M1-review.json)。
 
 原始结果见[报告](../../.tmp/source-relation-support-20261010/REPORT.json)、[A2 语义审阅](../../.tmp/source-relation-support-20261010/A2-review.json)、[A6 逐项审阅](../../.tmp/source-relation-support-20261010/A6-review.json)、[A2 实发审计](../../.tmp/source-relation-support-20261010/A2-sdk-audit.json)、[A6 实发审计](../../.tmp/source-relation-support-20261010/A6-sdk-audit.json)及[完整输入身份](../../.tmp/source-relation-support-20261010/input-audit.json)。
+
+## 2026-10-24 Code Agent 参数生产接入与两轮验证
+
+唯一机制与预声明见 [Python Spec §3.7](../optimization/to_verify/python-data-analysis-tool.md#37-code-agent-直接参数的接入与验证2026-10-24)，实施决定见 [ADR0043](../adr/0043-direct-code-agent-tool-parameters.md)。
+
+| 边界 | 实际结果 |
+| --- | --- |
+| 完整真实第三轮参数阶段 | baseline首响应8/10、一次修复后9/10，13物理／1,179,217 tokens；新接口首响应10/10，10物理／892,014 tokens；未知均零 |
+| Python参数与程序正确性 | 候选6次实际Python参数均合法且引用可读；其余为3次prepare_final和1次双读取；至少一份语法错误及一份潜在运行错误，不计程序执行通过 |
+| 实际执行边界 | 原数据与程序文件复用、权限拒绝、原字节及恢复零重执行成立；7次真实容器执行，零模型调用 |
+| 正式自然两轮流程 | 生产HTTP／Composition Root、新主体／会话／空Journal、MiniMax adaptive＋low、direct＋none；2请求／2交付，23物理／1,299,152 tokens、未知零，316.843秒，实际进程已停止 |
+| 同一正式轨迹的程序执行 | 11次Python执行，8成功／3失败，失败反馈回原模型；新直参、strict=false、完整原生消息、原字节与Journal恢复检查通过 |
+| 仍有参数问题 | 4次引用版本字段拒绝，revision字符串与声明的正整数不符；第二轮反馈后仍重复，随后继续其他合法动作；不计全部参数修复 |
+| 官方标准答案评分 | 0/2；首轮电影时长缺失范围写错，次轮4个市场延迟供给分量写错。新Judge2物理／14,581 tokens、未知零 |
+
+原始归档见 [.tmp/code-agent-tool-production-20261024](../../.tmp/code-agent-tool-production-20261024/flow/report.json)、[同轨迹执行／原生消息检查](../../.tmp/code-agent-tool-production-20261024/flow-audit/report.json)和[独立评分](../../.tmp/longds-implementation-20261023/judge/code-agent-direct-20261024-l1/report.json)。这是 `unverified_flow_capture`，release_eligible=false；原生历史五完整阶段5/5保持，旧MiMo控制档因旧program_ref类型不能用新类型读取的诊断失败保留，不冒充迁移成功。新轨迹只核对压缩原始来源与配对，没有自然容量压力、摘要激活、17→18恢复、Agent／Plan实际选择或36轮长任务验收。原三键漏填未复现与当前引用类型错误分别记录，完整研究能力未关闭。
+
+
+## 2026-10-24 文件 ID 简化的局部验证
+
+唯一设计与逐项外部依据见 [Python Spec §3.8](../optimization/to_verify/python-data-analysis-tool.md#38-文件选择只提交现有-id2026-10-24)，协议决定见 [ADR 0044](../adr/0044-model-artifact-id-selection.md)。公开文件工具由模型提交已有 ID，Runtime 保留完整身份／权限／版本及冻结事实；本轮未引入短 ID 表、持久工作区或自动参数修复。
+
+| 证据 | 当前结果与边界 |
+| --- | --- |
+| 完整真实参数阶段 baseline10 | 首次1/10；一次应用修复后2/10；19物理请求、329,286 tokens，未知0 |
+| 同输入候选10 | 首次10/10；10请求、138,206 tokens，未知0；8次 Python、5次读取参数合法，32个 Python 文件绑定均可见；未执行这些候选程序 |
+| 原件与执行旅程 | v2 完成7次真实进程，57份源原件保持；首轮另有2次进程后因评测误改不可变 Journal 输入而停止。源失败保留，修正未放宽生产不变量 |
+| 完整文件交接 | v4 经实际读取／搜索／检查／创建／补丁／恢复及4类拒绝；零新模型、零容器。v1/v2 的来源元数据、异常类型脚手架失败和 v3 原报告保留 |
+| 独立整体评审 | 无 Critical／Important／Minor；原生历史、Command／Journal 和作用域边界未发现新增缺陷；评审不代替正式流程；同轨迹审计另确认原字节／ID绑定、原生配对和源码身份 |
+| 正式两轮接续 | 2/2交付，planned_turns_finished；21请求、1,180,998 tokens、未知0，587.015秒。9次Python为6成功／3失败；1次ID抄写拒绝、1次不支持text/csv拒绝后继续交付；语义未评分 |
+
+上述属于参数及执行的局部证据。完整答案语义、36轮长任务、自然压缩和发布资格尚未取得；不改写此前官方答案0/2。原始源码、请求、失败、用量及校验和见 [.tmp/resource-id-tool-production-20261024](../../.tmp/resource-id-tool-production-20261024/progress.md)。
+
+
+## 2026-10-25 LongDS v1.1 Lite 剩余 23 项原稿执行（原批次结束，续跑已启动）
+
+用户选择 Lite 后进一步明确：除非存在官方翻译，否则保留官方原稿。已核对[官方 Kimi Code 题面构造](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/kimi_code/prompt.py)直接读取原 `context/question`，官方数据集与代码中未找到中文题面。本批使用固定 revision `6b448459c333ecc050a2e89fcc65c0e044d763ac` 的 23 项英文原稿，共 741 轮，23—42 轮/项，原始数据约 9.47GB。已完成的中文 Netflix task3 保留原身份及 27/36 评分，不与英文结果混算。
+
+执行与停止条件由[运行规格](04-running-and-release.md#v11-lite-剩余任务执行规格2026-10-25)拥有。本次仅扩展评测材料、采集及评分的实际轮数边界，新增一个串行批次入口；生产 Runtime、Prompt、模型参数和权限未修改。独立审查发现的 Windows 路径、材料冻结、资格历史费用及进程退出确认问题已修正。零模型准备核对 23 项/741 轮、原中文材料、旧 17+19 轮报告可读、固定分析镜像、本地数据库、首项官方 34 轮原题及 CSV 校验和；四个评测文件语法和导入 lint、文档规范检查通过。未运行单元测试，未发生翻译调用。
+
+北京时间 13:46 启动，实际生成器 PID 24780，首项 Web PID 32444。实际首项 `business/netflix_movies_and_tv_shows/task2` 已完成健康检查、原 CSV 上传并进入真实 MiniMax 调用；首个 Provider HTTP 返回 200，不等同于该轮交付或答案正确。配置为 MiniMax-M3.1-Flash、adaptive+medium、`direct/none`，证据仍为 `unverified_flow_capture`、`release_eligible=false`。
+
+来源准备在 `.tmp/longds-remaining-20261025/`；[原批次结果](../../.tmp/ls25/progress.json)及 `t01`—`t23` 保存逐项原件、采集和官方评分，标准输出为 `.tmp/longds-remaining-20261025/suite.stdout.log`。
+
+原批次于北京时间 16:53 结束，23 项均已尝试，完整完成 0 项；实际请求 54/741 轮，交付并评分 31 轮，其中 12 轮正确。Netflix task2 交付 20/34、评分 3/20，第 21 轮因 Python 未决执行返回 limitation；task4 交付 11/32、评分 9/11，第 12 轮出现 MiniMax 429，后续 21 项全部首轮 429。原已知生成消费 28,551,170 tokens、未知 67 次，Judge 194,389 tokens。429 的五小时额度原因是用户推测，现有归档只确认请求受限；未将失败或未到达记为答案通过。
+
+用户授权继续后，按[续跑规格](04-running-and-release.md#429-中断后的续跑2026-10-25)核对原主体、许可、消息、源码、配置和封存材料；源码差异为 0。操作脚本、导入 lint、官方实际前 11 轮保真及文档检查通过，独立启动审查无阻断。北京时间 21:09 启动新的操作进程，实际 PID 30980；[续跑进度](../../.tmp/lr25/progress.json)以原 task4 第 12 轮为起点，后续 21 项入队。新 run 保留原对话、完整 Journal、文件及许可，原截止不修改、消费不清零；新增回答独立评分，原 31 份回答不重算。
+
+上述续跑于 10 月 25 日 22:42 再次遇到 429 后暂停。新增交付并评分 30 轮，其中 14 轮正确；与原结果按同轨迹接续统计，累计交付 61/741、正确 26/61，完整完成仍为 0/23。Netflix task4 新增 19 轮后在第 31 轮出现未决执行；NYC 完成 4 轮后遇到 529；Kaggle 2018 完成 7 轮后在第 8 轮遇到 429，余下 19 项未续跑。其余数据以各分段封存报告为准。
+
+2026-10-26 用户明确要求恢复 Netflix task2。按 [ADR 0046](../adr/0046-sealed-pre-dispatch-incident-recovery.md)对原第 21 轮的 WinError 5、已知源码派发边界和真实 Docker404 完成一次操作恢复；原源码差异 0，原归档 seal 保持。在 `.tmp/lr2/` 副本中，经原 `PythonExecutionService` 与 Journal 规范入口将唯一获准 Command 收敛为“派发前持久化失败”：无退出码、无 stdout/stderr 引用；操作新增 execute 为 0、reconcile 为 1，同请求幂等与跨主体拒绝核对通过，未决集合从 1 条清空。原 20 轮、3/20 评分、25,235,993 已知 tokens、1 次未知用量和原许可保持，不改写原 unknown 历史记录。[操作证据](../../.tmp/lr2/operator-evidence/report.json)独立封存。
+
+本次北京时间 10:26 启动，实际操作／续跑 PID 4056，保持原主体、对话、完整 Journal、文件和许可，以新 run 从官方第 21 轮继续至第 34 轮；原 run 的终态与截止不变。原许可至当日 23:46，北京时间 10:27 已观察到正式模型 HTTP200。新分段已交付 14/14，合计全部 34 轮完成交付；生成 126 次物理请求、27,746,037 已知 tokens、未知 0，实际 Web 进程已停止。新增官方评分 0/14，与原 3/20 合计 3/34（8.82%），无评分服务或协议失败；新增 Judge 90,260 已知 tokens，未知 0，生成与评分 seal 均有效。[task2 恢复结果](../../.tmp/lr2/progress.json)及[独立评分](../../.tmp/lr2/judge/official/report.json)保留本段事实。本次证明特定事故状态已恢复及完整流程交付；语义仍有 31 轮未达标，不宣称 Windows 落盘问题已得到通用修复。
+
+## 2026-10-24 MiniMax medium 完整流程验证（已停止）
+
+按用户要求，canonical思考档位由low改为medium，adaptive保持；当前参数传播与完整实际SDK构造已核对，模型／材料／工具／Prompt及预算不因档位变化另改。唯一运行方案见 [研究 Spec §9.12](../optimization/to_verify/knowledge-decision-delivery.md#912-minimax-medium-的完整36轮验证)。
+
+本次启动于北京时间14:43:02，独立归档 `.tmp/minimax-medium-longds-e2e-20261024/`，生成PID8336，观察器绑定其实际退出后才评分。计划36轮及17→18原许可恢复；60M／36小时、每轮3600秒及原每run预算保持，direct＋none继续，因此仍是 unverified_flow_capture、release_eligible=false。
+
+准备阶段零模型：实际3消息／19工具的SDK仅reasoning_effort改变，16 CSV／36问题、固定Docker、数据库和Judge额度通过；成功／503评分准入分别[1,2]／[]。首次准备漏填诊断context_projection_ref，在HTTP前拒绝并有界修正，未消费模型。独立启动评审没有阻断；首个真实SDK已确认adaptive＋medium。本次已在14:52:20左右停止：首轮1请求／0回答／35未执行，13物理请求、479,230已知tokens、未知1，耗时558.593秒；无17→18恢复或自然压缩。7次Python为6成功／1失败。响应头前285.5秒断连是最早最终阻塞，非容量或480秒超时；本地生成与Web退出，评分门禁按未知消费拒绝，新增Judge0。原始采集／失败及未知保留，不自动补跑，旧low证据不改写。
+
+
+## 2026-10-24 用量未知不停止的完整 LongDS 验证（已停止并评分）
+
+按用户明确授权移除用量统计不完整停止线，当前方案和固定验收由[研究 Spec §9.13](../optimization/to_verify/knowledge-decision-delivery.md#913-用量未知不再单独停止并继续完整验证)拥有。模型／摘要的整份真实失败阶段回放从拒绝变为允许，479,230 已知 tokens、原未知标记和封存保持；三份真实采集评分准入及 SDK 全载荷不变检查通过，独立审查无阻断。没有新增单元测试或付费准备调用。
+
+新轨迹使用独立身份 `.tmp/usage-nonblocking-longds-20261024/`，北京时间 15:33:36 启动，生成 PID 15876；首个实际 SDK 已核对 adaptive＋medium。计划原 36 轮、17→18 新进程恢复、direct＋none，未知费用继续单列，60M 生成／2M Judge 阈值只约束已知消费。仍为 `unverified_flow_capture`、`release_eligible=false`。本次 16:22:23 生成退出，16:25:16 评分完成：14 请求、13 交付、22 未执行，13 份回答评分 11 份正确，第 2／5 轮为 0。第 14 轮最终提交的两次 `json_object` 请求均返回 Markdown，JSON 解析及原修复失败，正式入口返回 503；响应及费用完整，不是本次用量门禁停止。生成 113 次／15,282,805 tokens，新增 Judge 13 次／51,689 tokens，未知均 0；49 次 Python 为 38 成功、10 失败、1 超时。未到 17→18 恢复或自然压缩，最大单次实际输入 272,105 tokens；旧 medium 首轮失败不改写。详情见[本次最终报告](../../.tmp/usage-nonblocking-longds-20261024/report.json)。

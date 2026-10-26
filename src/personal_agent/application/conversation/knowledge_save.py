@@ -9,9 +9,10 @@ from threading import RLock
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 from .errors import (
+    ConversationFailure,
+    ConversationInputError,
     ConversationOperationConflict,
     ConversationOperationNotFound,
-    ConversationUnavailable,
 )
 from .journal import InMemoryInteractionJournal
 from .models import (
@@ -48,7 +49,7 @@ class ConversationKnowledgeSaveUseCase:
         confirmation_ref: str,
     ) -> ConversationKnowledgeSaveOperation:
         if decision not in {"confirm", "reject"}:
-            raise ValueError("decision must be confirm or reject")
+            raise ConversationInputError("decision must be confirm or reject")
         owner = principal
         with self._journal.exclusive_run(interaction_run_ref), self._confirmation_lock:
             trace = self._journal.get(interaction_run_ref)
@@ -84,9 +85,9 @@ class ConversationKnowledgeSaveUseCase:
             else:
                 normalized_confirmation_ref = confirmation_ref.strip()
                 if not normalized_confirmation_ref:
-                    raise ValueError("confirmation_ref is required when confirming")
+                    raise ConversationInputError("confirmation_ref is required when confirming")
                 if self._writer is None:
-                    raise ConversationUnavailable(
+                    raise ConversationFailure(
                         "conversation knowledge writer is not configured"
                     )
                 result = self._writer.solidify_conversation(

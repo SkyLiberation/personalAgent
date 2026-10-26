@@ -9,7 +9,6 @@ from personal_agent.application.python_execution.models import (
 )
 from personal_agent.application.python_execution.service import PythonExecutionService
 from personal_agent.kernel.prompts import get_prompt
-from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -25,18 +24,17 @@ def build_execute_python_tool(service: PythonExecutionService) -> BaseTool:
         description=get_prompt("python_execution.description").template,
         args_schema=ExecutePythonArgs,
         response_format="content_and_artifact",
-        extras=governance_extras(
+        extras={"strict": False, **governance_extras(
             side_effects=("write_local",),
             permission_scope="python:execute",
             timeout_seconds=None,
             max_retries=0,
-        ),
+        )},
     )
     def execute_python(
-        code: str | None,
-        program_ref: ResourceRef | None,
-        input_files: tuple[PythonInputBinding, ...],
+        code: str,
         config: RunnableConfig,
+        input_files: tuple[PythonInputBinding, ...] = (),
     ):
         context = require_gateway_context(config)
         if context.accepted_request_digest is None:
@@ -44,7 +42,7 @@ def build_execute_python_tool(service: PythonExecutionService) -> BaseTool:
         try:
             result = service.execute(
                 ExecutePythonArgs(
-                    code=code, program_ref=program_ref, input_files=input_files
+                    code=code, input_files=input_files
                 ),
                 execution_scope=context.execution_scope,
                 action_id=context.tool_call_id,

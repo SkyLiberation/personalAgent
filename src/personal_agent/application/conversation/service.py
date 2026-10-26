@@ -4,9 +4,8 @@ from personal_agent.capabilities.contracts.verification import ConversationAnswe
 from personal_agent.kernel.prompts import get_prompt
 
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from hashlib import sha256
@@ -16,7 +15,7 @@ from time import monotonic, sleep
 from typing import Any
 from uuid import uuid4
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from personal_agent.application.capture.web_source import WEB_SOURCE_FORMAT, WebReadOutput, WebSearchOutput
 
@@ -36,18 +35,21 @@ from personal_agent.capabilities.contracts.model import (
 from personal_agent.capabilities.contracts.verification import VerificationVerdict
 from personal_agent.kernel.contracts.agent import AgentGatewayContext, AgentTask
 from personal_agent.kernel.contracts.derivation import canonical_digest
-from personal_agent.application.artifacts.models import ArtifactWriteReceipt
+from personal_agent.application.artifacts.models import ArtifactWriteReceipt, resolve_artifact_ref
 from personal_agent.application.retrieval_experiment.models import (
     ExperimentToolArgs, PublishedExperimentResult, RetrievalDeployment,
 )
-from personal_agent.application.python_execution.models import ExecutePythonArgs
+from personal_agent.application.python_execution.models import ExecutePythonArgs, PythonExecutionAuthorization
 from personal_agent.application.retrieval_experiment.delivery import DeliveryIncomplete
 from .research_delivery import (
     ResearchExperimentCompletionUseCase, experiment_submission, pending_experiment_submission,
 )
 from .tool_requests import WriteArtifactArgs
-from .artifact_sources import input_resource_refs, trace_resource_refs
+from .artifact_sources import input_resource_refs
 from .history_compaction import HistoryCompactor, checkpoint_refs
+from .model_history import (
+    project_model_history, update_decisions,
+)
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceRef, ResourceSelector
 from personal_agent.kernel.contracts.scope import (
     ExecutionScope,
@@ -73,16 +75,18 @@ from .context_materialization import (
 )
 from .artifact_search import ArtifactSearchPort, SearchActionOutputArguments, search_artifact_text
 from .artifact_reading import ReadArtifactArguments, read_artifact_text
-from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, selected_citation_ids
+from .citations import (
+    CitationBindingError, materialize_cited_draft, materialize_citation_context,
+    selected_citation_ids, bound_citation_ids,
+)
 from .interaction_prompt import build_interaction_system_prompt
-from .final_revisions import FinalRevisionError, materialize_final_revision
+from .answer_results import DirectAnswerResult, ClaimAnswerResult
+from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+
 from .research import (
-    InitialResearchSubmission, ResearchSubmission, CreateClaims, ReviseClaimFragment,
-    ReplaceClaimReferences, AddClaims, DeleteClaim, RecheckClaims, ReturnToActions,
-    StopResearch, accepted_research, admit_claim_change, current_claims, verification_steps,
-    has_research_source_text, in_research_mode, ResearchEvidenceSelection, InitialResearchEvidenceSelection, research_request,
-    editable_research_claims, research_submission_type, applicable_research_review,
-    research_review_context, research_goal_requirements, validate_research_selection,
+    current_claims, ResearchEvidenceSelection, editable_research_claims,
+    applicable_research_review, research_review_context, research_goal_requirements,
+    validate_research_selection,
 )
 from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
 from .source_reading import materialize_source_reading_state
@@ -93,9 +97,10 @@ from .model_actions import (
 )
 from .errors import (
     ConversationFailureStage,
+    ConversationInputError,
     ConversationOperationConflict,
     ConversationOperationNotFound,
-    ConversationUnavailable,
+    ConversationFailure,
 )
 from .journal import (
     FileInteractionJournal,
@@ -103,6 +108,7 @@ from .journal import (
 )
 from .knowledge_save import ConversationKnowledgeSaveUseCase
 from .models import (
+    ModelCallDisposition,
     ActionObservation,
     ArtifactSourceInput,
     AcceptedArtifactToolRequest,
@@ -120,8 +126,7 @@ from .models import (
     EffectiveCapabilities,
     EffectiveToolCapability,
     FinalMessage,
-    FinalRevision,
-    FinalSubmission,
+    AnswerResultInvocation,
     SubmittedFinal,
     InteractionTrace,
     InteractionInput,
@@ -205,6 +210,8 @@ class ConversationService:
         experiment_deployment: RetrievalDeployment | None = None,
         experiment_model_capacity_valid: bool = False,
         experiment_completion: ResearchExperimentCompletionUseCase | None = None,
+        python_authorization: PythonExecutionAuthorization | None = None,
+        answer_result: DirectAnswerResult | None = None,
     ) -> None:
         self._model_client = model_client
         self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
@@ -215,6 +222,8 @@ class ConversationService:
         self._experiment_deployment = experiment_deployment
         self._experiment_model_capacity_valid = experiment_model_capacity_valid
         self._experiment_completion = experiment_completion
+        self._python_authorization = python_authorization
+        self._answer_result = answer_result or ClaimAnswerResult(AnswerResultConfig())
         self._knowledge_writer = knowledge_writer
         self._knowledge_reader = knowledge_reader
         self._knowledge_lifecycle = knowledge_lifecycle
@@ -230,7 +239,7 @@ class ConversationService:
         self._journal = journal or InMemoryInteractionJournal()
         self._history = HistoryCompactor(
             journal=self._journal, artifacts=self._artifact_port,
-            generate=self._model_client.generate, admit=self._admit_history_call,
+            generate=lambda request, run_ref: self._generate_model(request, run_ref=run_ref, usage=self._journal.get(run_ref).usage),
             record_usage=self._record_model_usage,
         ) if self._artifact_port is not None and self._model_client is not None else None
         self._knowledge_save = ConversationKnowledgeSaveUseCase(
@@ -250,7 +259,8 @@ class ConversationService:
         input_artifact_refs: tuple[ResourceRef, ...] = (),
     ) -> ConversationTurnView:
         run_ref = interaction_run_ref or f"irun_{uuid4().hex[:16]}"
-        with self._journal.exclusive_run(run_ref):
+        with (self._journal.exclusive_conversation(conversation_id, principal),
+              self._journal.exclusive_run(run_ref)):
             try:
                 return self._respond_locked(
                     conversation_id=conversation_id,
@@ -261,9 +271,9 @@ class ConversationService:
                     interaction_mode=interaction_mode,
                     input_artifact_refs=input_artifact_refs,
                 )
-            except ConversationUnavailable as error:
+            except ConversationFailure as error:
                 trace = self._journal.get(run_ref)
-                research_bound = trace is not None and trace.deployment_digest is not None
+                research_bound = trace is not None and trace.python_profile_digest is not None
                 if error.failure_stage in {"model_capacity", "application_budget"} or research_bound:
                     if trace is not None and trace.principal == principal:
                         usage = trace.usage
@@ -273,9 +283,10 @@ class ConversationService:
                             usage = self._record_model_usage(
                                 usage,
                                 error.response,
-                                model_turn=error.operation == "agent_interaction_turn",
+                                model_turn=error.operation == "agent_interaction_turn", run_ref=run_ref,
                             )
-                        if research_bound and error.failure_stage == "provider_request":
+                        if (research_bound and error.failure_stage == "provider_request"
+                                and not error.provider_response_complete):
                             usage = usage.model_copy(update={
                                 "provider_usage_complete": False, "model_calls": None,
                                 "input_tokens": None, "output_tokens": None,
@@ -315,9 +326,9 @@ class ConversationService:
         input_artifact_refs: tuple[ResourceRef, ...] = (),
     ) -> ConversationTurnView:
         if not messages or messages[-1].role != "user":
-            raise ValueError("conversation must end with a user message")
+            raise ConversationInputError("conversation must end with a user message")
         if self._model_client is None:
-            raise ConversationUnavailable(
+            raise ConversationFailure(
                 "conversation model is not configured",
                 reason_code="model_not_configured",
                 failure_stage="application_configuration",
@@ -328,7 +339,7 @@ class ConversationService:
         prior = self._journal.get(run_ref)
         new_run = prior is None
         if prior is not None and prior.input_artifact_refs != tuple(input_artifact_refs):
-            raise ValueError("interaction_run_ref is bound to different input_artifact_refs")
+            raise ConversationOperationConflict("interaction_run_ref is bound to different input_artifact_refs")
         if prior is not None:
             self._require_trace_scope(
                 prior,
@@ -336,10 +347,15 @@ class ConversationService:
                 action="conversation_run_resume",
             )
         if prior is not None and prior.conversation_id != conversation_id:
-            raise ValueError("interaction_run_ref is bound to a different conversation")
+            raise ConversationOperationConflict("interaction_run_ref is bound to a different conversation")
         if prior is None:
+            if any(
+                item.answer_result_binding != self._answer_result.config
+                for item in self._journal.conversation_traces(conversation_id, principal)
+            ):
+                raise ConversationOperationConflict("同一对话不能更换回答模块或核验装配，请使用独立对话。")
             if len(set(input_artifact_refs)) != len(input_artifact_refs):
-                raise ValueError("input_artifact_refs contains duplicate references")
+                raise ConversationInputError("input_artifact_refs contains duplicate references")
             sources = []
             for ref in input_artifact_refs:
                 if ref.resource_type != "artifact" or ref.owner != principal or self._artifact_port is None:
@@ -349,18 +365,38 @@ class ConversationService:
             deployment = self._experiment_deployment
             bound = deployment is not None and deployment.authorized_principal == principal and all(
                 item.resource_ref in input_artifact_refs for item in deployment.materials if item.role != "test_qrels")
+            authorization = self._python_authorization
+            analysis_bound = (authorization is not None and authorization.authorized_principal == principal
+                              and authorization.conversation_id == conversation_id)
+            if analysis_bound:
+                if datetime.now(UTC) >= authorization.expires_at:
+                    raise PermissionError("Python分析授权已过期")
+                if any(item.python_authorization_digest is not None
+                       and item.python_authorization_digest != authorization.authorization_digest
+                       for item in self._journal.conversation_traces(conversation_id, principal)):
+                    raise PermissionError("同一分析对话不能更换授权身份并重置额度")
+            now = datetime.now(UTC)
             prior = InteractionTrace(
+                answer_result_binding=self._answer_result.config,
                 interaction_run_ref=run_ref, conversation_id=conversation_id, principal=principal,
                 messages=tuple(messages), input_artifact_refs=tuple(input_artifact_refs), inputs=tuple(sources),
                 usage=CommittedUsage(provider_usage_complete=True, model_calls=0, input_tokens=0, output_tokens=0),
                 deployment_digest=deployment.deployment_digest if bound else None,
-                run_deadline_at=datetime.now(UTC)+timedelta(seconds=deployment.limits.run_timeout_seconds) if bound else None,
-                max_execution_seconds=deployment.limits.max_execution_seconds if bound else None,
+                python_authorization_digest=authorization.authorization_digest if analysis_bound else None,
+                run_deadline_at=(min(now + timedelta(seconds=authorization.turn_timeout_seconds), authorization.expires_at)
+                                 if analysis_bound else now + timedelta(seconds=deployment.limits.run_timeout_seconds)
+                                 if bound else None),
+                max_execution_seconds=(authorization.max_execution_seconds if analysis_bound
+                                       else deployment.limits.max_execution_seconds if bound else None),
             )
             self._journal.put(prior)
         elif prior.deployment_digest is not None and (
             self._experiment_deployment is None or self._experiment_deployment.deployment_digest != prior.deployment_digest):
             raise PermissionError("original experiment deployment is no longer available")
+        if prior.python_authorization_digest is not None:
+            self._require_python_authorization(prior)
+        if prior.answer_result_binding != self._answer_result.config:
+            raise ConversationOperationConflict("原运行的回答模块绑定缺失或与本次装配不同，请使用新对话进行独立运行。")
         if prior.deployment_digest is not None and current_claims(prior.inputs) is not None:
             raise ValueError("旧 claim 研究记录不能作为初步实验交付的提交；请使用新的准备身份。")
         working_plan = (
@@ -370,7 +406,7 @@ class ConversationService:
         )
         self._run_conversation_ids[run_ref] = conversation_id
         if prior is not None and tuple(messages) != prior.messages:
-            raise ValueError(
+            raise ConversationOperationConflict(
                 "interaction_run_ref is already bound to different user input"
             )
         if prior is not None and prior.knowledge_save_operation is not None:
@@ -397,7 +433,7 @@ class ConversationService:
             resources = ()
             if prior.deployment_digest is not None and prior.final_message.disposition == "answer":
                 if self._experiment_completion is None:
-                    raise ConversationUnavailable("实验完成校验不可用，无法恢复已完成回答。")
+                    raise ConversationFailure("实验完成校验不可用，无法恢复已完成回答。")
                 self._experiment_completion.validate(prior)
             return ConversationTurnView(
                 resources=resources,
@@ -422,6 +458,12 @@ class ConversationService:
             )]
         else:
             inputs = list(prior.inputs)
+        if new_run and prior.python_authorization_digest is not None:
+            observed = {item.action_id for item in inputs if isinstance(item, ActionObservation)}
+            for observation in self._journal.analysis_observations(prior):
+                if observation.action_id not in observed:
+                    inputs.append(observation)
+                    observed.add(observation.action_id)
         # The review owner checks its exact original input and current version.
         # Restarting this invocation does not change those persisted facts.
         source_review_start_index = 0
@@ -446,7 +488,7 @@ class ConversationService:
             and self._unread_offloaded_resource(inputs) is None
         ):
             if self._experiment_completion is None:
-                raise ConversationUnavailable("实验交付服务不可用，不能恢复报告提交。")
+                raise ConversationFailure("实验交付服务不可用，不能恢复报告提交。")
             try:
                 self._experiment_completion.validate(self._journal.get(run_ref))
             except DeliveryIncomplete as error:
@@ -472,7 +514,7 @@ class ConversationService:
             for derivation_response in derivation_responses:
                 usage = self._record_model_usage(usage, derivation_response)
             inputs.extend(derivation_feedback)
-            if (prior.deployment_digest is None
+            if (self._answer_result.verification_enabled and prior.deployment_digest is None
                     and review_criteria.requires_review and not self._verification_available()):
                 inputs.append(self._verification_unavailable_feedback())
                 review_criteria = ReviewCriteria()
@@ -515,162 +557,98 @@ class ConversationService:
                 working_plan=working_plan,
             )
 
-        finalization_pending = False
-
         while True:
             trace = self._journal.get(run_ref)
+            usage = trace.usage
             capabilities = self._effective_capabilities(run_ref=run_ref)
-            if trace.run_deadline_at is not None and datetime.now(UTC) >= trace.run_deadline_at:
-                return self._fail_closed_limitation(
-                    conversation_id, run_ref, principal, messages, inputs, usage, execution_order,
-                    concurrent_batches, context_composition, review_criteria=review_criteria,
-                    working_plan=working_plan, message="本次实验运行时限已到；已提交产物保留，未完成部分不计为完整交付。",
-                )
-            repeated_feedback = self._repeated_action_feedback(tuple(inputs))
-            if repeated_feedback is not None:
-                return self._fail_closed_limitation(
-                    conversation_id,
-                    run_ref,
-                    principal,
-                    messages,
-                    inputs,
-                    usage,
-                    execution_order,
-                    concurrent_batches,
-                    context_composition,
-                    review_criteria=review_criteria,
-                    working_plan=working_plan,
-                    message=(
-                        "模型连续提交了同一类无效动作，本次交互已安全停止；"
-                        "所有被拒绝的动作均未执行。"
-                    ),
-                )
-            if (
-                usage.model_turns >= self._budget_policy.max_model_turns
-                or usage.total_tokens >= self._budget_policy.max_total_tokens
-                or (
-                    self._budget_policy.max_tool_calls > 0
-                    and usage.tool_calls >= self._budget_policy.max_tool_calls
-                )
-            ):
-                return self._budget_exhausted(
-                    conversation_id,
-                    run_ref,
-                    principal,
-                    messages,
-                    inputs,
-                    usage,
-                    execution_order,
-                    concurrent_batches,
-                    context_composition,
-                    review_criteria,
-                    working_plan,
-                )
-            evidence_selection = None
-            selected_ids = frozenset()
-            if in_research_mode(
-                inputs, finalization_mode=finalization_pending,
-                requires_review=review_criteria.requires_review,
-                experiment_run=prior.deployment_digest is not None,
-            ):
-                try:
-                    while True:
-                        selection_request = self._research_selection_request(
-                            messages, inputs, review_criteria, reuse_start_index=source_review_start_index,
-                            run_ref=run_ref,
-                        )
-                        try:
-                            selection_response = self._generate_model(selection_request, run_ref=run_ref, usage=usage)
-                            break
-                        except ConversationUnavailable as error:
-                            self._compact_after_capacity(error, run_ref)
-                            usage = self._journal.get(run_ref).usage
-                except ConversationUnavailable as error:
-                    if prior.deployment_digest is None and error.failure_stage != "model_capacity" and error.response is not None:
-                        usage = self._record_model_usage(usage, error.response)
-                        self._commit(
-                            run_ref, principal, messages, inputs, usage, execution_order,
-                            concurrent_batches, context_composition,
-                            review_criteria=review_criteria, working_plan=working_plan,
-                        )
-                    raise
-                usage = self._record_model_usage(usage, selection_response)
-                self._commit(
-                    run_ref, principal, messages, inputs, usage, execution_order,
-                    concurrent_batches, context_composition,
-                    review_criteria=review_criteria, working_plan=working_plan,
-                )
-                assert isinstance(selection_response.value, ResearchEvidenceSelection)
-                evidence_selection = selection_response.value
-                try:
-                    validate_research_selection(evidence_selection, review_criteria, current_claims(inputs))
-                    selected_ids = selected_citation_ids(evidence_selection.references, inputs)
-                except (CitationBindingError, ValueError) as error:
-                    usage = usage.model_copy(update={"model_turns": usage.model_turns + 1})
-                    inputs.append(DecisionFeedback(
-                        action_id="research-evidence-selection", reason_code="research_selection_invalid",
-                        message=str(error),
-                        required_repair="逐项沿用 requirements 的全部编号且每项恰好一次，只关联当前 claim；引用只选实际返回的 citations。本次选择未用于创建论断。",
-                    ))
-                    self._commit(
-                        run_ref, principal, messages, inputs, usage, execution_order,
-                        concurrent_batches, context_composition,
-                        review_criteria=review_criteria, working_plan=working_plan,
+            trace = self._model_journal_call("agent_interaction_turn", self._journal.recover_model_response_originals,
+                ExecutionScope(principal=principal, execution_id=run_ref, thread_id=conversation_id))
+            usage = trace.usage
+            evidence_selection, selected_ids = self._current_research_selection(run_ref, inputs, review_criteria)
+            decision = self._pending_final_candidate(inputs)
+            if decision is None and isinstance(self._answer_result, ClaimAnswerResult):
+                recovery = self._answer_result.recovery_steps(inputs=inputs, messages=messages,
+                    criteria=review_criteria, reuse_start_index=source_review_start_index)
+                response_value = None
+                while True:
+                    try:
+                        step = recovery.send(response_value)
+                    except StopIteration as finished:
+                        decision = finished.value
+                        break
+                    if isinstance(step, StructuredModelRequest):
+                        response_value = self._generate_model(step, run_ref=run_ref, usage=usage).value
+                        usage = self._journal.get(run_ref).usage
+                    else:
+                        inputs.append(step)
+                        response_value = None
+                        self._commit(run_ref, principal, messages, inputs, usage, execution_order,
+                            concurrent_batches, context_composition, review_criteria=review_criteria, working_plan=working_plan)
+            model_response = None
+            protocol_feedback = None
+            paid_main = any(not record.consumed and record.response_refs
+                and record.operation == "agent_interaction_turn" for record in self._journal.get(run_ref).model_decisions)
+            if decision is None and not paid_main:
+                if trace.run_deadline_at is not None and datetime.now(UTC) >= trace.run_deadline_at:
+                    return self._fail_closed_limitation(
+                        conversation_id, run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition, review_criteria=review_criteria,
+                        working_plan=working_plan, message="本次任务运行时限已到；已提交产物保留，未完成部分不计为完整交付。",
                     )
-                    continue
-                if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                    return self._budget_exhausted(
-                        conversation_id, run_ref, principal, messages, inputs, usage,
-                        execution_order, concurrent_batches, context_composition,
-                        review_criteria, working_plan,
-                    )
-            if evidence_selection is not None and evidence_selection.next_step != "write":
-                decision = (
-                    ReturnToActions(kind="return_to_actions", reason=evidence_selection.reason)
-                    if evidence_selection.next_step == "acquire"
-                    else StopResearch(kind="stop_research", reason=evidence_selection.reason)
-                )
-                model_response = selection_response
-                composition = TurnContextComposition(
-                    turn_index=usage.model_turns,
-                    capability_projection_chars=0,
-                    system_prompt_other_chars=len(selection_request.messages[0]["content"]),
-                    conversation_messages_chars=0,
-                    typed_inputs_chars=len(selection_request.messages[1]["content"]),
-                    input_tokens=selection_response.input_tokens,
-                )
-                protocol_feedback = None
-                # The selection response was already charged; this is the decision turn.
-                usage = usage.model_copy(update={"model_turns": usage.model_turns + 1})
-            else:
-                try:
-                    decision, model_response, composition, protocol_feedback = self._decide(
-                        run_ref=run_ref,
-                        messages=messages,
-                        capabilities=self._model_visible_capabilities_for_turn(capabilities, inputs, run_ref=run_ref),
-                        inputs=inputs,
-                        usage=usage,
+                repeated_feedback = self._repeated_action_feedback(tuple(inputs))
+                if repeated_feedback is not None:
+                    return self._fail_closed_limitation(
+                        conversation_id,
+                        run_ref,
+                        principal,
+                        messages,
+                        inputs,
+                        usage,
+                        execution_order,
+                        concurrent_batches,
+                        context_composition,
                         review_criteria=review_criteria,
-                        turn_index=usage.model_turns,
                         working_plan=working_plan,
-                        interaction_mode=interaction_mode,
-                        finalization_mode=finalization_pending,
-                        evidence_selection=evidence_selection,
-                        selected_ids=selected_ids,
-                        source_review_start_index=source_review_start_index,
+                        message=(
+                            "模型连续提交了同一类无效动作，本次交互已安全停止；"
+                            "所有被拒绝的动作均未执行。"
+                        ),
                     )
-                except ConversationUnavailable as error:
-                    if prior.deployment_digest is None and error.failure_stage != "model_capacity" and error.response is not None:
-                        usage = self._record_model_usage(usage, error.response, model_turn=True)
-                        self._commit(
-                            run_ref, principal, messages, inputs, usage, execution_order,
-                            concurrent_batches, context_composition,
-                            review_criteria=review_criteria, working_plan=working_plan,
-                        )
-                    raise
-                usage = self._record_model_usage(self._journal.get(run_ref).usage, model_response, model_turn=True)
-            finalization_pending = False
-            context_composition.append(composition)
+                if (
+                    usage.model_turns >= self._budget_policy.max_model_turns
+                    or self._remaining_model_tokens(run_ref, usage) <= 0
+                    or (
+                        self._budget_policy.max_tool_calls > 0
+                        and usage.tool_calls >= self._budget_policy.max_tool_calls
+                    )
+                ):
+                    return self._budget_exhausted(
+                        conversation_id,
+                        run_ref,
+                        principal,
+                        messages,
+                        inputs,
+                        usage,
+                        execution_order,
+                        concurrent_batches,
+                        context_composition,
+                        review_criteria,
+                        working_plan,
+                    )
+            if decision is None:
+                decision, model_response, composition, protocol_feedback = self._decide(
+                    run_ref=run_ref, messages=messages,
+                    capabilities=self._model_visible_capabilities_for_turn(capabilities, inputs, run_ref=run_ref),
+                    inputs=inputs, usage=usage, review_criteria=review_criteria,
+                    turn_index=usage.model_turns, working_plan=working_plan,
+                    interaction_mode=interaction_mode, evidence_selection=evidence_selection,
+                    selected_ids=selected_ids, source_review_start_index=source_review_start_index)
+                usage = self._record_model_usage(self._journal.get(run_ref).usage, model_response, model_turn=True, run_ref=run_ref)
+                if not any(item.turn_index == composition.turn_index for item in context_composition):
+                    context_composition.append(composition)
+                self._commit(run_ref, principal, messages, inputs, usage, execution_order,
+                    concurrent_batches, context_composition, review_criteria=review_criteria,
+                    working_plan=working_plan, model_response=model_response)
             if protocol_feedback is not None:
                 inputs.append(protocol_feedback)
                 self._commit(
@@ -687,78 +665,64 @@ class ConversationService:
                 )
                 continue
             assert decision is not None
-            if isinstance(decision, (CreateClaims, ReviseClaimFragment, ReplaceClaimReferences,
-                                     AddClaims, DeleteClaim, RecheckClaims, ReturnToActions, StopResearch)):
-                if isinstance(decision, StopResearch):
-                    decision = FinalMessage(disposition="limitation", segments=(
-                        ConversationAnswerSegment(text=decision.reason),
-                    ))
+            if isinstance(decision, ResearchEvidenceSelection):
+                try:
+                    validate_research_selection(decision, review_criteria, current_claims(inputs))
+                    selected_citation_ids(decision.references, inputs)
+                except (CitationBindingError, ValueError) as error:
+                    inputs.append(DecisionFeedback(action_id=model_response.action_invocations[0].call_id,
+                        reason_code="research_selection_invalid", message=str(error),
+                        required_repair="覆盖全部requirements且每项恰好一次，只关联当前claim与已返回引用；本次选择未接纳。"))
                 else:
-                    approved = None
-                    if isinstance(decision, ReturnToActions):
-                        inputs.append(DecisionFeedback(
-                            action_id="research-return", reason_code="research_needs_evidence",
-                            message=decision.reason,
-                            required_repair=(
-                                "使用正式可用动作继续工作；准备提交有据研究稿时调用 prepare_final，回到当前研究版本。"
-                                if prior.deployment_digest is not None
-                                else "使用正式可用动作继续取证；取得可引用正文后系统返回当前研究版本。"
-                            ),
-                        ))
+                    self._accept_research_selection(run_ref, decision, inputs, review_criteria)
+                    if decision.next_step == "acquire":
+                        inputs.append(DecisionFeedback(action_id=model_response.action_invocations[0].call_id,
+                            reason_code="research_needs_evidence", message=decision.reason,
+                            required_repair="根据缺口调用当前合法工具；取得新证据后重新选证。"))
+                    elif decision.next_step == "limit":
+                        decision = FinalMessage(disposition="limitation", segments=(ConversationAnswerSegment(text=decision.reason),))
+                if isinstance(decision, ResearchEvidenceSelection):
+                    self._commit(run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition, review_criteria=review_criteria, working_plan=working_plan)
+                    continue
+            if self._answer_result.handles_submission(decision):
+                checks = self._answer_result.submission_steps(
+                    decision, inputs=inputs, messages=messages, criteria=review_criteria,
+                    reference=ResourceRef(
+                        resource_id=f"{run_ref}:research", resource_type="conversation_research", owner=principal,
+                    ), selected_ids=selected_ids, reuse_start_index=source_review_start_index,
+                )
+                response_value = None
+                resolution = None
+                while True:
+                    try:
+                        step = checks.send(response_value)
+                    except StopIteration as finished:
+                        resolution = finished.value
+                        break
+                    self._commit(
+                        run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition,
+                        review_criteria=review_criteria, working_plan=working_plan,
+                    )
+                    if isinstance(step, StructuredModelRequest):
+                        if self._remaining_model_tokens(run_ref, usage) <= 0:
+                            checks.close()
+                            break
+                        response = self._generate_model(step, run_ref=run_ref, usage=usage)
+                        usage = self._record_model_usage(usage, response)
+                        response_value = response.value
                     else:
-                        finalization_pending = True
-                        try:
-                            claims = admit_claim_change(decision, inputs, ResourceRef(
-                                resource_id=f"{run_ref}:research", resource_type="conversation_research",
-                                owner=principal,
-                            ), selected_ids)
-                        except (ValueError, CitationBindingError) as error:
-                            inputs.append(DecisionFeedback(
-                                action_id="research-admission", reason_code="research_edit_invalid",
-                                message=str(error), required_repair="核对当前完整版本、精确片段和可见引用后修正参数；被拒动作未改变集合。",
-                            ))
-                        else:
-                            inputs.append(claims)
-                            has_final_answer = bool(claims.final_answer) and bool("".join(
-                                segment.text for segment in claims.final_answer
-                            ).strip())
-                            if not has_final_answer:
-                                inputs.append(DecisionFeedback(
-                                    action_id="research-final", reason_code="final_answer_missing",
-                                    message="研究进展已保存，但尚未提交完整最终回答，不能交付。",
-                                    required_repair="继续取证或沿当前版本提交 final_answer；仅修改回答可用 recheck_claims。",
-                                ))
-                            checks = verification_steps(
-                                claims, tuple(inputs), messages, review_criteria,
-                                reuse_start_index=(len(inputs) if isinstance(decision, RecheckClaims)
-                                                   else source_review_start_index),
-                            ) if has_final_answer else iter(())
-                            step = next(checks, None)
-                            while step is not None:
-                                self._commit(
-                                    run_ref, principal, messages, inputs, usage, execution_order,
-                                    concurrent_batches, context_composition,
-                                    review_criteria=review_criteria, working_plan=working_plan,
-                                )
-                                if isinstance(step, StructuredModelRequest):
-                                    if usage.total_tokens >= self._budget_policy.max_total_tokens:
-                                        checks.close()
-                                        break
-                                    response = self._generate_model(step, run_ref=run_ref, usage=usage)
-                                    usage = self._record_model_usage(usage, response)
-                                    step = checks.send(response.value)
-                                else:
-                                    inputs.append(step)
-                                    step = next(checks, None)
-                            approved = accepted_research(inputs, reuse_start_index=source_review_start_index)
-                    if approved is None:
-                        self._commit(
-                            run_ref, principal, messages, inputs, usage, execution_order,
-                            concurrent_batches, context_composition,
-                            review_criteria=review_criteria, working_plan=working_plan,
-                        )
-                        continue
-                    decision = FinalMessage(disposition="answer", segments=approved.final_answer)
+                        inputs.append(step)
+                        response_value = None
+                if resolution is None or resolution.final is None:
+                    self._commit(
+                        run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition,
+                        review_criteria=review_criteria, working_plan=working_plan,
+                    )
+                    continue
+                decision = resolution.final
             if isinstance(decision, FinalMessage):
                 if (
                     review_criteria.plan_review_required
@@ -816,7 +780,7 @@ class ConversationService:
                         conversation_id=conversation_id,
                         disposition=decision.disposition,
                         message=ConversationMessage(
-                            role="assistant", content=decision.message.strip()
+                            role="assistant", content=decision.message
                         ),
                         working_plan=working_plan,
                     )
@@ -840,7 +804,7 @@ class ConversationService:
                         inputs.append(self._unread_output_feedback(decision, unread))
                     else:
                         if self._experiment_completion is None:
-                            raise ConversationUnavailable("实验交付服务不可用，不能检查报告提交。")
+                            raise ConversationFailure("实验交付服务不可用，不能检查报告提交。")
                         try:
                             self._experiment_completion.validate(self._journal.get(run_ref))
                         except DeliveryIncomplete as error:
@@ -857,28 +821,32 @@ class ConversationService:
                         review_criteria=review_criteria, working_plan=working_plan,
                     )
                     continue
-                elif current_claims(inputs) is not None and decision.disposition == "answer":
-                    approved = accepted_research(inputs, reuse_start_index=source_review_start_index)
-                    if approved is None or decision.segments != approved.final_answer:
-                        inputs.append(DecisionFeedback(
-                            action_id="research-completion", reason_code="research_answer_not_approved",
-                            message="只能交付当前完整研究版本经统一核验通过的确切回答。",
-                            required_repair="沿当前研究版本修订或补证并重新核验，不能另写答案绕过研究。",
-                        ))
-                        finalization_pending = True
-                        self._commit(
-                            run_ref, principal, messages, inputs, usage, execution_order,
-                            concurrent_batches, context_composition,
-                            review_criteria=review_criteria, working_plan=working_plan,
-                        )
-                        continue
-                elif review_criteria.requires_review and decision.disposition == "answer":
+                if decision.disposition == "answer" and self._pending_final_candidate(inputs) != decision:
                     inputs.append(SubmittedFinal(
                         action_id=f"final-{usage.model_turns}",
                         resource_ref=ResourceRef(resource_id=f"{run_ref}:final", resource_type="conversation_final",
                                                  owner=principal, revision=usage.model_turns),
                         final=decision,
                     ))
+                    self._commit(
+                        run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition,
+                        review_criteria=review_criteria, working_plan=working_plan,
+                    )
+                result_feedback = self._answer_result.validate_final(
+                    decision, inputs, reuse_start_index=source_review_start_index,
+                    requires_review=review_criteria.requires_review, experiment_run=prior.deployment_digest is not None,
+                )
+                if result_feedback is not None:
+                    inputs.append(result_feedback)
+                    self._commit(
+                        run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition,
+                        review_criteria=review_criteria, working_plan=working_plan,
+                    )
+                    continue
+                if (self._answer_result.needs_direct_verification(review_criteria, inputs)
+                        and decision.disposition == "answer"):
                     verified, result, usage = (
                         self._verify_before_send(
                             decision,
@@ -893,10 +861,11 @@ class ConversationService:
                             attempt=len(execution_order),
                         )
                     )
-                    inputs.append(result.interaction_input)
-                    execution_order.append(result.action_id)
+                    if result.interaction_input not in inputs:
+                        inputs.append(result.interaction_input)
+                    if result.action_id not in execution_order:
+                        execution_order.append(result.action_id)
                     if verified is None:
-                        finalization_pending = False
                         # Verifier owns acceptance, not the next action.
                         # Check the hard budget before the model chooses again.
                         self._commit(
@@ -952,56 +921,10 @@ class ConversationService:
                     conversation_id=conversation_id,
                     disposition=decision.disposition,
                     message=ConversationMessage(
-                        role="assistant", content=decision.message.strip()
+                        role="assistant", content=decision.message
                     ),
                     working_plan=working_plan,
                 )
-
-            if (
-                decision.wait_for_user
-                and decision.working_plan is not None
-                and decision.actions
-                and self._actions_are_planning_safe(
-                    decision.actions,
-                    capabilities,
-                )
-            ):
-                results, usage, concurrent = self._execute_actions(
-                    decision,
-                    conversation_id=conversation_id,
-                    run_ref=run_ref,
-                    principal=principal,
-                    owner=owner,
-                    source_platform=source_platform,
-                    usage=usage,
-                    committed_action_ids=frozenset(execution_order),
-                    committed_inputs=tuple(inputs),
-                    plan_step_id=None,
-                )
-                inputs.extend(item.interaction_input for item in results)
-                executed_results = [
-                    item
-                    for item in results
-                    if isinstance(item.interaction_input, ActionObservation)
-                ]
-                execution_order.extend(item.action_id for item in executed_results)
-                if concurrent:
-                    concurrent_batches.append(
-                        tuple(item.action_id for item in executed_results)
-                    )
-                self._commit(
-                    run_ref,
-                    principal,
-                    messages,
-                    inputs,
-                    usage,
-                    execution_order,
-                    concurrent_batches,
-                    context_composition,
-                    review_criteria=review_criteria,
-                    working_plan=working_plan,
-                )
-                continue
 
             wait_feedback = admit_plan_wait_boundary(decision)
             if wait_feedback is not None:
@@ -1079,6 +1002,12 @@ class ConversationService:
                     )
                     continue
                 working_plan = admitted_plan
+                if decision.working_plan_call_id is not None:
+                    self._commit(run_ref, principal, messages, inputs, usage, execution_order,
+                        concurrent_batches, context_composition, review_criteria=review_criteria,
+                        working_plan=working_plan, call_dispositions=(ModelCallDisposition(
+                            call_id=decision.working_plan_call_id, operation="working_plan", status="accepted",
+                            plan_id=working_plan.plan_id, plan_revision=working_plan.revision),))
             progress_feedback = admit_continue_turn_progress(
                 decision,
                 previous_plan=previous_plan,
@@ -1111,6 +1040,7 @@ class ConversationService:
                     context_composition,
                     review_criteria=review_criteria,
                     working_plan=working_plan,
+
                 )
                 return ConversationTurnView(
                     interaction_run_ref=run_ref,
@@ -1179,6 +1109,9 @@ class ConversationService:
                     review_criteria=review_criteria,
                     knowledge_save_operation=operation,
                     working_plan=working_plan,
+                    call_dispositions=(ModelCallDisposition(call_id=action.action_id,
+                        operation="knowledge_save", status="prepared", operation_ref=operation.command.command_id),
+                        ),
                 )
                 return self._knowledge_save.turn_view(
                     conversation_id,
@@ -1258,6 +1191,9 @@ class ConversationService:
                     review_criteria=review_criteria,
                     knowledge_delete_command_ref=operation.command.command_id,
                     working_plan=working_plan,
+                    call_dispositions=(ModelCallDisposition(call_id=action.action_id,
+                        operation="knowledge_delete", status="prepared", operation_ref=operation.command.command_id),
+                        ),
                 )
                 return self._knowledge_delete_turn_view(
                     conversation_id,
@@ -1278,6 +1214,13 @@ class ConversationService:
                 review_criteria=review_criteria,
                 working_plan=working_plan,
             )
+            if self._journal.get(run_ref).python_authorization_digest is not None:
+                self._admit_research_model_call(run_ref, usage)
+            latest = self._journal.get(run_ref)
+            if decision.actions and (self._remaining_model_tokens(run_ref, latest.usage) <= 0
+                    or (latest.run_deadline_at is not None and datetime.now(UTC) >= latest.run_deadline_at)):
+                return self._budget_exhausted(conversation_id, run_ref, principal, messages, inputs,
+                    latest.usage, execution_order, concurrent_batches, context_composition, review_criteria, working_plan)
             results, usage, concurrent = self._execute_actions(
                 decision,
                 conversation_id=conversation_id,
@@ -1301,12 +1244,6 @@ class ConversationService:
                 concurrent_batches.append(
                     tuple(item.action_id for item in executed_results)
                 )
-            finalization_pending = decision.finalization_requested or (
-                prior.deployment_digest is None
-                and review_criteria.requires_review
-                and not review_criteria.plan_review_required
-                and has_research_source_text(inputs)
-            )
             self._commit(
                 run_ref,
                 principal,
@@ -1347,7 +1284,7 @@ class ConversationService:
         context_composition, *, review_criteria, working_plan,
     ):
         if self._experiment_completion is None:
-            raise ConversationUnavailable("实验完成校验不可用，不能完成回答。")
+            raise ConversationFailure("实验完成校验不可用，不能完成回答。")
         submission = experiment_submission(self._journal.get(run_ref))
         # Persist the exact submission and its usage before completion checks.
         self._commit(
@@ -1383,7 +1320,7 @@ class ConversationService:
             return
         trace = self._journal.get(run_ref)
         existing = set(input_resource_refs(inputs))
-        refs = list(trace_resource_refs(trace))
+        refs = list(self._journal.readable_resource_refs(trace))
         # Only the experiment's named publication contract supplies child files.
         for record in trace.experiment_records:
             if record.receipt is None:
@@ -1410,13 +1347,16 @@ class ConversationService:
             if ref in checkpoint_refs(trace):
                 continue
             if ref not in existing:
-                inputs.append(
-                    ArtifactSourceInput(
-                        resource=self._artifact_port.resource_item(
-                            ref, principal=trace.principal, owner=trace.principal
-                        )
-                    )
-                )
+                try:
+                    resource = self._artifact_port.resource_item(ref, principal=trace.principal, owner=trace.principal)
+                except FileNotFoundError:
+                    action_id = f"artifact-unavailable:{ref.resource_id}:{ref.revision}"
+                    if not any(isinstance(item, DecisionFeedback) and item.action_id == action_id for item in inputs):
+                        inputs.append(DecisionFeedback(action_id=action_id, reason_code="artifact_unavailable",
+                            message=f"已提交的原件当前不可用：{ref.model_dump_json()}。未重新执行或替换原件。",
+                            required_repair="根据仍可用的原件继续，或如实说明缺失；恢复原件后可再次读取，不能猜测其内容。"))
+                    continue
+                inputs.append(ArtifactSourceInput(resource=resource))
                 existing.add(ref)
 
     def _recover_accepted_requests(
@@ -1460,7 +1400,7 @@ class ConversationService:
             ):
                 recovered = self._artifact_port.recover_draft(
                     execution_scope=accepted.execution_scope, tool_call_id=accepted.action_id,
-                    request=accepted.arguments.request, allowed_resource_refs=trace_resource_refs(trace),
+                    request=accepted.arguments.request, allowed_resource_refs=self._journal.readable_resource_refs(trace),
                 )
                 if recovered is not None:
                     self._journal.record_artifact_result(
@@ -1697,19 +1637,19 @@ class ConversationService:
         derivation failure degrades to "not a review request" rather than to a
         runtime-invented criterion.
         """
-        self._admit_research_model_call(run_ref, usage)
         trace = self._journal.get(run_ref)
-        research_bound = trace.deployment_digest is not None
+        research_bound = trace.python_profile_digest is not None
         try:
             return derive_interaction_intent(
                 self._model_client, messages=messages,
-                require_complete_usage=research_bound,
+                generate=lambda request: self._generate_model(request, run_ref=run_ref, usage=self._journal.get(run_ref).usage),
+                propagate_revision_failures=research_bound,
                 deadline_at=trace.run_deadline_at if research_bound else None,
-                remaining_tokens=(self._budget_policy.max_total_tokens - usage.total_tokens) if research_bound else None,
+                remaining_tokens=self._remaining_model_tokens(run_ref, usage) if research_bound else None,
             )
         except ModelCapacityRefused as error:
             raise self._capacity_failure(error) from error
-        except ConversationUnavailable:
+        except ConversationFailure:
             raise
         except ModelInvocationUnavailable as error:
             if research_bound:
@@ -1724,8 +1664,6 @@ class ConversationService:
                     error, message="研究意图的结构化输出未满足协议；已保留已知消费。",
                     failure_stage="provider_structured_decode", component="conversation_intent_admission",
                 ) from error
-            return AdmittedInteractionIntent(), (), ()
-        except Exception:
             return AdmittedInteractionIntent(), (), ()
 
     def _background_continuation_unavailable(
@@ -1781,8 +1719,18 @@ class ConversationService:
             working_plan=working_plan,
         )
 
-    @staticmethod
-    def _record_model_usage(usage, response, *, model_turn=False):
+    def _record_model_usage(self, usage, response, *, model_turn=False, run_ref=None):
+        if response.response_records:
+            if not model_turn:
+                return usage
+            if run_ref is None:
+                raise ConversationOperationConflict("主模型决策计数缺少运行绑定")
+            invocation_id = response.response_records[-1].invocation_id
+            record = next((record for record in self._journal.get(run_ref).model_decisions
+                           if record.invocation_id == invocation_id), None)
+            if record is None or record.turn_index is None:
+                raise ConversationOperationConflict("主模型决策计数缺少已存响应轮次")
+            return usage.model_copy(update={"model_turns": max(usage.model_turns, record.turn_index)})
         total_tokens = response.total_tokens
         if total_tokens is None:
             total_tokens = (response.input_tokens or 0) + (response.output_tokens or 0)
@@ -2001,6 +1949,18 @@ class ConversationService:
                 )
             ],
         }
+        expected_digest = canonical_digest({"tool_name": _VERIFICATION_CAPABILITY, "arguments": arguments})
+        previous = next((item for item in reversed(verification_inputs) if isinstance(item, ActionObservation)
+            and item.capability_id == _VERIFICATION_CAPABILITY and item.execution_request_digest == expected_digest), None)
+        if previous is not None:
+            receipts = observed_receipts((previous,), capability_names=frozenset({_VERIFICATION_CAPABILITY}))
+            passed = receipts[-1] if receipts and receipts[-1].verdict == "passed" else None
+            if passed is not None and decision.message != passed.verified_draft:
+                raise ValueError("verified receipt must bind the submitted answer")
+            return (decision if passed is not None else None), _ActionResult(previous.action_id, previous), usage
+        if self._budget_policy.max_tool_calls > 0 and usage.tool_calls >= self._budget_policy.max_tool_calls:
+            raise ConversationFailure("本次工具调用额度已用完，尚未启动新的核验。",
+                reason_code="dependency_unavailable", failure_stage="application_budget")
         execution_scope = ExecutionScope(
             principal=principal,
             execution_id=run_ref,
@@ -2035,6 +1995,7 @@ class ConversationService:
                 ),
             ),
         )
+        usage = self._journal.get(run_ref).usage
         usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
         receipts = observed_receipts(
             (result.interaction_input,),
@@ -2047,49 +2008,101 @@ class ConversationService:
         passed = receipt if verdict == "passed" else None
         if passed is None:
             return None, result, usage
-        if decision.message.strip() != passed.verified_draft:
+        if decision.message != passed.verified_draft:
             raise ValueError("verified receipt must bind the submitted answer")
         return (decision, result, usage)
 
-    def _research_selection_request(
-        self, messages: Sequence[ConversationMessage], inputs: Sequence[InteractionInput],
-        criteria: ReviewCriteria,
-        *, reuse_start_index: int, run_ref: str | None = None,
-    ) -> StructuredModelRequest[ResearchEvidenceSelection]:
-        claims = current_claims(inputs)
-        review = applicable_research_review(claims, inputs, reuse_start_index=reuse_start_index)
-        decision_inputs = tuple(
-            item for item in inputs
-            if not isinstance(item, SubmittedFinal)
-            and not (isinstance(item, DecisionFeedback)
-                     and item.reason_code == "research_needs_evidence")
-            and not (isinstance(item, ActionObservation)
-                     and item.capability_id == _VERIFICATION_CAPABILITY)
-            and (not isinstance(item, ResearchClaims) or item is claims)
-            and (not isinstance(item, ResearchReview) or item is review)
-        )
-        visible = materialize_citation_context(materialize_interaction_inputs(decision_inputs))
-        history_context = ""
-        if run_ref is not None and self._history is not None:
-            references = tuple(ref for claim in claims.claims for ref in claim.references) if claims else ()
-            visible, history_context = self._history.project(self._journal.get(run_ref), visible,
-                protected_citations=selected_citation_ids(references, inputs))
-        source_feedback = research_review_context(review, inputs)
-        output_type = InitialResearchEvidenceSelection if claims is None else ResearchEvidenceSelection
-        return research_request("conversation.research.evidence_selection", output_type, {
-            "conversation": [message.model_dump(mode="json") for message in messages],
-            "requirements": [item.model_dump(mode="json") for item in research_goal_requirements(criteria)],
-            "inputs": [item.model_dump(mode="json") for item in visible],
-            "source_feedback": source_feedback.model_dump(mode="json") if source_feedback is not None else None,
-            **({"history_context": history_context} if history_context else {}),
-        })
+    def generate_verification(
+        self, scope: ExecutionScope, request: StructuredModelRequest,
+    ) -> StructuredModelResponse:
+        """Bind each verifier call to the canonical run admission and usage owner."""
+        trace = self._journal.get(scope.execution_id)
+        if trace is None or scope.thread_id != trace.conversation_id:
+            raise PermissionError("核验缺少当前对话运行绑定")
+        self._require_trace_scope(trace, scope.principal, action="conversation_verification")
+        try:
+            response = self._generate_model(
+                request, run_ref=scope.execution_id, usage=trace.usage,
+            )
+        except ConversationFailure as error:
+            def record_failure(latest, failure=error):
+                usage = latest.usage
+                for observed in (*failure.prior_responses,
+                                 *((failure.response,) if failure.response is not None else ())):
+                    usage = self._record_model_usage(usage, observed)
+                if failure.failure_stage == "provider_request" and not failure.provider_response_complete:
+                    usage = usage.model_copy(update={
+                        "provider_usage_complete": False, "model_calls": None,
+                        "input_tokens": None, "output_tokens": None,
+                    })
+                return latest.model_copy(update={"revision": latest.revision + 1, "usage": usage})
+            self._journal.update(scope, record_failure)
+            # This owner has committed the failure. Do not charge it again if propagated.
+            error.response, error.prior_responses = None, ()
+            raise
+        self._journal.update(scope, lambda latest: latest.model_copy(update={
+            "revision": latest.revision + 1,
+            "usage": self._record_model_usage(latest.usage, response),
+        }))
+        return response
+
+    @staticmethod
+    def _pending_final_candidate(inputs):
+        index = next((i for i in range(len(inputs) - 1, -1, -1) if isinstance(inputs[i], SubmittedFinal)), None)
+        if index is None:
+            return None
+        later = inputs[index + 1:]
+        if any(isinstance(item, (DecisionFeedback, ResearchClaims, ResearchReview)) for item in later):
+            return None
+        if any(isinstance(item, ActionObservation) and item.capability_id != _VERIFICATION_CAPABILITY for item in later):
+            return None
+        for item in later:
+            if isinstance(item, ActionObservation) and item.capability_id == _VERIFICATION_CAPABILITY:
+                receipts = observed_receipts((item,), capability_names=frozenset({_VERIFICATION_CAPABILITY}))
+                if not receipts or receipts[-1].verdict != "passed":
+                    return None
+        return inputs[index].final
+
+    @staticmethod
+    def _research_selection_scope(inputs, criteria):
+        current = current_claims(inputs)
+        evidence = materialize_citation_context(materialize_interaction_inputs(inputs))
+        digest = canonical_digest([item.model_dump(mode="json") for item in evidence
+            if isinstance(item.observation, (ActionObservation, ArtifactSourceInput))])
+        return current.resource_ref if current else None, digest, canonical_digest(criteria.model_dump(mode="json"))
+
+    def _current_research_selection(self, run_ref, inputs, criteria):
+        claim_ref, evidence_digest, criteria_digest = self._research_selection_scope(inputs, criteria)
+        record = next((item for item in reversed(self._journal.get(run_ref).model_decisions)
+                       if item.research_selection is not None), None)
+        if (record is None or record.research_claim_ref != claim_ref
+                or record.research_evidence_digest != evidence_digest or record.research_criteria_digest != criteria_digest):
+            return None, frozenset()
+        selection = record.research_selection
+        return selection, selected_citation_ids(selection.references, inputs)
+
+    def _accept_research_selection(self, run_ref, selection, inputs, criteria):
+        trace = self._journal.get(run_ref)
+        claim_ref, evidence_digest, criteria_digest = self._research_selection_scope(inputs, criteria)
+        index = next(i for i in range(len(trace.model_decisions) - 1, -1, -1)
+                     if trace.model_decisions[i].turn_index == trace.usage.model_turns)
+        records = list(trace.model_decisions)
+        record = records[index]
+        records[index] = record.model_copy(update={"research_selection": selection,
+            "research_claim_ref": claim_ref, "research_evidence_digest": evidence_digest,
+            "research_criteria_digest": criteria_digest,
+            "dispositions": (*record.dispositions, ModelCallDisposition(
+                call_id=record.assistant.call_ids[0], operation="answer_result", status="accepted"))})
+        self._journal.update(ExecutionScope(principal=trace.principal, execution_id=run_ref,
+            thread_id=trace.conversation_id), lambda current: current.model_copy(update={
+                "revision": current.revision + 1, "model_decisions": tuple(records)}))
 
     def _decide(self, **arguments):
         run_ref = arguments["run_ref"]
         while True:
             try:
                 return self._decide_once(**arguments)
-            except ConversationUnavailable as error:
+            except ConversationFailure as error:
                 self._compact_after_capacity(error, run_ref)
                 arguments["usage"] = self._journal.get(run_ref).usage
                 arguments["capabilities"] = self._model_visible_capabilities_for_turn(
@@ -2107,7 +2120,6 @@ class ConversationService:
         turn_index,
         working_plan,
         interaction_mode,
-        finalization_mode=False,
         evidence_selection: ResearchEvidenceSelection | None = None,
         selected_ids: frozenset[str] = frozenset(),
         source_review_start_index: int = 0,
@@ -2125,53 +2137,42 @@ class ConversationService:
         put a turn with a structurally different input shape into the same series.
         """
         decision_trace = self._journal.get(run_ref)
-        action_definitions = (
-            () if finalization_mode else build_model_action_definitions(
-                capabilities, experiment_run=decision_trace.deployment_digest is not None,
-            )
-        )
-        capability_projection = (
-            ""
-            if finalization_mode
-            else model_visible_capability_policy_json(
-                capabilities, definitions=action_definitions,
-            )
-        )
-        claims = current_claims(inputs)
-        research_mode = in_research_mode(
-            inputs, finalization_mode=finalization_mode,
+        research_mode = self._answer_result.uses_claims(inputs,
             requires_review=review_criteria.requires_review,
-            experiment_run=self._journal.get(run_ref).deployment_digest is not None,
-        )
-        prompt_name = (
-            "conversation.research.writer" if research_mode else
-            "conversation.final" if finalization_mode else "conversation.action"
-        )
-        output_type = (
-            (InitialResearchSubmission if claims is None else ResearchSubmission)
-            if research_mode else FinalSubmission
-        )
+            experiment_run=decision_trace.deployment_digest is not None)
+        answer_actions = self._answer_result.action_definitions(inputs,
+            requires_review=review_criteria.requires_review,
+            experiment_run=decision_trace.deployment_digest is not None,
+            selection=evidence_selection, selected_ids=selected_ids)
+        action_definitions = build_model_action_definitions(capabilities,
+            experiment_run=decision_trace.deployment_digest is not None, answer_actions=answer_actions)
+        capability_projection = model_visible_capability_policy_json(capabilities, definitions=action_definitions)
+        claims = current_claims(inputs)
+        prompt_name = "conversation.action"
         system_content = build_interaction_system_prompt(
             capabilities,
             usage,
             review_criteria,
-            budget_policy=self._budget_policy,
+            budget_policy=self._visible_budget_policy(run_ref, usage),
             capability_projection=capability_projection,
             working_plan=working_plan,
             interaction_mode=interaction_mode,
-            finalization_mode=finalization_mode,
             explicit_research_entry=decision_trace.deployment_digest is not None,
             wall_seconds_at_input=(
                 max(0.0, (decision_trace.run_deadline_at - datetime.now(UTC)).total_seconds())
                 if decision_trace.run_deadline_at is not None else None
             ),
+            answer_result=self._answer_result,
         )
         if research_mode:
-            system_content = get_prompt(prompt_name).template
+            system_content += get_prompt("conversation.research.evidence_selection").template
+            if evidence_selection is not None and evidence_selection.next_step == "write":
+                system_content += get_prompt("conversation.research.writer").template
         visible_messages = [{"role": "system", "content": system_content}]
         conversation_content = [item.model_dump(mode="json") for item in messages]
         visible_messages.extend(conversation_content)
         typed_inputs_content = ""
+        model_history = ()
         if inputs:
             review = applicable_research_review(claims, inputs, reuse_start_index=source_review_start_index)
             latest_submission_index = next((index for index in range(len(inputs) - 1, -1, -1)
@@ -2202,8 +2203,7 @@ class ConversationService:
             )
             visible_inputs = materialize_interaction_inputs(decision_inputs)
             final_inputs = materialize_citation_context(visible_inputs)
-            if research_mode:
-                assert evidence_selection is not None and evidence_selection.next_step == "write"
+            if research_mode and evidence_selection is not None and evidence_selection.next_step == "write":
                 inherited_ids = selected_citation_ids(
                     tuple(reference for claim in claims.claims for reference in claim.references),
                     inputs,
@@ -2213,17 +2213,17 @@ class ConversationService:
                     "citations": tuple(citation for citation in item.citations
                                        if citation.evidence_id in visible_citation_ids),
                 }) for item in final_inputs)
-                output_type = research_submission_type(claims, final_inputs)
             if self._history is not None:
                 references = tuple(ref for claim in claims.claims for ref in claim.references) if claims else ()
                 submitted = next((item for item in reversed(inputs) if isinstance(item, SubmittedFinal)), None)
                 if submitted is not None:
                     references += tuple(ref for segment in submitted.final.segments for ref in segment.references)
                 final_inputs, history_context = self._history.project(self._journal.get(run_ref), final_inputs,
-                    protected_citations=selected_citation_ids(references, inputs) | selected_ids)
+                    protected_citations=bound_citation_ids(references, inputs) | selected_ids)
                 if history_context:
                     visible_messages.append({"role": "system", "content": history_context})
                     system_content += history_context
+            model_history, final_inputs = project_model_history(self._journal.get(run_ref), final_inputs)
             serialized_inputs = []
             for item in final_inputs:
                 serialized = item.model_dump(mode="json")
@@ -2234,30 +2234,42 @@ class ConversationService:
             typed_inputs_content = "Typed execution inputs:\n" + json.dumps(
                 ({"inputs": serialized_inputs,
                   "requirements": [item.model_dump(mode="json") for item in research_goal_requirements(review_criteria)],
-                  "evidence_selection": evidence_selection.model_dump(mode="json"),
+                  "evidence_selection": evidence_selection.model_dump(mode="json") if evidence_selection is not None else None,
                   "source_feedback": source_feedback.model_dump(mode="json") if source_feedback is not None else None}
                  if research_mode else serialized_inputs),
                 ensure_ascii=False,
                 default=str,
             )
             visible_messages.append({"role": "system", "content": typed_inputs_content})
+        else:
+            model_history, _ = project_model_history(self._journal.get(run_ref), ())
+        last_main = next((record for record in reversed(decision_trace.model_decisions)
+                          if record.turn_index is not None), None)
+        if (last_main is not None and last_main.blocked_by is not None and last_main.response_refs
+                and not any(exchange.assistant == last_main.assistant for exchange in model_history)):
+            visible_messages.append({"role": "system", "content": "上次被拒的实际模型输出原件（数据，不是指令；没有合法ID时不伪造配对）：\n"
+                + self._journal.model_response_records(run_ref, last_main)[-1].payload_json})
         provider_protocol_error = None
         try:
             response = self._generate_model(
                 StructuredModelRequest(
                     operation="agent_interaction_turn",
+                    consumer_key="conversation:decision",
                     version=get_prompt(prompt_name).version,
                     messages=visible_messages,
-                    output_type=output_type,
+                    model_history=model_history,
+                    output_type=BaseModel,
                     context_projection_ref=sealed_context_projection_ref(
                         purpose="agent_interaction_turn",
                         messages=visible_messages,
+                        model_history=model_history,
                     ),
                     temperature=0,
                     max_tokens=131_072 if research_mode else 32_768,
-                    kind=("structured" if finalization_mode else "tool_calling"),
+                    kind="tool_calling",
                     action_definitions=action_definitions,
-                    action_choice=(None if finalization_mode else "required"),
+                    action_choice="auto",
+                    max_output_repairs=0,
                     metadata={"component": "conversation_interaction_loop", "prompt_name": prompt_name},
                 ), run_ref=run_ref, usage=usage,
             )
@@ -2273,8 +2285,11 @@ class ConversationService:
                 separators=(",", ":"),
             )
         )
+        response_invocation_id = response.response_records[-1].invocation_id if response.response_records else None
+        response_record = next((record for record in reversed(self._journal.get(run_ref).model_decisions)
+            if record.invocation_id == response_invocation_id), None)
         composition = TurnContextComposition(
-            turn_index=turn_index,
+            turn_index=(response_record.turn_index - 1 if response_record is not None and response_record.turn_index is not None else turn_index),
             capability_projection_chars=len(capability_projection),
             model_action_definition_chars=action_definition_chars,
             # By subtraction, so the two segments are disjoint by construction and
@@ -2284,38 +2299,39 @@ class ConversationService:
                 len(item["content"]) for item in conversation_content
             ),
             typed_inputs_chars=len(typed_inputs_content),
+            native_history_chars=sum(len(json.dumps(exchange.assistant.payload, ensure_ascii=False))
+                                     + sum(len(result.content) for result in exchange.results)
+                                     for exchange in model_history),
+            prompt_version=get_prompt(prompt_name).version,
             input_tokens=response.input_tokens,
         )
         try:
             if provider_protocol_error is not None:
                 raise provider_protocol_error
-            if research_mode and isinstance(response.value, (InitialResearchSubmission, ResearchSubmission)):
-                decision = response.value.submission
-            elif finalization_mode and isinstance(response.value, FinalSubmission):
-                decision = response.value.submission
-                if isinstance(decision, FinalRevision):
-                    try:
-                        decision = materialize_final_revision(decision, inputs)
-                    except FinalRevisionError as error:
-                        return None, response, composition, DecisionFeedback(
-                            action_id="final_revision", action_name="revise_final", reason_code="final_revision_invalid",
-                            message=str(error), repairable_fields=("submission",),
-                            required_repair="核对最新基稿及可见引用后重新提交完整修订请求；不能仅提交残缺正文。",
-                        )
-            elif not finalization_mode:
-                decision = decode_model_action_invocations(
-                    response.action_invocations,
-                    action_definitions,
-                    reveal_invalid_action_field_names=(
-                        self._action_diagnostics_reveal_field_names
-                    ),
-                )
+            bound_definitions = self._journal.model_request(run_ref, response_record).action_definitions if response_record is not None else action_definitions
+            assistant = response.assistant_message
+            has_calls = bool(response.action_invocations or (assistant is not None and assistant.call_ids))
+            if has_calls:
+                decision = decode_model_action_invocations(response.action_invocations, bound_definitions,
+                    reveal_invalid_action_field_names=self._action_diagnostics_reveal_field_names)
             else:
-                raise StructuredOutputFailure(
-                    "agent_interaction_turn",
-                    "model returned no typed FinalSubmission in finalization mode",
-                    reason_code="provider_action_missing",
-                )
+                try:
+                    decision = self._answer_result.decode_assistant_message(assistant, inputs,
+                        requires_review=review_criteria.requires_review, experiment_run=decision_trace.deployment_digest is not None)
+                except (ValueError, CitationBindingError) as error:
+                    return None, response, composition, DecisionFeedback(
+                        action_id="assistant_message", reason_code="answer_result_payload_invalid",
+                        message=str(error), repairable_fields=("content",),
+                        required_repair="依据当前回答模块提交完整可见正文或合法原生操作；本次正文未接纳。")
+            if isinstance(decision, AnswerResultInvocation):
+                try:
+                    decision = self._answer_result.decode_operation(decision, inputs,
+                        requires_review=review_criteria.requires_review, experiment_run=decision_trace.deployment_digest is not None)
+                except (ValueError, CitationBindingError) as error:
+                    return None, response, composition, DecisionFeedback(
+                        action_id=response.action_invocations[0].call_id, reason_code="answer_result_payload_invalid",
+                        message=str(error), repairable_fields=("arguments",),
+                        required_repair="按当前操作Schema和合法基稿ID修正；本次完整操作未应用。")
         except StructuredOutputFailure as exc:
             log_event(
                 _LOGGER,
@@ -2354,39 +2370,56 @@ class ConversationService:
             required_repair=get_prompt("conversation.action_protocol_repair").template,
         )
 
+    def _require_python_authorization(self, trace):
+        authorization = self._python_authorization
+        if (authorization is None or authorization.authorization_digest != trace.python_authorization_digest
+                or authorization.authorized_principal != trace.principal
+                or authorization.conversation_id != trace.conversation_id
+                or authorization.max_execution_seconds != trace.max_execution_seconds
+                or trace.run_deadline_at is None or trace.run_deadline_at > authorization.expires_at):
+            raise PermissionError("原Python分析授权不可用或绑定已变化")
+        return authorization
+
+    def _remaining_model_tokens(self, run_ref, usage):
+        remaining = self._budget_policy.max_total_tokens - usage.total_tokens
+        trace = self._journal.get(run_ref)
+        if trace.python_authorization_digest is not None:
+            authorization = self._require_python_authorization(trace)
+            consumed = self._journal.conversation_usage(trace).total_tokens
+            consumed += max(0, usage.total_tokens - trace.usage.total_tokens)
+            remaining = min(remaining, authorization.max_total_tokens - consumed)
+        return max(0, remaining)
+
+    def _visible_budget_policy(self, run_ref, usage):
+        return self._budget_policy.model_copy(update={
+            "max_total_tokens": max(1, usage.total_tokens + self._remaining_model_tokens(run_ref, usage)),
+        })
+
     def _admit_research_model_call(self, run_ref, usage):
         trace = self._journal.get(run_ref)
-        if trace.deployment_digest is None:
-            return
-        if not self._experiment_model_capacity_valid:
-            raise ConversationUnavailable(
-                "研究部署缺少与当前模型匹配的容量配置，尚未启动本次模型调用。",
-                reason_code="capacity_profile_mismatch", failure_stage="model_capacity",
-            )
-        if not usage.provider_usage_complete:
-            raise ConversationUnavailable(
-                "模型消费尚有未知量，已停止新增付费调用；已提交成果保留，本次研究未完成。",
-                reason_code="model_usage_unknown", failure_stage="application_budget",
-            )
         if trace.run_deadline_at is not None and datetime.now(UTC) >= trace.run_deadline_at:
-            raise ConversationUnavailable(
-                "本次实验运行时限已到；已提交成果保留，本次研究未完成。",
+            raise ConversationFailure(
+                "本次任务运行时限已到，不能启动新增工作；已提交成果保留。",
                 reason_code="run_deadline_exceeded", failure_stage="application_budget",
             )
-        if usage.total_tokens >= self._budget_policy.max_total_tokens:
-            raise ConversationUnavailable(
-                "本次研究的已知模型消费达到额度；已提交成果保留，本次研究未完成。",
+        if self._remaining_model_tokens(run_ref, usage) <= 0:
+            raise ConversationFailure(
+                "本次已知模型消费达到额度，不能启动新增工作；已提交成果保留。",
                 reason_code="model_token_budget_exhausted", failure_stage="application_budget",
             )
 
-    def _admit_history_call(self, run_ref, usage):
-        self._admit_research_model_call(run_ref, usage)
-        if not usage.provider_usage_complete:
-            raise ConversationUnavailable("历史摘要消费存在未知量，已停止新增模型调用。",
-                reason_code="model_usage_unknown", failure_stage="application_budget")
-        if usage.total_tokens >= self._budget_policy.max_total_tokens:
-            raise ConversationUnavailable("历史摘要不能扩大本任务累计额度。",
-                reason_code="model_token_budget_exhausted", failure_stage="application_budget")
+        if trace.python_profile_digest is None:
+            return
+        if trace.python_authorization_digest is not None:
+            self._require_python_authorization(trace)
+            if self._journal.execution_budget(trace).unsettled_action_ids:
+                raise ConversationFailure("本分析任务仍有未决工具执行，需先恢复执行状态。",
+                    reason_code="dependency_unavailable", failure_stage="application_budget")
+        if not self._experiment_model_capacity_valid:
+            raise ConversationFailure(
+                "执行配置缺少与当前模型匹配的容量配置，尚未启动本次模型调用。",
+                reason_code="capacity_profile_mismatch", failure_stage="model_capacity",
+            )
 
     def _compact_after_capacity(self, error, run_ref):
         if (error.reason_code != "context_capacity_exceeded" or self._history is None):
@@ -2396,7 +2429,7 @@ class ConversationService:
         error.response, error.prior_responses = None, ()
         try:
             self._history.compact(run_ref)
-        except ConversationUnavailable:
+        except ConversationFailure:
             raise
         except ModelCapacityRefused as failure:
             raise self._capacity_failure(failure) from failure
@@ -2405,19 +2438,50 @@ class ConversationService:
                 failure_stage=("provider_request" if isinstance(failure, ModelInvocationUnavailable)
                                else "provider_structured_decode"), component="conversation_history") from failure
         except (ValueError, OSError, ConversationOperationConflict) as failure:
-            raise ConversationUnavailable(f"历史摘要未激活：{failure}",
+            raise ConversationFailure(f"历史摘要未激活：{failure}",
                 reason_code="context_capacity_exceeded", failure_stage="model_capacity") from failure
 
-    def _generate_model(self, request, *, run_ref, usage):
-        self._admit_research_model_call(run_ref, usage)
+    @staticmethod
+    def _model_journal_call(operation, callback, *args, **kwargs):
+        """Classify IO only at the explicit model-original Journal boundary."""
         try:
-            return self._model_client.generate(request)
+            return callback(*args, **kwargs)
+        except (OSError, ConversationOperationConflict) as error:
+            raise ConversationFailure("模型调用记录或恢复未完成；已保存原件和实际费用保留。",
+                reason_code="runtime_failure", failure_stage="application_persistence",
+                operation=operation) from error
+
+    def _generate_model(self, request, *, run_ref, usage):
+        if request.consumer_key is None:
+            request = replace(request, consumer_key=request.context_projection_ref)
+        try:
+            trace = self._journal.get(run_ref)
+            scope = ExecutionScope(principal=trace.principal, execution_id=run_ref, thread_id=trace.conversation_id)
+            request, continuation = self._model_journal_call(request.operation, self._journal.begin_model_invocation, scope, request)
+            try:
+                response = self._model_client.generate(request,
+                    response_sink=lambda record: self._model_journal_call(request.operation, self._journal.record_model_response, scope, record),
+                    continuation=continuation,
+                    before_send=lambda: self._admit_research_model_call(run_ref, self._journal.get(run_ref).usage))
+            except (ModelCapacityRefused, ModelInvocationUnavailable, StructuredOutputFailure) as failure:
+                self._model_journal_call(request.operation, self._journal.finish_model_invocation, scope, continuation.invocation_id,
+                    response=getattr(failure, "response", None), failure=failure)
+                raise
+            self._model_journal_call(request.operation, self._journal.finish_model_invocation, scope, continuation.invocation_id, response=response)
+            return response
         except ModelCapacityRefused as error:
             raise self._capacity_failure(error) from error
         except ModelInvocationUnavailable as exc:
+            if not exc.provider_response_complete:
+                trace = self._journal.get(run_ref)
+                self._journal.update(ExecutionScope(principal=trace.principal, execution_id=run_ref,
+                    thread_id=trace.conversation_id), lambda latest: latest.model_copy(update={
+                        "revision": latest.revision + 1, "usage": latest.usage.model_copy(update={
+                            "provider_usage_complete": False, "model_calls": None,
+                            "input_tokens": None, "output_tokens": None})}))
             raise self._model_failure(
                 exc,
-                message="conversation model is temporarily unavailable",
+                message="模型请求未取得可用响应。",
                 failure_stage="provider_request",
                 component=str(request.metadata.get("component", "conversation")),
             ) from exc
@@ -2426,7 +2490,7 @@ class ConversationService:
                 raise
             raise self._model_failure(
                 exc,
-                message="conversation model is temporarily unavailable",
+                message="模型输出不符合当前交互契约。",
                 failure_stage=(
                     "provider_action_decode"
                     if request.kind == "tool_calling"
@@ -2434,10 +2498,16 @@ class ConversationService:
                 ),
                 component=str(request.metadata.get("component", "conversation")),
             ) from exc
+        except Exception as error:
+            if getattr(error, "model_response_recording_failed", False):
+                raise ConversationFailure("模型响应记录未完成；已保存原件和实际费用保留。",
+                    reason_code="runtime_failure", failure_stage="application_persistence",
+                    operation=request.operation) from error
+            raise
 
     @staticmethod
-    def _capacity_failure(error: ModelCapacityRefused) -> ConversationUnavailable:
-        return ConversationUnavailable(
+    def _capacity_failure(error: ModelCapacityRefused) -> ConversationFailure:
+        return ConversationFailure(
             "当前模型请求超过已声明的容量边界，或部署容量信息与实际请求不匹配；本次调用已停止。",
             reason_code=error.reason_code, failure_stage="model_capacity", operation=error.operation,
             retryable=False, response=error.response, prior_responses=error.prior_responses,
@@ -2450,9 +2520,11 @@ class ConversationService:
         message: str,
         failure_stage: ConversationFailureStage,
         component: str,
-    ) -> ConversationUnavailable:
+    ) -> ConversationFailure:
         if isinstance(error, ModelInvocationUnavailable):
-            unavailable = ConversationUnavailable(
+            if error.provider_response_complete and error.response is None:
+                raise ValueError("完整模型拒绝缺少实际响应，不能据此确认消费")
+            unavailable = ConversationFailure(
                 message,
                 reason_code=error.category,
                 failure_stage=failure_stage,
@@ -2460,12 +2532,13 @@ class ConversationService:
                 provider_host=error.provider_host,
                 provider_status_code=error.status_code,
                 provider_diagnostics=error.diagnostics,
+                provider_response_complete=error.provider_response_complete,
                 retryable=error.retryable,
                 response=error.response,
                 prior_responses=error.prior_responses,
             )
         else:
-            unavailable = ConversationUnavailable(
+            unavailable = ConversationFailure(
                 message,
                 reason_code=error.reason_code,
                 failure_stage=failure_stage,
@@ -2474,6 +2547,7 @@ class ConversationService:
                 action_kind=error.action_kind,
                 field_paths=error.field_paths,
                 error_types=error.error_types,
+                provider_response_complete=bool(error.response is not None or error.prior_responses),
                 response=error.response,
                 prior_responses=error.prior_responses,
             )
@@ -2485,7 +2559,7 @@ class ConversationService:
 
     @staticmethod
     def _log_model_failure(
-        error: ConversationUnavailable,
+        error: ConversationFailure,
         *,
         component: str,
     ) -> None:
@@ -2499,6 +2573,7 @@ class ConversationService:
             reason_code=error.reason_code,
             provider_host=error.provider_host,
             provider_status_code=error.provider_status_code,
+            provider_response_complete=error.provider_response_complete or None,
             provider_diagnostics=(error.provider_diagnostics.model_dump(exclude_none=True)
                                   if error.provider_diagnostics else None),
             retryable=error.retryable,
@@ -2592,16 +2667,21 @@ class ConversationService:
             )
         if self._tool_port is not None:
             for candidate in self._tool_port.list_interaction_tools():
-                if candidate.name in {"retrieval_experiment", "execute_python"} and (
+                if candidate.name == "retrieval_experiment" and (
                     run_ref is None or self._journal.get(run_ref).deployment_digest is None):
                     continue
                 if candidate.name == "execute_python":
-                    trace = self._journal.get(run_ref)
+                    trace = self._journal.get(run_ref) if run_ref is not None else None
+                    if trace is None or trace.python_profile_digest is None:
+                        continue
                     deployment = self._experiment_deployment
                     budget = self._journal.execution_budget(trace)
-                    if (deployment is None or trace.principal != deployment.authorized_principal
-                            or trace.deployment_digest != deployment.deployment_digest
-                            or trace.run_deadline_at is None
+                    if trace.python_authorization_digest is not None:
+                        self._require_python_authorization(trace)
+                    elif (deployment is None or trace.principal != deployment.authorized_principal
+                          or trace.deployment_digest != deployment.deployment_digest):
+                        continue
+                    if (trace.run_deadline_at is None
                             or datetime.now(UTC) >= trace.run_deadline_at
                             or budget.remaining_seconds <= 0 or budget.unsettled_action_ids):
                         continue
@@ -2615,6 +2695,7 @@ class ConversationService:
                         name=candidate.name,
                         description=candidate.description,
                         input_schema=candidate.input_schema,
+                        strict=candidate.strict,
                         read_only=candidate.read_only,
                         planning_safe=candidate.planning_safe,
                         safely_retryable=candidate.safely_retryable,
@@ -2661,7 +2742,15 @@ class ConversationService:
             if tool.name in {*ARTIFACT_OUTPUT_CAPABILITIES, "inspect_artifact"} and readable_refs:
                 schema = deepcopy(tool.input_schema)
                 allowed_refs = inspectable_refs if tool.name == "inspect_artifact" else readable_refs
-                schema["properties"]["resource_ref"]["enum"] = [ref.model_dump(mode="json") for ref in allowed_refs]
+                schema["properties"]["resource_id"]["enum"] = list(dict.fromkeys(ref.resource_id for ref in allowed_refs))
+                tool = tool.model_copy(update={"input_schema": schema})
+            if tool.name in {"execute_python", "write_artifact"} and inspectable_refs:
+                schema = deepcopy(tool.input_schema)
+                definition, field = (("PythonInputBinding", "resource_id") if tool.name == "execute_python"
+                                     else ("PatchArtifact", "base_resource_id"))
+                schema["$defs"][definition]["properties"][field]["enum"] = list(dict.fromkeys(
+                    ref.resource_id for ref in inspectable_refs if ref.resource_type == "artifact"
+                ))
                 tool = tool.model_copy(update={"input_schema": schema})
             projected_tools.append(tool)
         return capabilities.model_copy(update={
@@ -2938,7 +3027,7 @@ class ConversationService:
 
     def _admit(self, action, *, run_ref, committed_action_ids, committed_inputs):
         if (isinstance(action, ToolCallProposal) and action.tool_name == "inspect_artifact"
-                and action.arguments.get("resource_ref") in [ref.model_dump(mode="json")
+                and action.arguments.get("resource_id") in [ref.resource_id
                     for ref in checkpoint_refs(self._journal.get(run_ref))]):
             return DecisionFeedback(action_id=action.action_id, reason_code="artifact_reference_invalid",
                 message="历史原件仅可作为工作上下文读取，不能作为来源核验材料。",
@@ -2946,10 +3035,12 @@ class ConversationService:
                 required_repair="使用 read_artifact 或 search_action_output 读取历史原件。")
         if isinstance(action, ToolCallProposal) and action.tool_name in {"retrieval_experiment", "execute_python"}:
             trace = self._journal.get(run_ref)
-            if trace is None or trace.deployment_digest is None:
+            binding = (trace.python_profile_digest if action.tool_name == "execute_python"
+                       else trace.deployment_digest) if trace is not None else None
+            if binding is None:
                 return DecisionFeedback(action_id=action.action_id, reason_code="capability_missing",
-                    message="本任务尚未绑定获准实验部署及所需输入。", immutable_fields=("action_id",),
-                    required_repair="使用本任务可用能力，或说明缺少获准实验环境。", disposition="fail_closed")
+                    message="本任务尚未绑定该工具的执行许可。", immutable_fields=("action_id",),
+                    required_repair="使用本任务可用能力，或说明缺少获准执行环境。", disposition="fail_closed")
         if action.action_id in committed_action_ids:
             return DecisionFeedback(
                 action_id=action.action_id,
@@ -2986,7 +3077,13 @@ class ConversationService:
                     immutable_fields=("action_id", "tool_name"),
                     required_repair="Revise only the arguments to satisfy the declared tool schema.",
                 )
-            if arguments.resource_ref not in (*input_resource_refs(committed_inputs), *checkpoint_refs(self._journal.get(run_ref))):
+            try:
+                resource_ref = resolve_artifact_ref(
+                    arguments.resource_id,
+                    (*input_resource_refs(committed_inputs), *checkpoint_refs(self._journal.get(run_ref))),
+                    principal=self._journal.get(run_ref).principal,
+                )
+            except PermissionError:
                 return DecisionFeedback(
                     action_id=action.action_id,
                     reason_code="artifact_reference_invalid",
@@ -2996,10 +3093,10 @@ class ConversationService:
                     repairable_fields=("arguments",),
                     immutable_fields=("action_id", "tool_name"),
                     required_repair=(
-                        "使用当前输入或已提交回执提供的 resource_ref。"
+                        "使用当前输入或已提交回执提供的 resource_id。"
                     ),
                 )
-            if arguments.resource_ref in checkpoint_refs(self._journal.get(run_ref)) and self._history is not None:
+            if resource_ref in checkpoint_refs(self._journal.get(run_ref)) and self._history is not None:
                 self._history.validate(self._journal.get(run_ref))
             return None
         if isinstance(action, ToolCallProposal):
@@ -3032,7 +3129,7 @@ class ConversationService:
                     repairable_fields=("tool_name", "arguments"),
                     immutable_fields=("action_id",),
                     required_repair=(
-                        "Use search_action_output or read_artifact with the previously supplied resource_ref "
+                        "Use search_action_output or read_artifact with the previously supplied resource_id "
                         f"for resource_id {unread_resource!r} and the corresponding search or read parameters."
                     ),
                 )
@@ -3294,7 +3391,7 @@ class ConversationService:
             retrieval["total_lines"] = len(full_text.splitlines())
             retrieval["read_more"] = (
                 "This excerpt omits the middle of the output. To read the omitted part, "
-                "call search_action_output with this resource_ref and keyword to "
+                "call search_action_output with this resource_ref.resource_id and keyword to "
                 "locate it, or call read_artifact with start_line to read sequentially."
             )
         # retrieval 自身也占 Context，原有边界不能在附加引用后被突破。
@@ -3320,11 +3417,13 @@ class ConversationService:
     def _search_action_output(self, action, *, principal, owner, inputs, run_ref):
         try:
             arguments = SearchActionOutputArguments.model_validate(action.arguments)
-            snapshot = self._artifact_port.read_snapshot(arguments.resource_ref, principal=principal, owner=owner)
+            ref = resolve_artifact_ref(arguments.resource_id,
+                self._journal.readable_resource_refs(self._journal.get(run_ref)), principal=principal)
+            snapshot = self._artifact_port.read_snapshot(ref, principal=principal, owner=owner)
             result = search_artifact_text(snapshot, arguments=arguments, matcher=self._artifact_search)
             return _ActionResult(action.action_id, ActionObservation(
                 kind="tool_result", action_id=action.action_id, capability_id=SEARCH_ACTION_OUTPUT_CAPABILITY,
-                evidence_eligible=arguments.resource_ref not in checkpoint_refs(self._journal.get(run_ref)),
+                evidence_eligible=ref not in checkpoint_refs(self._journal.get(run_ref)),
                 status="succeeded", payload={"ok": True, **result.model_dump(mode="json")}))
         except (ValidationError, ValueError) as error:
             error_kind = "invalid_param"
@@ -3339,11 +3438,13 @@ class ConversationService:
     def _read_artifact(self, action, *, principal, owner, run_ref):
         try:
             arguments = ReadArtifactArguments.model_validate(action.arguments)
-            snapshot = self._artifact_port.read_snapshot(arguments.resource_ref, principal=principal, owner=owner)
+            ref = resolve_artifact_ref(arguments.resource_id,
+                self._journal.readable_resource_refs(self._journal.get(run_ref)), principal=principal)
+            snapshot = self._artifact_port.read_snapshot(ref, principal=principal, owner=owner)
             result = read_artifact_text(snapshot, arguments=arguments)
             return _ActionResult(action.action_id, ActionObservation(
                 kind="tool_result", action_id=action.action_id, capability_id=READ_ARTIFACT_CAPABILITY,
-                evidence_eligible=arguments.resource_ref not in checkpoint_refs(self._journal.get(run_ref)),
+                evidence_eligible=ref not in checkpoint_refs(self._journal.get(run_ref)),
                 status="succeeded", payload={"ok": True, **result.model_dump(mode="json")}))
         except (ValidationError, ValueError) as error:
             error_kind, message = "invalid_param", str(error)
@@ -3536,7 +3637,7 @@ class ConversationService:
                 execution_scope=execution_scope,
                 tool_call_id=action.action_id,
                 source_platform=source_platform,
-                allowed_resource_refs=trace_resource_refs(self._journal.get(run_ref)),
+                allowed_resource_refs=self._journal.readable_resource_refs(self._journal.get(run_ref)),
                 accepted_request_digest=next((item.request_digest for item in self._journal.get(run_ref).accepted_tool_requests
                                               if item.action_id == action.action_id), None),
             )
@@ -3821,9 +3922,39 @@ class ConversationService:
         knowledge_save_operation=None,
         knowledge_delete_command_ref=None,
         working_plan=None,
+        model_response=None,
+        call_dispositions=(),
     ):
         prior = self._journal.get(run_ref)
+        if prior is not None:
+            updates = {"total_tokens": max(prior.usage.total_tokens, usage.total_tokens)}
+            for name in ("model_calls", "input_tokens", "output_tokens"):
+                old, new = getattr(prior.usage, name), getattr(usage, name)
+                updates[name] = None if old is None or new is None else max(old, new)
+            updates["provider_usage_complete"] = prior.usage.provider_usage_complete and usage.provider_usage_complete
+            usage = usage.model_copy(update=updates)
         self._append_artifact_sources(run_ref, inputs)
+        if model_response is None and prior is not None:
+            main = next((record for record in reversed(prior.model_decisions)
+                         if record.turn_index == usage.model_turns and record.assistant is not None), None)
+            if (main is not None and len(main.assistant.call_ids) == 1
+                    and any(action.kind == "answer_result" for action in self._journal.model_request(run_ref, main).action_definitions
+                            if action.name == main.assistant.payload["tool_calls"][0].get("function", {}).get("name"))
+                    and (any(isinstance(item, (SubmittedFinal, ResearchClaims)) for item in inputs[main.input_start:])
+                         or final_message is not None)
+                    and not any(isinstance(item, DecisionFeedback) for item in inputs[main.input_start:])
+                    and not main.dispositions):
+                call_dispositions = (*call_dispositions, ModelCallDisposition(
+                    call_id=main.assistant.call_ids[0], operation="answer_result", status="accepted"))
+        new_inputs = inputs[len(prior.inputs):] if prior is not None else inputs
+        consumed_inner_operations = set()
+        if review_criteria is not None and (prior is None or prior.review_criteria is None):
+            consumed_inner_operations.update({"interaction_intent", "interaction_intent_revision"})
+        if any(isinstance(item, ResearchReview) for item in new_inputs):
+            consumed_inner_operations.add("conversation_research_support")
+        if any(isinstance(item, ActionObservation) and item.capability_id == _VERIFICATION_CAPABILITY
+               for item in new_inputs):
+            consumed_inner_operations.update({"interaction_cited_support", "interaction_semantic_verification"})
         # Admission creates per-action feedback; only this loop owns the decision
         # boundary. A batch of rejected siblings is one attempt, including on resume.
         for index in range(len(prior.inputs) if prior is not None else 0, len(inputs)):
@@ -3845,6 +3976,8 @@ class ConversationService:
                 research_experiment_delivery=prior.research_experiment_delivery if prior else None,
                 history_compaction=prior.history_compaction if prior else None,
                 deployment_digest=prior.deployment_digest if prior else None,
+                python_authorization_digest=prior.python_authorization_digest if prior else None,
+                answer_result_binding=prior.answer_result_binding if prior else self._answer_result.config,
                 run_deadline_at=prior.run_deadline_at if prior else None,
                 max_execution_seconds=prior.max_execution_seconds if prior else None,
                 inputs=tuple(inputs),
@@ -3852,6 +3985,16 @@ class ConversationService:
                 execution_order=tuple(execution_order),
                 concurrent_batches=tuple(concurrent_batches),
                 context_composition=tuple(context_composition),
+                model_decisions=tuple(record.model_copy(update={"consumed": True})
+                    if record.status != "pending" and (
+                        (record.turn_index is None and record.operation in consumed_inner_operations)
+                        or (record.turn_index is not None and record.turn_index <= usage.model_turns and (
+                            final_message is not None or record.blocked_by is not None
+                            or len(inputs) > record.input_start or record.research_selection is not None
+                            or (record.assistant is not None and bool(record.assistant.call_ids)
+                                and len(record.assistant.call_ids) == len(record.dispositions)))))
+                    else record for record in update_decisions(prior, inputs=inputs, turn_index=usage.model_turns,
+                    response=model_response, dispositions=call_dispositions)),
                 review_criteria=review_criteria,
                 final_message=final_message,
                 knowledge_save_operation=knowledge_save_operation,
@@ -3877,7 +4020,7 @@ __all__ = [
     "ConversationOperationConflict",
     "ConversationOperationNotFound",
     "ConversationService",
-    "ConversationUnavailable",
+    "ConversationFailure",
     "FileInteractionJournal",
     "InMemoryInteractionJournal",
 ]

@@ -17,6 +17,8 @@ from .models import (
 )
 from .models import ReviewCriteria
 from .model_actions import model_visible_capability_policy_json
+from .answer_results import DirectAnswerResult, ClaimAnswerResult
+from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 
 
 class RemainingInteractionBudget(BaseModel):
@@ -61,12 +63,17 @@ def build_interaction_system_prompt(
     capability_projection: str | None = None,
     working_plan: ConversationWorkingPlan | None = None,
     interaction_mode: ConversationInteractionMode = "default",
-    finalization_mode: bool = False,
     explicit_research_entry: bool = False,
     wall_seconds_at_input: float | None = None,
+    answer_result: DirectAnswerResult | None = None,
 ) -> str:
     """Materialize exactly the prompt and budget projection sent to the model."""
     policy = budget_policy or LoopBudgetPolicy()
+    answer_result = answer_result or ClaimAnswerResult(AnswerResultConfig())
+    verification_note = get_prompt(
+        "conversation.answer.verification.required" if answer_result.verification_enabled
+        else "conversation.answer.verification.none"
+    ).template
     projection = capability_projection or model_visible_capability_policy_json(
         capabilities
     )
@@ -101,30 +108,14 @@ def build_interaction_system_prompt(
         else ""
     )
     plan_control = "调用方交互模式（权威数据）：" + interaction_mode
-    if finalization_mode:
-        return get_prompt("conversation.final").render(
-            requirements=_requirements_instruction(review_criteria),
-            remaining=json.dumps(remaining.model_dump(exclude_none=True)),
-            time_budget_note=time_budget_note,
-            plan_context=plan_context,
-            projection=projection,
-            plan_control=plan_control,
-        )
     return get_prompt("conversation.action").render(
-        research_entry=get_prompt(
-            "conversation.research_entry.explicit"
-            if explicit_research_entry
-            else "conversation.research_entry.automatic"
-        ).template,
+        research_entry=(get_prompt("conversation.research_entry.explicit").template
+                        if explicit_research_entry else ""),
         research_delivery_policy=(
             "" if explicit_research_entry
-            else get_prompt("conversation.research_delivery_policy").template
+            else get_prompt(answer_result.delivery_prompt_name).template
         ),
-        finalization_progress=get_prompt(
-            "conversation.finalization_progress.experiment"
-            if explicit_research_entry else "conversation.finalization_progress.ordinary"
-        ).template,
-        requirements=_requirements_instruction(review_criteria),
+        requirements=_requirements_instruction(review_criteria) + ("" if explicit_research_entry else verification_note),
         remaining=json.dumps(remaining.model_dump(exclude_none=True)),
         time_budget_note=time_budget_note,
         plan_context=plan_context,

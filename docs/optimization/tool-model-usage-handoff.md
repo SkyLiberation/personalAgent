@@ -1,12 +1,24 @@
 # 工具内部模型用量未进入 Conversation 总账
 
-`TOOL-MODEL-USAGE-HANDOFF-001` 的责任边界是工具执行结果到 Conversation 用量聚合。2026-10-01 完整终态中，Provider 已完成 66 次生产响应，共 1,194,979 tokens；Conversation 记录 62 次 typed 操作和 1,143,604 tokens。分项差额 51,375 tokens 精确等于三次最终核验工具的内部模型响应。直接模型调用的 63 份物理响应与 Journal 三项用量精确相等，内部恢复聚合为 62 次 typed 操作；本问题与[失败重试计量固化记录](completed/model-retry-usage.md)的分支不同。
+`TOOL-MODEL-USAGE-HANDOFF-001` 拥有工具内模型调用进入 Conversation 总账的边界。2026-10-23 普通 Verifier 已按下述逐调用方式接入；真实语义拒绝、未知停止及整条已知用量等式成立，历史合法接受及契约失败的当前版本回放尚未执行。原历史轨迹保持，不把当前结果外推到其他工具或 Agent。准入状态见[Future 队列](../future/design-optimization-backlog.md)。
+
+## 当前普通核验的机制与范围
+
+仅在整个 workflow 返回后交回合计，无法在分段核验之间及时判断额度或未知消费。因此采用当前 Application owner 的显式调用绑定：Runtime 构造 Conversation 后，把其按受信 `ExecutionScope` 绑定的模型调用方法注入原核验工具。工具从既有网关配置取得 scope，模型可见参数不增加字段。各次核验调用原 typed 模型 Port，立即提交成功响应或失败前已完成响应；未知保持未知。独立分析许可下，每次请求同时检查 Journal 聚合额度、截止及未知消费。工具返回后，Conversation 从 Journal 取得最新 usage，避免旧局部变量覆盖；本轮不向未绑定该许可的普通对话外推相同的任务总额停止保证。
+
+原网关 480 秒外层线程超时会使工作线程无法持有当前 run 的重入锁，且超时后可能继续付费；该工具改为同步调用，由原模型单请求超时与运行截止负责停止。原分段支持核验、整体核验、稿件／回执绑定均保持。该装配只修正普通核验入口，不增加通用 Hook、第二账本、工具用量字典或一套费用 Schema；当前模型响应已是 typed 用量事实，不再保留原“先新增工具合计回传契约”的候选。
+
+依据是下列历史差额、LongDS 首轮真实用例及本轮集成审查。新 target 的 80 次物理请求（76 次逻辑调用）共 4,879,140 tokens，与 Journal 完全相等；10 次核验 workflow 的语义拒绝消费均已纳入。真实 `final-25`／原 criteria／完整引用的独立 Offline 分支在第一次真实核验响应交付后丢失，生产保留未知，第二次核验在模型 Port 前拒绝；该分支 1 次物理请求、旁路 12,014 tokens，未把旁路值回填生产。结果及源身份见[LongDS 结果](to_verify/knowledge-decision-delivery.md#独立能力-target-的结果与剩余边界)。这不是完整用户结果通过，原合法接受与契约失败的历史身份也未被重标。
+
+## 历史失败依据与原边界
+
+2026-10-01 完整终态中，Provider 已完成 66 次生产响应，共 1,194,979 tokens；Conversation 记录 62 次 typed 操作和 1,143,604 tokens。分项差额 51,375 tokens 精确等于三次最终核验工具的内部模型响应。直接模型调用的 63 份物理响应与 Journal 三项用量精确相等，内部恢复聚合为 62 次 typed 操作；本问题与[失败重试计量固化记录](completed/model-retry-usage.md)的分支不同。
 
 [实际成本审计](../../.tmp/research-source-reuse-repair-20261001/cost-audit.json)保存完整请求、响应和逐分项等式。`application/conversation/service.py` 消费 `_verify_final` 的工具结果时只增加 `tool_calls`；`tools/interaction_verifier.py` 已取得结构化响应，却没有把模型用量交回总账。因此终态 `provider_usage_complete=true` 不代表全部生产模型成本完整。该路径在本轮未修改。
 
-## 责任与下一边界
+### 当时的责任与下一边界
 
-Provider 拥有实际调用用量；工具执行方返回 typed 用量事实，包括成功、语义拒绝和契约失败前已完成的响应；Conversation 聚合当前执行事实一次并纳入预算。未知消耗保持未知，不补零。下一候选先盘点工具/agent 内部调用的全部生产消费者，确定唯一传递契约，再以本次三份实际响应验证失败和成功的交接与去重。准入为失败归因阶段，见[Future 队列](../future/design-optimization-backlog.md)，本轮未实施。
+当时定位为 Provider 拥有实际用量、Conversation 聚合执行事实一次，成功、语义拒绝和契约失败前的完成响应都须交接，未知不能补零；尚未实施。当前普通 Verifier 改用上节的逐调用绑定；其他消费者按其真实入口及证据另审，不从这份历史归因自动取得生产准入。
 
 ## 2026-10-11 新正式轨迹的两次最终核验
 

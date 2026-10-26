@@ -17,6 +17,7 @@ from .history_models import HistoryCompactionCheckpoint, HistoryItemKey, History
 from .journal import InMemoryInteractionJournal
 from .models import ActionObservation, CommittedUsage, DecisionFeedback, InteractionInput, InteractionTrace
 from .ports import InteractionArtifactPort
+from .model_history import decision_input_indices
 
 
 def _digest(value: object) -> str:
@@ -41,15 +42,47 @@ class HistoryCompactor:
 
     def __init__(self, *, journal: InMemoryInteractionJournal,
                  artifacts: InteractionArtifactPort,
-                 generate: Callable[[StructuredModelRequest[HistorySummary]], StructuredModelResponse[HistorySummary]],
-                 admit: Callable[[str, CommittedUsage], None],
+                 generate: Callable[[StructuredModelRequest[HistorySummary], str], StructuredModelResponse[HistorySummary]],
                  record_usage: Callable[[CommittedUsage, StructuredModelResponse], CommittedUsage]) -> None:
         self.journal, self.artifacts = journal, artifacts
-        self.generate, self.admit, self.record_usage = generate, admit, record_usage
+        self.generate, self.record_usage = generate, record_usage
 
     @staticmethod
-    def _source(trace: InteractionTrace, end: int) -> list:
-        return [item.model_dump(mode="json") for item in trace.inputs[:end]]
+    def _source(trace: InteractionTrace, end: int, covered_turns: tuple[int, ...] = ()) -> dict:
+        return {"inputs": [item.model_dump(mode="json") for item in trace.inputs[:end]],
+                "model_decisions": [item.model_dump(mode="json") for item in trace.model_decisions
+                                    if item.turn_index in covered_turns]}
+
+    @staticmethod
+    def _atomic_groups(trace: InteractionTrace, choices):
+        selected = dict(choices)
+        groups = []
+        claimed = set()
+        for record in trace.model_decisions:
+            if record.turn_index is None or record.assistant is None:
+                continue
+            indices = set(decision_input_indices(trace, record))
+            claimed.update(indices)
+            if (indices and indices <= selected.keys()
+                    and record.turn_index != trace.model_decisions[-1].turn_index):
+                groups.append([(index, selected[index]) for index in sorted(indices)])
+        groups.extend([[(index, key)] for index, key in choices if index not in claimed])
+        return sorted(groups, key=lambda group: group[0][0])
+
+    @staticmethod
+    def _covered_turns(trace: InteractionTrace, choices, old_turns: tuple[int, ...]) -> tuple[int, ...]:
+        indices = {index for index, _ in choices}
+        end = max(indices, default=-1) + 1
+        turns = set(old_turns)
+        for record in trace.model_decisions[:-1]:
+            if record.turn_index is None or record.assistant is None:
+                continue
+            members = set(decision_input_indices(trace, record))
+            controls_complete = set(record.assistant.call_ids) <= {item.call_id for item in record.dispositions}
+            if ((members and members <= indices)
+                    or (not members and controls_complete and record.input_start < end)):
+                turns.add(record.turn_index)
+        return tuple(sorted(turns))
 
     def validate(self, trace: InteractionTrace) -> HistoryCompactionCheckpoint | None:
         checkpoint = trace.history_compaction
@@ -59,7 +92,7 @@ class HistoryCompactor:
                 or checkpoint.source_revision > trace.revision
                 or checkpoint.source_end > len(trace.inputs)
                 or checkpoint.snapshot_ref.owner != trace.principal
-                or _digest(self._source(trace, checkpoint.source_end)) != checkpoint.source_digest):
+                or _digest(self._source(trace, checkpoint.source_end, checkpoint.covered_decision_turns)) != checkpoint.source_digest):
             raise ValueError("历史摘要的原始来源或主体已失效。")
         snapshot = self.artifacts.read_snapshot(checkpoint.snapshot_ref,
                             principal=trace.principal, owner=trace.principal)
@@ -69,6 +102,8 @@ class HistoryCompactor:
         keys = {item_key(item) for item in trace.inputs[:checkpoint.source_end]}
         if len(set(checkpoint.covered_items)) != len(checkpoint.covered_items) or not set(checkpoint.covered_items) <= keys:
             raise ValueError("历史摘要覆盖无效或重复条目。")
+        if not set(checkpoint.covered_decision_turns) <= {item.turn_index for item in trace.model_decisions}:
+            raise ValueError("历史摘要引用不存在的模型决策。")
         return checkpoint
 
     def project(self, trace: InteractionTrace, visible: Sequence[CitableInput],
@@ -77,9 +112,15 @@ class HistoryCompactor:
         if checkpoint is None:
             return tuple(visible), ""
         covered = set(checkpoint.covered_items)
+        protected_keys = {item_key(item.observation) for item in visible
+                          if any(citation.evidence_id in protected_citations for citation in item.citations)}
+        for record in trace.model_decisions:
+            members = {item_key(trace.inputs[index]) for index in decision_input_indices(trace, record)}
+            if members & protected_keys:
+                protected_keys.update(members)
         result = tuple(item for item in visible
                        if item_key(item.observation) not in covered
-                       or any(citation.evidence_id in protected_citations for citation in item.citations))
+                       or item_key(item.observation) in protected_keys)
         facts = [{"action_id": item.action_id, "capability_id": item.capability_id,
                   "status": item.status}
                  for item in trace.inputs if isinstance(item, ActionObservation)]
@@ -140,16 +181,18 @@ class HistoryCompactor:
                    and index not in (latest_feedback, latest_verification)
                    and not (isinstance(item, ActionObservation)
                             and (item.status == "running" or item.action_id in pending))]
+        groups = self._atomic_groups(trace, choices)
+        choices = [item for group in groups for item in group]
         if not choices:
             raise ValueError("没有新的闭合旧历史可压缩，已停止无进展的重复压缩。")
         prompt = get_prompt("conversation.history_compaction")
         while choices:
-            self.admit(run_ref, self.journal.get(run_ref).usage)
             end = max(previous.source_end if previous else 0, choices[-1][0] + 1)
-            source = self._source(trace, end)
+            covered_turns = self._covered_turns(trace, choices,
+                previous.covered_decision_turns if previous else ())
+            source = self._source(trace, end, covered_turns)
             source_digest = _digest(source)
-            text = "\n".join(json.dumps({"input_index": index, "input": item}, ensure_ascii=False)
-                             for index, item in enumerate(source))
+            text = json.dumps(source, ensure_ascii=False, sort_keys=True)
             content_digest = sha256(text.encode("utf-8")).hexdigest()
             scope = ExecutionScope(principal=trace.principal, execution_id=run_ref,
                                    thread_id=trace.conversation_id, task_id="history_context")
@@ -164,46 +207,53 @@ class HistoryCompactor:
                 "previous_summary": previous.working_summary if previous else None,
                 "snapshot_ref": snapshot_ref.model_dump(mode="json"),
                 "new_closed_history": [trace.inputs[index].model_dump(mode="json") for index, _ in choices],
+                "closed_model_decisions": [{key: value for key, value in record.items()
+                    if key in {"turn_index", "input_start", "assistant", "protocol_exchanges", "dispositions", "blocked_by", "diagnostics"}}
+                    for record in source["model_decisions"]],
             }, ensure_ascii=False)}]
             request = StructuredModelRequest(operation="conversation_history_compaction", version=prompt.version,
-                messages=messages, output_type=HistorySummary, max_tokens=8192,
-                extra_body={"thinking": {"type": "disabled"}},
+                consumer_key="conversation:history_compaction",
+                messages=messages, output_type=HistorySummary, output_transport="native_tool", max_tokens=8192,
                 context_projection_ref=sealed_context_projection_ref(purpose="conversation_history_compaction", messages=messages),
                 metadata={"component": "conversation_history", "prompt_name": prompt.name})
             try:
-                response = self.generate(request)
+                response = self.generate(request, run_ref)
             except ModelCapacityRefused as error:
                 if error.response is not None or getattr(error, "prior_responses", ()):
                     self.record_failure(run_ref, error)
                     raise
-                if error.reason_code != "context_capacity_exceeded" or len(choices) == 1:
+                if error.reason_code != "context_capacity_exceeded" or len(groups) <= 1:
                     raise
-                choices = choices[:len(choices) // 2]
+                groups = groups[:len(groups) // 2]
+                choices = [item for group in groups for item in group]
                 continue
             except (ModelInvocationUnavailable, StructuredOutputFailure) as error:
                 self.record_failure(run_ref, error)
                 raise
             paid = self.record_response(run_ref, response)
-            self.admit(run_ref, paid.usage)
             summary = HistorySummary.model_validate(response.value).working_summary.strip()
             raw = response.raw_response
-            choices_out = getattr(raw, "choices", ()) or ()
-            if not summary or any(getattr(choice, "finish_reason", None) == "length" for choice in choices_out):
+            choices_out = (raw or {}).get("choices", ()) or ()
+            if not summary or any(choice.get("finish_reason") == "length" for choice in choices_out):
                 raise ValueError("历史摘要为空或被截断，未激活。")
-            if self._source(paid, end) != source or paid.history_compaction != previous:
+            if self._source(paid, end, covered_turns) != source or paid.history_compaction != previous:
                 raise ConversationOperationConflict("摘要期间历史或检查点已变化，费用保留但不覆盖新状态。")
             checkpoint = HistoryCompactionCheckpoint(run_ref=run_ref, source_revision=trace.revision,
                 source_end=end, source_digest=source_digest, covered_items=tuple(sorted(
                     old_keys | {key for _, key in choices}, key=lambda key: (key.kind, key.action_id, key.decision_turn or 0))),
+                covered_decision_turns=covered_turns,
                 snapshot_ref=snapshot_ref, snapshot_digest=content_digest, working_summary=summary,
-                prompt_version=prompt.version, model=response.model, response_id=getattr(raw, "id", None),
+                prompt_version=prompt.version, model=response.model, response_id=(raw or {}).get("id"),
                 response_digest=_digest({"content": response.content, "model": response.model,
-                                         "response_id": getattr(raw, "id", None)}),
+                                         "response_id": (raw or {}).get("id")}),
                 previous_checkpoint_digest=_digest(previous.model_dump(mode="json")) if previous else None)
             def activate(current):
                 if current.revision != paid.revision or current.history_compaction != previous:
                     raise ConversationOperationConflict("历史摘要激活时 Journal revision 冲突。")
-                return current.model_copy(update={"revision": current.revision + 1, "history_compaction": checkpoint})
+                return current.model_copy(update={"revision": current.revision + 1, "history_compaction": checkpoint,
+                    "model_decisions": tuple(record.model_copy(update={"consumed": True})
+                        if record.operation == request.operation and record.status == "decoded" else record
+                        for record in current.model_decisions)})
             self.journal.update(scope, activate)
             return checkpoint
         raise ValueError("历史摘要没有安全覆盖区间。")

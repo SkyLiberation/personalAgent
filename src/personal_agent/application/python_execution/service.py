@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.contracts.tool_runtime import accepted_tool_request_digest
+from personal_agent.application.artifacts.models import resolve_artifact_ref
 from .models import (
     INPUT_MAX_BYTES,
     PROGRAM_MAX_BYTES,
@@ -190,36 +191,30 @@ class PythonExecutionService:
             limitations=limitations,
         )
 
-    def _require_arguments(self, view: PythonJournalView) -> None:
-        refs = [item.resource_ref for item in view.arguments.input_files]
-        if view.arguments.program_ref is not None:
-            refs.append(view.arguments.program_ref)
-        if any(ref not in view.allowed_refs for ref in refs):
-            raise PermissionError("Python程序或输入不属于当前合法可读集合")
+    def _input_refs(self, view: PythonJournalView) -> tuple[ResourceRef, ...]:
+        return tuple(resolve_artifact_ref(
+            item.resource_id, view.allowed_refs,
+            principal=view.execution_scope.principal,
+        ) for item in view.arguments.input_files)
 
     def _command(
         self, view: PythonJournalView
     ) -> tuple[PythonExecutionCommand, tuple[PythonInputContent, ...]]:
-        self._require_arguments(view)
+        input_refs = self._input_refs(view)
         if (
             view.remaining_execution_seconds <= 0
             or self.clock() >= view.run_deadline_at
         ):
             raise TimeoutError("当前run执行额度或绝对截止已耗尽")
         scope = view.execution_scope
-        if view.arguments.code is not None:
-            content = view.arguments.code.encode("utf-8")
-            program_ref = self._publish(
-                scope,
-                view.request_digest,
-                "program.py",
-                content,
-                mime="text/x-python",
-            )
-        else:
-            program_ref = view.arguments.program_ref
-            if program_ref is None:
-                raise ValueError("Python请求缺少程序来源")
+        content = view.arguments.code.encode("utf-8")
+        program_ref = self._publish(
+            scope,
+            view.request_digest,
+            "program.py",
+            content,
+            mime="text/x-python",
+        )
         source = self._read(
             "program.py", program_ref, scope, max_bytes=PROGRAM_MAX_BYTES
         )
@@ -228,9 +223,9 @@ class PythonExecutionService:
         source.content.decode("utf-8", errors="strict")
         inputs: list[PythonInputContent] = []
         available = INPUT_MAX_BYTES
-        for binding in view.arguments.input_files:
+        for binding, ref in zip(view.arguments.input_files, input_refs, strict=True):
             item = self._read(
-                binding.name, binding.resource_ref, scope, max_bytes=available
+                binding.name, ref, scope, max_bytes=available
             )
             inputs.append(item)
             available -= item.size_bytes
@@ -290,22 +285,21 @@ class PythonExecutionService:
             != self.profile.limits.model_dump(exclude={"timeout_seconds"})
             or command.limits.timeout_seconds > self.profile.limits.timeout_seconds
             or tuple((item.name, item.resource_ref) for item in command.inputs)
-            != tuple((item.name, item.resource_ref) for item in view.arguments.input_files)
+            != tuple((item.name, ref) for item, ref in zip(
+                view.arguments.input_files, self._input_refs(view), strict=True
+            ))
         ):
             raise PermissionError("冻结Python Command与已接受请求或部署不同")
-        if view.arguments.code is not None:
-            expected = view.arguments.code.encode("utf-8")
-            if command.program.content_digest != hashlib.sha256(
-                expected
-            ).hexdigest() or command.program.size_bytes != len(expected):
-                raise ValueError("冻结Python程序与已接受inline原字节不同")
-        elif command.program.resource_ref != view.arguments.program_ref:
-            raise ValueError("冻结Python程序引用与已接受请求不同")
+        expected = view.arguments.code.encode("utf-8")
+        if command.program.content_digest != hashlib.sha256(
+            expected
+        ).hexdigest() or command.program.size_bytes != len(expected):
+            raise ValueError("冻结Python程序与已接受原字节不同")
 
     def _restore_inputs(
         self, command: PythonExecutionCommand, view: PythonJournalView
     ) -> tuple[PythonInputContent, ...]:
-        self._require_arguments(view)
+        self._input_refs(view)
         contents = tuple(
             self._read(
                 item.name,

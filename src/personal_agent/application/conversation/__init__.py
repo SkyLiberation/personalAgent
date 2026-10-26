@@ -30,9 +30,10 @@ from personal_agent.application.conversation.journal import (
     InMemoryInteractionJournal,
 )
 from personal_agent.application.conversation.errors import (
+    ConversationInputError,
     ConversationOperationConflict,
     ConversationOperationNotFound,
-    ConversationUnavailable,
+    ConversationFailure,
 )
 from personal_agent.application.conversation.service import ConversationService
 
@@ -41,6 +42,7 @@ __all__ = [
     "AgentDelegationProposal",
     "ContinueTurnProposal",
     "ConversationInteractionMode",
+    "ConversationInputError",
     "ConversationKnowledgeSaveCommand",
     "ConversationKnowledgeSaveOperation",
     "ConversationKnowledgeSaveReceipt",
@@ -51,7 +53,7 @@ __all__ = [
     "ConversationOperationNotFound",
     "ConversationService",
     "ConversationTurnView",
-    "ConversationUnavailable",
+    "ConversationFailure",
     "DecisionFeedback",
     "EffectiveCapabilities",
     "FinalMessage",

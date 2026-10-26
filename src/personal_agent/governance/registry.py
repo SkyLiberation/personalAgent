@@ -25,6 +25,7 @@ from personal_agent.governance.gateway import (
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.observability import PolicyDecisionRecorder
+from personal_agent.kernel.llm_schemas import model_tool_strict
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ class ToolExecutor:
                     name=tool.name,
                     description=tool.description or tool.name,
                     input_schema=tool_schema(tool),
+                    strict=model_tool_strict(tool),
                     read_only=not side_effects,
                     planning_safe=(
                         governance.risk_level == "low"

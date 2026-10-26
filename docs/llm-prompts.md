@@ -6,16 +6,15 @@ Prompt Registry 拥有可复用的版本化模板；业务事实、权限、执�
 
 | 模板组 | 消费者与输出责任 |
 | --- | --- |
-| `structured.system`、`structured.repair.system` | JSON Object Adapter 的 typed 输出校验与有界修复；调用方拥有 Schema 和引用范围，单一 Port 循环按请求预算纠正，普通默认一次、统一研究核验最多两次 |
+| `structured.system`、`structured.repair.system` | 非 Loop 显式 JSON Object 调用的 typed 校验与有界修复；Loop 内层改用请求级原生输出工具，保留各请求原修复次数 |
 | `conversation.interaction_intent` | `derive_interaction_intent` 的初次判断与既有背景来源修复共用正文／版本；模型区分当前轮任务与响应后后台要求，提取相位和显式条件，原消息仍拥有完整目标 |
-| `conversation.action` | Conversation 的原生动作相位；模型选择可见动作，Admission/Gateway 拥有准入与执行 |
-| `conversation.working_plan.description`、`conversation.prepare_final.description`、`conversation.experiment.prepare_final.description` | 原生控制动作；工作清单进度与最终提交分别表达，实验绑定选择适用的提交说明 |
-| `conversation.research_delivery_policy`、`conversation.finalization_progress.ordinary`、`conversation.finalization_progress.experiment` | 按实际绑定选择普通研究或实验报告提交指令，业务身份仍由 Runtime 拥有 |
+| `conversation.action` | Conversation 的原生消息／动作相位；可见正文或动作均由同一循环解释，Admission/Gateway 拥有准入与执行 |
+| `conversation.working_plan.description`、`conversation.answer.direct.delivery`、`conversation.research_entry.explicit` | 计划进度、普通assistant正文及带沟通／引用属性的原生提交；没有空准备或独立Final成文模板，业务身份仍由Runtime绑定 |
+| `structured.native_tool.repair.system` | 原生typed输出的有界修复，继续调用本次输出工具修正参数；JSON消费者仍使用原`structured.repair.system`，不混用承载 |
+| `conversation.research_delivery_policy` | claims 选证／写作的适用操作和同稿出口，不引入第二循环 |
 | `conversation.plan_context`、`conversation.requirements` | 从当前清单及冻结验收条件物化只读 Context |
 | `conversation.history_compaction` | HistoryCompactor 将闭合旧历史生成非权威工作摘要；原 Journal／Artifact 保留事实与原文，按 ADR 0038 提前接入，真实摘要消费尚未通过 |
 | `conversation.time_budget_snapshot` | 有既有运行截止时，为 action／ordinary final 解释输入构造时的秒数快照；无截止不注入，不改变硬停止或研究 writer |
-| `conversation.final` | 普通最终提交；完整稿或基于当前基稿的修订交给核验及 Completion |
-| `conversation.research.evidence_selection`、`conversation.research.writer` | 同一研究模型选择实际原文、生成和修订 claims 与最终回答；Runtime 保护版本、坐标与编辑范围 |
 | `conversation.research.support` | 一次检查当前完整 claims、实际最终回答与原用户目标；八类反馈交给原研究模型，空报告绑定当前输入 |
 | `interaction_verification.*` | 普通整稿核验；实际主体、条件、强度和否定范围与已提交原文对照 |
 | `web_search.description`、`web_read.description` | 工具的发现与正文读取契约；选择与回答来自当前用户任务 |
@@ -31,7 +30,7 @@ Conversation 的主要消费者位于 [service.py](../src/personal_agent/applica
 
 普通外部研究选证读取原会话、冻结验收项、当前研究及实际返回资料，选择下一步取证或写作；初稿 Schema 不允许声明已有 claim 回答。研究 writer 负责 claims 与最终回答，已有段落用当前 aN 引用由 Runtime 恢复，改写段落才生成新文字。准入原子检查版本和引用，claims 修改未同时提供新回答时清空旧回答。
 
-部署绑定的检索实验首轮由 `conversation.research_entry.explicit` 说明提交与文件检查，使用普通 FinalSubmission 成文，暂不进入下述 claims 及语义核验链；引用绑定保留。范围见 [ADR 0037](adr/0037-experiment-submission-first-delivery.md)。
+部署绑定的检索实验由 `conversation.research_entry.explicit` 说明原生提交与文件检查，不进入下述 claims 及语义核验链；引用绑定保留。领域范围见 [ADR 0037](adr/0037-experiment-submission-first-delivery.md)，模型协议按 [ADR 0045](adr/0045-native-intent-loop-and-recorded-model-output.md)。
 
 统一核验实际完整版本的来源支持、回答与 claims 的一致性，以及仅基于最终回答的目标满足。缺失回答由 Runtime 拦截；有发现则原研究模型修订或补证，无发现则 Completion 检查当前版本和确切正文后交付。旧 Coverage、synthesis、研究 Final 及反向重开均已删除；普通回答保持原核验路径。当前职责由[核验专题](topics/verification-and-completion.md)拥有，规格和验证边界见[统一 Spec](optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。
 

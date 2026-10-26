@@ -46,8 +46,8 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
-6. 普通外部研究提交同版本 claims 与最终回答，由统一核验检查来源、两者一致性及目标满足；普通交付生成 typed `FinalSubmission`。部署绑定的检索实验首轮也使用 FinalSubmission，实际 SubmittedFinal 持久后检查引用与实验文件，再发布同稿产物；暂不接入 claim／语义 verifier，契约见 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)。
-7. 运行系统按各自路径完成语义核验和 Completion，仅交付确切通过的 `FinalMessage` 正文。
+6. 回答模块按部署贡献原生提交／修订或 claim 选证／写作操作。模型直接携带完整候选，SubmittedFinal 持久后执行适用核验及领域文件检查，同稿交付；不存在空准备及第二次普通 JSON 成文。模型传输见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查仍由 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)拥有。
+7. 运行系统按装配契约完成适用核验和 Completion，交付确切 `FinalMessage` 正文。用户授权的无语义核验诊断不产生通过回执，也不计完整产品 E2E；边界见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
 
 当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
 
@@ -55,11 +55,11 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 
 ### 3.1 当前主循环的职责混合
 
-上述主链是责任说明，当前实现尚未把这些责任完整隔离。`ConversationService.respond()` 在同一循环内直接处理研究选证、编辑、统一核验及最终交付；`_decide()` 同时构造普通和研究的 Prompt、Schema 与输入。最终交付又按当前是否存在 `ResearchClaims` 分别检查研究批准和普通核验。研究模块已有局部规则，但公共推进仍了解其编辑协议。
+上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。2026-10-24 原生意图切片已替换源码，真实生成和完整 E2E 尚待验收，不把静态检查视为架构收益或产品通过。
 
-当前进入研究还受 `finalization_pending`、冻结标准和已成功 Web 动作影响，不是一个独立的用户产品入口。周期 `ResearchService` 拥有订阅、调度与投递事实，与请求内研究有不同生命周期。不能把两者合称为同一后台研究循环。
+claims 操作的适用性取决于 writer 装配、冻结标准、当前稿和已成功 Web 来源，不再依赖 finalization_pending。来源出现只使非空选证操作可用，不自动开始写作；周期 `ResearchService` 仍拥有独立订阅、调度和投递生命周期，不能与请求内研究合称同一后台循环。
 
-普通最终答案只有 `ReviewCriteria.requires_review` 成立才调用整稿核验；研究交付消费同版本统一报告。普通核验器固定追加通用来源标准，现有计算样本已出现无执行来源而拒绝正确答案的反馈；同轨迹根因仍待完整请求审计，见[现状与候选](../optimization/to_verify/conversation-loop-boundaries.md)。候选以研究子流程封装内部过程，各路径共享运行治理并按契约验收，允许模块内部循环；本轮未替换生产链。
+默认 required 核验装配下，普通最终答案只有 `ReviewCriteria.requires_review` 成立才调用整稿核验；研究交付消费同版本统一报告。普通核验器固定追加通用来源标准，现有计算样本已经出现范围和支持判断缺口，语义修复仍暂放，见[现状与候选](../optimization/to_verify/conversation-loop-boundaries.md)。完整研究子流程封装仍是候选；当前只替换回答提交模块，不新增第二套模型循环。
 
 ## 4. 后台持续运行边界
 
@@ -97,6 +97,8 @@ MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝�
 模型调用的正式 Port 是 `StructuredModelClient`，由组合根注入，覆盖结构化、原生工具调用和文本请求。结构化工厂根据 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；两者都在调用边界携带 Schema，并将结果物化为同一 Pydantic 契约。
 
 模型适配的阅读入口按职责组织：`infra/structured_model.py` 拥有公开工厂、SDK 调用、超时、协议修复、重试与观测装配；`infra/model_response.py` 集中响应 envelope、流内容、原生动作调用和用量归一化。现有 Adapter 与计量包装器直接消费这些解析函数，业务准入仍由 Application 拥有。解析规则的局部修改从新模块及其 typed 契约进入，调用与恢复问题从原适配入口进入。
+
+Conversation主请求使用auto：工具调用优先，无调用的完整合法assistant正文由AnswerResult形成同一FinalMessage候选，显式提交／修订仍承载沟通属性、引用和已有稿编辑。候选继续原SubmittedFinal、核验与Completion，不增完成状态；内层typed请求仍以required输出工具返回，并沿同一承载修复。正文、Verifier原稿及回执digest使用同一原字符串。当前修订的真实验收状态由[统一Loop Spec](../optimization/to_verify/conversation-loop-schema.md#11-第17轮后的终止协议复审与修订准入)拥有，不能以源码接入宣称完整36轮已通过。
 
 模型工厂以显式包装器组合单次调用准入、观测、用量和重试，实际顺序、SDK 流式 transport 与正式 SSE 的边界见[横切机制](cross-cutting.md#2-模型调用的实际组合)。模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索绑定与正文读取配置由[工具专题](../topics/tools.md)和[环境配置](../env.md)拥有。配置只证明部署选择，不证明服务健康或产品结果。
 

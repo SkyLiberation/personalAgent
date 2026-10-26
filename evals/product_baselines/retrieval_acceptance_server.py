@@ -37,6 +37,7 @@ def install_acceptance_observer(directory: Path) -> None:
     import httpx
 
     from personal_agent.infra.structured_model import OpenAIModelClient
+    from personal_agent.infra.model_transport import model_transport_snapshot, provider_exception_chain
 
     directory.mkdir(parents=True, exist_ok=False)
     original_create = OpenAIModelClient._create_chat_completion
@@ -61,6 +62,7 @@ def install_acceptance_observer(directory: Path) -> None:
             "response_received": False,
         }
         started = monotonic()
+        transport_source = request
         try:
             body = request.content
             # JSON bytes are saved as sent; never include request headers.
@@ -72,17 +74,24 @@ def install_acceptance_observer(directory: Path) -> None:
             record["body_observation_error"] = type(error).__name__
         try:
             response = original_send(http_client, request, *args, **kwargs)
+            transport_source = response.request
             record.update(response_received=True, status_code=response.status_code)
             return response
         except BaseException as error:
+            transport_source = error
             record["exception_type"] = type(error).__name__
+            record["exception_chain"] = [frame.model_dump(exclude_none=True) for frame in
+                                         provider_exception_chain(error, request.headers.get("authorization", "").removeprefix("Bearer "))]
             raise
         finally:
+            transport = model_transport_snapshot(transport_source)
+            if transport is not None:
+                record["transport"] = transport.model_dump(exclude_none=True)
             record["wall_seconds"] = monotonic() - started
             (directory / f"{send_id}.http.response.json").write_bytes(_json_bytes(record))
 
     @wraps(original_create)
-    def observed_create(self, client, operation, kwargs):
+    def observed_create(self, client, operation, kwargs, *, before_send=None):
         candidate_id = uuid4().hex
         http_client = client._client
         with lock:
@@ -101,11 +110,14 @@ def install_acceptance_observer(directory: Path) -> None:
         except (ValueError, TypeError) as error:
             record["body_observation_error"] = type(error).__name__
         try:
-            response = original_create(self, client, operation, kwargs)
-            record.update(completed=True, response=response.model_dump(mode="json"))
-            return response
+            completion = original_create(self, client, operation, kwargs, before_send=before_send)
+            record.update(completed=True, response=completion.payload.model_dump(mode="json"))
+            return completion
         except BaseException as error:
             record["exception_type"] = type(error).__name__
+            diagnostics = getattr(error, "diagnostics", None)
+            if diagnostics is not None:
+                record["provider_diagnostics"] = diagnostics.model_dump(exclude_none=True)
             if hasattr(error, "reason_code"):
                 record["reason_code"] = error.reason_code
             raise

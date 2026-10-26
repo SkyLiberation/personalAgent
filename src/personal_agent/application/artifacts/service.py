@@ -39,6 +39,7 @@ from .models import (
     CreateArtifact,
     GeneratedArtifactPublication,
     MachineArtifactPublication,
+    resolve_artifact_ref,
     validate_display_filename,
 )
 from .storage import exclusive_artifact_lock, install_immutable
@@ -368,12 +369,12 @@ class ArtifactService:
                 request.content,
             )
         else:
-            if request.base_ref not in allowed_resource_refs:
-                raise PermissionError(
-                    "patch base is not in the current task readable set"
-                )
+            base_ref = resolve_artifact_ref(
+                request.base_resource_id, allowed_resource_refs,
+                principal=execution_scope.principal,
+            )
             base = self.read_snapshot(
-                request.base_ref,
+                base_ref,
                 principal=execution_scope.principal,
                 owner=execution_scope.principal,
             )
@@ -394,7 +395,7 @@ class ArtifactService:
                     "patch base is not a supported program or configuration"
                 )
             content = TextCoordinates(base.content).apply_edits(request.edits)
-            source_refs = (request.base_ref,)
+            source_refs = (base_ref,)
             edits_applied = len(request.edits)
         binding = ArtifactProducerBinding(
             producer_key=f"draft:{execution_scope.execution_id}:{tool_call_id}",
@@ -713,6 +714,7 @@ class ArtifactService:
                     }
                 ],
                 max_tokens=900,
+                extra_body=dict(self.settings.openai.extra_body),
             )
             content = (response.choices[0].message.content or "").strip()
             if content:

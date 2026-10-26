@@ -54,10 +54,19 @@ def strict_tool_definition(tool: BaseTool) -> dict[str, Any]:
         "function": {
             "name": tool.name,
             "description": tool.description or "",
-            "parameters": strictify_schema(_model_visible_tool_schema(tool)),
-            "strict": True,
+            "parameters": (strictify_schema(_model_visible_tool_schema(tool))
+                           if model_tool_strict(tool) else _model_visible_tool_schema(tool)),
+            "strict": model_tool_strict(tool),
         },
     }
+
+
+def model_tool_strict(tool: BaseTool) -> bool:
+    """Read the tool's declared provider strict choice without changing its schema."""
+    strict = (tool.extras or {}).get("strict", True)
+    if not isinstance(strict, bool):
+        raise ValueError(f"Tool {tool.name!r} strict must be a boolean")
+    return strict
 
 
 def model_tool_wire_name(canonical_name: str) -> str:

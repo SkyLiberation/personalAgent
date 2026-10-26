@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator, model_serializer
-from personal_agent.capabilities.contracts.model import ModelActionInvocation
+from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
 from personal_agent.capabilities.contracts.research import (
     ResearchClaims,
     ResearchReview,
@@ -19,6 +19,7 @@ from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteOperationView,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.application.conversation.observation_bounds import ReadWindowRequest
 from personal_agent.application.artifacts.models import (
@@ -37,7 +38,7 @@ from personal_agent.application.python_execution.models import (
     PythonExecutionReceipt,
 )
 from .tool_requests import WriteArtifactArgs
-from .history_models import HistoryCompactionCheckpoint
+from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
 
 
 ConversationInteractionMode = Literal["default", "auto"]
@@ -58,7 +59,7 @@ class ConversationMessage(_StrictModel):
 
 
 class WorkingPlanStepProposal(_StrictModel):
-    step_id: str = Field(min_length=1, max_length=100)
+    step_id: str | None = Field(default=None, min_length=1, max_length=100)
     description: str = Field(
         min_length=1,
         max_length=1_000,
@@ -250,8 +251,29 @@ class FinalRevision(_StrictModel):
         return self
 
 
-class FinalSubmission(_StrictModel):
-    submission: FinalMessage | FinalRevision = Field(discriminator="kind")
+class SubmitFinalArguments(_StrictModel):
+    message: str = Field(min_length=1)
+    disposition: Literal["answer", "clarification_required", "limitation", "failed"]
+    references: tuple[str, ...] = ()
+
+
+class FinalSegmentEditArguments(_StrictModel):
+    segment: int = Field(ge=1)
+    operation: Literal["add_references", "replace_references", "replace_segment"]
+    references: tuple[str, ...] = ()
+    text: str | None = Field(default=None, min_length=1)
+
+
+class ReviseFinalArguments(_StrictModel):
+    base_resource_id: str = Field(min_length=1)
+    edits: tuple[FinalSegmentEditArguments, ...] = Field(min_length=1)
+
+
+class AnswerResultInvocation(_StrictModel):
+    """A bound native operation; its module owns the business parameter decode."""
+    call_id: str = Field(min_length=1)
+    operation: str = Field(min_length=1)
+    arguments: dict[str, Any]
 
 
 class SubmittedFinal(_StrictModel):
@@ -276,7 +298,7 @@ class ContinueTurnProposal(_StrictModel):
     working_plan: WorkingPlanProposal | None = None
     wait_for_user: bool = False
     message: str = Field(default="", max_length=4_000)
-    finalization_requested: bool = False
+    working_plan_call_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _action_ids_are_unique(self) -> "ContinueTurnProposal":
@@ -290,6 +312,7 @@ class EffectiveToolCapability(_StrictModel):
     name: str
     description: str
     input_schema: dict[str, Any]
+    strict: bool = True
     read_only: bool
     planning_safe: bool
     safely_retryable: bool
@@ -585,6 +608,8 @@ class TurnContextComposition(_StrictModel):
     system_prompt_other_chars: int = Field(ge=0)
     conversation_messages_chars: int = Field(ge=0)
     typed_inputs_chars: int = Field(ge=0)
+    native_history_chars: int = Field(default=0, ge=0)
+    prompt_version: str = ""
     input_tokens: int | None = None
 
     @property
@@ -595,6 +620,7 @@ class TurnContextComposition(_StrictModel):
             + self.system_prompt_other_chars
             + self.conversation_messages_chars
             + self.typed_inputs_chars
+            + self.native_history_chars
         )
 
 
@@ -616,7 +642,190 @@ class ResearchExperimentDelivery(_StrictModel):
     report_ref: ResourceRef | None = None
 
 
+class ModelCallDisposition(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    call_id: str = Field(min_length=1)
+    operation: Literal["working_plan", "answer_result", "knowledge_save", "knowledge_delete"]
+    status: Literal["accepted", "deferred", "prepared"]
+    plan_id: str | None = None
+    plan_revision: int | None = Field(default=None, ge=1)
+    operation_ref: str | None = None
+
+    @model_validator(mode="after")
+    def _bound_control_fact(self):
+        if (self.plan_id is None) != (self.plan_revision is None):
+            raise ValueError("plan disposition requires both identity and revision")
+        if self.operation == "working_plan" and self.status == "accepted" and self.plan_id is None:
+            raise ValueError("accepted plan disposition requires its canonical version")
+        if self.status == "prepared":
+            if self.operation not in ("knowledge_save", "knowledge_delete") or self.operation_ref is None:
+                raise ValueError("prepared operation requires its canonical operation reference")
+        elif self.operation_ref is not None:
+            raise ValueError("operation reference is only valid for a prepared business operation")
+        return self
+
+
+class ResearchInformationNeed(_StrictModel):
+    criterion_id: str = Field(pattern=r"^r[1-9][0-9]*$")
+    question: str = Field(min_length=1)
+    status: Literal["answered", "ready", "needs_evidence", "delivery_check"]
+    claim_ids: tuple[str, ...] = ()
+    references: tuple[ConversationEvidenceReference, ...] = ()
+    fit_reason: str = ""
+    gap: str = ""
+
+    @model_validator(mode="after")
+    def account_for_answer_or_gap(self):
+        if self.status == "answered" and not self.claim_ids:
+            raise ValueError(
+                "answered research requirement must identify current claims"
+            )
+        if self.status == "needs_evidence" and not self.gap.strip():
+            raise ValueError(
+                "research evidence gap must explain the necessary missing information"
+            )
+        if len(set(self.claim_ids)) != len(self.claim_ids):
+            raise ValueError("research requirement must not repeat claim identities")
+        return self
+
+
+class ResearchEvidenceSelection(_StrictModel):
+    next_step: Literal["write", "acquire", "limit"]
+    needs: tuple[ResearchInformationNeed, ...] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def write_requires_selected_evidence(self):
+        if self.next_step == "write" and not any(
+            need.references for need in self.needs
+        ):
+            raise ValueError(
+                "writing research claims requires selected returned evidence"
+            )
+        return self
+
+    @property
+    def references(self) -> tuple[ConversationEvidenceReference, ...]:
+        return tuple(reference for need in self.needs for reference in need.references)
+
+
+class InitialResearchInformationNeed(ResearchInformationNeed):
+    """No current claim exists to identify as an answered research requirement."""
+
+    status: Literal["ready", "needs_evidence", "delivery_check"]
+    claim_ids: tuple[str, ...] = Field(default=(), max_length=0)
+
+
+class InitialResearchEvidenceSelection(ResearchEvidenceSelection):
+    needs: tuple[InitialResearchInformationNeed, ...] = Field(min_length=1)
+
+
+class StoredModelRequest(_StrictModel):
+    """Serializable original Port request; code type is restored only on schema match."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    operation: str
+    version: str
+    messages: tuple[dict[str, Any], ...]
+    output_type_name: str | None
+    output_schema: dict[str, Any] | None
+    context_projection_ref: str
+    consumer_key: str | None = None
+    sensitivity: Literal["public", "internal", "confidential", "restricted"]
+    temperature: int | float
+    max_tokens: int | None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None
+    kind: Literal["structured", "tool_calling", "text"]
+    action_definitions: tuple[ModelActionDefinition, ...]
+    action_choice: Literal["none", "auto", "required"] | None
+    response_format: dict[str, Any] | None
+    output_transport: ModelOutputTransport | None
+    extra_body: dict[str, Any] | None
+    metadata: dict[str, Any]
+    max_output_repairs: int
+    model_history: tuple[ModelToolExchange, ...]
+    request_digest: str
+
+    @classmethod
+    def from_request(cls, request):
+        from dataclasses import fields
+        values = {field.name: getattr(request, field.name) for field in fields(request)
+                  if field.name != "output_type"}
+        return cls(**values,
+            output_type_name=f"{request.output_type.__module__}.{request.output_type.__qualname__}" if request.kind == "structured" else None,
+            output_schema=request.output_type.model_json_schema() if request.kind == "structured" else None,
+            request_digest=model_request_digest(request))
+
+    def restore(self, output_type):
+        if self.kind == "structured" and (self.output_type_name != f"{output_type.__module__}.{output_type.__qualname__}"
+                or self.output_schema != output_type.model_json_schema()):
+            raise ValueError("未完成模型调用的原输出契约已变化，不能嫁接新请求。")
+        values = {name: getattr(self, name) for name in StructuredModelRequest.__dataclass_fields__
+                  if name != "output_type"}
+        values["messages"] = list(self.messages)
+        request = StructuredModelRequest(**values, output_type=output_type)
+        if model_request_digest(request) != self.request_digest:
+            raise ValueError("已存模型调用原请求摘要不匹配。")
+        return request
+
+
+class ModelRequestReference(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    invocation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    operation: str
+    request_digest: ContentDigest
+    content_digest: ContentDigest
+    context_projection_ref: str
+    consumer_key: str | None = None
+    output_type_name: str | None
+    output_schema_digest: ContentDigest | None
+    max_output_repairs: int = Field(ge=0)
+    kind: Literal["structured", "tool_calling", "text"]
+
+
+class ModelResponseReference(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    invocation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    attempt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    sequence: int = Field(ge=0)
+    content_digest: ContentDigest
+
+
+class ModelDecisionRecord(_StrictModel):
+    """Journal-owned invocation and actual responses, including invalid output."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    invocation_id: str = Field(min_length=1)
+    operation: str = Field(min_length=1)
+    request: ModelRequestReference
+    turn_index: int | None = Field(default=None, ge=1)
+    input_start: int = Field(ge=0)
+    response_refs: tuple[ModelResponseReference, ...] = ()
+    assistant: ModelAssistantMessage | None = None
+    protocol_exchanges: tuple[ModelToolExchange, ...] = ()
+    dispositions: tuple[ModelCallDisposition, ...] = ()
+    blocked_by: HistoryItemKey | None = None
+    status: Literal["pending", "decoded", "invalid", "failed"] = "pending"
+    diagnostics: str | None = None
+    consumed: bool = False
+    research_selection: ResearchEvidenceSelection | None = None
+    research_claim_ref: ResourceRef | None = None
+    research_evidence_digest: ContentDigest | None = None
+    research_criteria_digest: ContentDigest | None = None
+
+    @model_validator(mode="after")
+    def _original_references_are_bound(self):
+        if self.request.invocation_id != self.invocation_id or self.request.operation != self.operation:
+            raise ValueError("model request reference is bound to another invocation")
+        if len({ref.attempt_id for ref in self.response_refs}) != len(self.response_refs):
+            raise ValueError("model response references repeat an attempt identity")
+        if any(ref.invocation_id != self.invocation_id or ref.sequence != index
+               for index, ref in enumerate(self.response_refs)):
+            raise ValueError("model response references are not in committed sequence")
+        return self
+
+
 class InteractionTrace(_StrictModel):
+    answer_result_binding: AnswerResultConfig | None = None
     history_compaction: HistoryCompactionCheckpoint | None = None
     revision: int = Field(default=1, ge=1)
     interaction_run_ref: str
@@ -628,6 +837,7 @@ class InteractionTrace(_StrictModel):
     experiment_records: tuple[ExperimentRecord, ...] = ()
     research_experiment_delivery: ResearchExperimentDelivery | None = None
     deployment_digest: ContentDigest | None = None
+    python_authorization_digest: ContentDigest | None = None
     run_deadline_at: AwareDatetime | None = None
     max_execution_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     inputs: tuple[InteractionInput, ...] = ()
@@ -635,11 +845,31 @@ class InteractionTrace(_StrictModel):
     execution_order: tuple[str, ...] = ()
     concurrent_batches: tuple[tuple[str, ...], ...] = ()
     context_composition: tuple[TurnContextComposition, ...] = ()
+    model_decisions: tuple[ModelDecisionRecord, ...] = ()
     review_criteria: ReviewCriteria | None = None
     final_message: FinalMessage | None = None
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
     knowledge_delete_command_ref: str | None = None
     working_plan: ConversationWorkingPlan | None = None
+
+    @property
+    def python_profile_digest(self) -> ContentDigest | None:
+        return self.python_authorization_digest or self.deployment_digest
+
+    @model_validator(mode="after")
+    def execution_authorization_is_bound(self) -> InteractionTrace:
+        turns = [record.turn_index for record in self.model_decisions if record.turn_index is not None]
+        if turns != sorted(set(turns)) or any(
+            record.input_start > len(self.inputs) or (record.turn_index is not None and record.turn_index > self.usage.model_turns + 1)
+            for record in self.model_decisions
+        ):
+            raise ValueError("native decision history is out of order or outside committed run facts")
+        if self.python_authorization_digest is not None:
+            if self.deployment_digest is not None:
+                raise ValueError("同一运行不能同时绑定通用分析和检索部署")
+            if self.run_deadline_at is None or self.max_execution_seconds is None:
+                raise ValueError("Python授权必须绑定截止及执行总额度")
+        return self
 
 
 class ConversationTurnView(_StrictModel):

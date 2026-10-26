@@ -34,7 +34,7 @@ from personal_agent.infra.structured_model import build_structured_model_client
 from personal_agent.kernel.config import Settings
 
 _CASE_ID = "WORKING-PLAN-TOOL-SCHEMA-CONFORMANCE-001"
-_REVISION = "working-plan-tool-schema-conformance-v2"
+_REVISION = "working-plan-tool-schema-conformance-v3"
 _OPERATION = "working_plan_tool_schema_conformance"
 _MAX_TOKENS = 600
 _MESSAGES = [
@@ -42,7 +42,7 @@ _MESSAGES = [
         "role": "system",
         "content": (
             "只调用唯一可用动作一次，提出简洁的两项工作计划。"
-            "严格按当前 Schema 将控制字段放在 arguments 对象内，不添加声明外字段。"
+            "严格按当前 Schema 直接提交控制字段，不添加声明外字段。"
         ),
     },
     {
@@ -83,7 +83,7 @@ def _schema_digest(definition: ModelActionDefinition) -> str:
 def _request(definition: ModelActionDefinition) -> StructuredModelRequest[_UnusedOutput]:
     return StructuredModelRequest(
         operation=_OPERATION,
-        version="v2-explicit-object-zh",
+        version="v3-direct-parameters-zh",
         messages=_MESSAGES,
         output_type=_UnusedOutput,
         context_projection_ref=sealed_context_projection_ref(

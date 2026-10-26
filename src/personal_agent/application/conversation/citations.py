@@ -75,7 +75,7 @@ def _separate_executed_query(
             {key: value for key, value in item.payload.items() if key != "ok"}
         )
         query = SearchActionOutputArguments(
-            resource_ref=output.resource_ref,
+            resource_id=output.resource_id,
             keyword=output.keyword,
             regex=output.regex,
             result_offset=output.result_offset,
@@ -334,6 +334,28 @@ def selected_citation_ids(
         for reference in references
         for location in _resolve_citation(reference.evidence_id, catalog)
     )
+
+
+def bound_citation_ids(
+    references: tuple[ConversationEvidenceReference, ...],
+    inputs: Iterable[InteractionInput],
+) -> frozenset[str]:
+    """Pin real evidence in Context while keeping rejected proposals untouched.
+
+    This is a history projection, never citation admission. The strict binder
+    still rejects the full answer; an invalid proposal cannot prevent its next
+    repair request from being materialized.
+    """
+    catalog = {location.evidence_id: location
+               for locations in _catalog(inputs).values() for location in locations}
+    bound = set()
+    for reference in references:
+        try:
+            locations = _resolve_citation(reference.evidence_id, catalog)
+        except CitationBindingError:
+            continue
+        bound.update(location.evidence_id for location in locations)
+    return frozenset(bound)
 
 
 def validate_citation_reference(

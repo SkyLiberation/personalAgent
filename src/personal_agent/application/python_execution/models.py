@@ -85,8 +85,9 @@ class PythonInputBinding(PythonModel):
     name: str = Field(
         description=get_prompt("python_execution.parameter.input_name").template
     )
-    resource_ref: ResourceRef = Field(
-        description=get_prompt("python_execution.parameter.input_resource_ref").template
+    resource_id: str = Field(
+        min_length=1,
+        description=get_prompt("python_execution.parameter.input_resource_id").template
     )
 
     @field_validator("name")
@@ -96,28 +97,24 @@ class PythonInputBinding(PythonModel):
 
 
 class ExecutePythonArgs(PythonModel):
-    code: str | None = Field(
+    code: str = Field(
         description=get_prompt("python_execution.parameter.code").template
     )
-    program_ref: ResourceRef | None = Field(
-        description=get_prompt("python_execution.parameter.program_ref").template
-    )
     input_files: tuple[PythonInputBinding, ...] = Field(
+        default=(),
         max_length=INPUT_MAX_COUNT,
         description=get_prompt("python_execution.parameter.input_files").template,
     )
 
     @field_validator("code")
     @classmethod
-    def bounded_code(cls, code: str | None) -> str | None:
-        if code is not None and len(code.encode("utf-8")) > PROGRAM_MAX_BYTES:
+    def bounded_code(cls, code: str) -> str:
+        if len(code.encode("utf-8")) > PROGRAM_MAX_BYTES:
             raise ValueError("Python程序超过128 KiB")
         return code
 
     @model_validator(mode="after")
-    def valid_source_and_names(self) -> ExecutePythonArgs:
-        if (self.code is None) == (self.program_ref is None):
-            raise ValueError("code与program_ref必须恰好一项不是null")
+    def valid_names(self) -> ExecutePythonArgs:
         names = [item.name.casefold() for item in self.input_files]
         if len(names) != len(set(names)):
             raise ValueError("输入文件名不能重复或仅大小写不同")
@@ -141,6 +138,31 @@ class PythonExecutionProfile(PythonModel):
     deployment_digest: Digest
     image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     limits: PythonExecutionLimits
+
+
+class PythonExecutionAuthorization(PythonModel):
+    """Operator-owned permit for one foreground analysis conversation."""
+
+    authorized_principal: AuthenticatedPrincipal
+    conversation_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    expires_at: AwareDatetime
+    turn_timeout_seconds: PositiveSeconds = 3600
+    max_total_tokens: PositiveInteger
+    max_execution_seconds: PositiveSeconds
+    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    limits: PythonExecutionLimits = Field(default_factory=PythonExecutionLimits)
+
+    @property
+    def authorization_digest(self) -> Digest:
+        return canonical_digest(self.model_dump(mode="json"))
+
+    def execution_profile(self) -> PythonExecutionProfile:
+        return PythonExecutionProfile(
+            authorized_principal=self.authorized_principal,
+            deployment_digest=self.authorization_digest,
+            image_id=self.image_id,
+            limits=self.limits,
+        )
 
 
 class PythonInputIdentity(PythonModel):

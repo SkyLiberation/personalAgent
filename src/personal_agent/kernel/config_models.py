@@ -97,6 +97,7 @@ class OpenAIConfig(_StrictBase):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     capacity: ModelCapacityConfig | None = None
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
 class StructuredConfig(_StrictBase):
@@ -301,6 +302,7 @@ class LangExtractConfig(_StrictBase):
     api_key: str | None = None
     base_url: str = "https://api.xiaomimimo.com/v1"
     model_id: str = DEFAULT_GENERATIVE_MODEL
+    extra_body: dict[str, Any] = Field(default_factory=dict)
     max_char_buffer: int = 6000
     extraction_passes: int = 1
     max_workers: int = 4

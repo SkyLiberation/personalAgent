@@ -106,7 +106,7 @@ class InputProbe:
             self.blocked_processes.append("subprocess.Popen")
             raise InputProbeStopped("unexpected_subprocess")
 
-        def capture(adapter, client, operation, kwargs):
+        def capture(adapter, client, operation, kwargs, *, before_send=None):
             if self.sdk is not None:
                 raise InputProbeStopped("multiple_sdk_requests")
             payload = redact_payload(kwargs)

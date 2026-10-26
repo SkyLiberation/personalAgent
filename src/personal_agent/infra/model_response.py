@@ -15,10 +15,35 @@ from pydantic import ValidationError
 
 from personal_agent.capabilities.contracts.model import (
     ModelActionInvocation,
+    ModelResponseRecord,
     StructuredModelRequest,
     StructuredOutputFailure,
 )
 from personal_agent.kernel.structured_parse import load_json_lenient
+
+
+def _restore_provider_response(record: ModelResponseRecord) -> Any:
+    """Restore attribute access over the original JSON without SDK validation."""
+    payload = record.raw_response
+    if not isinstance(payload, dict):
+        return payload
+    envelope = dict(payload)
+    choices = envelope.get("choices")
+    if isinstance(choices, list):
+        restored = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                restored.append(choice)
+                continue
+            fields = dict(choice)
+            message = fields.get("message")
+            if isinstance(message, dict):
+                fields["message"] = SimpleNamespace(**message)
+            restored.append(SimpleNamespace(**fields))
+        envelope["choices"] = restored
+    if isinstance(envelope.get("usage"), dict):
+        envelope["usage"] = SimpleNamespace(**envelope["usage"])
+    return SimpleNamespace(**envelope)
 
 
 class _EmptyNestedCompletionError(RuntimeError):
@@ -190,8 +215,18 @@ def _extract_action_invocations(
     request: StructuredModelRequest[Any],
 ) -> tuple[ModelActionInvocation, ...]:
     """Normalize call structure; the Application owns declared-action admission."""
-    tool_calls = getattr(message, "tool_calls", None) or []
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls is None:
+        tool_calls = []
+    if not isinstance(tool_calls, list):
+        raise StructuredOutputFailure(
+            request.operation,
+            "provider tool_calls must be an array",
+            reason_code="provider_action_type_unsupported",
+        )
     if not tool_calls:
+        if request.action_choice == "auto":
+            return ()
         raise StructuredOutputFailure(
             request.operation,
             "provider returned no action call for a tool-calling request",

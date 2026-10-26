@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -9,10 +10,11 @@ from personal_agent.application.conversation import (
     ConversationMessage,
     ConversationKnowledgeSaveOperation,
     ConversationInteractionMode,
+    ConversationFailure,
+    ConversationInputError,
     ConversationOperationConflict,
     ConversationOperationNotFound,
     ConversationTurnView,
-    ConversationUnavailable,
     ConversationWorkingPlan,
 )
 from personal_agent.application.conversation.models import KnowledgeDeleteConfirmation
@@ -25,6 +27,13 @@ from personal_agent.adapters.web.routes.artifacts import (
     ArtifactResourceView,
     artifact_resource_view,
 )
+from personal_agent.adapters.web.routes.conversation_errors import (
+    conversation_failure_detail,
+    conversation_failure_status_code,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationTurnRequest(BaseModel):
@@ -134,14 +143,22 @@ def register_conversation_routes(
             return conversation_turn_response(
                 view, principal=principal, settings=settings
             )
-        except ValueError as exc:
+        except ConversationInputError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ConversationOperationConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (ConversationOperationNotFound, PermissionError):
             raise HTTPException(status_code=404, detail="Resource not found.") from None
-        except ConversationUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ConversationFailure as exc:
+            raise HTTPException(
+                status_code=conversation_failure_status_code(exc),
+                detail=conversation_failure_detail(exc),
+            ) from exc
+        except Exception as exc:
+            logger.error("Conversation turn failed error_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=500, detail=conversation_failure_detail(exc)
+            ) from exc
 
     @app.get("/api/conversation/runs/{interaction_run_ref}")
     def conversation_trace(
@@ -182,7 +199,15 @@ def register_conversation_routes(
             raise HTTPException(status_code=404, detail="Resource not found.") from None
         except ConversationOperationConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except ValueError as exc:
+        except ConversationInputError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except ConversationUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ConversationFailure as exc:
+            raise HTTPException(
+                status_code=conversation_failure_status_code(exc),
+                detail=conversation_failure_detail(exc),
+            ) from exc
+        except Exception as exc:
+            logger.error("Knowledge save decision failed error_type=%s", type(exc).__name__)
+            raise HTTPException(
+                status_code=500, detail=conversation_failure_detail(exc)
+            ) from exc

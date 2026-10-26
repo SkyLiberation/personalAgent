@@ -334,6 +334,12 @@ class AgentRuntime:
         conversation_journal = FileInteractionJournal(self.settings.data_dir / "interaction_runs")
         experiment_deployment = None
         experiment_completion = None
+        python_profile = None
+        python_authorization = None
+        python_endpoint = None
+        if (self.settings.retrieval_experiment_config_path is not None
+                and self.settings.python_execution_config_path is not None):
+            raise ValueError("Python通用分析许可与检索部署不能同时配置")
         if self.settings.retrieval_experiment_config_path is not None:
             from personal_agent.infra.retrieval_experiment.deployment import load_retrieval_deployment
             from personal_agent.infra.retrieval_experiment.backend import DockerExperimentBackend
@@ -349,9 +355,6 @@ class AgentRuntime:
             from personal_agent.application.python_execution.models import (
                 PythonExecutionLimits, PythonExecutionProfile,
             )
-            from personal_agent.application.python_execution.service import PythonExecutionService
-            from personal_agent.infra.python_execution.backend import DockerPythonExecutionBackend
-            from personal_agent.tools.execute_python import build_execute_python_tool
             candidate_limits = experiment_deployment.limits
             python_profile = PythonExecutionProfile(
                 authorized_principal=experiment_deployment.authorized_principal,
@@ -367,16 +370,7 @@ class AgentRuntime:
                     stderr_bytes=candidate_limits.stderr_bytes,
                 ),
             )
-            python_service = PythonExecutionService(
-                artifacts=self.artifact_service, journal=conversation_journal,
-                execution=DockerPythonExecutionBackend(
-                    endpoint=experiment_environment.endpoint,
-                    work_root=self.settings.data_dir / "python_execution_jobs",
-                    profile=python_profile,
-                ),
-                profile=python_profile,
-            )
-            self._tool_executor.register(build_execute_python_tool(python_service))
+            python_endpoint = experiment_environment.endpoint
             from personal_agent.application.retrieval_experiment.delivery import RetrievalExperimentCompletionService
             from personal_agent.application.conversation.research_delivery import ResearchExperimentCompletionUseCase
             experiment_completion = ResearchExperimentCompletionUseCase(
@@ -384,6 +378,30 @@ class AgentRuntime:
                     experiments=experiment_service,
                 ), artifacts=self.artifact_service,
             )
+        if self.settings.python_execution_config_path is not None:
+            from personal_agent.infra.python_execution.deployment import load_python_deployment
+
+            python_config = load_python_deployment(self.settings.python_execution_config_path)
+            python_authorization = python_config.authorization
+            python_profile = python_authorization.execution_profile()
+            python_endpoint = python_config.endpoint
+        if python_profile is not None:
+            from personal_agent.application.python_execution.service import PythonExecutionService
+            from personal_agent.infra.python_execution.backend import DockerPythonExecutionBackend
+            from personal_agent.tools.execute_python import build_execute_python_tool
+
+            python_service = PythonExecutionService(
+                artifacts=self.artifact_service, journal=conversation_journal,
+                execution=DockerPythonExecutionBackend(
+                    endpoint=python_endpoint, work_root=self.settings.data_dir / "python_execution_jobs",
+                    profile=python_profile),
+                profile=python_profile,
+            )
+            self._tool_executor.register(build_execute_python_tool(python_service))
+        from personal_agent.application.conversation.answer_results import DirectAnswerResult, ClaimAnswerResult
+        answer_result = (
+            DirectAnswerResult if self.settings.answer_result.writer == "direct" else ClaimAnswerResult
+        )(self.settings.answer_result)
         self._conversation_service = ConversationService(
             self._structured_client,
             policy_decisions=self._policy_decisions,
@@ -400,6 +418,8 @@ class AgentRuntime:
             journal=conversation_journal,
             experiment_deployment=experiment_deployment,
             experiment_completion=experiment_completion,
+            python_authorization=python_authorization,
+            answer_result=answer_result,
             experiment_model_capacity_valid=all(
                 config.capacity is not None
                 and config.capacity.provider_host == urlparse(config.base_url or "").hostname
@@ -410,6 +430,10 @@ class AgentRuntime:
                 self.settings.action_diagnostics_reveal_field_names
             ),
         )
+        if self._structured_client is not None and answer_result.verification_enabled:
+            self._tool_executor.register(build_verify_interaction_draft_tool(
+                self._conversation_service.generate_verification,
+            ))
         self._sync_procedure_definitions()
         self._procedure_runtime = ProcedureRuntime(
             ProcedureMaterializer(PROCEDURE_CATALOG),
@@ -502,10 +526,6 @@ class AgentRuntime:
             )
         self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service))
         self._tool_executor.register(build_write_artifact_tool(self.artifact_service))
-        if self._structured_client is not None:
-            self._tool_executor.register(
-                build_verify_interaction_draft_tool(self._structured_client)
-            )
         self._tool_executor.register(
             build_graph_search_tool(self._active_graph_store())
         )

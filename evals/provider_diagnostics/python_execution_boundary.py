@@ -215,6 +215,7 @@ class BoundaryJourney:
         *,
         copy_from: Path | None = None,
         through_revision: int | None = None,
+        extra_refs: tuple[ResourceRef, ...] = (),
     ) -> Path:
         root = self.output / name
         if copy_from is not None:
@@ -251,6 +252,7 @@ class BoundaryJourney:
                 + timedelta(
                     seconds=self.stage.remaining_at_input["wall_seconds_at_input"]
                 ),
+                "input_artifact_refs": (*self.original_trace.input_artifact_refs, *extra_refs),
             }
         )
         run = data / "interaction_runs" / mapped.interaction_run_ref
@@ -264,6 +266,7 @@ class BoundaryJourney:
                 "original_max_execution_seconds": mapped.max_execution_seconds,
                 "allowed_original_artifacts": len(self.artifacts),
                 "classification": "Offline time mapping; not current-time Product E2E or real process-crash recovery",
+                "counterfactual_extra_refs": [ref.model_dump(mode="json") for ref in extra_refs],
             },
         )
         return root
@@ -285,10 +288,9 @@ class BoundaryJourney:
     def _arguments(self, code: str = _CODE) -> ExecutePythonArgs:
         return ExecutePythonArgs(
             code=code,
-            program_ref=None,
             input_files=(
                 PythonInputBinding(
-                    name="per_query.json", resource_ref=self.per_query.resource_ref
+                    name="per_query.json", resource_id=self.per_query.resource_ref.resource_id
                 ),
             ),
         )
@@ -589,12 +591,14 @@ class BoundaryJourney:
         ):
             request = ExecutePythonArgs(
                 code=args.code,
-                program_ref=args.program_ref,
-                input_files=(PythonInputBinding(name="per_query.json", resource_ref=ref),),
+                input_files=(PythonInputBinding(name="per_query.json", resource_id=ref.resource_id),),
             )
-            output, accepted, _, _ = self._invoke(root, f"py-boundary-{label}", request)
+            # Initialize a distinct Offline counterfactual before the Journal
+            # owns its immutable input bindings. Original source stays sealed.
+            branch = self._branch(f"refusals-{label}", extra_refs=(ref,))
+            output, accepted, _, _ = self._invoke(branch, f"py-boundary-{label}", request)
             _require(
-                not output["ok"] and accepted.command is None and self._no_jobs(root),
+                not output["ok"] and accepted.command is None and self._no_jobs(branch),
                 f"{label}: unexpectedly dispatched",
             )
             self._passed(label, result=output)
@@ -690,6 +694,36 @@ class BoundaryJourney:
             original_sha256=self.per_query.sha256,
             altered_sha256=sha256(path.read_bytes()).hexdigest(),
         )
+
+    def reuse_program_file(self, root: Path) -> None:
+        journal, artifacts, _, _ = self._components(root)
+        trace = journal.get(self.original_trace.interaction_run_ref)
+        original = next(item for item in trace.accepted_tool_requests
+                        if item.action_id == "py-boundary-real-count")
+        program_ref = original.receipt.program_ref
+        args = ExecutePythonArgs(
+            code=('import runpy, sys\nfrom pathlib import Path\n'
+                  'runpy.run_path(str(Path(sys.argv[1]) / "analysis.py"), run_name="__main__")\n'),
+            input_files=(*self._arguments().input_files,
+                         PythonInputBinding(name="analysis.py", resource_id=program_ref.resource_id)),
+        )
+        output, saved, _, _ = self._invoke(root, "py-boundary-program-file", args)
+        _require(output["ok"] and saved.receipt.status == "succeeded",
+                 f"standard Python program reuse failed: {output}")
+        self.calls += 1
+        self.total_execution_seconds += saved.execution.elapsed_seconds or 0
+        scope = self._scope("py-boundary-program-file")
+        source = artifacts.read_upload(program_ref, principal=scope.principal, owner=scope.principal)[1]
+        binding = next(item for item in saved.command.inputs if item.name == "analysis.py")
+        stdout = artifacts.read_upload(saved.receipt.stdout_ref, principal=scope.principal, owner=scope.principal)[1]
+        previous = artifacts.read_upload(original.receipt.stdout_ref, principal=scope.principal, owner=scope.principal)[1]
+        _require(source == _CODE.encode() and binding.content_digest == sha256(source).hexdigest()
+                 and stdout == previous, "program-file reuse changed original bytes or input-directory semantics")
+        recovered, recovered_request, _, _ = self._invoke(root, "py-boundary-program-file", args, accept=False)
+        _require(recovered == output and recovered_request == saved,
+                 "program-file replay changed original execution facts")
+        self._passed("standard_python_program_file_reuse", program_ref=program_ref.model_dump(mode="json"),
+                     input_digest=binding.content_digest, stdout_sha256=sha256(stdout).hexdigest())
 
     def process_outcomes(self, root: Path) -> None:
         cases = (
@@ -987,6 +1021,7 @@ class BoundaryJourney:
         try:
             self.precheck()
             root = self.success_and_recovery()
+            self.reuse_program_file(root)
             self.refusals()
             self.process_outcomes(root)
             self.explicit_filenames(root)

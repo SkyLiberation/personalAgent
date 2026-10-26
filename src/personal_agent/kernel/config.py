@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
+from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 
 from personal_agent.kernel.config_models import (
     _StrictBase,
@@ -40,6 +41,8 @@ class Settings(_StrictBase):
     url_capture_provider: Literal["firecrawl", "builtin"] = "builtin"
     action_diagnostics_reveal_field_names: bool = False
     retrieval_experiment_config_path: Path | None = None
+    python_execution_config_path: Path | None = None
+    answer_result: AnswerResultConfig = Field(default_factory=AnswerResultConfig)
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)

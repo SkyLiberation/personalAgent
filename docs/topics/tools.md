@@ -20,7 +20,7 @@ Application Service
 
 模型原生动作由 [model_actions.py](../../src/personal_agent/application/conversation/model_actions.py)投影和解码。工具参数表达业务动作；工作进度通过独立 `control_working_plan` 提交，执行系统从已准入工作清单关联活动项。动作相位与 typed 最终提交分别调用模型，具体契约见 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)和 [ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)。
 
-当前全部原生动作使用唯一 `arguments` 对象，控制动作也遵守此结构；`prepare_final` 为 `arguments={}`。模型可见调用名来自本轮同一 `ModelActionDefinition.name`，内部 capability identity 只关联执行事实。完整 wire Schema 校验通过后才解码；仅实验工具的 frozen `payload_field="action"` 将原业务对象无损还原为 canonical `ExperimentToolArgs.action`，其余工具保持原业务对象，包括 `write_artifact.request`。原 Args、准入、权限、接受摘要和恢复不变，不接受旧直接控制形状或非法字符串。决定与验证范围见 [ADR 0036](../adr/0036-explicit-native-action-payload.md)。
+当前全部原生 function.parameters 直接表达 canonical 业务参数，控制动作同样直接提交，prepare_final 为 {}。模型可见调用名来自同轮 ModelActionDefinition.name；完整 wire 校验通过后解码为原 Proposal，检索工具保留 canonical action 字段，write_artifact 保留 request 字段，不增加通用 arguments 包装或 payload_field。Python 由工具声明 strict=false 以保留可选参数，其他现有动作继续 strict=true；本地类型、权限、接受摘要与恢复仍由原 owner 执行。决定与验收见 [ADR 0043](../adr/0043-direct-code-agent-tool-parameters.md)，ADR 0036 保留为已替代的历史协议。
 
 ## 注册与曝光
 
@@ -78,7 +78,9 @@ Gateway 将 typed `ToolGatewayContext` 经 `RunnableConfig.configurable` 交给�
 
 研究实验的模型工具分别为 `write_artifact` 与 `retrieval_experiment`：前者创建或按确切快照补丁生成不可变程序／配置版本；后者执行开发实验、冻结确切结果或评测冻结方案。结果摘要从同一不可变原件只读投影 publication，表达业务结果与子文件的对应关系；组合和冻结继续消费原业务结果引用。模型可以根据真实指标及原件选择后续工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。程序用途、输入输出及交付契约由[研究设计](../optimization/to_verify/knowledge-decision-delivery.md#41-受限实验能力)拥有。当前工具已装配；能力验收核对实际执行、结果消费与回答，下载和打包不在范围，不能由注册事实推断研究语义通过。
 
-`execute_python` 与检索实验并列，当前显式接收同级 `code`、`program_ref` 和 `input_files`：新代码与已有程序引用恰一非 null，无文件也提供空列表；各绑定含确切文件名与 Artifact 引用。原 Artifact owner 保存确切源码、输入清单及 stdout／stderr，工具返回有界预览和原件引用；模型可以继续读取、修正程序或成文。它复用一次程序一个受限容器的技术沙箱，与检索实验共享当前 run 的执行额度，保持原 Journal 的不可变命令和未知终态对账。程序输出不变成可信指标或完成事实；分析原件保留内部引用，完成时不生成用户清单／ZIP或触发下载；历史清单和CLI读取保持原离线身份。工具由模型自主选择，不以调用频次验收参数能力；详细契约及验证边界由 [Python 工具 Spec](../optimization/to_verify/python-data-analysis-tool.md)拥有。
+公开文件工具统一由模型提交已有 `resource_id`：读取／搜索／检查直接提供该字符串，Python 的 input_files 每项为 name／resource_id，草稿 patch 用 base_resource_id。模型不重建 owner、资源类型或 revision；Artifact 从当前获准集合恢复唯一完整引用，未知、歧义、跨主体及版本不符明确拒绝。内部 ResourceRef、来源和执行回执保留，续读参数只包含文件 ID 与坐标；不增加可写 ID 表或全局文件搜索，见 [ADR 0044](../adr/0044-model-artifact-id-selection.md)。
+
+`execute_python` 与检索实验并列，当前只要求完整 `code`，可选 `input_files` 省略默认空。已有程序绑定为只读输入，由模型用标准 Python 执行，Runtime 按原字节恢复；Command／Receipt 的程序引用仍保留实际执行身份。原 Artifact owner 保存确切源码、输入清单及 stdout／stderr，工具返回有界预览和原件引用；模型可以继续读取、修正程序或成文。它复用一次程序一个受限容器的技术沙箱，通用分析按显式对话许可聚合任务执行额度，检索部署保持原 run 内共享额度；两者沿用原 Journal 的不可变命令和未知终态对账。独立装配及跨轮原件接续见 [ADR 0040](../adr/0040-scoped-python-analysis-authorization.md)，实际验收状态由下述 Spec 拥有。程序输出不变成可信指标或完成事实；分析原件保留内部引用，完成时不生成用户清单／ZIP或触发下载；历史清单和CLI读取保持原离线身份。工具由模型自主选择，不以调用频次验收参数能力；详细契约及验证边界由 [Python 工具 Spec](../optimization/to_verify/python-data-analysis-tool.md)拥有。
 
 ## 证据入口
 

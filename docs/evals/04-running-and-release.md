@@ -1,6 +1,97 @@
 # 运行、归档与发布
 
+## LongDS 长程分析基线
+
+### v1.1 Lite 剩余任务执行规格（2026-10-25）
+
+用户要求继续运行其余用例，并选择 Lite；随后明确要求没有官方翻译就保留原稿。已核对官方 Kimi Code 的 `build_turn_prompt` 直接使用原 `context/question`，官方数据集未提供中文题面。本次固定数据 revision `6b448459c333ecc050a2e89fcc65c0e044d763ac`，从官方 `task/longds_v1.1/task_list_lite.json` 收集 24 项，跳过已完整执行的 `business/netflix_movies_and_tv_shows/task3`，剩余 23 项、741 轮使用英文原稿各执行一次。旧任务中文 36 轮交付、27/36 评分保留原身份，与新英文结果分开报告。
+
+| 需求 | 执行与验收 |
+| --- | --- |
+| `LITE-1`：保持官方任务边界 | 按官方清单顺序，每项从第 1 轮开始，使用该项原始数据和完整轮数；仅在真实 `answer` 后继续。每项新主体、对话、Python 许可和归档，失败保留，后续独立任务继续；同项不自动补跑 |
+| `LITE-2`：官方题面保真 | 英文 `context/question` 逐字来自固定版本原件，按官方 `Context/Question` 标签拼接；不翻译、不改写、不提供参考答案或程序。保留原件、来源 URL、Git blob/LFS 校验和及题面摘要；独立评分读取原始答案 |
+| `LITE-3`：沿用真实链路与评分 | 继续生产 HTTP、Composition Root、真实 MiniMax medium、固定分析镜像以及 `direct/none`；仍为 `unverified_flow_capture`。只评分 HTTP 成功且 `disposition=answer` 的实际回答，采用已核对版本的官方 Judge 和已有同配置资格，参考答案仅评分侧读取 |
+| `LITE-4`：保持身份与停止线 | 每项固定 60M 已知生成 tokens、每轮 10M/40 次主决策及 3600 秒；未知用量记录但不单独停止。每项 Judge 独立 2M。任务间校验冻结源码、配置与材料，变化停止新任务；不覆盖任何已有归档 |
+
+这是评测输入和执行适配，不改变 Runtime、生产 Prompt、权限或工具。现有 `longds_materials.py` 继续拥有准备与 seal，`run_longds.py` 继续拥有正式 HTTP 采集，`longds_judge.py` 继续拥有官方评分；将仅适用于 task3 的轮数、文件数和字节数约束改为固定来源的实际清单约束。批次入口负责串行选择、原件准备、逐项运行和结果索引，不替模型做分析。生产装配与依赖方向保持，架构正文无需新增业务结构。
+
+零模型清单已收集：23 项轮数为 23—42，共 741 轮，原始输入约 9.47GB，包含目录、同名文件及非 CSV。单层文件保持原件上传；有目录的任务通过无分析结果的 ZIP 保留完整相对路径和原始字节，生成侧自行读取。材料准备逐文件校验 Git blob 或 LFS SHA-256，归档保存完整映射。既有 Python 输入 64MiB、512MiB 内存及 32MiB 临时盘限制保持；超过能力的真实拒绝或失败按原身份记录，不能缩减数据、抽样或扩大生产权限来迎合评测。
+
+实施顺序：先按固定清单零模型收集轮数、文件类型与大小；再扩展已有材料和采集的任务边界，保持旧 task3 原件验证；静态检查和真实材料只读校验通过后，以首个剩余任务作为批次首项开始运行，逐项记录实际反馈和成本。沿用先前 36 轮约 3995 秒、26.4M tokens 作为规模参考，实际任务差异逐项报告；同配置成本明显超过该任务按轮数折算的参考两倍时，在任务安全结束后暂停新增任务并重审，不压低生产预算。
+
+来源收集根为 `.tmp/longds-remaining-20261025/`，实际执行使用短路径 `.tmp/ls25/t01` 至 `t23`，避免 Windows `MAX_PATH`；任务编号由结果内的完整官方身份绑定。下载缓存按经核验的 Git/LFS 摘要命名，ZIP 内仍保持官方原相对路径。启动时冻结全部原题、数据树、来源 URL 和摘要，任务开始前及材料准备后校验冻结材料、源码和配置；采集抛异常且无法确认 Web 已停止时暂停批次。历史 Judge 资格从原封存目录只读引用，不复制进新费用账本。
+
+开始前核实 Docker、固定镜像及本地评测数据库；不运行已停用单元测试。批次已于 2026-10-25 北京时间 13:46 启动，后续题面语言和实际成绩由[用例盘点](02-current-case-inventory.md#2026-10-25-longds-v11-lite-剩余-23-项原稿执行原批次结束续跑已启动)及独立归档记录。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_suite --root .tmp/longds-remaining-20261025 --collect-only
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_suite --root .tmp/longds-remaining-20261025 --output .tmp/ls25
+```
+
+执行目录必须尚不存在；`progress.json` 提供当前任务、逐项结果及停止原因，`t01` 至 `t23` 的材料、采集和评分独立封存。进程异常或成本停止后保留剩余未执行量，不用同目录覆盖重跑。
+
+#### 429 中断后的续跑（2026-10-25）
+
+原批次已结束：Netflix task2 在第 21 轮返回未决工具执行限制；task4 在第 12 轮遇到 429，后续 21 项也在首轮遇到相同拒绝。用户推测五小时额度已用尽并授权继续；五小时原因尚未证实，恢复是否成立由下一次正式请求判断，不另发合成探针。
+
+本次操作脚本为 `.tmp/lr25/resume.py`，进度及新归档使用同一短根，原 `.tmp/ls25/` 只读。先逐字核对生产及原评测源码、配置、材料 seal 和原题；不改生产代码。task4 从第 12 轮继续，复制原主体、对话、完整 Journal、文件引用及原 Python 许可，保留前 11 轮实际消息、先前消费和失败。原第 12 轮的 run 已超过一小时截止，使用正式入口创建新 run 重新请求同一道原题；不改旧截止、不替换原许可、不清空任务消费。新分段报告记录 `preceding_source_turns=11`，只评分新增回答，旧评分原样保留。
+
+其余 21 项复用封存的官方材料，因原批没有回答或执行结果，以新采集身份从首轮开始；原 429、未知用量及失败身份仍作为本次来源记录。若再次收到 429，当前原子调用安全结束后暂停整批，不继续提交后续任务，也不循环重采样；服务是否恢复先消费 task4 的实际第 12 轮请求验证。原每项 60M、每轮 10M/40 次决策、原模型及官方 Judge 条件保持。
+
+Netflix task2 的 20 轮已交付结果和未决执行单独保留；本次可续队列为 22 项、696 轮，另 14 轮当时属于该阻塞。原全体 741 轮及未完成 710 轮的分母保持。启动前验证新操作脚本的源码和路径、旧封存身份及 HTTP 输入；续跑结果不改写原批次成绩。
+
+#### Netflix task2 的单次事故恢复（2026-10-26）
+
+用户进一步授权恢复 task2，按 [ADR 0046](../adr/0046-sealed-pre-dispatch-incident-recovery.md)在新 `.tmp/lr2/` 副本中处理原第 21 轮的确证未派发失败。操作适配器仅对绑定的单一 Command 提供恢复事实，经现有执行服务和 Journal 公共写入口收敛；原 `.tmp/ls25/t01`、生产代码、冻结 Command、原许可及前 20 轮不改写。完成事故核对后，新 run 使用实际原消息从第 21 轮进入正式 HTTP，并按原 60M 总额度扣除已知消费后继续至第 34 轮；新增 14 轮单独采集和评分，原 3/20 成绩保持。真实同名容器非 404、封存或绑定不符、许可失效、新未决状态及 429 均停止，不重跑到成功。
+
+用例与预算由[研究 Spec §9](../optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计)拥有，结果契约为 `LONGDS_OUTCOME`。准备命令不调用模型、不执行分析程序；来源目录为已核查的固定版本原件，输出目录必须尚不存在。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.run_longds prepare --source-directory .tmp/longds-design-20261023 --output .tmp/longds-implementation-20261023/materials
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.run_longds baseline --materials .tmp/longds-implementation-20261023/materials --output .tmp/longds-implementation-20261023/l1-baseline
+```
+
+基线须先配置真实模型、两条匹配的容量配置和既有本机评测数据库凭据；本次每 run 10M tokens、40 次主决策，其他参数按 Spec 固定。调用正式 `/api/artifacts/upload` 后，按顺序发送最多两轮完整中文请求至 `/api/conversation/turn`；只在实际 `answer` 后继续，不代答澄清或确认。参考答案不挂载。采集器复用现有只读 SDK／HTTP 观察及实际进程身份，保存源快照、原始请求、回答、Journal、用量和校验和；不提供解题代码。`report.json` 的 `not_scored` 仅记录流程，不能计作正确性或完整 36 轮通过。
+
+独立 Python 能力 target 使用相同入口和新的输出目录；本次固定镜像如下。该目录若已经存在，保留原运行，不覆盖或以同名重跑。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.run_longds baseline --purpose target --user-turns 2 --materials .tmp/longds-implementation-20261023/materials --python-image-id sha256:510b3b843826cf0bb0684f73e33171ef96735856d2f6569c7a235a2426678755 --docker-endpoint npipe:////./pipe/dockerDesktopLinuxEngine --output .tmp/longds-implementation-20261023/l1-python-target
+```
+
+生成进程已停止且 seal 有效后，独立评分才读取实际 Final。Judge 资格与 2M 独立额度由 Spec 固定；下面复用已通过的同配置资格，不重复计资格样本或把评分回灌生成侧。
+
+用户授权的无 claim／核验流程使用相同采集入口，运行前显式设置 `$env:PERSONAL_AGENT_ANSWER_RESULT = '{"writer":"direct","verification":"none"}'`，输出另取尚不存在的目录。本次目录为 `.tmp/answer-result-modules-20261023/l1-direct-flow`，该配置自动记录为 `unverified_flow_capture`、`release_eligible=false`；不得计作完整 Product E2E。默认配置对照不设置该变量；同对话与同 run 不能换装配，后续 claim 消融使用独立对话并固定 verification，实际确认 claim 机制已被消费。预算与判据由[Spec §9.9](../optimization/to_verify/knowledge-decision-delivery.md#99-可替换回答模块与无核验流程验证)拥有。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_judge score --judge-root .tmp/longds-implementation-20261023/judge --source-directory .tmp/longds-design-20261023 --materials .tmp/longds-implementation-20261023/materials --capture .tmp/longds-implementation-20261023/l1-python-target --name l1-python-target
+```
+
+本次额度、未知消费和真实 Python 执行阶段的局部诊断源码随 `.tmp/longds-implementation-20261023/` 独立结果封存；不以标准任务成功率报告它们，也不覆盖独占目录。权限／原件／执行恢复回放的模型和新增执行均为 0；声明的 Provider 响应交付丢失只作用于独立控制分支，正式生成轨迹保持原输入。
+
+MiMo 的两轮实际配置、结果和后续预算见 [Spec §9.10](../optimization/to_verify/knowledge-decision-delivery.md#910-切回-mimo-的长任务验证)。新启动器读取当前 Settings 和既有凭据，不能复用显式指定 DeepSeek 的旧实验启动器；两轮独立身份已封存，禁止覆盖。完整任务须显式指定 `--purpose target --user-turns 36 --task-token-limit 60000000 --stop-after-checkpoint`，沿原固定镜像与新的输出目录启动；任务额度同时供许可、观察停止及归档使用，省略仍为原 20M，L1 拒绝改额度。只有第 17 轮真实完成并封存后才按该开关退出。
+
+恢复使用 `--recovery-checkpoint <完整L2归档>/checkpoint-17`，同时指定 `--purpose target --user-turns 36` 及新的 `--output`，沿用原模型配置。恢复继承原授权文件、原额度及已发生消费，显式传入不同额度在新增调用前拒绝；不能提供新 `--python-image-id`、`--docker-endpoint` 或重复指定 `--stop-after-checkpoint`。检查点须有完整 seal、相同源码／配置、原第 17 轮实际消息及未过期许可。本次以同轨迹后半段覆盖 L3，不再重复一次第 18—36 轮；当前尚无真实检查点或完整成绩，CLI 可加载不代表 L3 通过。
+
+MiniMax low 的新完整流程按 [Spec §9.11](../optimization/to_verify/knowledge-decision-delivery.md#911-minimax-low-的完整流程验证)执行，启动器为 `.tmp/minimax-longds-e2e-20261023/full-launch.py`，收尾为同目录 `complete-longds.py`，后者绑定启动身份中的真实 Python PID。先用 `scoring_admission.py` 对既有成功／503 两份完整采集做零模型准入回放：只把实际 HTTP 成功且 `disposition=answer` 的原回答送入既有评分器，失败正文保留未评分，消费未知则停止评分。模型、端点和 thinking 从当前配置读取，原 MiMo 启动器仅保留历史身份，不用于新任务。
+
+2026-10-24用户调为 medium 后，完整流程使用新身份 `.tmp/minimax-medium-longds-e2e-20261024/`，按 [Spec §9.12](../optimization/to_verify/knowledge-decision-delivery.md#912-minimax-medium-的完整36轮验证)执行。当前配置和实际 SDK 已核对；新 full-launch.py 仍调用正式 baseline 完成1—17及原许可恢复18—36，新 complete-longds.py 绑定该次实际PID后才收尾。旧 low 启动器及归档不修改，新的观察器删除已退役 Args.program_ref 统计读取；评分仍由原官方 Judge 和共享预算拥有，不给生成侧反馈。
+
+用户取消用量未知停止线后的完整运行由 [Spec §9.13](../optimization/to_verify/knowledge-decision-delivery.md#913-用量未知不再单独停止并继续完整验证)拥有，独立目录为 `.tmp/usage-nonblocking-longds-20261024/`。执行 `python -B -X utf8 .tmp/usage-nonblocking-longds-20261024/full-launch.py`；收尾脚本为同目录 `complete-longds.py --launcher-pid <该次真实PID>`。未知用量继续记录，不阻止生成、检查点、恢复或合法答案评分；额度阈值按已知消费执行，未决执行及原授权／截止保持。上方 low／medium 原档案的未知停止线只解释其历史运行，不用于本次启动。
+
 **当前 E2E 数量以测试收集与 `evidence_catalog.py` 为准；已撤回的 Investigation Project 及其 scripted conformance 不再属于当前执行矩阵。**
+
+## 模型 HTTP 诊断的真实阶段回放
+
+MiMo 工具流式接入使用[独立传输规格](../optimization/model-provider-transport.md#2026-10-23-mimo-工具流式接入规格)。局部入口 `python -m evals.product_baselines.mimo_tool_stream_replay --output <尚不存在的目录>` 读取固定历史完整 SDK 阶段，只以本机 SSE 服务替代外部响应，不调用真实模型或工具。新完整轨迹由 `.tmp/mimo-tool-stream-20261023/full-launch.py` 调用上方同一 LongDS 正式入口，收尾脚本 `complete-longds.py` 等待真实生成退出、校验各段及恢复身份，再以新 Judge 名称评分；原失败轨迹和一次未知消费保持。
+
+[传输诊断规格](../optimization/to_verify/model-provider-diagnostics.md#本轮验收与实施顺序)固定三例及真实输入，执行入口如下；`before-source` 指向修改前完整源码快照，`capture` 指向原 LongDS 归档的 SDK 目录，输出目录必须尚不存在。
+
+```powershell
+.\.venv\Scripts\python.exe -m evals.product_baselines.model_transport_diagnostics --capture .tmp/research-mimo-longds-20261023/l2-prefix-17/sdk --before-source .tmp/mimo-transport-diagnostics-20261023/before/src --output .tmp/mimo-transport-diagnostics-20261023/offline-v5
+```
+
+入口只把外部 HTTP 服务替换为回环故障／正常响应服务，对两组子进程设置相同 `NO_PROXY=127.0.0.1`；生产配置保持。该 Offline Eval 不启动模型生成、工具执行或原任务恢复，不覆盖预算准入、真实 MiMo 根因和完整产品结果；原档案及已经存在的输出目录不得覆盖。
 
 ## 新运行的归档位置
 
@@ -566,3 +657,30 @@ missing_same_revision_passing_trace
 ## 研究评分器输出额度
 
 输出额度的修复机制与正式消费者配置由[评分输出预算固化记录](../optimization/completed/research-grader-output-budget.md)拥有，历史截断和预算恢复结果见[当前盘点](02-current-case-inventory.md#2026-10-01-独立评分器输出预算恢复)。原 E2E、评分反例和产品成功分子保持原身份；预算恢复与定向评分资格分别报告，不替代完整产品交付或发布证据。
+
+## 原生工具历史的真实阶段回放
+
+`python -m evals.product_baselines.model_history_replay --output <全新目录>` 消费固定 MiniMax 原始五阶段及 Journal，经生产原生历史投影、SDK 参数和容量边界检查完整保真、配对、恢复、身份拒绝和并行组选择；零真实模型或工具调用，不是 Product E2E。原件缺少新增决策字段，回放明确从封存 SDK 重建；不能把重建结果冒称旧生产已有历史。版本结果、其他控制／摘要回放及真实阶段限制由[续接规格](../optimization/model-provider-transport.md#2026-10-23-原生工具会话续接规格)拥有；不重用已有输出目录或改写旧封存。
+
+## Code Agent 参数的完整阶段回放
+
+`evals.product_baselines.python_action_replay` 消费原生历史接入后的 LongDS 第三轮完整首次失败请求。baseline 保留原实际 wire；candidate 由正式定义链导出完整声明，只更换已准入的直接参数协议、Python 描述及可选输入，历史原文不改。两组各10次，各自产生反馈并最多一次应用修复，SDK 修复另计，预算与停止由 [Python Spec §3.7](../optimization/to_verify/python-data-analysis-tool.md#37-code-agent-直接参数的接入与验证2026-10-24)拥有。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.python_action_replay --group baseline --output .tmp/<独立归档>/baseline
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.python_action_replay --group candidate --definitions .tmp/<正式定义导出>/definitions.json --output .tmp/<独立归档>/candidate
+```
+
+这是 Offline 参数／反馈阶段；模型选出的程序和工具均不派发，代码语法、所需文件、引用及实际 Python 覆盖另行审读，不按10/10协议合法宣称程序运行、业务答案或长任务通过。生产接续仍从正式自然请求和空 Journal 开始。
+
+## 文件 ID 的完整阶段回放与交接
+
+`artifact_reference_replay` 固定上一候选正式首轮的完整引用失败输入。baseline 保持原 wire，candidate 使用当前生产定义链及文件说明；每组10个独立连续旅程，原模型、think 和输出额度保持，真实拒绝由正式反馈配对。预算与停止由 [Python Spec §3.8](../optimization/to_verify/python-data-analysis-tool.md#38-文件选择只提交现有-id2026-10-24)拥有。prepared 保存完整声明、新旧文件协议段及用于新增反馈的实际身份；反馈 scaffold 清除旧执行记录，仅支持新增响应配对，不替换或裁剪首请求消息。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.artifact_reference_replay --group baseline --prepared .tmp/<已核对准备目录> --output .tmp/<独立归档>/baseline
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.artifact_reference_replay --group candidate --prepared .tmp/<已核对准备目录> --output .tmp/<独立归档>/candidate
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.provider_diagnostics.artifact_id_journey --prepared .tmp/<已核对准备目录> --output .tmp/<全新文件交接目录>
+```
+
+参数阶段不执行生成代码。文件交接使用该次实际材料和候选源码，经生产读取／搜索、检查、草稿创建／补丁及恢复边界；零新模型和容器，不代替完整产品结果。Python 真执行沿当前 `python_execution_boundary` 的真实研究源及独立目录运行。旧协议回放保留原源码身份，新正式流程使用空 Journal。

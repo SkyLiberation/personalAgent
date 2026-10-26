@@ -8,7 +8,7 @@ import unicodedata
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 
 DRAFT_MAX_BYTES = 65_536
 DRAFT_MAX_EDITS = 32
@@ -18,6 +18,24 @@ ContentDigest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 class _ArtifactModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def resolve_artifact_ref(
+    resource_id: str,
+    allowed_refs: tuple[ResourceRef, ...],
+    *,
+    principal: AuthenticatedPrincipal,
+) -> ResourceRef:
+    """Resolve a model's ID only within the caller's already authorized facts."""
+    matches = tuple(dict.fromkeys(
+        ref for ref in allowed_refs if ref.resource_id == resource_id
+    ))
+    if len(matches) != 1:
+        raise PermissionError("文件ID不在当前可读集合中，或对应多个不同的确切引用。")
+    ref = matches[0]
+    if ref.resource_type != "artifact" or ref.owner != principal:
+        raise PermissionError("文件ID不属于当前主体的Artifact。")
+    return ref
 
 
 def validate_display_filename(filename: str) -> str:
@@ -85,7 +103,7 @@ class CreateArtifact(_ArtifactModel):
 
 class PatchArtifact(_ArtifactModel):
     operation: Literal["patch"]
-    base_ref: ResourceRef
+    base_resource_id: str = Field(min_length=1, description="当前可读草稿的resource_id；按该确切快照的行列范围修改。")
     edits: tuple[TextEdit, ...] = Field(min_length=1, max_length=DRAFT_MAX_EDITS)
 
     @model_validator(mode="after")
