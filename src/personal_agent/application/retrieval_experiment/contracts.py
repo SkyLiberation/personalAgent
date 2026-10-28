@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import hashlib
 import json
 import math
@@ -168,29 +171,30 @@ def dataset_binding(manifest: DatasetManifest) -> DatasetBinding:
 
 
 def validate_rankings(
-    raw: object, manifest: DatasetManifest, retrieve_k: int, *, truncate: bool = False
+    raw: object, manifest: DatasetManifest, retrieve_k: int, *, truncate: bool = False,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> Rankings:
     """统一排序；仅检索器可裁剪 backend 的额外一个 self-match 候选。"""
     if not isinstance(raw, Mapping) or set(raw) != set(manifest.query_ids):
-        raise ValueError("排名必须完整且恰好包含当前 split 的全部查询")
+        raise ValueError(prompts.render('experiment_rankings.coverage'))
     known_documents = set(manifest.document_ids)
     rankings: Rankings = {}
     for qid in manifest.query_ids:
         scores = raw[qid]
         if not isinstance(scores, Mapping):
-            raise ValueError(f"查询 {qid} 的排名必须为文档分数字典")
+            raise ValueError(prompts.render('experiment_rankings.scores', query_id=qid))
         if len(scores) > retrieve_k + (1 if truncate else 0):
-            raise ValueError(f"查询 {qid} 超过 retrieve_k")
+            raise ValueError(prompts.render('experiment_rankings.depth', query_id=qid))
         checked: dict[str, float] = {}
         for docid, score in scores.items():
             if not isinstance(docid, str) or docid not in known_documents:
-                raise ValueError(f"查询 {qid} 包含未知文档：{docid}")
+                raise ValueError(prompts.render('experiment_rankings.document', query_id=qid, document_id=docid))
             if (
                 isinstance(score, bool)
                 or not isinstance(score, (int, float))
                 or not math.isfinite(score)
             ):
-                raise ValueError(f"查询 {qid} 的文档 {docid} 不是有限数值分数")
+                raise ValueError(prompts.render('experiment_rankings.finite_score', query_id=qid, document_id=docid))
             if docid != qid:
                 checked[docid] = float(score)
         ordered = sorted(

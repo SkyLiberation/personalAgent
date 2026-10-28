@@ -1,0 +1,3 @@
+interface:
+  display_name: "方案推进分析"
+  short_description: "按目标制定验证计划，区分自主决策与语义修复，依据差异推进已有方案"

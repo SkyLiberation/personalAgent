@@ -88,23 +88,7 @@
 
 ## Web API 入口
 
-当前 Web 层覆盖的主要能力：
-
-- `GET /api/health`
-- `GET /api/tools`
-- `POST /api/tools/{name}/execute`
-- `GET /api/notes`
-- `POST /api/notes/{note_id}/graph-sync`
-- `GET /api/notes/{note_id}/chunks`
-- `POST /api/notes/{note_id}/delete-commands` 及对应确认、恢复接口
-- `POST /api/knowledge/ingest-upload`
-- `POST /api/conversation/turn`
-- `GET /api/digest`
-- `GET /api/entry/stream`
-- `POST /api/debug/reset-database`
-
-旧 `/api/entry/runs` 与 resume 路径已经移除并返回 404。更完整的接口说明见
-[api.md](../api.md)。
+Web 提供 Conversation、知识摄取与生命周期、Artifact、工具、简报和管理接口。端点、字段、鉴权及失败响应由 [API](../api.md)统一维护，本页只说明入口适配与调用路径。
 
 ## 统一入口路径
 
@@ -150,18 +134,7 @@ CLI command
 
 ## 当前能力
 
-- 已具备 FastAPI Web API
-- 已具备前端静态资源托管
-- 已具备 Conversation SSE 入口；当前 SSE 是对完整回复的协议分块，不声称是模型 token 原生流
-- 已具备 tools、notes、digest 与 Conversation trace 查询接口
-- 已具备 API Key 鉴权和 token bucket 限流
-- 已具备 CORS 配置
-- 已具备 CLI 本地入口
-- 已具备飞书官方 SDK 长连接入口
-- 已具备飞书事件短时去重
-- 已具备飞书文件下载和群聊消息按需加载
-- Web SSE、CLI 文本和飞书文本对话进入同一个 `AgentService.converse()` 合约；固定业务能力保留
-  明确 use case，不为形式统一塞进通用图
+Web SSE、CLI 文本和飞书文本对话都调用 `AgentService.converse()`。文件、知识确认、简报和周期研究由各自业务入口处理；入口适配保留协议差异，业务事实及恢复仍由对应服务维护。
 
 ## 已知限制
 
@@ -179,13 +152,11 @@ CLI 命令见上文。文件上传、知识生命周期确认和图谱重同步�
 
 ### 4. 用户身份模型仍较轻量
 
-Web 侧通过 API Key 映射用户，SSE 也支持 query 参数传 key；飞书侧可配置是否使用默认用户。当前适合个人或轻量多用户场景，更复杂的组织级权限、租户隔离和审计策略还需要继续增强。
+Web 侧通过 API Key 映射用户，SSE 也支持 query 参数传 key；飞书侧可配置是否使用默认用户。身份及隔离的实际边界见 [Context](context-engineering.md#visibility-的定义与分层)，不从入口数量推导组织级权限能力。
 
 ### 5. 流式语义仍有限
 
-`entry_stream` 当前先完成一次 Conversation turn，再将最终文本切片为 SSE。若用户 E2E 证明
-首 token 延迟或中途取消不满足要求，才应定义原生流式事件与恢复边界；不能仅为“更像现代
-Agent”引入另一套 event schema。
+`entry_stream` 先完成一次 Conversation turn，再将最终文本切片为 SSE。该入口没有模型 token 原生流，也没有独立的可恢复执行状态；事件字段见 [API](../api.md#get-apientrystream)。
 
 ## 证据与后续准入
 

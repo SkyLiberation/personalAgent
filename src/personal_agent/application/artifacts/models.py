@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from typing import Annotated, Literal
 import unicodedata
 
@@ -25,16 +28,17 @@ def resolve_artifact_ref(
     allowed_refs: tuple[ResourceRef, ...],
     *,
     principal: AuthenticatedPrincipal,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResourceRef:
     """Resolve a model's ID only within the caller's already authorized facts."""
     matches = tuple(dict.fromkeys(
         ref for ref in allowed_refs if ref.resource_id == resource_id
     ))
     if len(matches) != 1:
-        raise PermissionError("文件ID不在当前可读集合中，或对应多个不同的确切引用。")
+        raise PermissionError(prompts.render('artifacts.ref_unavailable'))
     ref = matches[0]
     if ref.resource_type != "artifact" or ref.owner != principal:
-        raise PermissionError("文件ID不属于当前主体的Artifact。")
+        raise PermissionError(prompts.render('artifacts.ref_owner_mismatch'))
     return ref
 
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import hashlib
 import json
 import re
@@ -230,7 +233,8 @@ def _same_run(left: ExecutionScope, right: ExecutionScope) -> bool:
 
 
 class RetrievalExperimentCompletionService:
-    def __init__(self, *, experiments: RetrievalExperimentService) -> None:
+    def __init__(self, *, experiments: RetrievalExperimentService, prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
+        self._prompts = prompts
         self.experiments = experiments
         self.artifacts = experiments.artifacts
         self.deployment = experiments.deployment
@@ -266,7 +270,7 @@ class RetrievalExperimentCompletionService:
                     "unknown",
                 }:
                     raise _incomplete(
-                        "execution_unsettled", "实验仍有尚未确认的执行，不能完整交付"
+                        "execution_unsettled", self._prompts.render('experiment_delivery.unsettled')
                     )
             if not record.receipt or record.receipt.status != "succeeded":
                 continue
@@ -275,7 +279,7 @@ class RetrievalExperimentCompletionService:
                 or record.execution is None
                 or record.execution.status != "succeeded"
             ):
-                raise _incomplete("fact_missing", "成功回执缺少对应的实际成功执行")
+                raise _incomplete("fact_missing", self._prompts.render('experiment_delivery.successful_execution'))
             for ref in record.receipt.result_refs:
                 if ref in successful and successful[ref][1] != record:
                     raise ValueError("同一实验结果出现互相冲突的记录")
@@ -283,14 +287,14 @@ class RetrievalExperimentCompletionService:
             if record.command and isinstance(record.command.workload, FinalWorkload):
                 finals.append((index, record))
         if not finals:
-            raise _incomplete("final_missing", "尚无成功执行的完整最终评测")
+            raise _incomplete("final_missing", self._prompts.render('experiment_delivery.final_missing'))
         final_keys = {
             (record.command.workload.frozen_ref, record.receipt.result_refs)
             for _, record in finals
         }
         if len(final_keys) != 1:
             raise _incomplete(
-                "final_ambiguous", "存在互不相同的最终方案，不能由交付端代选"
+                "final_ambiguous", self._prompts.render('experiment_delivery.final_ambiguous')
             )
         final_index, final_record = finals[0]
         workload = final_record.command.workload
@@ -306,13 +310,13 @@ class RetrievalExperimentCompletionService:
         )
         if not freeze_indices:
             raise _incomplete(
-                "freeze_missing", "最终评测之前没有本 run 的合法冻结", frozen_ref
+                "freeze_missing", self._prompts.render('experiment_delivery.freeze_missing'), frozen_ref
             )
         try:
             frozen = self.experiments.read_frozen(frozen_ref, execution_scope=scope)
         except FileNotFoundError as error:
             raise _incomplete(
-                "artifact_missing", "原冻结文件不存在", frozen_ref
+                "artifact_missing", self._prompts.render('experiment_delivery.frozen_file_missing'), frozen_ref
             ) from error
         if frozen != workload.frozen:
             raise ValueError("最终执行绑定与原冻结文件不一致")
@@ -334,7 +338,7 @@ class RetrievalExperimentCompletionService:
                 )
             except FileNotFoundError as error:
                 raise _incomplete(
-                    "artifact_missing", "交付所需原文件不存在", ref
+                    "artifact_missing", self._prompts.render('experiment_delivery.artifact_missing'), ref
                 ) from error
             record_scope = snapshot.record.execution_scope
             if record_scope is None or not _same_run(record_scope, scope):
@@ -342,11 +346,7 @@ class RetrievalExperimentCompletionService:
             if snapshot.record.purpose not in {"machine", "draft"}:
                 raise PermissionError("交付原件必须来自当前实验或正式草稿写入口")
             content = snapshot.content.encode("utf-8")
-            bound = BoundArtifact(
-                resource_ref=ref,
-                content_digest=snapshot.content_digest,
-                content=content,
-            )
+            bound = BoundArtifact.model_validate({'resource_ref': ref, 'content_digest': snapshot.content_digest, 'content': content}, context=self._prompts)
             contents[ref] = bound
             return bound
 
@@ -357,14 +357,14 @@ class RetrievalExperimentCompletionService:
                 raise ValueError("实验结果存在循环输入引用")
             reading.add(ref)
             if ref not in successful:
-                raise _incomplete("fact_missing", "结果没有本 run 的实际成功记录", ref)
+                raise _incomplete("fact_missing", self._prompts.render('experiment_delivery.result_fact_missing'), ref)
             try:
                 publication, actual, files = self.experiments.read_result(
                     ref, execution_scope=scope
                 )
             except FileNotFoundError as error:
                 raise _incomplete(
-                    "artifact_missing", "结果所需原文件不存在", ref
+                    "artifact_missing", self._prompts.render('experiment_delivery.result_artifact_missing'), ref
                 ) from error
             manifest = (
                 self.deployment.development
@@ -404,7 +404,7 @@ class RetrievalExperimentCompletionService:
                 raise ValueError("非候选结果不能绑定候选源码或配置")
             if actual.candidate:
                 if publication.program_ref is None:
-                    raise _incomplete("fact_missing", "实际候选缺少源码引用", ref)
+                    raise _incomplete("fact_missing", self._prompts.render('experiment_delivery.candidate_source_missing'), ref)
                 source = contents[publication.program_ref]
                 config_digest = (
                     contents[publication.config_ref].content_digest
@@ -433,7 +433,7 @@ class RetrievalExperimentCompletionService:
                     development_baselines.add(actual.config.method)
         if development_baselines != {"bm25", "dense"}:
             raise _incomplete(
-                "development_missing", "需要完整成功的 BM25 与 dense 开发实验"
+                "development_missing", self._prompts.render('experiment_delivery.development_missing')
             )
         selected_publication, selected_result, selected_files = result(
             frozen.selected_result_ref
@@ -443,7 +443,7 @@ class RetrievalExperimentCompletionService:
             selected_index >= min(freeze_indices)
             or selected_result.dataset.split != "train"
         ):
-            raise _incomplete("identity_mismatch", "冻结选中项不是冻结之前的开发结果")
+            raise _incomplete("identity_mismatch", self._prompts.render('experiment_delivery.selected_identity'))
         if (
             selected_publication.input_result_refs != frozen.input_result_refs
             or selected_publication.program_ref != frozen.program_ref
@@ -464,10 +464,11 @@ class RetrievalExperimentCompletionService:
             config_digest=contents[frozen.config_ref].content_digest
             if frozen.config_ref
             else hashlib.sha256(b"").hexdigest(),
+            prompts=self._prompts,
         )
         if rebuilt != frozen.frozen:
             raise ValueError("冻结文件与原开发结果、配置或源码不一致")
-        validate_final_dataset(frozen.frozen, self.deployment.final)
+        validate_final_dataset(frozen.frozen, self.deployment.final, prompts=self._prompts)
         actual_finals = tuple(
             result(ref)[1] for ref in final_record.receipt.result_refs
         )
@@ -475,20 +476,19 @@ class RetrievalExperimentCompletionService:
             item.dataset != dataset_binding(self.deployment.final)
             for item in actual_finals
         ):
-            raise _incomplete("identity_mismatch", "最终回执包含其他 split 的实验结果")
+            raise _incomplete("identity_mismatch", self._prompts.render('experiment_delivery.final_split'))
         if not any(item.config.method == "bm25" for item in actual_finals):
-            raise _incomplete("final_missing", "最终评测缺少实际 BM25 基线")
+            raise _incomplete("final_missing", self._prompts.render('experiment_delivery.final_baseline'))
         selected_finals = [
             item for item in actual_finals if recipe(item) == frozen.frozen.recipe
         ]
         if len(selected_finals) != 1:
-            raise _incomplete("final_missing", "最终评测缺少唯一的冻结选中结果")
-        validate_final_result(frozen.frozen, selected_finals[0])
+            raise _incomplete("final_missing", self._prompts.render('experiment_delivery.final_selected'))
+        validate_final_result(frozen.frozen, selected_finals[0], prompts=self._prompts)
         add(frozen_ref)
 
-    @staticmethod
     def _validate_result(
-        actual: ExperimentResult,
+        self, actual: ExperimentResult,
         files: tuple[BoundArtifact, ...],
         manifest: DatasetManifest,
     ) -> None:
@@ -496,10 +496,10 @@ class RetrievalExperimentCompletionService:
             actual.dataset != dataset_binding(manifest)
             or actual.metrics.query_count != manifest.query_count
         ):
-            raise _incomplete("coverage_incomplete", "实验不是当前完整数据集的结果")
+            raise _incomplete("coverage_incomplete", self._prompts.render('experiment_delivery.coverage'))
         coverage = Coverage.model_validate_json(files[3].content)
         rankings = validate_rankings(
-            json.loads(files[2].content), manifest, actual.config.retrieve_k
+            json.loads(files[2].content), manifest, actual.config.retrieve_k, prompts=self._prompts,
         )
         if (
             coverage.dataset_id != manifest.dataset_id
@@ -514,11 +514,11 @@ class RetrievalExperimentCompletionService:
             )
         ):
             raise _incomplete(
-                "coverage_incomplete", "查询执行事实不完整或与实际排名不同"
+                "coverage_incomplete", self._prompts.render('experiment_delivery.query_facts')
             )
         if Metrics.model_validate_json(files[4].content) != actual.metrics:
             raise ValueError("原指标文件与 result 不一致")
         per_query = TypeAdapter(dict[str, QueryMetrics]).validate_json(files[5].content)
         if set(per_query) != set(manifest.query_ids):
-            raise _incomplete("coverage_incomplete", "逐查询指标没有覆盖完整查询集")
+            raise _incomplete("coverage_incomplete", self._prompts.render('experiment_delivery.per_query'))
 

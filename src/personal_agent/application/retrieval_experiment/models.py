@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import hashlib
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, ValidationInfo, model_validator
 
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
@@ -206,9 +209,10 @@ class BoundArtifact(BoundInputIdentity):
     content: bytes
 
     @model_validator(mode="after")
-    def verify_digest(self) -> BoundArtifact:
+    def verify_digest(self, info: ValidationInfo) -> BoundArtifact:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         if hashlib.sha256(self.content).hexdigest() != self.content_digest:
-            raise ValueError("实验快照与原字节摘要不符")
+            raise ValueError(prompts.render('experiment_validation.input_digest'))
         return self
 
 
@@ -245,18 +249,19 @@ class ExperimentCommand(StrictModel):
     command_digest: Digest
 
     @model_validator(mode="after")
-    def validate_command(self) -> ExperimentCommand:
+    def validate_command(self, info: ValidationInfo) -> ExperimentCommand:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         if self.deadline_at <= self.accepted_at:
-            raise ValueError("实验deadline必须晚于接受时间")
+            raise ValueError(prompts.render('experiment_validation.deadline'))
         if self.command_digest != canonical_digest(
             self.model_dump(mode="json", exclude={"command_digest"})
         ):
-            raise ValueError("实验Command摘要不一致")
+            raise ValueError(prompts.render('experiment_validation.command_digest'))
         if any(
             item.resource_ref.owner != self.execution_scope.principal
             for item in self.bound_inputs
         ):
-            raise ValueError("Command不保存其他主体或private标签引用")
+            raise ValueError(prompts.render('experiment_validation.input_owner'))
         return self
 
 

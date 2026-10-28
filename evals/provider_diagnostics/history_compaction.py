@@ -1,6 +1,8 @@
 """真实失败历史的非思考摘要与主决策接续；不执行模型提议的动作。"""
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 import argparse
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -253,7 +255,7 @@ def main() -> None:
             visible = materialize_citation_context(materialize_interaction_inputs(after_summary.inputs))
             projected, history = service._history.project(after_summary, visible)
             restored = ConversationService(model_client=service._model_client,
-                artifact_port=ArtifactService(settings), journal=FileInteractionJournal(output / "data/interaction_runs"),
+                artifact_port=ArtifactService(settings, provider_policy=build_provider_policy(base_url=settings.openai.base_url, provider=settings.openai.provider)), journal=FileInteractionJournal(output / "data/interaction_runs"),
                 budget_policy=service._budget_policy, experiment_model_capacity_valid=True)
             restored_trace = restored._journal.get(RUN_REF)
             if restored._history.validate(restored_trace) != checkpoint or restored._history.project(restored_trace, visible) != (projected, history):

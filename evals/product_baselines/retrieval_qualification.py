@@ -15,7 +15,7 @@ from evals.e2e_quality.research_answer_outcome import (
 )
 from personal_agent.infra.structured_model import JsonObjectStructuredAdapter, StrictJsonSchemaAdapter
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompts import create_prompt_catalog
 from .retrieval_qualification_review import (
     QualificationAccuracyReview, SourceReview, materialize_references, validate_judgment_accuracy,
 )
@@ -65,8 +65,9 @@ def grader_identity(settings: Settings) -> GraderIdentity:
         "src/personal_agent/kernel/llm_schemas.py",
         "src/personal_agent/capabilities/contracts/model.py",
     )
-    prompt = get_prompt("structured.system")
-    repair_prompt = get_prompt("structured.repair.system")
+    prompts = create_prompt_catalog(settings.prompt_language)
+    prompt = prompts.get("structured.system")
+    repair_prompt = prompts.get("structured.repair.system")
     return GraderIdentity(
         prompt_sha256=sha256(GRADER_PROMPT.encode()).hexdigest(),
         schema_sha256=_digest(ResearchAnswerReport.model_json_schema()),

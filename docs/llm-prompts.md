@@ -6,20 +6,20 @@ Prompt Registry 拥有可复用的版本化模板；业务事实、权限、执�
 
 | 模板组 | 消费者与输出责任 |
 | --- | --- |
-| `structured.system`、`structured.repair.system` | 非 Loop 显式 JSON Object 调用的 typed 校验与有界修复；Loop 内层改用请求级原生输出工具，保留各请求原修复次数 |
-| `conversation.interaction_intent` | `derive_interaction_intent` 的初次判断与既有背景来源修复共用正文／版本；模型区分当前轮任务与响应后后台要求，提取相位和显式条件，原消息仍拥有完整目标 |
+| `structured.system`、`structured.repair.system` | JSON 输出的 Schema 说明与有界修复；具体承载由请求指定，意图提取使用 `prompted_json`，其他已迁移的内部 typed 能力使用原生输出工具 |
+| `conversation.interaction_intent` | `derive_interaction_intent` 的初次判断与后台来源修订共用正文／版本；提取相位和显式条件，区分当前任务与响应后后台要求，原消息仍拥有完整目标 |
 | `conversation.action` | Conversation 的原生消息／动作相位；可见正文或动作均由同一循环解释，Admission/Gateway 拥有准入与执行 |
-| `conversation.working_plan.description`、`conversation.answer.direct.delivery`、`conversation.research_entry.explicit` | 计划进度、普通assistant正文及带沟通／引用属性的原生提交；没有空准备或独立Final成文模板，业务身份仍由Runtime绑定 |
+| `conversation.working_plan.description`、`conversation.answer.direct.delivery`、`conversation.research_entry.explicit` | 计划进度、普通 assistant 正文及带沟通／引用属性的原生提交；业务身份由 Runtime 绑定 |
 | `structured.native_tool.repair.system` | 原生typed输出的有界修复，继续调用本次输出工具修正参数；JSON消费者仍使用原`structured.repair.system`，不混用承载 |
 | `conversation.research_delivery_policy` | claims 选证／写作的适用操作和同稿出口，不引入第二循环 |
 | `conversation.plan_context`、`conversation.requirements` | 从当前清单及冻结验收条件物化只读 Context |
-| `conversation.history_compaction` | HistoryCompactor 将闭合旧历史生成非权威工作摘要；原 Journal／Artifact 保留事实与原文，按 ADR 0038 提前接入，真实摘要消费尚未通过 |
-| `conversation.time_budget_snapshot` | 有既有运行截止时，为 action／ordinary final 解释输入构造时的秒数快照；无截止不注入，不改变硬停止或研究 writer |
+| `conversation.history_compaction` | HistoryCompactor 将闭合旧历史生成工作摘要，原 Journal／Artifact 保留事实与原文；当前接入及真实消费的证据边界见 [Context](topics/context-engineering.md#整体窗口与历史增长的当前边界) |
+| `conversation.time_budget_snapshot` | 有运行截止时，向主决策说明输入构造时的剩余秒数；无截止不注入，硬停止仍由运行系统执行 |
 | `conversation.research.support` | 一次检查当前完整 claims、实际最终回答与原用户目标；八类反馈交给原研究模型，空报告绑定当前输入 |
 | `interaction_verification.*` | 普通整稿核验；实际主体、条件、强度和否定范围与已提交原文对照 |
 | `web_search.description`、`web_read.description` | 工具的发现与正文读取契约；选择与回答来自当前用户任务 |
 | `conversation.read_artifact.description`、`conversation.search_output.description` | 实际正文坐标、读取覆盖、搜索续页及超长行边界 |
-| `python_execution.description`、`python_execution.parameter.*` | 工具总说明及 Python Args 字段说明；解释同级源码／程序引用选择、显式文件绑定、实际输出及失败边界，不包含具体统计程序或期待答案 |
+| `python_execution.description`、`python_execution.parameter.*` | Python 工具及参数说明；解释完整源码、可选输入文件绑定、实际输出和失败边界，具体程序来自当前任务 |
 | `answer_generation.system` | `RuntimeLlmClient` 的文本调用，不承担 Conversation 的独立完成判断 |
 | `evidence_rerank.system/user` | 显式装配的 LLM reranker 只排序已有 evidence ID |
 | `graphiti.custom_extraction` | Graphiti 抽取适配；知识准入仍由 Personal Knowledge 拥有 |

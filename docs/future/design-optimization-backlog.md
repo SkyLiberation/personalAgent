@@ -11,7 +11,7 @@
 | 编号 | 尚未解决的问题 | 当前准入 | 设计与推进记录 |
 | --- | --- | --- | --- |
 | `CONVERSATION-LOOP-BOUNDARIES-001` | 当前direct／none流程已验证；语义保真及原C6未覆盖反事实仍待验 | 原生正文／动作已接入，意图固定40/40、完整LongDS36/36及真实进程恢复通过；5轮自然本地estimated预算压缩后继续交付，不能外推Provider极限或净成本收益 | [统一Schema及结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)、[历史压缩](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩) |
-| `KNOWLEDGE-DECISION-DELIVERY-001` | 完整流程已跑通，业务准确性、claim消融与完整核验仍待验 | `A2`：自主Python、跨轮事实和可替换回答模块已接入；MiniMax medium／direct＋none完整36轮交付、17→18真实恢复，官方27/36。原错误保留，语义优化暂放；不追加下载／打包，后续按既定claim消融与核验范围推进 | [整体设计](../optimization/to_verify/knowledge-decision-delivery.md)、[实际结果](../evals/02-current-case-inventory.md) |
+| `KNOWLEDGE-DECISION-DELIVERY-001` | 长程执行已成立，约束遵循、分析状态继承与成文仍失败 | `A2` 保留已实现基础；候选使用完整用户原文＋辅助理解，撤下要求片段引用；独立核验未实施，能力与净收益须分别验证，不作为默认必要机制。原件成文与 claim 消融保持独立，不以恢复、压缩或工具成功替代用户结果 | [约束接续与语义核验设计](../optimization/to_verify/longtask-semantic-consistency.md#长程分析约束接续与语义核验候选)、[实际结果](../evals/02-current-case-inventory.md) |
 | `RUNTIME-POLICY-AUDIT-ISOLATION-001` | 审计绑定修复已接入且真实阶段回放通过，原完整对话 target 未交付 | `A2`：baseline 0/1、target 0/1、审计阶段反事实 1/1；完整产品验收未过，停止新增模型样本 | [修复证据与剩余边界](../optimization/to_verify/runtime-policy-audit-isolation.md) |
 | `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001` | 重复输入对实际费用和延迟的影响待证 | `A1`：统一链原目标扩预算续验已通过并停止新增调用；成本优化尚未开始，无新生产候选 | [预算复审与后续成本边界](../optimization/to_verify/research-input-budget.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001` | 原 HTTP 错误体真实条件尚未触发 | `A2`：错误体及传输异常诊断均已接入，局部固定反事实通过；本轮传输交接已关闭，不再作为剩余门禁。原 429 具体原因无法追溯，真实错误体条件保留未覆盖 | [Provider 失败诊断交接](../optimization/to_verify/model-provider-diagnostics.md) |

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import hashlib
 import shutil
 import tempfile
@@ -100,15 +103,15 @@ def _new_directory(path: Path) -> Path:
     return path
 
 
-def load_manifest(path: Path) -> DatasetManifest:
+def load_manifest(path: Path, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> DatasetManifest:
     manifest = DatasetManifest.model_validate(read_json(path))
     for name, expected in manifest.artifact_sha256.items():
         if sha256_file(path.parent / name) != expected:
-            raise ValueError(f"数据产物摘要不匹配：{name}")
+            raise ValueError(prompts.render('experiment_controller.dataset_digest', artifact_name=name))
     return manifest
 
 
-def load_result(path: Path) -> ExperimentResult:
+def load_result(path: Path, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> ExperimentResult:
     result = ExperimentResult.model_validate(read_json(path))
     for artifact in (
         result.artifacts.rankings,
@@ -117,7 +120,7 @@ def load_result(path: Path) -> ExperimentResult:
         result.artifacts.per_query,
     ):
         if sha256_file(path.parent / artifact.path) != artifact.sha256:
-            raise ValueError(f"结果产物摘要不匹配：{artifact.path}")
+            raise ValueError(prompts.render('experiment_controller.result_digest', path=artifact.path))
     return result
 
 

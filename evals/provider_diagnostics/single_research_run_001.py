@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 from dataclasses import fields
 from hashlib import sha256
 import json
@@ -254,7 +256,7 @@ def run_diagnostic() -> tuple[bool, Path, dict[str, Any]]:
     )
     task = AgentTask(task_text=TASK_TEXT, task_type="research")
     store = PostgresAgentRunStore(database_url)
-    artifact_service = ArtifactService(settings)
+    artifact_service = ArtifactService(settings, provider_policy=build_provider_policy(base_url=settings.openai.base_url, provider=settings.openai.provider))
     gateway = AgentGateway(policy_engine=PolicyEngine(), store=store)
     gateway.register(
         GPTResearcherA2AAdapter(

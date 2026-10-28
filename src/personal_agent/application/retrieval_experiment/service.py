@@ -1,6 +1,9 @@
 """检索实验唯一业务入口：授权快照、冻结、外部执行和正式发布。"""
 
 from __future__ import annotations
+
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 import hashlib
 import json
 from collections.abc import Callable
@@ -71,15 +74,17 @@ class RetrievalExperimentService:
         journal: ExperimentJournalPort,
         execution: ExperimentExecutionPort,
         deployment: RetrievalDeployment,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
+        self._prompts = prompts
         self.artifacts = artifacts
         self.journal = journal
         self.execution = execution
         self.deployment = deployment
         self.clock = clock
         self.reader = PublishedExperimentReader(
-            artifacts=artifacts, deployment=deployment
+            artifacts=artifacts, deployment=deployment, prompts=prompts,
         )
 
     def _read(
@@ -92,9 +97,7 @@ class RetrievalExperimentService:
         metadata = self.artifacts.resource_item(
             ref, principal=principal, owner=principal
         )
-        return BoundArtifact(
-            resource_ref=ref, content_digest=metadata.content_digest, content=content
-        )
+        return BoundArtifact.model_validate({'resource_ref': ref, 'content_digest': metadata.content_digest, 'content': content}, context=self._prompts)
 
     def read_result(
         self, ref: ResourceRef, *, execution_scope: ExecutionScope
@@ -138,7 +141,7 @@ class RetrievalExperimentService:
     ) -> ExperimentToolResult:
         scope = execution_scope
         if scope.principal != self.deployment.authorized_principal:
-            raise PermissionError("本主体未获实验部署授权")
+            raise PermissionError(self._prompts.render('retrieval_experiment.authorization'))
         expected = accepted_tool_request_digest(
             execution_scope=scope,
             action_id=action_id,
@@ -146,7 +149,7 @@ class RetrievalExperimentService:
             arguments=ExperimentToolArgs(action=action),
         )
         if request_digest != expected:
-            raise PermissionError("实验请求与已接受摘要不一致")
+            raise PermissionError(self._prompts.render('retrieval_experiment.request_digest'))
         view = self.journal.load(
             execution_scope=scope, action_id=action_id, request_digest=request_digest
         )
@@ -157,7 +160,7 @@ class RetrievalExperimentService:
             or view.request_digest != request_digest
             or view.deployment_digest != self.deployment.deployment_digest
         ):
-            raise PermissionError("实验请求未被本run按原部署接受")
+            raise PermissionError(self._prompts.render('retrieval_experiment.accepted_deployment'))
         record = next(
             (item for item in view.records if item.action_id == action_id), None
         )
@@ -226,13 +229,13 @@ class RetrievalExperimentService:
             ref not in self._completed_results(view)
             or ref not in view.allowed_artifact_refs
         ):
-            raise PermissionError("结果必须来自本run已提交的成功实验")
+            raise PermissionError(self._prompts.render('retrieval_experiment.result_not_successful'))
 
     def _draft(
         self, ref: ResourceRef, view: ExperimentJournalView, mime: str
     ) -> BoundArtifact:
         if ref not in view.allowed_artifact_refs:
-            raise PermissionError("程序或配置不属于当前可读集合")
+            raise PermissionError(self._prompts.render('retrieval_experiment.program_unreadable'))
         snapshot = self.artifacts.read_snapshot(
             ref,
             principal=view.execution_scope.principal,
@@ -251,7 +254,7 @@ class RetrievalExperimentService:
             )
             or snapshot.record.content_type != mime
         ):
-            raise PermissionError("程序或配置必须是本run对应类型的正式草稿")
+            raise PermissionError(self._prompts.render('retrieval_experiment.program_not_draft'))
         return self._read(ref, view.execution_scope)
 
     def _command(
@@ -266,7 +269,7 @@ class RetrievalExperimentService:
                 and item.execution is not None
                 for item in view.records
             ):
-                raise ValueError("最终评测派发后不能继续开发调参")
+                raise ValueError(self._prompts.render('retrieval_experiment.development_after_final'))
             request = action.request
             config = {
                 "bm25": BM25Config,
@@ -277,7 +280,7 @@ class RetrievalExperimentService:
             publications = []
             refs = getattr(request, "input_result_refs", ())
             if len(set(refs)) != len(refs):
-                raise ValueError("输入结果不能重复")
+                raise ValueError(self._prompts.render('retrieval_experiment.duplicate_input'))
             for ref in refs:
                 self._require_result(ref, view)
                 pub, result, files = self.read_result(ref, execution_scope=scope)
@@ -286,7 +289,7 @@ class RetrievalExperimentService:
                     or result.dataset.split_id != self.deployment.development.split_id
                     or result.config.retrieve_k < config.retrieve_k
                 ):
-                    raise ValueError("输入排名数据或深度不满足开发配置")
+                    raise ValueError(self._prompts.render('retrieval_experiment.input_rankings'))
                 publications.append(pub)
                 inputs.extend(files)
             program_ref = config_ref = None
@@ -312,7 +315,7 @@ class RetrievalExperimentService:
                 and item.receipt.frozen_ref
             )
             if not frozen_refs or action.frozen_ref != frozen_refs[-1]:
-                raise PermissionError("只能执行本run已提交的冻结方案")
+                raise PermissionError(self._prompts.render('retrieval_experiment.freeze_not_submitted'))
             frozen_bytes = self._read(action.frozen_ref, scope)
             frozen = self.read_frozen(action.frozen_ref, execution_scope=scope)
             workload = FinalWorkload(
@@ -327,12 +330,12 @@ class RetrievalExperimentService:
                 continue
             snapshot = self._read(material.resource_ref, scope)
             if snapshot.content_digest != material.content_digest:
-                raise ValueError("部署原件发生变化")
+                raise ValueError(self._prompts.render('retrieval_experiment.deployment_changed'))
             inputs.append(snapshot)
         unique = {item.resource_ref: item for item in inputs}
         now = self.clock()
         if now.tzinfo is None or now.utcoffset() is None:
-            raise ValueError("实验时钟必须提供aware UTC时间")
+            raise ValueError(self._prompts.render('retrieval_experiment.clock'))
         now = now.astimezone(timezone.utc)
         remaining = min(
             view.remaining_execution_seconds,
@@ -340,7 +343,7 @@ class RetrievalExperimentService:
             self.deployment.limits.worker_timeout_seconds,
         )
         if remaining <= 0:
-            raise ValueError("实验时间额度已耗尽")
+            raise ValueError(self._prompts.render('retrieval_experiment.deadline'))
         payload = dict(
             execution_scope=scope,
             action_id=view.action_id,
@@ -361,7 +364,7 @@ class RetrievalExperimentService:
         from pydantic import TypeAdapter
 
         raw = TypeAdapter(dict).dump_python(payload, mode="json")
-        command = ExperimentCommand(**payload, command_digest=canonical_digest(raw))
+        command = ExperimentCommand.model_validate({**payload, 'command_digest': canonical_digest(raw)}, context=self._prompts)
         return command, self._inputs(command, scope)
 
     def _inputs(
@@ -371,7 +374,7 @@ class RetrievalExperimentService:
         for binding in command.bound_inputs:
             content = self._read(binding.resource_ref, scope)
             if content.content_digest != binding.content_digest:
-                raise ValueError("已接受输入快照已变化")
+                raise ValueError(self._prompts.render('retrieval_experiment.snapshot_changed'))
             items.append(content)
         if isinstance(command.workload, FinalWorkload):
             private = next(
@@ -379,7 +382,7 @@ class RetrievalExperimentService:
             )
             content = self._read(private.resource_ref, scope, private=True)
             if content.content_digest != private.content_digest:
-                raise ValueError("私有评分原件摘要不一致")
+                raise ValueError(self._prompts.render('retrieval_experiment.private_digest'))
             items.append(content)
         return tuple(items)
 
@@ -407,7 +410,7 @@ class RetrievalExperimentService:
                     and r.execution
                     for r in view.records
                 ):
-                    raise ValueError("最终评测派发后不能替换冻结方案")
+                    raise ValueError(self._prompts.render('retrieval_experiment.freeze_after_final'))
         pub, result, files = self.read_result(
             action.selected_result_ref, execution_scope=scope
         )
@@ -429,6 +432,7 @@ class RetrievalExperimentService:
             config_digest=config.content_digest
             if config
             else hashlib.sha256(b"").hexdigest(),
+            prompts=self._prompts,
         )
         published = PublishedFrozenExperiment(
             frozen=frozen,
@@ -471,7 +475,7 @@ class RetrievalExperimentService:
             ):
                 digest = hashlib.sha256(content).hexdigest()
                 if digest != manifest.artifact_sha256[f"{role}.json"]:
-                    raise ValueError("公开文本投影与部署manifest摘要不同")
+                    raise ValueError(self._prompts.render('retrieval_experiment.projection_digest'))
                 original = next(
                     item for item in self.deployment.materials if item.role == role
                 )
@@ -581,7 +585,7 @@ class RetrievalExperimentService:
             )
         fact = record.execution if record else None
         limitations = (
-            ["执行终态尚未知，原预留额度保留。"] if receipt.status == "unknown" else []
+            [self._prompts.render('retrieval_experiment.unknown')] if receipt.status == "unknown" else []
         )
         for ref in receipt.diagnostic_refs:
             limitations.extend(

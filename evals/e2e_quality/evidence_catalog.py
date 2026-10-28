@@ -239,12 +239,12 @@ RETRIEVAL_EXPERIMENT_OUTCOMES = {
     key: UserOutcomeContract(
         outcome_id=case_id,
         persona="在许可测试环境验证检索方案的中文开发者",
-        source_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划",
+        source_ref="docs/optimization/to_verify/research-experiment-protocol.md#5-当前范围与历史文件交付的关系",
         natural_goal=goal,
         observable_result="自主完成实际实验、消费结果并作必要选择，冻结后test并提交有依据的完整回答；原始结果供内部追溯，不要求用户下载或打包。",
         counterfactuals=("缺必要实际执行时不能以文字回答充当完成", "test标注不向生成侧开放", "不得修改当前知识库", "P1程序必须来自本轨迹模型并实际执行，允许无提升", "下载或打包失败不得计作Agent能力失败"),
         baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
-        baseline_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#72-完整落地-implementation-plan",
+        baseline_ref="docs/optimization/to_verify/verify_results/research-experiment.md#32-完整落地-implementation-plan",
         assertion_owner="evals/product_baselines/test_retrieval_experiment_001.py",
     )
     for key, case_id, goal in (
@@ -257,13 +257,13 @@ RETRIEVAL_EXPERIMENT_OUTCOMES = {
 LONGDS_OUTCOME = UserOutcomeContract(
     outcome_id="LONGDS-NETFLIX-003",
     persona="持续调整市场分析条件并回看历史口径的中文分析用户",
-    source_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计",
+    source_ref="docs/optimization/to_verify/longds-analysis.md#longds-长程数据分析-spec",
     natural_goal="分析 Netflix 目录与各国搜索热度，连续处理 36 轮调整和历史比较，最终推荐三个市场。",
     observable_result="逐轮从正式入口得到实际分析答案；按固定官方协议分别报告正确轮数、最终推荐和流程完成。",
     counterfactuals=("未来问题和参考答案不进入生产输入", "未授权跨对话原件拒绝且零执行",
                      "同请求恢复不重复执行", "总预算耗尽不新增付费调用，未知消费保留且不单独停止"),
     baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
-    baseline_ref="docs/optimization/to_verify/knowledge-decision-delivery.md#96-分阶段验收与停止条件",
+    baseline_ref="docs/optimization/to_verify/longds-analysis.md#6-分阶段验收与停止条件",
     assertion_owner="evals/product_baselines/longds_judge.py",
 )
 

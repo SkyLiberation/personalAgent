@@ -6,7 +6,7 @@
 
 LongDS 首轮已经完成 7 次 Python，但普通核验 10 次拒绝，最终触及主决策上限。该例未进入 claim 写作。用户明确要求先不接入核验和 claim，确保分析流程运行，并要求后续能够消融 claim。
 
-按[研究 Spec §9.9](../optimization/to_verify/knowledge-decision-delivery.md#99-可替换回答模块与无核验流程验证)，将直接回答与 claim 回答实现为同一 Application 提交契约的两种模块，核验由独立配置装配。默认保留当前 `claims + required`；本次独立 LongDS 流程采用 `direct + none`。配置在 Runtime 装配，在 Journal 的 run 及对话边界绑定；模型不选择装配，恢复不能换配置。
+按[可替换回答模块与无核验流程验证](../optimization/to_verify/verify_results/longds-analysis.md#2-可替换回答模块与无核验流程验证)，将直接回答与 claim 回答实现为同一 Application 提交契约的两种模块，核验由独立配置装配。默认保留当前 `claims + required`；本次独立 LongDS 流程采用 `direct + none`。配置在 Runtime 装配，在 Journal 的 run 及对话边界绑定；模型不选择装配，恢复不能换配置。
 
 ## 责任、复杂度与替代方案
 

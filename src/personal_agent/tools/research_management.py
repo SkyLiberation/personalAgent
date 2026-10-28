@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -198,7 +201,7 @@ def build_list_research_runs_tool(service) -> BaseTool:
     return list_research_runs
 
 
-def build_get_research_digest_tool(service) -> BaseTool:
+def build_get_research_digest_tool(service, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> BaseTool:
     @tool(
         "get_research_digest",
         description="读取某次 Research run 的简报内容。",
@@ -209,7 +212,7 @@ def build_get_research_digest_tool(service) -> BaseTool:
     def get_research_digest(run_id: str, user_id: str = "default"):
         run = service.get_run(run_id)
         if run is None or run.user_id != user_id:
-            return tool_response(tool_failure("未找到该用户的 Research run。", error_kind="invalid_param"))
+            return tool_response(tool_failure(prompts.render('tools.research.run_unavailable'), error_kind="invalid_param"))
         digest = service.get_digest(run.digest_id) if run.digest_id else None
         return tool_response(tool_success({
             "run": _run_summary(run),

@@ -1,6 +1,6 @@
 # personalAgent 当前核心架构
 
-> 2026-10-16 按生产代码核对。本文拥有全局责任和主链；实际包布局由[代码地图](code-map.md)拥有，横切实现见[横切机制](cross-cutting.md)。产品证据由[当前端到端用例盘点](../evals/02-current-case-inventory.md)拥有，尚未闭环的设计由[设计优化队列](../future/design-optimization-backlog.md)拥有。代码已接入与产品验收分别判断。
+> 本文按现行代码说明全局责任和主链；实际包布局见[代码地图](code-map.md)，横切装配见[横切机制](cross-cutting.md)。实际结果按[评测盘点](../evals/02-current-case-inventory.md)中的归档身份解释，未闭环事项见[设计优化队列](../future/design-optimization-backlog.md)。
 
 ## 1. 核心判断
 
@@ -46,7 +46,7 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
-6. 回答模块按部署贡献原生提交／修订或 claim 选证／写作操作。模型直接携带完整候选，SubmittedFinal 持久后执行适用核验及领域文件检查，同稿交付；不存在空准备及第二次普通 JSON 成文。模型传输见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查仍由 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)拥有。
+6. 回答模块按部署提供直接提交／修订或 claim 选证／写作操作。模型提交完整候选，运行系统持久化 `SubmittedFinal`，再执行适用核验及领域文件检查，通过后交付同一稿件。模型协议见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查见 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)。
 7. 运行系统按装配契约完成适用核验和 Completion，交付确切 `FinalMessage` 正文。用户授权的无语义核验诊断不产生通过回执，也不计完整产品 E2E；边界见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
 
 当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
@@ -55,9 +55,9 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 
 ### 3.1 当前主循环的职责混合
 
-上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。2026-10-24 原生意图切片已替换源码，真实生成和完整 E2E 尚待验收，不把静态检查视为架构收益或产品通过。
+上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。原生协议已接入，直接回答装配的实际生成、连续交付及恢复范围见 [Loop 运行结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)；研究子流程的职责拆分仍是候选。
 
-claims 操作的适用性取决于 writer 装配、冻结标准、当前稿和已成功 Web 来源，不再依赖 finalization_pending。来源出现只使非空选证操作可用，不自动开始写作；周期 `ResearchService` 仍拥有独立订阅、调度和投递生命周期，不能与请求内研究合称同一后台循环。
+claim 操作的适用性取决于 writer 装配、冻结标准、当前稿和已成功 Web 来源。来源出现使选证操作可用，写作仍由模型选择；周期 `ResearchService` 另有订阅、调度和投递生命周期。
 
 默认 required 核验装配下，普通最终答案只有 `ReviewCriteria.requires_review` 成立才调用整稿核验；研究交付消费同版本统一报告。普通核验器固定追加通用来源标准，现有计算样本已经出现范围和支持判断缺口，语义修复仍暂放，见[现状与候选](../optimization/to_verify/conversation-loop-boundaries.md)。完整研究子流程封装仍是候选；当前只替换回答提交模块，不新增第二套模型循环。
 
@@ -94,11 +94,11 @@ MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝�
 
 ## 7. 模型与服务提供方边界
 
-模型调用的正式 Port 是 `StructuredModelClient`，由组合根注入，覆盖结构化、原生工具调用和文本请求。结构化工厂根据 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；两者都在调用边界携带 Schema，并将结果物化为同一 Pydantic 契约。
+模型调用的正式 Port 是 `StructuredModelClient`，由组合根注入，覆盖结构化、原生工具调用和文本请求。默认结构化承载按 `StructuredConfig.output_transport` 选择 `StrictJsonSchemaAdapter` 或 `JsonObjectStructuredAdapter`；请求也可明确声明 `native_tool` 或 `prompted_json`，均由同一 Pydantic 契约校验结果。
 
 模型适配的阅读入口按职责组织：`infra/structured_model.py` 拥有公开工厂、SDK 调用、超时、协议修复、重试与观测装配；`infra/model_response.py` 集中响应 envelope、流内容、原生动作调用和用量归一化。现有 Adapter 与计量包装器直接消费这些解析函数，业务准入仍由 Application 拥有。解析规则的局部修改从新模块及其 typed 契约进入，调用与恢复问题从原适配入口进入。
 
-Conversation主请求使用auto：工具调用优先，无调用的完整合法assistant正文由AnswerResult形成同一FinalMessage候选，显式提交／修订仍承载沟通属性、引用和已有稿编辑。候选继续原SubmittedFinal、核验与Completion，不增完成状态；内层typed请求仍以required输出工具返回，并沿同一承载修复。正文、Verifier原稿及回执digest使用同一原字符串。当前修订的真实验收状态由[统一Loop Spec](../optimization/to_verify/conversation-loop-schema.md#11-第17轮后的终止协议复审与修订准入)拥有，不能以源码接入宣称完整36轮已通过。
+Conversation 主请求使用 `auto`，优先处理工具调用。没有调用时，`AnswerResult` 将完整合法的 assistant 正文转为 `FinalMessage` 候选；显式提交／修订还可携带沟通属性、引用和稿件编辑。候选沿同一 `SubmittedFinal`、核验与 Completion 链交付，正文、Verifier 原稿及回执 digest 使用同一原字符串。意图提取使用 `prompted_json`，原生 typed 输出请求使用 `required` 工具，修复沿用各自承载。实现与实际验证范围见 [Loop Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)。
 
 模型工厂以显式包装器组合单次调用准入、观测、用量和重试，实际顺序、SDK 流式 transport 与正式 SSE 的边界见[横切机制](cross-cutting.md#2-模型调用的实际组合)。模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索绑定与正文读取配置由[工具专题](../topics/tools.md)和[环境配置](../env.md)拥有。配置只证明部署选择，不证明服务健康或产品结果。
 
@@ -116,13 +116,7 @@ Trace、event、receipt 和评测归档记录事实，不改变生产决策。�
 
 ## 9. 当前不变量
 
-1. 一个业务事实只有一个 canonical model、责任主体和合法写入口。
-2. 身份、作用域、digest 和资源引用跨层时使用 typed contract。
-3. Admission 只接受或拒绝 Proposal，不补业务字段或生成替代目标。
-4. 最终回答不能由工具成功、子智能体终态或 Verifier 自述直接推导。
-5. Application 能力定义归对应 Application Use Case；模型可见菜单由定义、可用性和曝光生成，授权在实际调用边界检查。
-6. 固定事务不为形式统一包装为 Planner、Workflow、Command、Event 或 Project。
-7. 产品能力只能由正式入口的用户结果证明；内部对象和 Trace 只能用于定位。
+事实归属、唯一写入口与依赖方向由 [ARC](../devSpec/architecture-ownership.md)约束；Proposal、准入、执行和完成的边界由 [EXE](../devSpec/agentic-execution.md)约束；跨层类型和 Prompt 契约由 [COD](../devSpec/code-structure.md)约束。这些是维护门禁，具体实现与差异按上文和代码地图核对。
 
 ## 10. 当前证据边界
 

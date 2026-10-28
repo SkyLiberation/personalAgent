@@ -12,19 +12,19 @@
 
 | 入口 | 唯一主讲内容 |
 | --- | --- |
-| [EVD：变更证据与设计准入](change-evidence.md) | 设计顺序、基线与因果证据、连续模型链、验证额度、复杂度、机制比较、优秀实践优先采用、偏离依据与真实问题驱动调整、方案问题的解决闭环、阻塞复审、累计设计改动的整体 critic、优化验收与重新打开 |
+| [EVD：变更证据与设计准入](change-evidence.md) | 设计顺序、基线与因果证据、连续模型链、复杂度、机制比较、优秀实践优先采用、偏离依据与真实问题驱动调整、方案问题的解决闭环、阻塞复审、累计设计改动的整体 critic、优化验收与重新打开 |
 | [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、派生缓存与投影、契约一致性、设计阶段的架构分析、生产可达性与架构基线演进 |
-| [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan、Admission、执行、Verification、Completion、Command 与恢复协议 |
+| [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan 及其审阅与 planning-safe 边界、Admission、执行、Verification、Completion、Command 与恢复协议 |
 | [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入与 think 审计、中立追问、反馈表达、存储边界、能力投影与服务方等价绑定 |
-| [COD：代码组织与实现约束](code-structure.md) | 可读性优先、功能模块化与开发上下文、类型与不变量、已有文字引用、职责与编排、错误、依赖注入、横切关注点与 AOP、命名与通用 Prompt 契约 |
-| [QLT：测试、评估、观测与安全](quality-security.md) | 验证方式、替身边界、Golden Set、局部语义判断类修复的重复验证、E2E 阻塞、核验漏放的最小充分上下文诊断与任务设计复审、安全与审计 |
+| [COD：代码组织与实现约束](code-structure.md) | 可读性与模块职责门禁、类型与不变量、已有文字引用、职责与编排、错误、依赖注入、横切实现边界、命名与通用 Prompt 契约；编码方法归属由正文链接至项目 skill |
+| [QLT：测试、评估、观测与安全](quality-security.md) | 验证方式、替身边界、Golden Set、语义修复的证据资格、E2E 阻塞、核验漏放的最小充分上下文诊断与任务设计复审、安全与审计 |
 | [REL：迁移、ADR 与完成门禁](migration-release.md) | 兼容例外、迁移、ADR 与分类完成检查 |
 | [DOC：文档模块规范](../AGENTS.md) | 文档事实治理、生命周期与检查 |
 | [EVM：评测模块规范](../../evals/AGENTS.md) | 用例登记、比较身份、归档、历史证据复用、运行声明与成本控制 |
 | [生产 Prompt 模块规范](../../src/personal_agent/kernel/prompt_templates/AGENTS.md) | `PromptSpec` 注册、序列化、版本与消费检查 |
 | [REF：优秀智能体能力组件参考](../agentRef/README.md) | 外部机制检索坐标、重复阻塞的同类方法检索与证据范围，不拥有工程规则或采用结论 |
 
-文档目录由[文档索引](../README.md)拥有，中文表达及设计 Spec 结构由[写作规范](../chinese-writing-spec.md#62-spec-结构与需求追溯)拥有，Future 与优化记录的生命周期分别由 [Future 索引](../future/README.md)和[优化索引](../optimization/README.md)拥有。
+文档目录由[文档索引](../README.md)拥有，中文表达及设计 Spec 结构由[写作规范](../chinese-writing-spec.md#62-spec-结构与需求追溯)拥有，Future 与优化记录的生命周期分别由 [Future 索引](../future/README.md)和[优化索引](../optimization/README.md)拥有。项目 skill 的触发与分工统一见[根规范任务路由](../../AGENTS.md#3-任务路由按识别信号读取细则)，本索引不重复维护技能清单或输出模板。验证计划、比较条件、重复次数、计分与额度安排由[方案推进验证规则](../../.agents/skills/analyze-proposal-progress/SKILL.md#3-方案验证与重复次数)拥有。
 
 当前框架从[工程架构入口](../architecture/README.md)读取；该目录说明实现与代码位置，本目录拥有设计和开发约束，架构持续维护按 ARC 执行。
 

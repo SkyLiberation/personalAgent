@@ -5,7 +5,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from personal_agent.kernel.prompts import get_prompt
 
 
 class PersonEntity(BaseModel):
@@ -43,9 +42,6 @@ ENTITY_TYPES: dict[str, type[BaseModel]] = {
     "Organization": OrganizationEntity,
     "Source": SourceEntity,
 }
-
-
-CUSTOM_EXTRACTION_INSTRUCTIONS = get_prompt("graphiti.custom_extraction").template
 
 
 def _coerce_to_text(value: Any) -> str:

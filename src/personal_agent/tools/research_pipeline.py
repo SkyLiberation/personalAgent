@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -117,7 +120,7 @@ def build_research_run_loop_tool(service) -> BaseTool:
     return research_run_loop
 
 
-def build_research_synthesize_digest_tool(service) -> BaseTool:
+def build_research_synthesize_digest_tool(service, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> BaseTool:
     @tool(
         "research_synthesize_digest",
         description="根据 ResearchRunProjection 中的事件和证据状态生成情报简报。",
@@ -137,7 +140,7 @@ def build_research_synthesize_digest_tool(service) -> BaseTool:
             "run_id": run_id,
             "run": run.model_dump(mode="json"),
             "digest": digest.model_dump(mode="json") if digest else None,
-            "answer": digest.to_text() if digest else run.failure_reason or "研究未生成简报。",
+            "answer": digest.to_text() if digest else run.failure_reason or prompts.render('tools.research.digest_missing'),
         }))
 
     return research_synthesize_digest

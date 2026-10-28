@@ -1,6 +1,6 @@
 # 智能体决策与受治理执行细则（EXE）
 
-> 本细则在任务涉及 Proposal、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay 或 durable execution 时生效。
+> 本细则在任务涉及 Proposal、Plan 审阅与 planning-safe、Admission、ToolCall、Command、Approval、digest、Receipt、Execution、Verification、Completion、replay 或 durable execution 时生效。
 
 ## 1. Proposal、Admission 与降级边界
 
@@ -21,6 +21,8 @@ Procedure 只封装 prepare、confirm、commit、receipt、compensate 和 reconc
 ### 2.1 Plan 控制与具体工具不得混装
 
 **新增或修改 Plan 与 ToolCall 协议时，模型只在工作状态发生变化时更新 Plan，具体工具只接收完成业务动作所需的参数。** 禁止要求模型在每次搜索、读取、写入或智能体调用中重复提交 canonical Plan 已经拥有的步骤标识；这种镜像字段不能增加语义信息，只会扩大服务提供方 Schema、Admission 和恢复失败面。
+
+审阅前只可执行 Policy 投影为 planning-safe 的低风险读取；planning-safe 不等于严格 read-only，其他执行会关闭新 Plan 的审阅迁移。
 
 Plan 协议必须遵守以下责任边界：
 
@@ -48,7 +50,7 @@ Plan 协议必须遵守以下责任边界：
 
 FinalMessage 不得通过重复枚举全部 Plan Step ID 来替代 Verifier。工具成功、Plan 状态、模型自述和固定预算也都不能替代 Semantic Verification 或 Completion Gate。
 
-研究模型在同一研究版本提交的完整 `final_answer` 属于最终交付提议。Runtime 只将该字段的确切正文与引用恢复为 `FinalMessage`，按同版本统一核验和 Completion 交付；字段缺失时保存中间进展，继续研究。该恢复不生成答案，也不增加独立汇总或第二次语义核验。
+研究最终产物接入 `FinalMessage` 的具体契约见 [Runtime 的 Conversation loop](../topics/runtime.md#conversation-loop)。
 
 ## 3. Tool、Command、digest 与 Receipt
 
@@ -71,7 +73,7 @@ digest 是冻结 canonical payload 的一致性指纹，不是身份、授权或
 
 Command、Event、Receipt 不得机械成套创建：
 
-- 仅当操作需跨请求、审批、重试或恢复时创建 Command；
+- Command 按本节首段及根规范第 2.4 节的条件创建；
 - 仅当已发生事实有独立审计、订阅或重放消费者时创建 Event；
 - 仅当需要幂等执行证据、外部结果关联或恢复依据时创建 Receipt；Receipt 本身不证明跨外部系统的 exactly-once；
 - Projection 或 View 必须可从 canonical facts 重建，且禁止成为第二业务写入口；有实际需求时可按 [ARC 派生存储规则](architecture-ownership.md#61-派生缓存与投影)持久化和受控刷新。

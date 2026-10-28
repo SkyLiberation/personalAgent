@@ -18,7 +18,8 @@ from personal_agent.capabilities.contracts.model import (
     sealed_context_projection_ref,
 )
 
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .models import (
     ConversationMessage,
@@ -47,7 +48,7 @@ class UserTextReference(_StrictModel):
 class ReviewRequirement(_StrictModel):
     """One acceptance condition and its verbatim user-owned source."""
 
-    criterion: str = Field(min_length=1, max_length=500)
+    criterion: str = Field(min_length=1)
     source: UserTextReference
 
 
@@ -105,6 +106,7 @@ def resolve_user_text(
 
 def materialize_intent_messages(
     messages: Sequence[ConversationMessage],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> list[dict[str, object]]:
     """Show one numbered copy; coordinates still resolve against the originals."""
     projected = []
@@ -113,8 +115,7 @@ def materialize_intent_messages(
         if message.role == "user":
             lines = _user_lines(message.content)
             item["content"] = (
-                f"用户原始消息索引 message_index={index}，允许行号 1..{len(lines)}。"
-                "下列 L 编号由 Runtime 添加，不属于用户原文：\n"
+                prompts.render("conversation.intent.user_source_header", index=index, line_count=len(lines))
                 + "".join(f"L{number}|{line}" for number, line in enumerate(lines, 1))
             )
         projected.append(item)
@@ -125,6 +126,7 @@ def admit_interaction_intent(
     proposal: InteractionIntentProposal,
     *,
     messages: Sequence[ConversationMessage],
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> AdmittedInteractionIntent:
     """Ground semantic decisions only in verbatim user-authored text."""
     background_span = resolve_user_text(proposal.background_source, messages, latest_only=True)
@@ -153,12 +155,12 @@ def admit_interaction_intent(
     )
     interaction_phase = proposal.interaction_phase if phase_grounded else "ordinary"
     if not phase_grounded:
-        ungrounded.append(_source_description(proposal.phase_source))
+        ungrounded.append(_source_description(proposal.phase_source, prompts=prompts))
     for requirement in proposal.requirements:
         span = resolve_user_text(requirement.source, messages)
         criterion = requirement.criterion.strip()
         if not criterion or not span:
-            ungrounded.append(_source_description(requirement.source))
+            ungrounded.append(_source_description(requirement.source, prompts=prompts))
             continue
         if criterion not in criteria:
             criteria.append(criterion)
@@ -185,15 +187,16 @@ def derive_interaction_intent(
         [StructuredModelRequest[InteractionIntentProposal]],
         StructuredModelResponse[InteractionIntentProposal],
     ] | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[
     AdmittedInteractionIntent,
     tuple[StructuredModelResponse[InteractionIntentProposal], ...],
     tuple[DecisionFeedback, ...],
 ]:
     """Derive one intent, revising an ungrounded background requirement at most once."""
-    intent_prompt = get_prompt("conversation.interaction_intent")
+    intent_prompt = prompts.get("conversation.interaction_intent")
     generate_model = generate or model_client.generate
-    source_messages = materialize_intent_messages(messages)
+    source_messages = materialize_intent_messages(messages, prompts=prompts)
     prompt_messages = [
         {"role": "system", "content": intent_prompt.template},
         *source_messages,
@@ -214,14 +217,14 @@ def derive_interaction_intent(
             metadata={"component": "conversation_intent_admission"},
         )
     )
-    admitted = admit_interaction_intent(response.value, messages=messages)
+    admitted = admit_interaction_intent(response.value, messages=messages, prompts=prompts)
     if admitted.background_requirement_grounded:
         return admitted, (response,), ()
 
-    feedback = background_requirement_revision_feedback()
+    feedback = background_requirement_revision_feedback(prompts=prompts)
     if deadline_at is not None and datetime.now(UTC) >= deadline_at:
         raise ConversationFailure(
-            "本次实验运行时限已到；已保留实际成果，本次研究未完成。",
+            prompts.render("conversation.intent.deadline_exceeded"),
             reason_code="run_deadline_exceeded",
             failure_stage="application_budget",
             prior_responses=(response,),
@@ -239,7 +242,7 @@ def derive_interaction_intent(
         and consumed >= remaining_tokens
     ):
         raise ConversationFailure(
-            "本次研究的已知模型消费达到额度，已停止新增付费调用。",
+            prompts.render("conversation.intent.tokens_exhausted"),
             reason_code="model_token_budget_exhausted",
             failure_stage="application_budget",
             prior_responses=(response,),
@@ -247,14 +250,9 @@ def derive_interaction_intent(
     revision_messages = [
         {
             "role": "system",
-            "content": (
-                f"{intent_prompt.template}\n\n"
-                "上次后台要求未通过来源准入。仅修订 background_continuation_requested、"
-                "background_source、interaction_phase 和 phase_source；requirements 已冻结，"
-                "修改不会生效。确需本次响应返回后独立工作时，引用最新用户消息中证明该要求的行；"
-                "否则返回 false 和 background_source=null。上次实际提议："
-                f"{response.value.model_dump_json()}。实际反馈："
-                f"{feedback.model_dump_json()}."
+            "content": prompts.render(
+                "conversation.intent.revision", intent_prompt=intent_prompt.template,
+                proposal=response.value.model_dump_json(), feedback=feedback.model_dump_json(),
             ),
         },
         *source_messages,
@@ -303,20 +301,20 @@ def derive_interaction_intent(
         }
     )
     return (
-        admit_interaction_intent(revised_proposal, messages=messages),
+        admit_interaction_intent(revised_proposal, messages=messages, prompts=prompts),
         (response, revision),
         (feedback,),
     )
 
 
-def background_requirement_revision_feedback() -> DecisionFeedback:
+def background_requirement_revision_feedback(
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> DecisionFeedback:
     """Describe the only fields an ungrounded background proposal may revise."""
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
         reason_code="background_requirement_revision_required",
-        message=(
-            "后台继续运行要求缺少最新用户消息中的合法来源，或与交互相位冲突。"
-        ),
+        message=prompts.get("conversation.intent.background_revision.message").template,
         repairable_fields=(
             "background_continuation_requested",
             "background_source",
@@ -324,45 +322,38 @@ def background_requirement_revision_feedback() -> DecisionFeedback:
             "phase_source",
         ),
         immutable_fields=("messages", "requirements"),
-        required_repair=(
-            "确需响应返回后继续工作时返回 true 及最新用户消息的合法行引用；"
-            "否则返回 false 和 background_source=null。后台要求只适用 ordinary，phase_source=null。"
-        ),
+        required_repair=prompts.get("conversation.intent.background_revision.repair").template,
     )
 
 
-def ungrounded_criteria_feedback(criteria: ReviewCriteria) -> DecisionFeedback:
+def ungrounded_criteria_feedback(
+    criteria: ReviewCriteria, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> DecisionFeedback:
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
         reason_code="review_criteria_not_grounded",
-        message=(
-            "本次验收条件无法恢复到合法用户原文，未接纳为审查标准。"
-        ),
+        message=prompts.get("conversation.intent.ungrounded_criteria.message").template,
         repairable_fields=("message",),
         immutable_fields=("messages",),
-        required_repair=(
-            "需要按明确要求审稿时，请用户明确验收条件；其他请求正常回答，不自述已通过核验。"
-        ),
+        required_repair=prompts.get("conversation.intent.ungrounded_criteria.repair").template,
     )
 
 
-def ungrounded_background_requirement_feedback() -> DecisionFeedback:
+def ungrounded_background_requirement_feedback(
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> DecisionFeedback:
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
         reason_code="background_requirement_not_grounded",
-        message=(
-            "后台继续运行要求未能恢复到最新用户原文，没有启动后台任务。"
-        ),
+        message=prompts.get("conversation.intent.ungrounded_background.message").template,
         repairable_fields=("message",),
         immutable_fields=("messages",),
-        required_repair=(
-            "在当前对话继续工作；确需响应返回后独立继续时，请用户明确后台要求。"
-        ),
+        required_repair=prompts.get("conversation.intent.ungrounded_background.repair").template,
     )
 
 
-def _source_description(source: UserTextReference | None) -> str:
-    return source.model_dump_json() if source is not None else "<缺少用户来源>"
+def _source_description(source: UserTextReference | None, *, prompts: PromptCatalog) -> str:
+    return source.model_dump_json() if source is not None else prompts.render("conversation.intent.source_missing")
 
 
 __all__ = [

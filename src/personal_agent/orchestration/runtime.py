@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 from personal_agent.infra.artifact_ripgrep import RipgrepArtifactSearch
 
 import logging
@@ -17,6 +19,8 @@ from personal_agent.kernel.models import (
 )
 from personal_agent.kernel.observability import PolicyDecisionRecorder
 from personal_agent.infra.structured_model import build_structured_model_client
+from personal_agent.kernel.prompts import create_prompt_catalog
+from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.memory import MemoryFacade
 from personal_agent.application.knowledge import KnowledgeConsolidationUseCase
@@ -172,16 +176,18 @@ class AgentRuntime:
         store: PostgresMemoryStore,
         graph_store: GraphitiStore,
         capture_service: "CaptureService | None" = None,
+        *, prompts: PromptCatalog | None = None,
     ) -> None:
         if not settings.postgres_url:
             raise ValueError(
                 "PERSONAL_AGENT_POSTGRES_URL is required for business persistence."
             )
         self.settings = settings
+        self._prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
         configure_langsmith_environment(settings.langsmith)
         self.store = store
         self.graph_store = graph_store
-        self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings))
+        self._policy_engine = PolicyEngine(_policy_rules_from_settings(settings), prompts=self._prompts)
         self.tool_governance_store = PostgresToolGovernanceStore(settings.postgres_url)
         self.procedure_definition_store = PostgresProcedureDefinitionStore(
             settings.postgres_url
@@ -212,10 +218,13 @@ class AgentRuntime:
         )
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
-        self.artifact_service = ArtifactService(settings, logger)
+        self.artifact_service = ArtifactService(settings, logger, provider_policy=build_provider_policy(
+            base_url=settings.openai.base_url, provider=settings.openai.provider,
+        ), prompts=self._prompts)
         self._structured_client = build_structured_model_client(
             settings.structured,
             settings.langsmith,
+            prompts=self._prompts,
         )
         # Unified LLM ports: every application caller depends on these instead of
         # ``OpenAI`` / ``traced_chat_completion``. ``model_client`` serves
@@ -228,6 +237,7 @@ class AgentRuntime:
         self._model_client = build_chat_model_client(
             settings.openai,
             settings.langsmith,
+            prompts=self._prompts,
         )
         if self._structured_client is not None:
             self.knowledge_service.relation_judge = LLMClaimRelationJudge(
@@ -245,6 +255,7 @@ class AgentRuntime:
         self._research_event_client = self._structured_client
         self._planner_client = self._structured_client
         self._tool_executor = ToolExecutor(
+            prompts=self._prompts,
             audit_sink=self.tool_governance_store,
             idempotency_store=self.tool_governance_store,
             policy_engine=self._policy_engine,
@@ -265,6 +276,7 @@ class AgentRuntime:
         self._llm = LlmClient(
             settings,
             model_client=self._model_client,
+            prompts=self._prompts,
         )
         self._digest_formatter = DigestFormatter()
         self._review_digest_use_case = ReviewDigestUseCase(
@@ -283,19 +295,22 @@ class AgentRuntime:
             )
         )
         self._knowledge_consolidation_use_case = KnowledgeConsolidationUseCase(
-            self.memory,
+            self.memory, prompts=self._prompts,
             capture=lambda **kwargs: self.execute_capture(**kwargs),
             generate_draft=lambda prompt: self._llm.generate_answer(
                 prompt,
                 prompt_name="note_consolidation",
+                prompt_version=self._prompts.get("knowledge.consolidation.draft").version,
             ),
         )
         self._research_service = ResearchService(
             self.research_store,
             self._tool_executor,
+            prompts=self._prompts,
             generate_text=lambda prompt, name: self._llm.generate_answer(
                 prompt,
                 prompt_name=name,
+                prompt_version=self._prompts.get(name).version,
             ),
             save_note=lambda **kwargs: self.execute_capture(**kwargs),
             event_extractor=StructuredResearchEventExtractor(
@@ -325,7 +340,7 @@ class AgentRuntime:
             build_research_run_loop_tool(self._research_service)
         )
         self._tool_executor.register(
-            build_research_synthesize_digest_tool(self._research_service)
+            build_research_synthesize_digest_tool(self._research_service, prompts=self._prompts)
         )
         self._tool_executor.register(
             build_research_verify_digest_tool(self._research_service)
@@ -348,10 +363,10 @@ class AgentRuntime:
                 self.settings.retrieval_experiment_config_path)
             experiment_service = RetrievalExperimentService(
                 artifacts=self.artifact_service, journal=conversation_journal,
-                execution=DockerExperimentBackend(deployment=experiment_deployment, environment=experiment_environment),
-                deployment=experiment_deployment,
+                execution=DockerExperimentBackend(deployment=experiment_deployment, environment=experiment_environment, prompts=self._prompts),
+                deployment=experiment_deployment, prompts=self._prompts,
             )
-            self._tool_executor.register(build_retrieval_experiment_tool(experiment_service))
+            self._tool_executor.register(build_retrieval_experiment_tool(experiment_service, prompts=self._prompts))
             from personal_agent.application.python_execution.models import (
                 PythonExecutionLimits, PythonExecutionProfile,
             )
@@ -375,8 +390,8 @@ class AgentRuntime:
             from personal_agent.application.conversation.research_delivery import ResearchExperimentCompletionUseCase
             experiment_completion = ResearchExperimentCompletionUseCase(
                 experiments=RetrievalExperimentCompletionService(
-                    experiments=experiment_service,
-                ), artifacts=self.artifact_service,
+                    experiments=experiment_service, prompts=self._prompts,
+                ), artifacts=self.artifact_service, prompts=self._prompts,
             )
         if self.settings.python_execution_config_path is not None:
             from personal_agent.infra.python_execution.deployment import load_python_deployment
@@ -394,21 +409,22 @@ class AgentRuntime:
                 artifacts=self.artifact_service, journal=conversation_journal,
                 execution=DockerPythonExecutionBackend(
                     endpoint=python_endpoint, work_root=self.settings.data_dir / "python_execution_jobs",
-                    profile=python_profile),
-                profile=python_profile,
+                    profile=python_profile, prompts=self._prompts),
+                profile=python_profile, prompts=self._prompts,
             )
-            self._tool_executor.register(build_execute_python_tool(python_service))
+            self._tool_executor.register(build_execute_python_tool(python_service, prompts=self._prompts))
         from personal_agent.application.conversation.answer_results import DirectAnswerResult, ClaimAnswerResult
         answer_result = (
             DirectAnswerResult if self.settings.answer_result.writer == "direct" else ClaimAnswerResult
         )(self.settings.answer_result)
         self._conversation_service = ConversationService(
             self._structured_client,
+            prompts=self._prompts,
             policy_decisions=self._policy_decisions,
             tool_port=self._tool_executor,
             agent_port=self._agent_gateway,
             artifact_port=self.artifact_service,
-            artifact_search=RipgrepArtifactSearch(),
+            artifact_search=RipgrepArtifactSearch(prompts=self._prompts),
             knowledge_writer=self.knowledge_service,
             knowledge_reader=ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
@@ -433,6 +449,7 @@ class AgentRuntime:
         if self._structured_client is not None and answer_result.verification_enabled:
             self._tool_executor.register(build_verify_interaction_draft_tool(
                 self._conversation_service.generate_verification,
+                prompts=self._prompts,
             ))
         self._sync_procedure_definitions()
         self._procedure_runtime = ProcedureRuntime(
@@ -520,14 +537,14 @@ class AgentRuntime:
     def _register_tools(self) -> None:
         if self.capture_service is not None:
             self._tool_executor.register(build_capture_url_tool(self.capture_service))
-            self._tool_executor.register(build_web_read_tool(self.settings, self.capture_service))
+            self._tool_executor.register(build_web_read_tool(self.settings, self.capture_service, prompts=self._prompts))
             self._tool_executor.register(
                 build_capture_upload_tool(self.capture_service, self.artifact_service)
             )
-        self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service))
-        self._tool_executor.register(build_write_artifact_tool(self.artifact_service))
+        self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service, prompts=self._prompts))
+        self._tool_executor.register(build_write_artifact_tool(self.artifact_service, prompts=self._prompts))
         self._tool_executor.register(
-            build_graph_search_tool(self._active_graph_store())
+            build_graph_search_tool(self._active_graph_store(), prompts=self._prompts)
         )
         self._tool_executor.register(
             build_capture_text_tool(
@@ -541,14 +558,14 @@ class AgentRuntime:
             )
         )
         self._tool_executor.register(build_list_recent_notes_tool(self.memory))
-        self._tool_executor.register(build_get_note_tool(self.memory))
+        self._tool_executor.register(build_get_note_tool(self.memory, prompts=self._prompts))
         self._tool_executor.register(build_find_similar_notes_tool(self.memory))
         self._tool_executor.register(build_update_note_tool(self.memory))
         self._tool_executor.register(build_supersede_note_tool(self.memory))
         self._tool_executor.register(build_mark_note_deprecated_tool(self.memory))
         self._tool_executor.register(build_mark_notes_conflicted_tool(self.memory))
         self._tool_executor.register(
-            build_consolidate_knowledge_tool(self._knowledge_consolidation_use_case)
+            build_consolidate_knowledge_tool(self._knowledge_consolidation_use_case, prompts=self._prompts)
         )
         self._tool_executor.register(
             build_review_digest_tool(self._review_digest_use_case)
@@ -575,7 +592,7 @@ class AgentRuntime:
             build_list_research_runs_tool(self._research_service)
         )
         self._tool_executor.register(
-            build_get_research_digest_tool(self._research_service)
+            build_get_research_digest_tool(self._research_service, prompts=self._prompts)
         )
         self._tool_executor.register(
             build_submit_research_feedback_tool(self._research_service)
@@ -592,7 +609,7 @@ class AgentRuntime:
 
             web_provider = build_web_search_provider(self.settings)
             self._tool_executor.register(
-                build_web_search_tool(self.settings, web_provider)
+                build_web_search_tool(self.settings, web_provider, prompts=self._prompts)
             )
         for mcp_tool in build_mcp_tools(self.settings.mcp):
             self._tool_executor.register(mcp_tool)
@@ -835,12 +852,9 @@ class AgentRuntime:
         if not self.settings.openai.api_key or not self.settings.openai.base_url:
             return None
         prompt = (
-            "把下面的个人知识库缺口改写成一句自然、友好、简洁的中文提问。"
-            "只输出问题本身。\n"
-            f"缺口类型：{gap.gap_type}\n相关实体：{', '.join(gap.entities) or '无'}\n"
-            f"默认问法：{gap.question}"
+            self._prompts.render('knowledge.gap_question', gap_type=gap.gap_type, entities=', '.join(gap.entities) or self._prompts.render('knowledge.gap_no_entities'), question=gap.question)
         )
-        return self._llm.generate_answer(prompt, prompt_name="knowledge_gap_question")
+        return self._llm.generate_answer(prompt, prompt_name="knowledge_gap_question", prompt_version=self._prompts.get("knowledge.gap_question").version)
 
     def sync_note_to_graph(self, note_id: str) -> bool:
         return self._ingestion().sync_note_to_graph(note_id)

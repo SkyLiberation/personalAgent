@@ -1,12 +1,12 @@
 # 独立检索实验工具
 
-从仓库根运行 `python -m scripts.retrieval_experiment --help`。本工具供开发者执行一次实验、复算及复现；研究设计由[唯一 Spec](../../docs/optimization/to_verify/knowledge-decision-delivery.md#71-先行交付独立实验工具-implementation-plan)拥有。控制端路径由受信操作者提供，不是模型参数协议。
+从仓库根运行 `python -m scripts.retrieval_experiment --help`。本工具供开发者执行一次实验、复算及复现；研究设计由[唯一 Spec](../../docs/optimization/to_verify/verify_results/research-experiment.md#31-先行交付独立实验工具-implementation-plan)拥有。控制端路径由受信操作者提供，不是模型参数协议。
 
 工程入口只转调 `src/personal_agent/adapters/cli/retrieval_experiment.py`，不初始化 Runtime。独立 CLI 和生产 `DockerExperimentBackend` 共用 `infra/retrieval_experiment/` 的检索、评分和候选执行实现；业务类型与无 IO 冻结规则由 `application/retrieval_experiment/` 拥有。原工程命令和 `--help` 只需下列 control requirements；`reproduce` 读取正式 Artifact 与 Settings，使用已安装项目生产依赖的原授权运行环境，也不构造 Runtime。worker 从仓库根构建，专属 `Dockerfile.worker.dockerignore` 只允许固定依赖和必要 Python 源码进入上下文；候选镜像仍使用原目录构建。新 worker 使用独立标签，历史冻结仍绑定原确切镜像与源码，不能换成新镜像。
 
-当前源码将 `per_query.json` 保持为标准 JSON 对象、每查询一行，便于原读取／搜索按完整查询定位；评分值和 JSON 消费者保持。须使用包含此源码的新 worker 镜像，原单行文件与确切旧镜像保留，详见[格式范围与验证](../../docs/optimization/to_verify/knowledge-decision-delivery.md#逐查询产物的可定位格式候选)。
+当前源码将 `per_query.json` 保持为标准 JSON 对象、每查询一行，便于原读取／搜索按完整查询定位；评分值和 JSON 消费者保持。须使用包含此源码的新 worker 镜像，原单行文件与确切旧镜像保留，详见[格式范围与验证](../../docs/optimization/to_verify/verify_results/research-experiment.md#逐查询产物的可定位格式候选)。
 
-生产装配由 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 指向受信 JSON，顶层为 `deployment` 与 `environment`。前者绑定主体、四种原件角色、manifest、固定镜像和模型身份及额度；后者含 `endpoint`、`network`、`es_endpoint`、绝对 `model_path` 和 `workspace_root`。加载入口为 `infra.retrieval_experiment.deployment.load_retrieval_deployment`。实际部署还须完成生成模型 capacity 准入；完整接受、授权、恢复及完成规则见 [Spec §4.1](../../docs/optimization/to_verify/knowledge-decision-delivery.md#41-受限实验能力)，本 CLI 不替代该生产入口。
+生产装配由 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 指向受信 JSON，顶层为 `deployment` 与 `environment`。前者绑定主体、四种原件角色、manifest、固定镜像和模型身份及额度；后者含 `endpoint`、`network`、`es_endpoint`、绝对 `model_path` 和 `workspace_root`。加载入口为 `infra.retrieval_experiment.deployment.load_retrieval_deployment`。实际部署还须完成生成模型 capacity 准入；完整接受、授权、恢复及完成规则见 [受限实验能力](../../docs/optimization/to_verify/research-experiment-protocol.md#2-受限实验能力)，本 CLI 不替代该生产入口。
 
 ## 准备
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from langchain_core.tools import BaseTool, tool
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,7 +25,7 @@ class InspectArtifactArgs(BaseModel):
     )
 
 
-def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
+def build_inspect_artifact_tool(artifact_service: ArtifactService, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> BaseTool:
     @tool(
         "inspect_artifact",
         description="读取当前可读文件，按问题提取内容并返回来源引用；不会写入长期知识库。",
@@ -41,10 +44,10 @@ def build_inspect_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
     def inspect_artifact(
         resource_id: str, config: RunnableConfig, question: str = ""
     ):
-        context = require_gateway_context(config)
+        context = require_gateway_context(config, prompts=prompts)
         resource_ref = resolve_artifact_ref(
             resource_id, context.allowed_resource_refs,
-            principal=context.execution_scope.principal,
+            principal=context.execution_scope.principal, prompts=prompts,
         )
         result = artifact_service.inspect_upload(
             resource_ref=resource_ref,

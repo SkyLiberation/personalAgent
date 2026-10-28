@@ -59,7 +59,7 @@ tool calls 时继续循环，并允许并行执行多个调用。Anthropic 的
 8. Provider 在内部 required action phase 返回纯文本时，Adapter 使用同一 action schema 做一次协议修复，不把
    纯文本猜成 Final，也不做无界重试。
 
-2026-10-23 LongDS 正式首轮发现既有自动研究入口偏离上述责任：读到局部 Artifact 正文后，代码没有收到 `prepare_final` 就移除全部动作并要求最终成文。按[实际基线与验收](../optimization/to_verify/knowledge-decision-delivery.md#l1-结果与首个因果切片)删除该自动切换。普通工具结果只交回动作模型；外部研究在模型明确提交后仍走原研究及核验链。此修正不增加协议、持久字段或无核验出口；首轮结果与阶段检查点分别记录。
+2026-10-23 LongDS 正式首轮发现既有自动研究入口偏离上述责任：读到局部 Artifact 正文后，代码没有收到 `prepare_final` 就移除全部动作并要求最终成文。按[实际基线与验收](../optimization/to_verify/verify_results/longds-analysis.md#11-l1-结果与首个因果切片)删除该自动切换。普通工具结果只交回动作模型；外部研究在模型明确提交后仍走原研究及核验链。此修正不增加协议、持久字段或无核验出口；首轮结果与阶段检查点分别记录。
 
 ## 4. 为什么保留 `prepare_final`
 

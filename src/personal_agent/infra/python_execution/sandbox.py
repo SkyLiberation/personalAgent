@@ -6,6 +6,9 @@ contracts; this runner confirms process termination and preserves actual bytes.
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from contextlib import closing
 
 import hashlib
@@ -654,20 +657,21 @@ def _recover_program(
     output_dir: Path,
     job_key: str,
     input_sha256: Mapping[str, str] | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> SandboxResult:
     """原候选完整输出可复用；失去capture的在途进程只确认停止，不重启。"""
     from docker import DockerClient
 
     record_path = output_dir / "job.json"
     if not record_path.is_file():
-        raise RuntimeError("候选目录缺少原身份，禁止重新执行")
+        raise RuntimeError(prompts.render('python_recovery.identity_missing'))
     raw = asdict(TypeAdapter(_JobRecord).validate_json(record_path.read_bytes()))
     expected_name = "retrieval-candidate-" + job_key[:40]
     if input_sha256 is not None:
         hashes = dict(input_sha256)
     else:
         if program is None or inputs is None:
-            raise ValueError("恢复Python需要确切输入摘要或原件")
+            raise ValueError(prompts.render('python_recovery.input_digest'))
         hashes = {"program.py": hashlib.sha256(program.read_bytes()).hexdigest()}
         hashes.update(
             {
@@ -681,7 +685,7 @@ def _recover_program(
         or raw["job_key"] != job_key
         or raw["input_sha256"] != hashes
     ):
-        raise ValueError("原候选身份与恢复请求不同")
+        raise ValueError(prompts.render('python_recovery.identity_mismatch'))
     saved_path = output_dir / "result.json"
     if saved_path.is_file():
         saved = asdict(TypeAdapter(_SavedResult).validate_json(saved_path.read_bytes()))
@@ -698,7 +702,7 @@ def _recover_program(
             or saved["stdout_bytes"] > raw["limits"]["stdout_bytes"]
             or saved["stderr_bytes"] > raw["limits"]["stderr_bytes"]
         ):
-            raise ValueError("原Python捕获与作业身份或限额不同")
+            raise ValueError(prompts.render('python_recovery.capture_binding'))
         if saved["status"] != "unknown":
             if (
                 not (output_dir / "stdout.json").is_file()
@@ -723,12 +727,12 @@ def _recover_program(
             if len(stdout) != saved["stdout_bytes"] or hashlib.sha256(
                 stdout
             ).hexdigest() != saved.get("stdout_sha256"):
-                raise ValueError("原候选输出不完整")
+                raise ValueError(prompts.render('python_recovery.output_incomplete'))
             if len(stderr_raw) != saved["stderr_bytes"] or (
                 saved["stderr_sha256"]
                 and hashlib.sha256(stderr_raw).hexdigest() != saved["stderr_sha256"]
             ):
-                raise ValueError("原Python stderr捕获不完整")
+                raise ValueError(prompts.render('python_recovery.stderr_incomplete'))
             return SandboxResult(
                 saved["container_id"],
                 saved["status"],

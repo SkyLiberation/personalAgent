@@ -56,9 +56,11 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 
 用户原标准由 `InteractionIntent` 冻结，回执 `success_criteria` 与 `criteria_digest` 仍绑定这组原标准；系统判断在 `criterion_results` 中独立保留，不改写用户要求。回执保留原文用于反馈和审计；三态和修订意见由模型判断，恢复引用不改变它们。失败通过现有 Conversation 循环返回模型，修订稿重新验证。既有触发范围与预算保持，不增加模型阶段、服务或循环。原文引用规范由 [COD](../devSpec/code-structure.md#21-已有文字通过引用传递)拥有，接入责任见 [ADR 0020](../adr/0020-require-conversation-source-support-verification.md)。
 
+意图提议的criterion为非空字符串，完整限定可超过500字符；不截断、重抄或为字数机械拆项，整体生成继续受原模型与任务预算约束。来源身份和语义正确性仍分别校验／评估，长度合法不等于标准正确。实际超长原件与取消上限的边界见[完整字符串承载](../optimization/completed/intent-criterion-length.md)。
+
 当前生产链暂停独立文档缺项分类及其覆盖拒绝，统一研究与普通 Final 分别检查仍适用的来源支持。普通整稿语义核验保留实际读取状态作为数据，但不能将未读内容当成已知事实；无据全文否定仍须按来源支持与用户结果判据拒绝。`evidence_sufficiency` 原先只负责越过独立覆盖拦截，现已随该分支移除。历史覆盖拒绝与补读恢复检查点见 [ADR 0021](../adr/0021-separate-document-absence-from-reading-coverage.md)，当前取舍、风险及退出条件见 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)。
 
-统一研究请求输出上限为 131,072 tokens，本轮正式验证模型时限为 2,400 秒；普通回答核验保留 32,768 tokens 和 480 秒工具执行时限；工具自身不重试。两项上限分别允许 thinking 与完整报告输出、给模型请求及解析留出执行时间，仍可能因模型自身超时或协议错误失败。扩大交互总预算不会自动改变这些局部上限。旧 1,200-token / 60 秒限制已移除，同一真实首稿的预算对照取得完整绑定报告，但仍漏放无据权限归属结论；不能把报告返回与语义正确混为一谈。记录及产品验收限制见[推进记录第 54 节](../optimization/verifier-output-truncation.md#54-验证报告被局部预算截断的单边界资格检查)。
+统一研究核验请求输出上限为 131,072 tokens，普通回答核验为 32,768 tokens。普通核验工具不设置独立 Gateway 超时，也不执行工具重试；模型请求仍受部署超时和交互预算约束，配置见[环境说明](../env.md#llm-配置)。扩大交互总预算不会改变请求输出上限。历史扩容对照虽取得完整报告，仍漏放无据权限归属结论，记录及边界见[推进记录第 54 节](../optimization/verifier-output-truncation.md#54-验证报告被局部预算截断的单边界资格检查)。
 
 当前已知限制是 Verifier 可能把标题对主题的提及误判为正文已经满足详细比较要求，Draft 与 Evidence 同次输入还会放大该错误。固定反例在当前生产 Verifier 中受控重放三次，模型每次都把只存在于 Evidence 的三项比较正文与两个 URL 当成 Draft 已有内容，五项全部返回 `satisfied`。后续来源隔离与 typed segment 绑定候选虽然阻止了 Evidence 直接进入 Draft 判断，但最终仍有一次把唯一标题 segment 绑定给三项比较正文并错误通过。二态 aggregate 的路由职责不受影响；剩余问题属于 Draft 语义判别能力，不再允许通过增加来源字段、状态或同义 Prompt 修补。
 
@@ -72,9 +74,9 @@ Verifier 的开放语义输出由模型或外部权威拥有；引用集合、di
 
 | 路径 | 触发 | 验证事实 | 消费者 |
 | --- | --- | --- | --- |
-| Conversation grounded answer | personal/tool Observations 到达后 | source constraint、citation、conflict 与 required evidence | Conversation revision / FinalMessage |
+| Conversation 普通回答 | 提交 `answer`，且冻结用户条件要求核验 | 提交正文、来源支持和冻结用户要求 | Conversation 修订或确切正文交付 |
 | Conversation 普通外部研究 | 同版本 claims 与最终回答已提交 | 来源支持、回答与研究一致性、回答满足原目标 | 原研究修订、补证或确切正文 Completion |
-| Conversation Review | 用户显式要求审查文本时 | 最终文本是否满足冻结的用户明示判据 | revision loop / verified bytes |
+| Conversation Review | 用户显式要求审查文本并提交候选时，复用普通核验路径 | 最终文本是否满足冻结的用户明示判据 | 修订或回执绑定的确切正文 |
 
 Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构性案例，但不能作为
 普通知识目标具备 Verify 元能力的证据。
@@ -98,11 +100,11 @@ Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构�
 - `_verify_before_send()` 消费普通核验回执，检查通过结果及被评正文与当前提交一致；回执形状合法、条件枚举齐全，不等于判断正确。
 - `InteractionIntent` 的原文片段准入证明被引文字确实来自用户；条件提取是否完整、改写是否忠实仍属于语义边界。
 
-现行研究核验保留原会话、冻结 requirements、完整当前回答及实际资料，不能只凭提取条件列表或 Plan 完成状态交付。开放目标的解释和判断仍可能出错，已知标题被误判为完整正文的漏放见上文。设计中的依据归属、交付准入及停止分支由[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#41-完成依据从哪里来)拥有；本轮仅澄清事实和证明范围，未增加生产门禁或修改现行核验触发。
+现行研究核验保留原会话、冻结 requirements、完整当前回答及实际资料，提取条件列表和 Plan 完成状态都不能单独作为交付依据。开放目标的解释和判断仍会出错，已知标题被误判为完整正文的漏放见上文；相关设计与待证范围见[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#41-完成依据从哪里来)。
 
 ## 执行证据
 
-研究实验完成按[ADR 0037](../adr/0037-experiment-submission-first-delivery.md)暂不接入claim／语义verifier：实际SubmittedFinal与usage先持久，确定性代码检查引用、原开发／最终执行、冻结及权限，缺口交回模型。通过后直接提交并返回同一Final，不创建清单、ZIP、报告副本或下载资源列表。Python原件仍由Artifact保存，终态和输入身份继续检查；Final、提交后恢复和已完成返回复用同一完成契约。入口为[research_delivery.py](../../src/personal_agent/application/conversation/research_delivery.py)，有效范围由[研究Spec §8.5](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)拥有。局部完成链通过不能替代研究语义或长任务证据。
+研究实验完成按[ADR 0037](../adr/0037-experiment-submission-first-delivery.md)暂不接入claim／语义verifier：实际SubmittedFinal与usage先持久，确定性代码检查引用、原开发／最终执行、冻结及权限，缺口交回模型。通过后直接提交并返回同一Final，不创建清单、ZIP、报告副本或下载资源列表。Python原件仍由Artifact保存，终态和输入身份继续检查；Final、提交后恢复和已完成返回复用同一完成契约。入口为[research_delivery.py](../../src/personal_agent/application/conversation/research_delivery.py)，有效范围由[当前范围与历史文件交付的关系](../optimization/to_verify/research-experiment-protocol.md#5-当前范围与历史文件交付的关系)拥有。局部完成链通过不能替代研究语义或长任务证据。
 
 - `ASK-001A`：Conversation 逐项引用互斥个人资料并明确冲突，禁止 web、跨 principal 泄漏和知识写入；
 - `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；

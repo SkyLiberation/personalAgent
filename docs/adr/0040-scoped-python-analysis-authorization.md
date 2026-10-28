@@ -3,7 +3,7 @@
 - 状态：Accepted，代码已实施，局部执行／停止／恢复边界成立；完整用户结果及跨用户轮接续未通过。
 - 日期：2026-10-23。
 - 范围：Python 执行装配、Conversation 许可与 Journal 的跨轮只读投影。
-- 唯一规格：[Python Spec §3.5](../optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配)；真实用例及来源由[整体 Spec §9](../optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计)拥有。
+- 唯一规格：[Python Spec §3.5](../optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配)；真实用例及来源由[整体 LongDS 长程数据分析 Spec](../optimization/to_verify/longds-analysis.md#longds-长程数据分析-spec)拥有。
 
 ## 问题与依据
 
@@ -13,7 +13,7 @@ LongDS 正式首轮实际能力表没有 Python，普通数据分析不能借用
 
 采用现有显式部署、immutable Profile、接受记录和原件引用，不增加 Notebook、CodeAgent、任务表或第二费用账本。Application 的 `PythonExecutionAuthorization` 定义许可，外层部署 JSON 提供其事实及 Docker endpoint，Runtime 装配同一执行工具。许可绑定确切主体、对话、镜像、限额、绝对到期及总 token／执行额度；摘要映射到已有 Profile，原执行服务不依赖检索领域模型。
 
-Journal 在每个 run 冻结授权摘要，并按该摘要、主体和对话读取已提交事实。各 run 只记录自己的消费；聚合视图支持原模型准入、执行预留及剩余额度说明。新 run 不产生新总许可，配置变化不静默扩额。跨进程对话锁把这些读、准入及提交串行化。2026-10-24 用户明确取消用量未知停止线：模型费用未知继续保留，但不单独阻止新增调用；token 阈值只约束已知消费，不能解释为费用不完整时的真实总量硬上限。未决工具执行仍要求先恢复，既有同请求恢复继续按原 Command 核对。实施和验证由[研究 Spec §9.13](../optimization/to_verify/knowledge-decision-delivery.md#913-用量未知不再单独停止并继续完整验证)拥有。
+Journal 在每个 run 冻结授权摘要，并按该摘要、主体和对话读取已提交事实。各 run 只记录自己的消费；聚合视图支持原模型准入、执行预留及剩余额度说明。新 run 不产生新总许可，配置变化不静默扩额。跨进程对话锁把这些读、准入及提交串行化。2026-10-24 用户明确取消用量未知停止线：模型费用未知继续保留，但不单独阻止新增调用；token 阈值只约束已知消费，不能解释为费用不完整时的真实总量硬上限。未决工具执行仍要求先恢复，既有同请求恢复继续按原 Command 核对。实施和验证由[用量未知不再单独停止，并继续完整验证](../optimization/to_verify/verify_results/longds-analysis.md#6-用量未知不再单独停止并继续完整验证)拥有。
 
 Conversation 拥有跨轮输入：恢复当前许可下的真实工作产物、程序及输出观察，沿 Artifact 重新检查权限及字节。其他对话来源不因主体相同自动获得授权；缺失反馈显式进入原循环。当前 run 的 `deployment_digest` 继续只代表检索部署，通用分析的新摘要不触发冻结／test 或实验完成校验。Final 及适用 Verifier 保持原契约。
 

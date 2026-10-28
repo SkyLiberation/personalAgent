@@ -6,7 +6,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .models import (
     CommittedUsage,
@@ -57,7 +58,6 @@ def model_visible_working_plan_json(
 def build_interaction_system_prompt(
     capabilities: EffectiveCapabilities,
     usage: CommittedUsage,
-    review_criteria: ReviewCriteria | None = None,
     *,
     budget_policy: LoopBudgetPolicy | None = None,
     capability_projection: str | None = None,
@@ -66,16 +66,17 @@ def build_interaction_system_prompt(
     explicit_research_entry: bool = False,
     wall_seconds_at_input: float | None = None,
     answer_result: DirectAnswerResult | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> str:
     """Materialize exactly the prompt and budget projection sent to the model."""
     policy = budget_policy or LoopBudgetPolicy()
-    answer_result = answer_result or ClaimAnswerResult(AnswerResultConfig())
-    verification_note = get_prompt(
+    answer_result = answer_result or ClaimAnswerResult(AnswerResultConfig(), prompts=prompts)
+    verification_note = prompts.get(
         "conversation.answer.verification.required" if answer_result.verification_enabled
         else "conversation.answer.verification.none"
     ).template
     projection = capability_projection or model_visible_capability_policy_json(
-        capabilities
+        capabilities, prompts=prompts
     )
     remaining = RemainingInteractionBudget(
         model_turns=max(0, policy.max_model_turns - usage.model_turns),
@@ -85,12 +86,12 @@ def build_interaction_system_prompt(
         wall_seconds_at_input=wall_seconds_at_input,
     )
     time_budget_note = (
-        get_prompt("conversation.time_budget_snapshot").template
+        prompts.get("conversation.time_budget_snapshot").template
         if wall_seconds_at_input is not None
         else ""
     )
     plan_context = (
-        get_prompt("conversation.plan_context").render(
+        prompts.get("conversation.plan_context").render(
             total=str(len(working_plan.steps)),
             completed=str(
                 sum(step.status == "completed" for step in working_plan.steps)
@@ -107,15 +108,15 @@ def build_interaction_system_prompt(
         if working_plan is not None
         else ""
     )
-    plan_control = "调用方交互模式（权威数据）：" + interaction_mode
-    return get_prompt("conversation.action").render(
-        research_entry=(get_prompt("conversation.research_entry.explicit").template
+    plan_control = prompts.render("conversation.interaction_mode", interaction_mode=interaction_mode)
+    return prompts.get("conversation.action").render(
+        research_entry=(prompts.get("conversation.research_entry.explicit").template
                         if explicit_research_entry else ""),
         research_delivery_policy=(
             "" if explicit_research_entry
-            else get_prompt(answer_result.delivery_prompt_name).template
+            else prompts.get(answer_result.delivery_prompt_name).template
         ),
-        requirements=_requirements_instruction(review_criteria) + ("" if explicit_research_entry else verification_note),
+        verification_note="" if explicit_research_entry else verification_note,
         remaining=json.dumps(remaining.model_dump(exclude_none=True)),
         time_budget_note=time_budget_note,
         plan_context=plan_context,
@@ -124,12 +125,19 @@ def build_interaction_system_prompt(
     )
 
 
-def _requirements_instruction(review_criteria: ReviewCriteria | None) -> str:
+def build_requirements_context(
+    review_criteria: ReviewCriteria | None, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> str:
+    """Render the frozen interpretation once, keeping each original sentence."""
     if review_criteria is None or not review_criteria.requires_review:
         return ""
-    return get_prompt("conversation.requirements").render(
-        criteria_json=json.dumps(list(review_criteria.criteria), ensure_ascii=False),
+    entries = []
+    for index, criterion in enumerate(review_criteria.criteria, start=1):
+        prefix = f"{index}. "
+        entries.append(prefix + criterion.replace("\n", "\n" + " " * len(prefix)))
+    return prompts.get("conversation.requirements").render(
+        criteria_text="\n".join(entries),
     )
 
 
-__all__ = ["build_interaction_system_prompt", "model_visible_working_plan_json"]
+__all__ = ["build_interaction_system_prompt", "build_requirements_context", "model_visible_working_plan_json"]

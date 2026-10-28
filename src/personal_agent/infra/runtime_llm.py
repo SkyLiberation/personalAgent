@@ -4,7 +4,8 @@ import logging
 import time
 
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+from personal_agent.kernel.prompt_registry import PromptCatalog
 
 logger = logging.getLogger(__name__)
 _LLM_FAILURE_COOLDOWN_SECONDS = 30.0
@@ -21,8 +22,10 @@ class LlmClient:
         self,
         settings: Settings,
         model_client: "object | None" = None,
+        *, prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
         self.settings = settings
+        self._prompts = prompts
         self._model_client = model_client
         self._unavailable_until = 0.0
 
@@ -53,7 +56,7 @@ class LlmClient:
         if self._in_cooldown():
             logger.info("Skipping answer generation while LLM failure cooldown is active")
             return None
-        answer_prompt = get_prompt("answer_generation.system")
+        answer_prompt = self._prompts.get("answer_generation.system")
         try:
             messages = [
                 {"role": "system", "content": answer_prompt.template},

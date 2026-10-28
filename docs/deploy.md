@@ -6,7 +6,7 @@
 uv sync
 ```
 
-正文搜索需要 `ripgrep`，部署前确认 `rg --version` 可执行；Python 依赖安装不会提供该二进制。Dockerfile 已声明安装 `ripgrep`，本轮未构建镜像。后端只以固定参数调用搜索进程，不向 Agent 暴露 Shell；工具契约见 [ADR 0024](adr/0024-plain-source-tools-and-inline-citations.md)。
+正文搜索需要 `ripgrep`，部署前确认 `rg --version` 可执行；Python 依赖安装不会提供该二进制。[Dockerfile](../Dockerfile)声明安装 `ripgrep`。后端只以固定参数调用搜索进程，工具契约见 [ADR 0024](adr/0024-plain-source-tools-and-inline-citations.md)。
 
 ## 2. 安装前端依赖
 
@@ -21,16 +21,9 @@ npm install
 cp .env.example .env
 ```
 
-然后填写你的：
+填写主模型的 `STRUCTURED_*`、Postgres、Embedding 及所需外部服务配置。主模型参数如何投影到直接回答、Graphiti 和提取器，以及各消费者的独立覆盖方式，由[环境变量说明](env.md#provider-选择与参数绑定)统一维护。
 
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `OPENAI_MODEL`
-- `EMBEDDING_API_KEY`
-- `EMBEDDING_BASE_URL`
-- `OPENAI_EMBEDDING_MODEL`
-
-当前工程以 Graphiti 为核心能力，不再提供关闭图谱的开关。本地开发请启动 Neo4j，并确保 `.env` 中的 Graphiti、LLM 和 Embedding 配置完整。
+本地开发需启动 Neo4j，并满足 [Graphiti 配置条件](env.md#graphiti-配置条件)。数据库、凭据和模型配置应在启动后端前完成。
 
 ## 4. 启动 Neo4j
 
@@ -190,23 +183,7 @@ npm run build
 
 ## 9. 运行 Research 前端 Golden E2E
 
-该门禁要求后端 `http://127.0.0.1:8000` 和前端 `http://127.0.0.1:3000` 已按上文启动。测试必须通过前端对话框输入触发 research,不能直接调用 research API 启动任务。
-
-首次运行先安装 Playwright 浏览器:
-
-```bash
-cd frontend
-npx playwright install chromium
-```
-
-运行 gate:
-
-```bash
-cd frontend
-npm run test:research-e2e
-```
-
-测试会写出 `test-results/research-quality-frontend-e2e-report.json`,其中包含 intent、Research workflow 步骤覆盖、ResearchRun 状态、digest claim 支撑率和端到端 latency。
+当前工作树已删除该历史门禁使用的 `testing/playwright.research-quality.config.cjs` 和前端用例，`frontend/package.json` 中残留的 `test:research-e2e` 命令不可作为可运行入口。正式评测的命令、前置条件与证据分类统一见[评测执行与发布](evals/04-running-and-release.md)；部署成功不等于用户结果通过。
 
 ## 日志位置
 

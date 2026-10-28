@@ -2,6 +2,8 @@
 
 > 本细则在任务涉及架构分层、架构基线维护、业务事实、状态、Schema、Model、Repository、Port、Adapter、Application Capability、Runtime Mechanism、Product Aggregate、派生数据、缓存、物化投影或生产可达性时生效。现行实现从[工程架构入口](../architecture/README.md)定位。
 
+架构定义、设计、业务适配检查与维护方法见[架构设计与维护 skill](../../.agents/skills/design-project-architecture/SKILL.md)；本细则拥有事实归属、分层、架构分析要求与生产准入门禁。
+
 ## 1. 单一事实与单一写入口
 
 业务事实必须遵守[根规范第 2.2 节](../../AGENTS.md#22-一个事实只有一个-owner)的单一归属和业务写入口。编码前须能逐字段说明责任主体、来源、写入者、生命周期、版本、失效条件和重建方式；不适用项说明原因，归属或写入规则不明确时不得编码。

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.prompts import create_prompt_catalog
+from personal_agent.infra.model_providers import build_provider_policy
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
 from personal_agent.orchestration.runtime import AgentRuntime
@@ -23,6 +25,7 @@ class AgentService:
         self, settings: Settings | None = None, capture_service: "CaptureService | None" = None
     ) -> None:
         resolved_settings = settings or Settings.from_env()
+        prompts = create_prompt_catalog(resolved_settings.prompt_language)
         if not resolved_settings.postgres_url:
             raise ValueError("PERSONAL_AGENT_POSTGRES_URL is required for business persistence.")
         store = PostgresMemoryStore(
@@ -38,8 +41,12 @@ class AgentService:
         )
         self.runtime = AgentRuntime(
             settings=resolved_settings,
+            prompts=prompts,
             store=store,
-            graph_store=GraphitiStore(resolved_settings),
+            graph_store=GraphitiStore(resolved_settings, prompts=prompts, provider_policy=build_provider_policy(
+                base_url=resolved_settings.graphiti.llm_base_url or resolved_settings.openai.base_url,
+                provider=resolved_settings.graphiti.llm_provider,
+            )),
             capture_service=capture_service,
         )
 

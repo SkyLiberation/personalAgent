@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -128,11 +131,13 @@ class ToolGateway:
         idempotency_store: IdempotencyStore | None = None,
         policy_engine: PolicyEngine | None = None,
         policy_decisions: PolicyDecisionRecorder | None = None,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
+        self._prompts = prompts
         self._tools: dict[str, BaseTool] = {}
         self.audit_sink = audit_sink
         self._idempotency = idempotency_store or InMemoryIdempotencyStore()
-        self._policy = policy_engine or PolicyEngine()
+        self._policy = policy_engine or PolicyEngine(prompts=prompts)
         self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
         self._rate_limiter = InMemoryRateLimiter()
         self._executor = ThreadPoolExecutor(
@@ -159,7 +164,7 @@ class ToolGateway:
         tool = self._tools.get(name)
         if tool is None:
             return tool_failure(
-                f"未找到工具：{name}", error_kind="invalid_param"
+                self._prompts.render('tool_gateway.not_found', tool_name=name), error_kind="invalid_param"
             ).model_dump(mode="json")
 
         started = perf_counter()
@@ -186,7 +191,7 @@ class ToolGateway:
             elif self._is_rate_limited(tool, context):
                 rate_limited = True
                 output = tool_failure(
-                    f"工具 {tool.name} 触发速率限制，请稍后再试。",
+                    self._prompts.render('tool_gateway.rate_limited', tool_name=tool.name),
                     error_kind="transient",
                 )
             else:
@@ -257,7 +262,7 @@ class ToolGateway:
             except TimeoutError:
                 timed_out = True
                 last_output = tool_failure(
-                    f"工具 {tool.name} 执行超时（>{governance.timeout_seconds}s）。",
+                    self._prompts.render('tool_gateway.timed_out', tool_name=tool.name, seconds=governance.timeout_seconds),
                     error_kind="transient",
                 )
                 if attempt < max_attempts:
@@ -273,7 +278,7 @@ class ToolGateway:
                 return last_output, attempt, timed_out
         return (
             last_output
-            or tool_failure(f"工具 {tool.name} 未执行。", error_kind="unrecoverable"),
+            or tool_failure(self._prompts.render('tool_gateway.not_executed', tool_name=tool.name), error_kind="unrecoverable"),
             max_attempts,
             timed_out,
         )
@@ -312,7 +317,7 @@ class ToolGateway:
             return artifact
         if isinstance(artifact, dict) and "ok" in artifact:
             return ToolArtifact.model_validate(artifact)
-        return tool_failure(str(getattr(message, "content", "工具执行失败。")))
+        return tool_failure(str(getattr(message, "content", self._prompts.render('tools.execution_failed'))))
 
     @staticmethod
     def _sleep_before_retry(backoff_seconds: float, attempt: int) -> None:
@@ -335,10 +340,10 @@ class ToolGateway:
             return {
                 "tool_messages": [
                     ToolMessage(
-                        content="工具节点未收到待执行的工具调用。",
+                        content=self._prompts.render('tool_gateway.no_pending_call'),
                         tool_call_id="",
                         artifact=tool_failure(
-                            "工具节点未收到待执行的工具调用。"
+                            self._prompts.render('tool_gateway.no_pending_call')
                         ).model_dump(mode="json"),
                     )
                 ]
@@ -358,7 +363,7 @@ class ToolGateway:
         content = (
             str(artifact.get("data"))
             if artifact.get("ok")
-            else str(artifact.get("error") or "工具执行失败。")
+            else str(artifact.get("error") or self._prompts.render('tools.execution_failed'))
         )
         return {
             "tool_messages": [
@@ -506,7 +511,7 @@ class ToolGateway:
         key = str(args.get("idempotency_key", "")).strip()
         if governance.idempotency_key_required and not key:
             return _PolicyViolation(
-                f"工具 {tool.name} 执行高风险确认动作时缺少 idempotency_key。",
+                self._prompts.render('tool_gateway.idempotency_key_missing', tool_name=tool.name),
                 kind="invalid_param",
             )
         return None
@@ -528,7 +533,7 @@ class ToolGateway:
             if receipt is not None:
                 return key, ToolArtifact.model_validate(receipt)
             raise ToolError(
-                f"工具 {tool.name} 的同一幂等调用正在执行且尚无可重放 receipt（idempotency_key={key}）。",
+                self._prompts.render('tool_gateway.idempotency_pending', tool_name=tool.name, key=key),
                 kind="transient",
             )
         return key, None
@@ -575,7 +580,7 @@ class ToolGateway:
                 continue
             if not url_allowed(value, governance.allowed_domains):
                 return _PolicyViolation(
-                    f"工具 {tool.name} 的目标 URL 不在允许域名列表中。",
+                    self._prompts.render('tool_gateway.domain_denied', tool_name=tool.name),
                     kind="permission",
                 )
         return None

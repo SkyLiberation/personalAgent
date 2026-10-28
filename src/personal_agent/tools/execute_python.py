@@ -8,7 +8,8 @@ from personal_agent.application.python_execution.models import (
     PythonInputBinding,
 )
 from personal_agent.application.python_execution.service import PythonExecutionService
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -18,10 +19,12 @@ from personal_agent.tools.base import (
 )
 
 
-def build_execute_python_tool(service: PythonExecutionService) -> BaseTool:
+def build_execute_python_tool(
+    service: PythonExecutionService, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> BaseTool:
     @tool(
         "execute_python",
-        description=get_prompt("python_execution.description").template,
+        description=prompts.get("python_execution.description").template,
         args_schema=ExecutePythonArgs,
         response_format="content_and_artifact",
         extras={"strict": False, **governance_extras(
@@ -36,14 +39,12 @@ def build_execute_python_tool(service: PythonExecutionService) -> BaseTool:
         config: RunnableConfig,
         input_files: tuple[PythonInputBinding, ...] = (),
     ):
-        context = require_gateway_context(config)
+        context = require_gateway_context(config, prompts=prompts)
         if context.accepted_request_digest is None:
-            raise PermissionError("Python执行请求缺少已接受记录。")
+            raise PermissionError(prompts.render('tools.python.acceptance_missing'))
         try:
             result = service.execute(
-                ExecutePythonArgs(
-                    code=code, input_files=input_files
-                ),
+                ExecutePythonArgs.model_validate({'code': code, 'input_files': input_files}, context=prompts),
                 execution_scope=context.execution_scope,
                 action_id=context.tool_call_id,
                 request_digest=context.accepted_request_digest,
@@ -58,7 +59,7 @@ def build_execute_python_tool(service: PythonExecutionService) -> BaseTool:
                 evidence=[],
                 error=None
                 if succeeded
-                else f"Python实际执行状态：{result.receipt.status}；{result.receipt.error_code or '请读回执和诊断原件'}",
+                else prompts.render('tools.python.status', status=result.receipt.status, detail=result.receipt.error_code or prompts.render('tools.python.read_receipt')),
                 error_kind=None if succeeded else "unrecoverable",
             )
         )

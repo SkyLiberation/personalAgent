@@ -59,7 +59,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 该 Docker SDK 的 [`run()`](https://github.com/docker/docker-py/blob/5ad5327fba623897ee9a527d7eee1b01703e0726/docker/models/containers.py#L875)捕获镜像缺失后自动 pull；要求预备固定镜像的调用方应显式 create 并处理缺失，而非无条件照搬该便捷调用。`from_env()` 在本版本默认还可跟随 CLI context，实际运行端应从部署配置明确绑定 Engine 端点。自动删除会影响事后 inspect／产物恢复，是否删除须按真实消费者决定；仅设置客户端超时不产生服务端任务 TTL。
 
-这两条调用链提供的是不同层次的复用，不证明本工程必须容器化每个工具，也不证明容器约束已在目标环境生效。[研究 Spec 的 runner 设计](../optimization/to_verify/knowledge-decision-delivery.md#执行隔离与沙箱的最小边界)拥有本例推荐、装配、生命周期及验收；此处仅记录外部事实和限制。
+这两条调用链提供的是不同层次的复用，不证明本工程必须容器化每个工具，也不证明容器约束已在目标环境生效。[研究 Spec 的 runner 设计](../optimization/to_verify/research-experiment-protocol.md#26-执行隔离与沙箱的最小边界)拥有本例推荐、装配、生命周期及验收；此处仅记录外部事实和限制。
 
 ## 6. 开源 Agent 的运行隔离装配
 
@@ -77,7 +77,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 2. **命令停止与环境回收不是同一步。** OpenHands 的 [cleanup](https://github.com/OpenHands/software-agent-sdk/blob/5fa4dea24c52fe3ac53fa4e3e67a1376b72189e2/openhands-workspace/openhands/workspace/docker/workspace.py#L369)执行 `docker stop` 后未检查返回码便清空 ID；Gemini CLI 的 `--rm` 只处理容器退出后的删除，本次 wrapper 分支未见按主容器 ID 停止并 inspect 的闭环。OpenSandbox 的 [`close()`](https://github.com/opensandbox-group/OpenSandbox/blob/b1a29cf93a823a95913f7943010febb3f29de05c/sdks/sandbox/python/src/opensandbox/sandbox.py#L424)只关闭客户端 transport，`kill()` 才请求释放远端环境。以上均不能由客户端不再等待推定后端资源已释放。
 3. **TTL 的执行者和恢复事实决定保障范围。** OpenSandbox 的 [Docker TTL](https://github.com/opensandbox-group/OpenSandbox/blob/b1a29cf93a823a95913f7943010febb3f29de05c/server/opensandbox_server/services/docker/docker_service.py#L280)由 server 进程内 Timer 调度，启动时[扫描容器与到期元数据重建](https://github.com/opensandbox-group/OpenSandbox/blob/b1a29cf93a823a95913f7943010febb3f29de05c/server/opensandbox_server/services/docker/docker_service.py#L425)，有重启恢复机制，但 server 离线期间不能保证准时销毁；[续期元数据持久化失败](https://github.com/opensandbox-group/OpenSandbox/blob/b1a29cf93a823a95913f7943010febb3f29de05c/server/opensandbox_server/services/docker/docker_service.py#L1304)仅记 warning。OpenHands 的存活容器 pause／resume 也不等于崩溃后持久作业恢复。
 
-这三种实现共同支持：先明确隔离单位，由受信控制端创建实际受限环境，再通过命令身份、输出和终态管理执行。不同点在于整个 Agent、长期 workspace 和单次执行的边界。本工程基线及模型候选程序的采用范围由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#执行隔离与沙箱的最小边界)拥有；可编程执行的追加比较见下一节。外部实现的缺省权限、停止返回值及 TTL 名称不直接成为本工程保证。
+这三种实现共同支持：先明确隔离单位，由受信控制端创建实际受限环境，再通过命令身份、输出和终态管理执行。不同点在于整个 Agent、长期 workspace 和单次执行的边界。本工程基线及模型候选程序的采用范围由[研究 Spec](../optimization/to_verify/research-experiment-protocol.md#26-执行隔离与沙箱的最小边界)拥有；可编程执行的追加比较见下一节。外部实现的缺省权限、停止返回值及 TTL 名称不直接成为本工程保证。
 
 ## 7. 模型生成程序的实际执行链
 
@@ -88,7 +88,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 | smolagents `v1.22.0`，`f68ee35967da5c9051a0a9d94af6ac9ca06dafc2` | [`CodeAgent.create_python_executor`](https://github.com/huggingface/smolagents/blob/f68ee35967da5c9051a0a9d94af6ac9ca06dafc2/src/smolagents/agents.py#L1576)按配置装配 Local／Docker 等执行器；[`_step_stream`](https://github.com/huggingface/smolagents/blob/f68ee35967da5c9051a0a9d94af6ac9ca06dafc2/src/smolagents/agents.py#L1613)物化 memory、调用模型、解析代码并执行，再将日志／结果或错误放回步骤。Docker 分支在 [`DockerExecutor`](https://github.com/huggingface/smolagents/blob/f68ee35967da5c9051a0a9d94af6ac9ca06dafc2/src/smolagents/remote_executors.py#L341)启动 Jupyter Gateway 容器、建立 kernel，经 WebSocket 执行 | 借鉴“模型生成计算逻辑 → 独立执行器 → 真实反馈进入后续决策”；不把本地解释器或 import 名单当物理沙箱。不复制持久 kernel、动态 pip 安装、`final_answer` 控制终止或其默认权限；它们不能代替本工程独立评分、Completion 和已提交成果恢复 |
 | OpenHands SDK `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1` | [`AgentBase._initialize`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/base.py#L571)装配选定工具；[`Agent._execute_action_event`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/agent.py#L1499)分派模型动作到 [`ToolDefinition.__call__`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/tool/tool.py#L623)及实际 executor，再产出 ObservationEvent／错误。FileEditor 写代码，Terminal 的 create 装配 TerminalExecutor，后者调用 Session 执行 | 借鉴源码产物和执行动作分开、共用编辑／执行能力以及实际错误反馈；不把整个工具目录暴露给每次任务，不照搬通用 Shell／长期 session、并发默认值或 workspace 权限。会话内状态不直接作为本工程可恢复事实 |
 
-上述源码支持可编程执行的可实现性，不支持“只要能写代码就具有研究收益”的结论。本工程推荐的最小范围、评分边界、唯一 owner、源码冻结及 P1 验收由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#模型怎样构造并验证候选)拥有；独立比较仍须给固定流程相同的模型、编程能力及预算。
+上述源码支持可编程执行的可实现性，不支持“只要能写代码就具有研究收益”的结论。本工程推荐的最小范围、评分边界、唯一 owner、源码冻结及 P1 验收由[研究 Spec](../optimization/to_verify/research-experiment-protocol.md#22-模型怎样构造并验证候选)拥有；独立比较仍须给固定流程相同的模型、编程能力及预算。
 
 ## 8. 文本读写与修改入口
 
@@ -99,7 +99,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 | OpenHands SDK `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1` | [`FileEditorAction`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-tools/openhands/tools/file_editor/definition.py#L29)以 command 区分 view／create／str_replace／insert／undo_edit，create 接收 file_text，str_replace 接收 old_str／new_str；Tool.create 装配 FileEditorExecutor，沿原工具分派执行 | 采用明确操作分支、结构化参数及独立文件写入口；本工程不用宿主绝对路径和旧字符串重抄定位，改用确切 Artifact 引用及行列范围，也不增加独立 undo：可以选择旧不可变快照 |
 | DeepAgents `fd3e64ab6b605450bed5a2c22ef2ec84cd40542e` | `create_deep_agent` 装配 Filesystem middleware，后者的 [`_create_write_file_tool`](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/middleware/filesystem.py#L2304)验证路径及 write 权限后调用 backend.write；[`_create_edit_file_tool`](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/middleware/filesystem.py#L2395)验证后将 old_string／new_string 交给 backend.edit | 采用模型工具、权限检查和实际存储后端分开；本工程复用现有 Artifact owner，已有读取独立保留，新增一个严格 create／patch 写工具。按当前引用保真要求不采用旧字符串替换，也不引入第二套可变文件状态 |
 
-两个项目展示不同工具分组，不决定最佳工具数量。本工程的不可变引用、批量范围修改、可读集合投影、幂等及执行绑定由[唯一候选契约](../optimization/to_verify/knowledge-decision-delivery.md#程序产物读写工具契约)定义；这些差异须按本工程真实输入和 P1 阶段验收，不能转计外部实现的能力。
+两个项目展示不同工具分组，不决定最佳工具数量。本工程的不可变引用、批量范围修改、可读集合投影、幂等及执行绑定由[唯一候选契约](../optimization/to_verify/program-artifact-contract.md#1-程序产物读写工具契约)定义；这些差异须按本工程真实输入和 P1 阶段验收，不能转计外部实现的能力。
 
 ## 9. 模型按需计算数据与结果反馈
 
@@ -177,4 +177,4 @@ Anthropic的[工具设计经验](https://www.anthropic.com/research/writing-tool
 | Quarto，`5b2316316ab5cdd91edd882614dff929eeaec33c`：[Jupyter 执行与渲染](https://github.com/quarto-dev/quarto-cli/blob/5b2316316ab5cdd91edd882614dff929eeaec33c/src/execute/jupyter/jupyter.ts#L438)根据文档形成 notebook，调用实际 kernel，再读取执行后的 notebook，经 `quarto.jupyter.toMarkdown` 生成 Markdown；[官方 Python 文档](https://quarto.org/docs/computations/python.html)说明代码结果与内联表达式进入文档 | 计算结果和报告中的数字、表格可以共用执行对象，避免把展示数字重新当计算输入。借用执行与成文关联，不引入 Quarto 依赖，不将渲染成功视作业务正确 |
 | pandas，[多键排序契约](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.sort_values.html) | 模型可把用户要求写为明确的多键排序及升降序，随后由普通库确定执行。库保证执行给定规则，不替模型确定正确的过滤总体、公式或并列规则；无须为每种排名再造专用工具 |
 
-共同边界是：数据检查和结果直交可减少确定性传递错误，不能消除错误语义进入代码的问题。本工程的候选职责、取舍及验收由[研究 Spec §10](../optimization/to_verify/knowledge-decision-delivery.md#10-可执行分析自检与结果成文候选)唯一拥有；不把外部实现的可选检查推导为本工程已经具备或已经验证独立核验能力。
+共同边界是：数据检查和结果直交可减少确定性传递错误，不能消除错误语义进入代码的问题。本工程的候选职责、取舍及验收由[可执行分析与结果成文候选](../optimization/to_verify/analysis-result-correctness.md#可执行分析与结果成文候选)唯一拥有；不把外部实现的可选检查推导为本工程已经具备或已经验证独立核验能力。

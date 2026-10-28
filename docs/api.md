@@ -244,7 +244,7 @@ LangGraph checkpoint。
 
 ```json
 [
-  {"name": "capture_url", "description": "抓取网页正文", "exposure": "public_agent"},
+  {"name": "capture_url", "description": "抓取网页正文", "exposure": "workflow_activity"},
   {"name": "graph_search", "description": "搜索个人知识图谱", "exposure": "public_agent"}
 ]
 ```
@@ -323,7 +323,11 @@ Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、rea
 
 缺少上游状态时省略该字段，不以本地 502 代填。此投影不含模型原文、内部异常栈或密钥，依据见 [ADR 0045](adr/0045-native-intent-loop-and-recorded-model-output.md)。
 
-请求可附 `input_artifact_refs`（默认为空），仅接受当前认证主体拥有的确切 Artifact 引用；首次调用前验证，同 run 恢复要求主体、会话、messages 与有序引用全部一致。`resources` 每项为 `{resource, download_url}`：resource 是原 Artifact 元数据，download_url 是正式下载路径；内部 `ConversationTurnView` 保持原元数据类型。上传响应复用同一包装。鉴权关闭且主体非默认用户时，URL 带编码后的 user_id；鉴权开启时由请求凭据确定主体。文件引用不包含宿主路径。研究实验只在许可部署、主体和开发原件绑定后启用，生产实现及验收状态见[研究 Spec](optimization/to_verify/knowledge-decision-delivery.md)。
+请求可附 `input_artifact_refs`（默认为空），仅接受当前认证主体拥有的确切 Artifact 引用。首次调用前校验；同 run 恢复要求主体、会话、`messages` 与有序引用全部一致。
+
+响应的 `resources` 每项为 `{resource, download_url}`：`resource` 是原 Artifact 元数据，`download_url` 是正式下载路径，上传响应复用同一包装。内部 `ConversationTurnView` 保持原元数据类型，文件引用不包含宿主路径。鉴权关闭且主体非默认用户时，URL 带编码后的 `user_id`；鉴权开启时由请求凭据确定主体。
+
+研究实验只在许可部署、主体和开发原件绑定后启用，实现及验收状态见[研究 Spec](optimization/to_verify/knowledge-decision-delivery.md)。
 
 知识读取与生命周期能力的部分入口：
 
@@ -368,7 +372,9 @@ Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/
 
 ### Artifact 原件与成果内容
 
-`POST /api/artifacts/upload` 使用 multipart 的 `file`（认证关闭时可附 `user_id`）保存原件，返回 `resource` 元数据及 `download_url`，不摄入知识。`GET /api/artifacts/{resource_id}/revisions/{revision}` 按当前认证主体恢复确切引用，校验原始字节摘要／长度后下载；缺资源或非 owner 为404，非法引用或完整性失败为422。下载只返回已核验字节，不暴露存储路径。
+`POST /api/artifacts/upload` 使用 multipart 的 `file`（认证关闭时可附 `user_id`）保存原件，返回 `resource` 元数据及 `download_url`，不摄入知识。
+
+`GET /api/artifacts/{resource_id}/revisions/{revision}` 按当前认证主体恢复确切引用，校验原始字节摘要与长度后下载。缺资源或非 owner 返回 `404`，非法引用或完整性失败返回 `422`；下载返回已核验字节，不暴露存储路径。
 
 旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
 `POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用

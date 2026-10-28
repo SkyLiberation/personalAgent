@@ -175,6 +175,11 @@
       "expected": "EXE"
     },
     {
+      "id": "exe_plan_review_boundary",
+      "task": "调整 Plan 审阅与 planning-safe 工具可达性时，如何限定审阅前动作与迁移条件？",
+      "expected": "EXE"
+    },
+    {
       "id": "ctx_visibility",
       "task": "Context 检索前怎样先按权限和 scope 做 Visibility 过滤？",
       "expected": "CTX"
@@ -246,7 +251,7 @@
     },
     {
       "id": "doc_semantic_repetition_rule",
-      "task": "把局部语义判断类修复的重复验证要求写入 AGENTS.md 及其 Markdown 规范，并同步文档索引和镜像。",
+      "task": "将局部语义判断类修复的十次验证规则从工程规范迁入方案推进 skill，整理 Markdown 正文并同步文档索引和镜像。",
       "expected": "DOC"
     },
     {
@@ -398,6 +403,31 @@
       "id": "doc_architecture_migration",
       "task": "整理 docs/architecture 的 Markdown 架构说明，删除 summary 中的旧正文并更新文档索引。",
       "expected": "DOC"
+    },
+    {
+      "id": "doc_project_skill_maintenance",
+      "task": "整理工程规范与项目 skill 的 Markdown 正文，统一触发边界、方法职责与引用，不修改产品行为。",
+      "expected": "DOC"
+    },
+    {
+      "id": "doc_new_coding_quality_skill",
+      "task": "创建编码质量 skill 的 Markdown 指令，明确高内聚、低耦合、代码规模和切面隔离要求，仅修改文档与路由。",
+      "expected": "DOC"
+    },
+    {
+      "id": "cod_business_cross_cutting",
+      "task": "编写业务代码时如何隔离日志和计量等横切关注点，以高内聚、低耦合保持主流程清晰？",
+      "expected": "COD"
+    },
+    {
+      "id": "doc_architecture_design_skill",
+      "task": "创建架构设计与维护 skill 的 Markdown 指令，整理开源实践引用并接入文档索引，仅修改规范与技能文件。",
+      "expected": "DOC"
+    },
+    {
+      "id": "arc_business_fitness_design",
+      "task": "架构定义与设计如何从业务目标出发，判断职责、契约、依赖和运行方式是否合理、符合业务？",
+      "expected": "ARC"
     }
   ]
 }

@@ -17,6 +17,7 @@ import logging
 from typing import Any
 
 from personal_agent.kernel.config import LangExtractConfig
+from personal_agent.kernel.model_provider import ModelProviderPolicy
 from personal_agent.application.extract.langextract_client import run_extract
 from personal_agent.application.extract.prompts import EXAMPLES, PROMPT_DESCRIPTION
 from personal_agent.application.extract.schemas import SectionMap, SectionRecord
@@ -35,10 +36,12 @@ class PreExtractService:
         self,
         config: LangExtractConfig,
         *,
+        provider_policy: ModelProviderPolicy,
         prompt: str = PROMPT_DESCRIPTION,
         examples: list | None = None,
     ) -> None:
         self.config = config
+        self._provider_policy = provider_policy
         self.prompt = prompt
         self.examples = examples if examples is not None else EXAMPLES
 
@@ -66,6 +69,7 @@ class PreExtractService:
                 prompt=self.prompt,
                 examples=self.examples,
                 config=self.config,
+                provider_policy=self._provider_policy,
             )
         except Exception as exc:  # noqa: BLE001 - boundary with third-party lib
             logger.warning("pre_extract.failed error=%s", exc, exc_info=True)

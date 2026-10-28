@@ -22,6 +22,9 @@ from personal_agent.application.capture.utils import (
     source_type_from_upload,
 )
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import create_prompt_catalog
+from personal_agent.kernel.model_provider import ModelProviderPolicy
 from personal_agent.kernel.contracts.resource import (
     GeneratedArtifactContent,
     ResourceEvidenceRef,
@@ -68,9 +71,12 @@ class ArtifactService:
     """Owns immutable Artifact bytes, metadata and accepted producer requests."""
 
     def __init__(
-        self, settings: Settings, logger: logging.Logger | None = None
+        self, settings: Settings, logger: logging.Logger | None = None,
+        *, provider_policy: ModelProviderPolicy, prompts: PromptCatalog | None = None,
     ) -> None:
         self.settings = settings
+        self._prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
+        self._provider_policy = provider_policy
         self.logger = logger or logging.getLogger(__name__)
 
     def save_upload(
@@ -371,7 +377,7 @@ class ArtifactService:
         else:
             base_ref = resolve_artifact_ref(
                 request.base_resource_id, allowed_resource_refs,
-                principal=execution_scope.principal,
+                principal=execution_scope.principal, prompts=self._prompts,
             )
             base = self.read_snapshot(
                 base_ref,
@@ -689,9 +695,7 @@ class ArtifactService:
             )
         mime = content_type or mimetypes.guess_type(filename)[0] or "image/png"
         encoded = base64.b64encode(file_bytes).decode("ascii")
-        prompt = "客观描述附件可见内容并回答用户问题；不要声称已保存。\n用户请求：" + (
-            question or "请概述图片内容"
-        )
+        prompt = self._prompts.render("artifacts.image.describe", question=question or self._prompts.render("artifacts.image.question_default"))
         try:
             client = OpenAI(
                 api_key=self.settings.openai.api_key,
@@ -699,9 +703,9 @@ class ArtifactService:
                 timeout=self.settings.openai.timeout_seconds,
                 max_retries=self.settings.openai.max_retries,
             )
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
+            parameters = self._provider_policy.prepare_chat_parameters({
+                "model": model,
+                "messages": [
                     {
                         "role": "user",
                         "content": [
@@ -713,9 +717,9 @@ class ArtifactService:
                         ],
                     }
                 ],
-                max_tokens=900,
-                extra_body=dict(self.settings.openai.extra_body),
-            )
+                "max_tokens": 900,
+            }, defaults=self.settings.openai.extra_body if model == self.settings.openai.model else {})
+            response = client.chat.completions.create(**parameters)
             content = (response.choices[0].message.content or "").strip()
             if content:
                 return f"Uploaded image artifact: {filename}\n\n{content}"

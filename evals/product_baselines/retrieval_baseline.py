@@ -5,6 +5,8 @@ accept an unexpected complete result without the independent grader in Spec §6.
 """
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 from dataclasses import dataclass
 import argparse
 import csv
@@ -81,7 +83,7 @@ class BaselineOutcome(BaseModel):
 
 def prepare_world(settings: Settings, scenario: RetrievalScenario, *, limits: ExperimentLimits) -> RetrievalWorld:
     """Seed only authorized initial facts through the existing Artifact owner."""
-    artifacts = ArtifactService(settings, logging.getLogger(__name__))
+    artifacts = ArtifactService(settings, logging.getLogger(__name__), provider_policy=build_provider_policy(base_url=settings.openai.base_url, provider=settings.openai.provider))
     split_queries = {}
     split_audit = {}
     for split, expected in (("train", 809), ("test", 300)):
@@ -163,7 +165,10 @@ def grade_missing_delivery(*, trace: dict, data_dir: Path, model_calls_completed
         ref = ResourceRef.model_validate(record["resource_ref"])
         if ref.owner != OWNER:
             continue
-        service = ArtifactService(Settings(data_dir=data_dir))
+        settings = Settings(data_dir=data_dir)
+        service = ArtifactService(settings, provider_policy=build_provider_policy(
+            base_url=settings.openai.base_url, provider=settings.openai.provider,
+        ))
         stored, content = service.read_upload(ref, principal=OWNER, owner=OWNER)
         kind = str(record.get("artifact_kind", ""))
         mime = stored.content_type or ""

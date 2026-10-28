@@ -1,6 +1,8 @@
 """F1：真实 Runtime HTTP 的初始 Artifact 授权拒绝，预期零模型调用。"""
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 import argparse
 from hashlib import sha256
 import json
@@ -86,7 +88,7 @@ def run(preparation: Path, output: Path) -> ScopeCounterfactualReport:
     api_keys = {own_key: OWNER, foreign_key: foreign}
     settings = settings.model_copy(update={"web": settings.web.model_copy(update={"api_keys": api_keys, "admin_api_keys": {}})})
     content = ("F1 授权反事实专用原件：" + secrets.token_hex(24)).encode("utf-8")
-    artifacts = ArtifactService(settings)
+    artifacts = ArtifactService(settings, provider_policy=build_provider_policy(base_url=settings.openai.base_url, provider=settings.openai.provider))
     ref = artifacts.save_upload(filename="scope-fixture.txt", content_type="text/plain", file_bytes=content,
                                 uploads_dir=data_dir / "uploads", principal=foreign, owner=foreign)
     resource = artifacts.resource_item(ref, principal=foreign, owner=foreign)

@@ -9,7 +9,8 @@ from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.artifacts.models import ArtifactWriteRequest
 from personal_agent.application.conversation.tool_requests import WriteArtifactArgs
 from personal_agent.kernel.contracts.tool_runtime import accepted_tool_request_digest
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.tools.base import (
     governance_extras,
     require_gateway_context,
@@ -18,10 +19,12 @@ from personal_agent.tools.base import (
 )
 
 
-def build_write_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
+def build_write_artifact_tool(
+    artifact_service: ArtifactService, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> BaseTool:
     @tool(
         "write_artifact",
-        description=get_prompt("artifact.write.description").template,
+        description=prompts.get("artifact.write.description").template,
         args_schema=WriteArtifactArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
@@ -33,7 +36,7 @@ def build_write_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
         ),
     )
     def write_artifact(request: ArtifactWriteRequest, config: RunnableConfig):
-        context = require_gateway_context(config)
+        context = require_gateway_context(config, prompts=prompts)
         arguments = WriteArtifactArgs(request=request)
         digest = accepted_tool_request_digest(
             execution_scope=context.execution_scope,
@@ -42,7 +45,7 @@ def build_write_artifact_tool(artifact_service: ArtifactService) -> BaseTool:
             arguments=arguments,
         )
         if context.accepted_request_digest != digest:
-            raise PermissionError("保存请求没有与本次执行身份绑定的已接受记录。")
+            raise PermissionError(prompts.render('tools.artifact.acceptance_missing'))
         receipt = artifact_service.write_draft(
             execution_scope=context.execution_scope,
             tool_call_id=context.tool_call_id,

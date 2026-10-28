@@ -20,12 +20,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 MAX_OBSERVATION_PAYLOAD_CHARS = 20_000
 """Serialized ceiling for one observation payload entering the context."""
 
 _HEAD_RATIO = 0.2
 _MIN_STRING_CHARS = 400
-_OMISSION_TEMPLATE = "\n... [{omitted} characters omitted from the middle] ...\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,31 +47,31 @@ def serialized_length(payload: Any) -> int:
     return len(json.dumps(payload, ensure_ascii=False, default=str))
 
 
-def _bound_string(text: str, limit: int) -> tuple[str, int]:
+def _bound_string(text: str, limit: int, *, prompts: PromptCatalog) -> tuple[str, int]:
     if len(text) <= limit:
         return text, 0
     head_chars = max(1, int(limit * _HEAD_RATIO))
     tail_chars = max(1, limit - head_chars)
     omitted = len(text) - head_chars - tail_chars
-    marker = _OMISSION_TEMPLATE.format(omitted=omitted)
+    marker = prompts.render("conversation.observation.omission_marker", omitted=omitted)
     return text[:head_chars] + marker + text[len(text) - tail_chars:], omitted
 
 
-def _bound_value(value: Any, limit: int) -> tuple[Any, int]:
+def _bound_value(value: Any, limit: int, *, prompts: PromptCatalog) -> tuple[Any, int]:
     if isinstance(value, str):
-        return _bound_string(value, limit)
+        return _bound_string(value, limit, prompts=prompts)
     if isinstance(value, dict):
         bounded: dict[str, Any] = {}
         omitted = 0
         for key, item in value.items():
-            bounded[key], dropped = _bound_value(item, limit)
+            bounded[key], dropped = _bound_value(item, limit, prompts=prompts)
             omitted += dropped
         return bounded, omitted
     if isinstance(value, (list, tuple)):
         items: list[Any] = []
         omitted = 0
         for item in value:
-            bounded_item, dropped = _bound_value(item, limit)
+            bounded_item, dropped = _bound_value(item, limit, prompts=prompts)
             items.append(bounded_item)
             omitted += dropped
         return items, omitted
@@ -80,7 +82,7 @@ _SCALAR_KEY_CHARS = 200
 
 
 def _bound_as_text(
-    payload: dict[str, Any], max_chars: int, original_chars: int
+    payload: dict[str, Any], max_chars: int, original_chars: int, *, prompts: PromptCatalog
 ) -> BoundedPayload:
     """Last resort for payloads whose size comes from their shape, not one string.
 
@@ -102,7 +104,7 @@ def _bound_as_text(
     # Escaping makes the serialized cost of an excerpt unpredictable, so shrink
     # until the whole payload is measured to fit rather than trusting an estimate.
     while True:
-        excerpt, omitted = _bound_string(serialized, budget)
+        excerpt, omitted = _bound_string(serialized, budget, prompts=prompts)
         kept["observation_excerpt"] = excerpt
         if serialized_length(kept) <= max_chars or budget <= 1:
             return BoundedPayload(
@@ -115,6 +117,7 @@ def bound_observation_payload(
     payload: dict[str, Any],
     *,
     max_chars: int = MAX_OBSERVATION_PAYLOAD_CHARS,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> BoundedPayload:
     """Fit ``payload`` inside ``max_chars`` by paging its long strings.
 
@@ -128,7 +131,7 @@ def bound_observation_payload(
         return BoundedPayload(payload=payload, omitted_chars=0, original_chars=original_chars)
     limit = max_chars
     while True:
-        bounded, omitted = _bound_value(payload, limit)
+        bounded, omitted = _bound_value(payload, limit, prompts=prompts)
         if serialized_length(bounded) <= max_chars:
             return BoundedPayload(
                 payload=bounded,
@@ -136,7 +139,7 @@ def bound_observation_payload(
                 original_chars=original_chars,
             )
         if limit <= _MIN_STRING_CHARS:
-            return _bound_as_text(payload, max_chars, original_chars)
+            return _bound_as_text(payload, max_chars, original_chars, prompts=prompts)
         limit = max(_MIN_STRING_CHARS, limit // 2)
 
 
@@ -194,7 +197,11 @@ class ReadWindowState(BaseModel):
     request: ReadWindowRequest
     outcome: ReadWindowOutcome
     continuation: ReadWindowRequest | None
-    explanation: str = "仅返回本次顺序窗口；continuation 为空只表示此后缀结束，不证明累计全文已读。"
+    explanation: str = Field(
+        default_factory=lambda: DEFAULT_PROMPTS.render(
+            "conversation.observation.window_explanation"
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,9 +211,14 @@ class PayloadExcerpt:
     read_state: ReadWindowState
 
 
-def excerpt_payload_text(text: str, *, start_line: int = 1,
-                         max_lines: int = MAX_EXCERPT_LINES,
-                         max_chars: int | None = None) -> PayloadExcerpt:
+def excerpt_payload_text(
+    text: str,
+    *,
+    start_line: int = 1,
+    max_lines: int = MAX_EXCERPT_LINES,
+    max_chars: int | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> PayloadExcerpt:
     """Return a sequential 1-indexed artifact window without searching."""
     all_lines = text.splitlines()
     chosen = []
@@ -219,5 +231,13 @@ def excerpt_payload_text(text: str, *, start_line: int = 1,
         used_chars += cost
     continuation = ReadWindowRequest(start_line=chosen[-1][0] + 1) if chosen and chosen[-1][0] < len(all_lines) else None
     outcome: ReadWindowOutcome = "empty_resource" if not all_lines else "start_out_of_bounds" if start_line > len(all_lines) else "window_returned"
-    return PayloadExcerpt(lines=tuple(chosen), total_lines=len(all_lines), read_state=ReadWindowState(
-        request=ReadWindowRequest(start_line=start_line), outcome=outcome, continuation=continuation))
+    return PayloadExcerpt(
+        lines=tuple(chosen),
+        total_lines=len(all_lines),
+        read_state=ReadWindowState(
+            request=ReadWindowRequest(start_line=start_line),
+            outcome=outcome,
+            continuation=continuation,
+            explanation=prompts.render("conversation.observation.window_explanation"),
+        ),
+    )

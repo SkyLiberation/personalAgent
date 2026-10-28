@@ -35,6 +35,7 @@ class Settings(_StrictBase):
     log_level: str = "INFO"
     embedding_provider: str = "local"
     llm_provider: str = "stub"
+    prompt_language: str = "zh"
     default_user: str = "default"
     postgres_url: str | None = None
     max_verify_retries: int = 1

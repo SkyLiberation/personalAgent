@@ -15,7 +15,8 @@ from personal_agent.kernel.evidence import (
     rank_evidence_items,
     select_ranked_evidence,
 )
-from personal_agent.kernel.prompts import get_prompt, render_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS, create_prompt_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -171,9 +172,13 @@ class SupportEvidenceReranker:
 class LlmEvidenceReranker:
     name = "llm"
 
-    def __init__(self, settings: Settings, model_client: "object | None" = None) -> None:
+    def __init__(
+        self, settings: Settings, model_client: "object | None" = None,
+        *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+    ) -> None:
         self.settings = settings
         self._model_client = model_client
+        self._prompts = prompts
         self.last_telemetry: dict[str, object] = {}
 
     def rerank(
@@ -227,12 +232,12 @@ class LlmEvidenceReranker:
             sealed_context_projection_ref,
         )
 
-        system_prompt = get_prompt("evidence_rerank.system")
+        system_prompt = self._prompts.get("evidence_rerank.system")
         messages = [
             {"role": "system", "content": system_prompt.template},
             {
                 "role": "user",
-                "content": render_prompt(
+                "content": self._prompts.render(
                     "evidence_rerank.user",
                     rerank_prompt=_rerank_prompt(question, candidates),
                 ),
@@ -342,8 +347,9 @@ def build_context_pack_with_settings(
     question: str,
     evidence: list[EvidenceItem],
     settings: Settings,
+    *, prompts: PromptCatalog | None = None,
 ) -> ContextPack:
-    reranker = create_evidence_reranker(settings)
+    reranker = create_evidence_reranker(settings, prompts=prompts)
     return reranker.rerank(
         question,
         evidence,
@@ -356,16 +362,18 @@ def build_context_pack_with_settings(
 def create_evidence_reranker(
     settings: Settings,
     model_client: "object | None" = None,
+    *, prompts: PromptCatalog | None = None,
 ) -> EvidenceReranker:
+    prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
     name = settings.ask.reranker.strip().lower()
     if name in {"heuristic", "default"}:
         return HeuristicEvidenceReranker()
     if name in {"support", "semantic", "semantic_support"}:
         return SupportEvidenceReranker(settings)
     if name == "llm":
-        return LlmEvidenceReranker(settings, model_client=model_client)
+        return LlmEvidenceReranker(settings, model_client=model_client, prompts=prompts)
     if name in {"llm_gated", "gated_llm"}:
-        return GatedLlmEvidenceReranker(settings, model_client=model_client)
+        return GatedLlmEvidenceReranker(settings, model_client=model_client, prompts=prompts)
     raise ValueError(
         "Unknown ask reranker '%s'. Available: heuristic, support, llm, llm_gated"
         % settings.ask.reranker

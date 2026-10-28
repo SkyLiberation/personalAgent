@@ -9,6 +9,8 @@ from personal_agent.application.retrieval_experiment.delivery import (
     DeliveryGap, DeliveryIncomplete, RetrievalExperimentCompletionService,
 )
 from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .citations import CitationBindingError, materialize_cited_draft
 from .models import (
@@ -27,28 +29,34 @@ def pending_experiment_submission(inputs: Sequence[InteractionInput]) -> Submitt
     return None
 
 
-def experiment_submission(trace: InteractionTrace) -> SubmittedFinal:
+def experiment_submission(
+    trace: InteractionTrace, *, prompts: PromptCatalog = DEFAULT_PROMPTS
+) -> SubmittedFinal:
     submission = pending_experiment_submission(trace.inputs)
     if submission is None or not submission.final.message.strip():
-        raise DeliveryIncomplete(DeliveryGap(code="fact_missing", message="完整报告尚未提交，或提交后仍有待处理反馈。"))
+        raise DeliveryIncomplete(DeliveryGap(code="fact_missing", message=prompts.render("conversation.experiment.submission_missing")))
     ref = submission.resource_ref
     if (ref.owner != trace.principal or ref.resource_type != "conversation_final"
             or ref.resource_id != f"{trace.interaction_run_ref}:final"):
-        raise DeliveryIncomplete(DeliveryGap(code="identity_mismatch", message="报告提交不属于当前任务及主体。"))
+        raise DeliveryIncomplete(DeliveryGap(code="identity_mismatch", message=prompts.render("conversation.experiment.submission_identity_mismatch")))
     try:
-        materialize_cited_draft(submission.final.segments, trace.inputs)
+        materialize_cited_draft(submission.final.segments, trace.inputs, prompts=prompts)
     except CitationBindingError as exc:
         raise DeliveryIncomplete(DeliveryGap(
-            code="identity_mismatch", message=f"报告引用未绑定实际来源：{str(exc)[:1500]}",
+            code="identity_mismatch", message=prompts.render(
+                "conversation.experiment.citations_unbound", error=str(exc)[:1500]
+            ),
         )) from exc
     return submission
 
 
 class ResearchExperimentCompletionUseCase:
     def __init__(self, *, experiments: RetrievalExperimentCompletionService,
-                 artifacts: InteractionArtifactPort) -> None:
+                 artifacts: InteractionArtifactPort,
+                 prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
         self.experiments = experiments
         self.artifacts = artifacts
+        self.prompts = prompts
 
     @staticmethod
     def scope(trace: InteractionTrace) -> ExecutionScope:
@@ -56,9 +64,9 @@ class ResearchExperimentCompletionUseCase:
                               thread_id=trace.conversation_id, task_id="research_delivery")
 
     def validate(self, trace: InteractionTrace) -> None:
-        submission = experiment_submission(trace)
+        submission = experiment_submission(trace, prompts=self.prompts)
         if trace.final_message is not None and trace.final_message != submission.final:
-            raise DeliveryIncomplete(DeliveryGap(code="identity_mismatch", message="最终回答不是当前报告提交。"))
+            raise DeliveryIncomplete(DeliveryGap(code="identity_mismatch", message=self.prompts.render("conversation.experiment.final_mismatch")))
         self._validate_python_results(trace)
         self.experiments.validate(execution_scope=self.scope(trace), records=trace.experiment_records)
 
@@ -93,7 +101,7 @@ class ResearchExperimentCompletionUseCase:
                 or receipt.status == "unknown"
             ):
                 raise DeliveryIncomplete(DeliveryGap(
-                    code="execution_unsettled", message="Python分析仍有尚未确认的执行，不能完整交付。",
+                    code="execution_unsettled", message=self.prompts.render("conversation.experiment.execution_unsettled"),
                 ))
             if (
                 receipt.action_id != command.action_id
@@ -110,7 +118,7 @@ class ResearchExperimentCompletionUseCase:
                 or receipt.stderr_ref is None
             ):
                 raise DeliveryIncomplete(DeliveryGap(
-                    code="artifact_missing", message="Python分析输出原件不可恢复，不能完整交付。",
+                    code="artifact_missing", message=self.prompts.render("conversation.experiment.output_originals_missing"),
                 ))
             if (
                 receipt.status != execution.status
@@ -139,7 +147,7 @@ class ResearchExperimentCompletionUseCase:
                     self.artifacts.resource_item(ref, principal=trace.principal, owner=trace.principal)
             except FileNotFoundError as error:
                 raise DeliveryIncomplete(DeliveryGap(
-                    code="artifact_missing", message="Python程序、输入或执行清单原件不存在。",
+                    code="artifact_missing", message=self.prompts.render("conversation.experiment.input_originals_missing"),
                 )) from error
             if PythonInputManifest.model_validate_json(snapshot.content) != manifest:
                 raise ValueError("Python输入清单与实际冻结Command不同")

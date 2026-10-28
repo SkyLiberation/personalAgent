@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from .models import (
     ActionObservation,
     ContinueTurnProposal,
@@ -163,6 +166,7 @@ def admit_working_plan(
     inputs: tuple,
     wait_for_user: bool = False,
     result_delivered: bool = False,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[DecisionFeedback | None, ConversationWorkingPlan | None]:
     step_ids = tuple(step.step_id for step in proposal.steps if step.step_id is not None)
     if len(step_ids) != len(set(step_ids)):
@@ -189,11 +193,11 @@ def admit_working_plan(
         return DecisionFeedback(
             action_id="working_plan",
             reason_code="working_plan_active_step_required",
-            message="工作计划最多只能有一个 in_progress 工作项。",
+            message=prompts.render("conversation.plan.active_step_limit"),
             repairable_fields=("steps",),
             immutable_fields=("goal", "grounding"),
             required_repair=(
-                "只保留当前正在推进的一个活动项，其余待办项设为 pending。"
+                prompts.render("conversation.plan.active_step_repair")
             ),
         ), None
     starts_new_plan = _starts_new_plan(current, result_delivered=result_delivered)
@@ -211,8 +215,11 @@ def admit_working_plan(
                      and step.description != current_by_id[step.step_id].description]
     if unknown or omitted or changed_bound:
         return DecisionFeedback(action_id="working_plan", reason_code="working_plan_step_binding_invalid",
-            message=f"完整计划更新被拒：未知ID={sorted(unknown)}；漏项={sorted(omitted)}；已绑定项改义={changed_bound}。",
-            repairable_fields=("steps",), required_repair="新项省略或null step_id；保留当前全部有效ID及已绑定项职责。整批计划未改变。"), None
+            message=prompts.render(
+                "conversation.plan.step_binding_invalid", unknown=sorted(unknown),
+                omitted=sorted(omitted), changed_bound=changed_bound,
+            ),
+            repairable_fields=("steps",), required_repair=prompts.render("conversation.plan.step_binding_repair")), None
 
     def materialize_step(step):
         step_id = step.step_id or f"wstep_{uuid4().hex[:16]}"

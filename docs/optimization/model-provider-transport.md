@@ -2,13 +2,13 @@
 
 ## 2026-10-24 MiniMax medium 完整流程的响应头前断连
 
-用户提高思考档位后，新36轮轨迹在首轮因传输未知停止，未交付回答；完整运行及预算由[研究 Spec §9.12](to_verify/knowledge-decision-delivery.md#912-minimax-medium-的完整36轮验证)拥有。本节只读定位，不修改生产传输或自动重跑已关闭轨迹。
+用户提高思考档位后，新36轮轨迹在首轮因传输未知停止，未交付回答；完整运行及预算由[MiniMax medium 的完整36轮验证](to_verify/verify_results/longds-analysis.md#5-minimax-medium-的完整36轮验证)拥有。本节只读定位，不修改生产传输或自动重跑已关闭轨迹。
 
 实发请求121f2723315a40c48a8009b1b869ca19使用MiniMax-M3.1-Flash、adaptive＋medium、非流式工具调用、32,768输出上限；23条完整消息，109,823字符，不把字符数当tokens。诊断链为openai.APIConnectionError→httpx/httpcore.RemoteProtocolError（Server disconnected without sending a response）；http11.receive_response_headers.failed，285.4905秒，body_bytes=0／body_chunks=0，实际连接127.0.0.1:7892。当前urllib.getproxies读取的是Windows系统代理，环境HTTP_PROXY等并未显式设置。证据说明本机代理路径在响应头之前断开，不能认定是哪一端主动关闭、发生了内容过滤或达到了输出／上下文上限。
 
 后继f99f7260c379403cbd89e700f7d75322与该失败请求逐字段完全相同，属于既有有界重试；7.234秒返回完整tool_calls及已知usage，但不能覆盖前次未知消费。其read_artifact提议未成为已接受执行；当前run保留provider_usage_complete=false并返回limitation。原始采集13物理请求、479,230已知tokens、未知1均不改写；观察器按准入规则拒绝评分，是预期停止而非新的评分器缺陷。
 
-须区分触发故障与最终停止责任：网络曾断开，但重试已恢复模型响应；该轨迹最终不再推进的是当时“出现未知用量即停止”的预算／验收规则。原预声明执行正确，不说明恢复后的提议不可执行。用户于 2026-10-24 明确取消这一停止线，当前改为保留未知费用、按已知消费阈值继续；实施、验收和新的完整运行由[研究 Spec §9.13](to_verify/knowledge-decision-delivery.md#913-用量未知不再单独停止并继续完整验证)拥有。不新增费用估算或预留账本，旧关闭轨迹和一次未知消费仍保持原身份。
+须区分触发故障与最终停止责任：网络曾断开，但重试已恢复模型响应；该轨迹最终不再推进的是当时“出现未知用量即停止”的预算／验收规则。原预声明执行正确，不说明恢复后的提议不可执行。用户于 2026-10-24 明确取消这一停止线，当前改为保留未知费用、按已知消费阈值继续；实施、验收和新的完整运行由[用量未知不再单独停止，并继续完整验证](to_verify/verify_results/longds-analysis.md#6-用量未知不再单独停止并继续完整验证)拥有。不新增费用估算或预留账本，旧关闭轨迹和一次未知消费仍保持原身份。
 
 停止审计最初错误地要求这份未知终止轨迹的全部原生调用已配对；实际末尾含上述未执行提议，project_model_history明确拒绝缺结果／拒绝的续接。审计修正为报告该未决尾部和原拒绝，不删原文或补造tool结果，也不将此终止场景记为恢复／完整配对通过；已冻结的7份程序原字节和输入绑定、SDK实际档位及源码身份另行核对。
 
@@ -107,7 +107,7 @@ Conversation Journal 保存同一次实际决策的响应及其输入边界。�
 
 通过后按同一正式 LongDS 入口启动一条独立 36 轮 target，从第 1 轮进入，在第 17 轮真实完成后停止服务、沿同一新许可／消息／Journal 启动 18—36 轮。原失败运行没有检查点且消费未知，保持封存；本次明确继续授权用于新的验证身份，不清除原 Journal 或冒称原轨迹恢复。新运行仍为 MiMo Flash、direct+none、60M 停止阈值、36 小时许可、每轮 3600 秒、每 run 10M／40 主决策／256 工具／4 委派。任一非 answer、服务失败、未知消费或原预算终止即封存，不挑成功重跑；真实完成答案在生成停止后独立官方评分，不回灌模型。旧已知消费与一次未知在历史累计中单列，不能把新运行已知数当作所有尝试完整成本。
 
-归档为 `.tmp/mimo-tool-stream-20261023/`。局部通过后才能启动新 target；原长任务方案及评分标准保持，流程仍不计带 Verification 的产品／发布通过。[研究 Spec](to_verify/knowledge-decision-delivery.md#910-切回-mimo-的长任务验证)、当前架构、评测记录及队列同步消费本规格。
+归档为 `.tmp/mimo-tool-stream-20261023/`。局部通过后才能启动新 target；原长任务方案及评分标准保持，流程仍不计带 Verification 的产品／发布通过。[研究 Spec](to_verify/verify_results/longds-analysis.md#3-切回-mimo-的长任务验证)、当前架构、评测记录及队列同步消费本规格。
 
 独立评审确认 T3 的完整过滤响应计量缺口：同一完整历史阶段仅把外部 `finish_reason` 改为 `content_filter`，SDK 已完整收到 28,239 tokens，`get_final_completion()` 最终解析却抛出不带 completion 的异常，Adapter 无响应可交接。评审为两次本机 HTTP，付费／工具零，未启动 E2E。修正前源码保存在 `before-filter/`。追加第四例完整过滤响应，各一次：只发一次请求，零有效动作／工具、provider_rejected、不可重试，完整 usage 沿 Adapter → 原错误 Port → Conversation 保留；真实断流例继续未知，不能用已知过滤响应覆盖它。
 

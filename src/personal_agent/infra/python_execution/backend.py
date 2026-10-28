@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import hashlib
 from contextlib import closing
 from dataclasses import asdict
@@ -31,7 +34,8 @@ from .sandbox import (
 
 class DockerPythonExecutionBackend:
     def __init__(
-        self, *, endpoint: str, work_root: Path, profile: PythonExecutionProfile
+        self, *, endpoint: str, work_root: Path, profile: PythonExecutionProfile,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
         if (
             not endpoint.startswith(
@@ -40,6 +44,7 @@ class DockerPythonExecutionBackend:
             or "@" in endpoint
         ):
             raise ValueError("Python执行器需要无内嵌凭证的显式Docker Engine端点")
+        self._prompts = prompts
         self.endpoint = endpoint
         self.work_root = work_root.resolve()
         self.profile = profile
@@ -53,31 +58,29 @@ class DockerPythonExecutionBackend:
             or command.limits.model_dump(exclude={"timeout_seconds"})
             != self.profile.limits.model_dump(exclude={"timeout_seconds"})
         ):
-            raise PermissionError("Python Command与固定执行部署不同")
+            raise PermissionError(self._prompts.render('python_backend.deployment'))
         root = self.work_root / command.command_digest
         for path in (root, *root.parents):
             if path.is_symlink():
-                raise ValueError("Python执行目录不得包含符号链接")
+                raise ValueError(self._prompts.render('python_backend.directory_symlink'))
         if not root.resolve().is_relative_to(self.work_root):
-            raise ValueError("Python执行目录越界")
+            raise ValueError(self._prompts.render('python_backend.directory_escape'))
         return root
 
-    @staticmethod
-    def _snapshot(root: Path, command: PythonExecutionCommand) -> None:
+    def _snapshot(self, root: Path, command: PythonExecutionCommand) -> None:
         path = root / "command.json"
         if path.exists():
             if (
                 path.is_symlink()
-                or PythonExecutionCommand.model_validate_json(path.read_bytes())
+                or PythonExecutionCommand.model_validate_json(path.read_bytes(), context=self._prompts)
                 != command
             ):
-                raise ValueError("Python原作业与冻结Command不同")
+                raise ValueError(self._prompts.render('python_backend.job_command'))
         else:
-            raise ValueError("Python原作业缺少冻结Command，禁止重新执行")
+            raise ValueError(self._prompts.render('python_backend.job_command_missing'))
 
-    @staticmethod
     def _paths(
-        root: Path, command: PythonExecutionCommand
+        self, root: Path, command: PythonExecutionCommand
     ) -> tuple[Path, dict[str, Path]]:
         program = root / "bound" / "program.py"
         paths = {item.name: root / "bound" / item.name for item in command.inputs}
@@ -89,7 +92,7 @@ class DockerPythonExecutionBackend:
                 or path.stat().st_size != item.size_bytes
                 or hashlib.sha256(path.read_bytes()).hexdigest() != item.content_digest
             ):
-                raise ValueError("Python后端输入与冻结原字节不同")
+                raise ValueError(self._prompts.render('python_backend.input_bytes'))
         return program, paths
 
     def execute(
@@ -98,13 +101,13 @@ class DockerPythonExecutionBackend:
         root = self._root(command)
         identities = tuple(item.identity() for item in inputs)
         if identities != (command.program, *command.inputs):
-            raise ValueError("执行输入与冻结Python Command不同")
+            raise ValueError(self._prompts.render('python_backend.input_command'))
         if (root / "command.json").exists():
             self._snapshot(root, command)
         else:
             root.mkdir(parents=True, exist_ok=True)
             if any(root.iterdir()):
-                raise ValueError("Python工作目录缺少原身份，禁止重新执行")
+                raise ValueError(self._prompts.render('python_backend.job_identity'))
             path = root / "command.json"
             with path.open("xb") as stream:
                 stream.write((command.model_dump_json() + "\n").encode("utf-8"))
@@ -113,12 +116,12 @@ class DockerPythonExecutionBackend:
         bound = root / "bound"
         bound.mkdir(exist_ok=True)
         if bound.is_symlink():
-            raise ValueError("Python输入目录不得是符号链接")
+            raise ValueError(self._prompts.render('python_backend.input_symlink'))
         for item in inputs:
             target = bound / item.name
             if target.exists():
                 if target.is_symlink() or target.read_bytes() != item.content:
-                    raise ValueError("Python输入快照冲突")
+                    raise ValueError(self._prompts.render('python_backend.input_snapshot'))
             else:
                 with target.open("xb") as stream:
                     stream.write(item.content)
@@ -154,6 +157,7 @@ class DockerPythonExecutionBackend:
             )
         self._record(root, command)
         result = _recover_program(
+            prompts=self._prompts,
             endpoint=self.endpoint,
             image=command.image_id,
             output_dir=root / "execution",
@@ -227,7 +231,7 @@ class DockerPythonExecutionBackend:
                         != command.command_digest
                         or container.status not in {"exited", "dead", "created"}
                     ):
-                        raise ValueError("Python清理未确认匹配的停止容器")
+                        raise ValueError(self._prompts.render('python_backend.cleanup_identity'))
                     container.remove()
                 except NotFound:
                     pass
@@ -241,7 +245,7 @@ class DockerPythonExecutionBackend:
     def _record(self, root: Path, command: PythonExecutionCommand) -> _JobRecord:
         path = root / "execution" / "job.json"
         if path.is_symlink() or path.parent.is_symlink():
-            raise ValueError("Python原作业记录不得是符号链接")
+            raise ValueError(self._prompts.render('python_backend.job_record_symlink'))
         record = TypeAdapter(_JobRecord).validate_json(path.read_bytes())
         if (
             record.job_key != command.command_digest
@@ -256,5 +260,5 @@ class DockerPythonExecutionBackend:
                 for item in (command.program, *command.inputs)
             }
         ):
-            raise ValueError("Python后端作业与冻结Command不符")
+            raise ValueError(self._prompts.render('python_backend.job_binding'))
         return record

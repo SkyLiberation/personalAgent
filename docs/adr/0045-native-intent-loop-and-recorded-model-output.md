@@ -1,6 +1,6 @@
 # ADR 0045：Loop 使用原生意图与可恢复模型响应
 
-状态：2026-10-24 首版完整任务第17轮失败后，正文入口／原生修复及流式角色修订已按critic接入，整合审查与真实生成验收中。替代 ADR 0017 中 prepare_final＋独立 Final JSON 协议；不改变执行、核验和 Completion 的责任。
+状态：原生协议已接入，替代 ADR 0017 的 `prepare_final`＋独立 Final JSON 协议。首版第 17 轮失败后的修订、真实生成、连续交付和恢复结果见 [Loop Spec §16](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)；流程验证与语义正确性分别报告。执行、核验和 Completion 责任保持。
 
 ## 背景与问题
 
@@ -10,13 +10,13 @@
 
 ## 决定与责任
 
-按[统一 Loop Schema 设计](../optimization/to_verify/conversation-loop-schema.md)及[实际开源调用链比较](../agentRef/model-interaction-protocols.md)，主循环使用原生消息／工具调用。修订按OpenHands实际分类先处理调用，无调用的完整可见正文也形成回答候选；submit_final携带沟通意图／行引用等属性，revise_final恢复现稿修订，两者同入原提交出口。首版强制所有正文先调用submit_final的选择已被第17轮否定，修订不得再仅加重提示。删除空准备动作及第二次普通成文；claims仍以真实业务操作接入，同稿共享出口。
+按[统一 Loop Schema 设计](../optimization/to_verify/conversation-loop-schema.md)及[实际开源调用链比较](../agentRef/model-interaction-protocols.md)，主循环使用原生消息／工具调用，优先处理调用；没有调用时，完整可见正文也形成回答候选。`submit_final` 携带沟通意图、行引用等属性，`revise_final` 修订现稿，两者进入同一提交出口。首版要求所有正文先调用 `submit_final`，已被第 17 轮反例否定。空准备动作与第二次普通成文已删除，claims 继续以业务操作接入同稿出口。
 
 模型决定语义、工具、代码及正文。Runtime 恢复身份／范围／版本，Admission 只接纳或拒绝，执行 owner 写事实，Verifier 与 Completion 各守原职责。原生终止和研究操作独占批次，执行前检查，不根据模型自述批准自己。
 
 内部typed结果按请求声明策略。意图判断及原grounding修订采用提示式JSON文本，不请求未经核实的API格式功能；其他native typed能力及非Loop默认profile保留。原类型、来源Admission及同模式有限修复不变。完整响应在解码前经 typed Port 记录者提交原 Journal／Artifact；稳定 invocation_id、逐次原件及 continuation 支持重启先解码付费输出、恢复有限修复次数。引用只选择当前合法身份，已有正文由 Runtime 恢复。安全错误在 Web／SSE 投影，不能混淆上游 HTTP、本地输出和 Runtime 故障。
 
-原生typed修复继续调用同一输出工具，不使用正文JSON修复指令；JSON消费者保留其原承载。普通主回复的正文支持不放宽内层typed Schema，不跳过claims、计划审阅、核验或Completion。流式role按结构字段聚合，其sticky失败事实写原response record，先保存后校验并用于恢复；不从坏角色字符串造合法值。缺少实际终止finish_reason的响应在保存后拒绝，EOF不能代替结束事实。修订critic及零模型真实产物回放已完成，新固定生成组／完整任务尚未验证，首版失败及计费均保留。
+原生 typed 修复继续调用同一输出工具，JSON 消费者保留原承载。主回复支持正文，不放宽内部 Schema 或跳过 claims、计划审阅、核验及 Completion。流式 `role` 按结构字段聚合，持续失败事实写入原响应记录，先保存、再校验并用于恢复。缺少终止 `finish_reason` 的响应在保存后拒绝，EOF 不能代替结束事实。首版失败与计费保留，修订后的实际验证范围由上述 Loop 结果拥有。
 
 ## 取舍、复杂度与防护
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from personal_agent.kernel.model_provider import ModelProvider, resolve_model_provider
 
 from personal_agent.kernel.contracts.capability_values import (
     AttestationStatus,
@@ -38,6 +39,8 @@ class GraphitiConfig(_StrictBase):
     llm_base_url: str | None = None
     llm_model: str | None = None
     llm_small_model: str | None = None
+    llm_provider: ModelProvider | None = None
+    llm_extra_body: dict[str, Any] = Field(default_factory=dict)
 
     sync_max_attempts: int = 3
     sync_max_workers: int = 4
@@ -84,9 +87,19 @@ class ModelCapacityConfig(_StrictBase):
         return self
 
 
-class OpenAIConfig(_StrictBase):
-    api_key: str | None = None
+class _ModelEndpointConfig(_StrictBase):
+    provider: ModelProvider | None = None
     base_url: str | None = None
+    extra_body: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_provider_endpoint(self):
+        resolve_model_provider(self.base_url, self.provider)
+        return self
+
+
+class OpenAIConfig(_ModelEndpointConfig):
+    api_key: str | None = None
     model: str = DEFAULT_GENERATIVE_MODEL
     small_model: str = DEFAULT_GENERATIVE_MODEL
     vision_model: str = ""
@@ -97,19 +110,16 @@ class OpenAIConfig(_StrictBase):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     capacity: ModelCapacityConfig | None = None
-    extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
-class StructuredConfig(_StrictBase):
+class StructuredConfig(_ModelEndpointConfig):
     """Single config for every JSON-schema / Pydantic structured LLM call."""
 
     api_key: str | None = None
-    base_url: str | None = None
     model: str = DEFAULT_GENERATIVE_MODEL
     timeout_seconds: float = 60.0
     max_retries: int = 2
     output_transport: Literal["json_schema", "json_object"] = "json_object"
-    extra_body: dict[str, Any] = Field(default_factory=dict)
     capacity: ModelCapacityConfig | None = None
 
     @property
@@ -287,7 +297,7 @@ class LangSmithConfig(_StrictBase):
     sample_rate: float = 1.0
 
 
-class LangExtractConfig(_StrictBase):
+class LangExtractConfig(_ModelEndpointConfig):
     """LangExtract layer config.
 
     Provider-specific overrides remain available, while the environment loader
@@ -302,7 +312,6 @@ class LangExtractConfig(_StrictBase):
     api_key: str | None = None
     base_url: str = "https://api.xiaomimimo.com/v1"
     model_id: str = DEFAULT_GENERATIVE_MODEL
-    extra_body: dict[str, Any] = Field(default_factory=dict)
     max_char_buffer: int = 6000
     extraction_passes: int = 1
     max_workers: int = 4

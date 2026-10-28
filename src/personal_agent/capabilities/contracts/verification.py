@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic import model_validator
 
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 VerificationVerdict = Literal["passed", "failed"]
 
@@ -88,9 +89,7 @@ class CitedSupportRejection(BaseModel):
     checked_draft: str = Field(min_length=1)
     findings: tuple[OverreachFinding, ...] = Field(min_length=1)
     explanation: str = (
-        "本次提交的证据不足以支持所列草稿声明，暂不交付。"
-        "这不证明原文没有依据或声明必然为假。请补充已有引用、继续取证或修订结论后重新提交；"
-        "补充引用时可以保留有据的原稿，不必为了改稿而改变事实。"
+        DEFAULT_PROMPTS.get('verification.cited_support_rejection.explanation').template
     )
 
 

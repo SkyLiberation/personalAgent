@@ -12,6 +12,9 @@ from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RR
 from neo4j import AsyncGraphDatabase
 
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.model_provider import ModelProviderPolicy
 from personal_agent.kernel.graph_results import GraphCaptureResult, GraphRetrievalResult
 from personal_agent.kernel.logging_utils import log_event, trace_span
 from personal_agent.kernel.models import (
@@ -31,7 +34,7 @@ from personal_agent.memory.graphiti.documents import (
     related_episode_ids_from_edges as _related_episode_ids_from_edges,
 )
 from personal_agent.memory.graphiti.llm_strategies import build_graphiti_llm_client
-from personal_agent.memory.graphiti.ontology import CUSTOM_EXTRACTION_INSTRUCTIONS, ENTITY_TYPES
+from personal_agent.memory.graphiti.ontology import ENTITY_TYPES
 from personal_agent.memory.graphiti.search_strategies import (
     GraphSearchStrategy,
     apply_search_config_overrides,
@@ -42,8 +45,11 @@ logger = logging.getLogger(__name__)
 
 
 class GraphitiStore:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, provider_policy: ModelProviderPolicy,
+                 prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
         self.settings = settings
+        self._prompts = prompts
+        self._provider_policy = provider_policy
         self._indices_ready = False
         self._user_data_probe_cache: dict[str, bool] = {}
         self.search_strategy: GraphSearchStrategy = apply_search_config_overrides(
@@ -285,7 +291,7 @@ class GraphitiStore:
                                 source=EpisodeType.text,
                                 group_id=self._group_id(document.user_id),
                                 entity_types=ENTITY_TYPES,
-                                custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                                custom_extraction_instructions=self._prompts.get("graphiti.custom_extraction").template,
                             ),
                             timeout=self.settings.graphiti.add_episode_timeout_seconds,
                         )
@@ -308,7 +314,7 @@ class GraphitiStore:
                                 source=EpisodeType.text,
                                 group_id=self._group_id(document.user_id),
                                 entity_types=ENTITY_TYPES,
-                                custom_extraction_instructions=CUSTOM_EXTRACTION_INSTRUCTIONS,
+                                custom_extraction_instructions=self._prompts.get("graphiti.custom_extraction").template,
                             ),
                             timeout=self.settings.graphiti.add_episode_timeout_seconds,
                         )
@@ -649,7 +655,7 @@ class GraphitiStore:
             await self._close_client(graphiti)
 
     async def _build_client(self, trace_id: str | None = None) -> Graphiti:
-        llm_client = build_graphiti_llm_client(self.settings)
+        llm_client = build_graphiti_llm_client(self.settings, provider_policy=self._provider_policy)
         embedder = DashScopeCompatibleEmbedder(
             config=OpenAIEmbedderConfig(
                 api_key=self.settings.openai.embedding_api_key or self.settings.openai.api_key,

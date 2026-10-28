@@ -21,6 +21,8 @@ from personal_agent.capabilities.contracts.verification import (
     ConversationEvidenceReference,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from .context_materialization import (
     ARTIFACT_OUTPUT_CAPABILITIES,
     select_visible_successful_observations,
@@ -245,7 +247,7 @@ _CitationT = TypeVar("_CitationT", bound=CitationLine)
 
 
 def _resolve_citation(
-    evidence_id: str, catalog: Mapping[str, _CitationT]
+    evidence_id: str, catalog: Mapping[str, _CitationT], *, prompts: PromptCatalog
 ) -> tuple[_CitationT, ...]:
     """Expand a writer's range only into exact, already returned full lines."""
     document, position, *columns = evidence_id.split(":")
@@ -254,7 +256,9 @@ def _resolve_citation(
         start, end = (int(value) for value in position.split("-"))
         if end <= start or end - start + 1 > len(catalog):
             raise CitationBindingError(
-                f"引用 {evidence_id} 不是可见的连续多行范围；结束行须大于起始行，且每行已完整返回。"
+                prompts.render(
+                    "conversation.citations.range_invalid", evidence_id=evidence_id
+                )
             )
         coordinates = tuple(f"{document}:{line}" for line in range(start, end + 1))
     missing = next(
@@ -262,13 +266,20 @@ def _resolve_citation(
     )
     if missing is not None:
         raise CitationBindingError(
-            f"引用 {evidence_id} 中的 {missing} 未完整返回或不存在。请选择 citations 中实际可见的行；连续范围不能跳过缺行，部分行须原样保留字符范围，需要其他内容时继续读取。"
+            prompts.render(
+                "conversation.citations.coordinate_unavailable",
+                evidence_id=evidence_id,
+                missing=missing,
+            )
         )
     return tuple(catalog[coordinate] for coordinate in coordinates)
 
 
 def materialize_cited_draft(
-    segments: tuple[ConversationAnswerSegment, ...], inputs: Iterable[InteractionInput]
+    segments: tuple[ConversationAnswerSegment, ...],
+    inputs: Iterable[InteractionInput],
+    *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[CitedDraftUnit, ...]:
     catalog = {
         location.evidence_id: location
@@ -279,7 +290,7 @@ def materialize_cited_draft(
     for segment in segments:
         restored = []
         for ref in segment.references:
-            for location in _resolve_citation(ref.evidence_id, catalog):
+            for location in _resolve_citation(ref.evidence_id, catalog, prompts=prompts):
                 restored.append(
                     CitedEvidence(
                         id=f"e{len(restored) + 1:03d}",
@@ -297,7 +308,10 @@ def materialize_cited_draft(
 
 
 def materialize_reference_sources(
-    segments: tuple[ConversationAnswerSegment, ...], inputs: Iterable[InteractionInput]
+    segments: tuple[ConversationAnswerSegment, ...],
+    inputs: Iterable[InteractionInput],
+    *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[AvailableCitation, ...]:
     """Keep document coordinates when projecting source identity for synthesis.
 
@@ -314,7 +328,7 @@ def materialize_reference_sources(
             location
             for segment in segments
             for ref in segment.references
-            for location in _resolve_citation(ref.evidence_id, catalog)
+            for location in _resolve_citation(ref.evidence_id, catalog, prompts=prompts)
         )
     )
 
@@ -322,6 +336,8 @@ def materialize_reference_sources(
 def selected_citation_ids(
     references: tuple[ConversationEvidenceReference, ...],
     inputs: Iterable[InteractionInput],
+    *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> frozenset[str]:
     """Bind a selection to returned coordinates using the canonical resolver."""
     catalog = {
@@ -332,13 +348,15 @@ def selected_citation_ids(
     return frozenset(
         location.evidence_id
         for reference in references
-        for location in _resolve_citation(reference.evidence_id, catalog)
+        for location in _resolve_citation(reference.evidence_id, catalog, prompts=prompts)
     )
 
 
 def bound_citation_ids(
     references: tuple[ConversationEvidenceReference, ...],
     inputs: Iterable[InteractionInput],
+    *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> frozenset[str]:
     """Pin real evidence in Context while keeping rejected proposals untouched.
 
@@ -351,7 +369,7 @@ def bound_citation_ids(
     bound = set()
     for reference in references:
         try:
-            locations = _resolve_citation(reference.evidence_id, catalog)
+            locations = _resolve_citation(reference.evidence_id, catalog, prompts=prompts)
         except CitationBindingError:
             continue
         bound.update(location.evidence_id for location in locations)
@@ -359,7 +377,10 @@ def bound_citation_ids(
 
 
 def validate_citation_reference(
-    reference: ConversationEvidenceReference, catalog: Mapping[str, CitationLine]
+    reference: ConversationEvidenceReference,
+    catalog: Mapping[str, CitationLine],
+    *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> None:
     """Reject references outside the exact returned coordinate projection."""
-    _resolve_citation(reference.evidence_id, catalog)
+    _resolve_citation(reference.evidence_id, catalog, prompts=prompts)

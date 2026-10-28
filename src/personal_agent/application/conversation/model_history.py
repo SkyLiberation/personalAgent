@@ -3,7 +3,8 @@ from collections.abc import Sequence
 import json
 
 from personal_agent.capabilities.contracts.model import ModelToolExchange, ModelToolResult, StructuredModelResponse
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .citations import CitableInput
 from .errors import ConversationOperationConflict
@@ -103,14 +104,15 @@ def validate_decision_extension(previous: InteractionTrace, current: Interaction
             raise ConversationOperationConflict("模型调用、响应及已提交处置不可改写")
 
 
-def _disposition_content(disposition: ModelCallDisposition) -> str:
-    prompt = get_prompt("conversation.native_control." + disposition.status)
+def _disposition_content(disposition: ModelCallDisposition, prompts: PromptCatalog) -> str:
+    prompt = prompts.get("conversation.native_control." + disposition.status)
     return json.dumps({"message": prompt.template, "disposition": disposition.model_dump(mode="json", exclude_none=True)},
                       ensure_ascii=False)
 
 
 def project_model_history(
     trace: InteractionTrace, visible: Sequence[CitableInput],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[tuple[ModelToolExchange, ...], tuple[CitableInput, ...]]:
     """Use only already materialized/visible facts, never raw tool payloads."""
     covered = set(trace.history_compaction.covered_decision_turns) if trace.history_compaction else set()
@@ -144,7 +146,7 @@ def project_model_history(
                     content=json.dumps(item.model_dump(mode="json"), ensure_ascii=False)))
                 consumed.add(input_identity(item.observation))
             elif call_id in dispositions:
-                results.append(ModelToolResult(call_id=call_id, content=_disposition_content(dispositions[call_id])))
+                results.append(ModelToolResult(call_id=call_id, content=_disposition_content(dispositions[call_id], prompts)))
             elif any(item.action_id == call_id for item in trace.accepted_tool_requests):
                 raise ConversationOperationConflict("原生工具调用仍缺少已接受执行的恢复结果")
             elif record.blocked_by is not None and record.blocked_by in keyed:

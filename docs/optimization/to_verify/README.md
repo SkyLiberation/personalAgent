@@ -8,22 +8,39 @@
 
 ## 近期候选入口
 
-下列候选保留各自边界。当前研究已使用同版本 claims 与最终回答的统一核验，旧独立 Final v6 不再是活动实现候选；其历史成果按原身份保留。当前结果由[评测盘点](../../evals/02-current-case-inventory.md)拥有，选证输出及计量分别按各自前置边界验证。
+下表提供近期方案入口，已接入部分和待验证条件由正文说明。实际结果见[评测盘点](../../evals/02-current-case-inventory.md)，准入状态见 [Future 队列](../../future/design-optimization-backlog.md)。
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `CONVERSATION-LOOP-BOUNDARIES-001`：整个 Loop 的模型交互 Schema、原生动作与交付、错误和恢复 | [当前完成及证据边界](conversation-loop-schema.md#16-完整运行结果与实际边界)；完整36轮交付及17→18恢复成立，官方正确性27/36，未覆盖边界见正文 | [统一交互契约](conversation-loop-schema.md)，替代旧 §3.10 单独候选；[终答入口框架分析](conversation-loop-schema.md#17-终答入口的框架分析与职责收窄候选)，收窄候选未实施 |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析、长程状态及历史压缩的整体职责和验证关系 | [当前状态](knowledge-decision-delivery.md#8-当前状态与剩余决定)、[LongDS 36 轮设计](knowledge-decision-delivery.md#9-longds-长程数据分析设计)；执行事实由评测盘点拥有，准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有 | [研究能力增强与实验交付 Spec](knowledge-decision-delivery.md)；[可执行分析、自检与成文候选](knowledge-decision-delivery.md#10-可执行分析自检与结果成文候选)，尚未实施 |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主Python数据分析执行；旧自动统计方案已撤回 | [研究事实与范围](knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python数据分析工具Spec](python-data-analysis-tool.md)，已实施；自主计算链成立，局部整稿失败 |
-| `RESEARCH-GOAL-COVERAGE-001`：统一链既有验收保持；claim 增量贡献先补完整标注与实际修订，再决定独立机制候选 | [正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [claim 评估与优化顺序](research-goal-coverage.md#当前推荐复核标注再比较实际修订)；[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
-| `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入优化及实际成本收益尚待证明 | [预算事实与当前边界](research-input-budget.md) | [预算复审](research-input-budget.md) |
-| `ANSWER-NORMATIVE-SCOPE-001`：自动复核已删除，真实反馈继续修订；最新 target 原预算未交付 | [已验边界及 c4 闭环](../completed/source-proof-boundary-isolation.md) | [范围校准与真实反馈消费](normative-context-acquisition.md#用户确认范围后的-c7-实际修订验收) |
+| Prompt 语言及生成／评分配置替换 | [封存输入与验证](verify_results/prompt-language-mimo.md) | [语言与 MiMo 配置 Spec](prompt-language-selection.md)；已固化的工程提示与动态反馈见[完成记录](../completed/english-owned-feedback.md) |
+| `CONVERSATION-LOOP-BOUNDARIES-001`：模型交互 Schema、原生动作、交付与恢复 | [完整运行结果及适用边界](conversation-loop-schema.md#16-完整运行结果与实际边界) | [统一交互契约](conversation-loop-schema.md)、[终答职责收窄候选](conversation-loop-schema.md#17-终答入口的框架分析与职责收窄候选) |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析与长程分析状态 | [LongDS 设计与事实依据](longds-analysis.md#longds-长程数据分析-spec) | [约束接续与语义核验候选](longtask-semantic-consistency.md#长程分析约束接续与语义核验候选)；原件成文和 claim 消融分别推进 |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主 Python 数据分析 | [执行链与成文边界](verify_results/research-experiment.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python 数据分析工具 Spec](python-data-analysis-tool.md) |
+| `RESEARCH-GOAL-COVERAGE-001`：用户事实覆盖及 claim 增量贡献 | [统一链正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [复核标注与实际修订比较](research-goal-coverage.md#当前推荐复核标注再比较实际修订)、[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
+| `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入物化的费用与延迟 | [预算事实](research-input-budget.md) | [预算复审与待证收益](research-input-budget.md) |
+| `ANSWER-NORMATIVE-SCOPE-001`：真实范围反馈与修订 | [来源核验已固化边界](../completed/source-proof-boundary-isolation.md) | [范围校准与真实反馈消费](normative-context-acquisition.md#用户确认范围后的-c7-实际修订验收) |
 | `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验与修订反馈分工](final-revision-comparison.md) |
 | `RESEARCH-SELECTION-USAGE-COMMIT-001`：后置写作或选证输出失败造成已完成用量漏计 | [正式用量差额](../research-selection-usage-commit.md) | [已完成选证用量的及时提交](research-selection-usage-commit.md) |
 | `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：单次输出截断阻断正式研究 | [正式选证失败](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [研究请求采用服务方默认输出额度](research-provider-output-default.md) |
 | `ANSWER-NORMATIVE-SCOPE-001`：多来源稿的指代导致具体页面归属错误 | [真实来源错配](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | [最终稿具体来源归属](answer-source-attribution.md) |
 
 独立新业务选型不再作为当前前置待办；[场景比较及未采纳会议规格](non-research-task-directions.md)保留取舍与来源，不单独推进日历接入。
+
+## 研究能力专题与验证记录
+
+[研究能力总 Spec](knowledge-decision-delivery.md)只保留目标、总体职责和推进关系。专题正文按实际修改对象读取，验证结果统一进入用户指定的 `verify_results/`：
+
+| 正文职责 | 唯一入口 |
+| --- | --- |
+| 受限实验、候选程序、持久接受及当前完成协议 | [实验执行协议](research-experiment-protocol.md) |
+| SciFact 自然请求、R 需求、用例、评分及收益判据 | [实验请求与验收](research-experiment-acceptance.md) |
+| 共享程序／JSON 产物、快照及坐标 patch | [程序产物契约](program-artifact-contract.md) |
+| LongDS 逐轮依赖、LT 需求和 L0—L3 | [LongDS Spec](longds-analysis.md) |
+| NUM 精度、自检、计算成文及原件提交候选 | [结果成文候选](analysis-result-correctness.md) |
+| SEM 约束接续、成果适用性及语义核验候选 | [长程语义候选](longtask-semantic-consistency.md) |
+| 已执行验证、当时计划、失败归因及设计审阅 | [验证记录目录](verify_results/README.md) |
+
+这些文档共用原问题编号，不新增能力、准入项或运行条件。当前实现与候选、历史结果的事实强度保持原身份；正式成绩由评测文档拥有。
 
 ## 按问题找方案
 
@@ -51,8 +68,8 @@
 
 ## 每项必须保留的内容
 
-Runtime 的独立工程问题见[策略审计隔离规格](runtime-policy-audit-isolation.md)：先验证同进程多个正式应用的审计归属，再决定是否准入显式注入修复。
+Runtime 的独立工程问题见[策略审计隔离规格](runtime-policy-audit-isolation.md)：显式注入已接入并通过真实读取阶段反事实，原完整对话 target 未交付，剩余门禁由该规格说明。
 
 每项写明具体问题编号、上位问题、失败输入与最早责任边界、候选机制与责任主体、已成立证据、未验证部分、依赖方案、代码和归档身份、下一验证判据与预算、直接证伪及退出条件。必须有问题记录或索引的入链，不允许只有工具名或通用技术名称的孤立方案。
 
-本批先收敛当前研究论断修订链。其他历史候选继续由原问题记录拥有，在后续触及时按同一规则迁移；本索引不声称全库历史已经迁完。
+历史候选按各自代码和证据身份解释，后续触及时按上述规则整理。

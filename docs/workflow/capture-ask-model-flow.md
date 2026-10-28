@@ -40,9 +40,7 @@ flowchart LR
 3. 成功 `Observation` 提交后，下一模型回合仍读取该 Observation，但逐回合能力投影不再暴露已经完成的 `search_personal_knowledge`；该投影不保存新业务事实，Admission 的重复搜索拒绝只作为 fail-closed 防线。
 4. 用户明确禁止上网且正向要求使用已保存事实时，模型可以从个人证据回答，外部搜索调用必须为零。
 5. 用户要求官方或当前外部资料时，模型必须调用可见的只读搜索工具；`Observation` 与个人证据进入同一个循环。单个官方文档查询，或少量需要和个人 Context 在父级回答中合并的只读查询，不委托整个请求；只有可独立验证且确实需要广泛综合、Context 隔离或并行研究的子目标才使用外部研究智能体。
-6. Conversation 生成唯一 FinalMessage。没有足够证据时必须给 limitation，不能把 Tool success 当完成。
-
-这种形态与优秀 Agent 的共同点是“一个 manager/loop 组合多个只读资源”；采用它的原因不是框架对齐，而是 ASK-001A/B 的同入口 baseline 与目标 E2E。
+6. Conversation 提交唯一 `FinalMessage`，并执行适用核验和完成检查。资料不足时由模型选择补证、澄清或说明限制；工具成功不替代用户结果。
 
 ## 权力与事实边界
 
@@ -58,13 +56,9 @@ flowchart LR
 
 - `ASK-001A`：同一 Conversation 只使用 owner 个人资料，逐项引用冲突原文，不调用 web、不泄漏其他 principal、不新增 Claim。
 - `ASK-001B`：同一 Conversation 同时使用个人证据与官方 Web 证据，最终回答包含官方 URL，只有一个 `FinalMessage`，不泄漏、不写知识；`narrow_research_routing` 横切套件独立检查直接读取与零整体委托。
-- `E08`：Conversation 回答本身不写 Claim；显式 solidify 后才进入知识写路径。
+- 显式保存的权限、确认、重放和跨会话结果由 `E14/L07` 覆盖；已退出当前矩阵的 `E08` 保留历史身份。
 
-运行：
-
-```powershell
-uv run pytest evals/e2e_quality/test_conversation_grounded_answer.py -q -s
-```
+正式运行命令与归档要求由[评测执行与发布](../evals/04-running-and-release.md)维护。
 
 ## 仍保留的组件评测
 

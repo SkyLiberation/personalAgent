@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,9 +42,9 @@ class WebReadOutput(BaseModel):
     source_text: str
 
 
-def source_body_text(source: UrlCaptureResult, *, max_bytes: int) -> str:
+def source_body_text(source: UrlCaptureResult, *, max_bytes: int, prompts: PromptCatalog = DEFAULT_PROMPTS) -> str:
     """Store the captured body verbatim; source metadata stays in WebReadOutput."""
     if len(source.text.encode("utf-8")) > max_bytes:
-        raise ValueError("来源正文超过单次容量，未交付不完整正文。")
+        raise ValueError(prompts.render('web_source.body_limit'))
     return source.text
 

@@ -14,6 +14,8 @@ from personal_agent.application.artifacts.models import (
     TextPosition,
 )
 from personal_agent.application.artifacts.text_coordinates import TextCoordinates
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .observation_bounds import MAX_OBSERVATION_PAYLOAD_CHARS, serialized_length
 from .source_reading import ReturnedSourceLine
@@ -55,7 +57,9 @@ class SourceSearchResult(SearchActionOutputArguments):
     total_lines: int
     matched_record_count: int
     next_offset: int | None
-    explanation: str = "只返回命中行的正文，超长行给出局部文字与 start_column、line_length；line 可作为 read_artifact 的 start_line。搜索结束或零命中不表示全文已读或相关语义不存在。"
+    explanation: str = Field(
+        default_factory=lambda: DEFAULT_PROMPTS.render("conversation.search.explanation")
+    )
 
 
 def search_artifact_text(
@@ -64,9 +68,10 @@ def search_artifact_text(
     arguments: SearchActionOutputArguments,
     matcher: ArtifactSearchPort,
     max_chars: int = MAX_OBSERVATION_PAYLOAD_CHARS,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> SourceSearchResult:
     if snapshot.resource_ref.resource_id != arguments.resource_id:
-        raise ValueError("搜索快照与请求引用不一致。")
+        raise ValueError(prompts.render("conversation.search.snapshot_mismatch"))
     text = snapshot.content
     coordinates = TextCoordinates(text)
     records = [line.text for line in coordinates.lines]
@@ -80,7 +85,7 @@ def search_artifact_text(
     hits: set[int] = set()
     for match in matcher.find(body, keyword=arguments.keyword, regex=arguments.regex):
         if not 0 <= match.start <= match.end <= boundaries[-1]:
-            raise ValueError("搜索位置超出本次正文。")
+            raise ValueError(prompts.render("conversation.search.match_out_of_bounds"))
         if match.start == boundaries[-1]:
             continue
         first = bisect_right(boundaries, match.start)
@@ -93,7 +98,7 @@ def search_artifact_text(
                 match_columns[number] = len(prefix)
     ordered = sorted(hits)
     if arguments.result_offset > len(ordered):
-        raise ValueError("搜索结果分页偏移超出匹配记录数。")
+        raise ValueError(prompts.render("conversation.search.offset_out_of_bounds"))
     selected: list[ReturnedSourceLine] = []
     result = SourceSearchResult(
         **arguments.model_dump(),
@@ -104,6 +109,7 @@ def search_artifact_text(
         total_lines=len(records),
         matched_record_count=len(ordered),
         next_offset=None,
+        explanation=prompts.render("conversation.search.explanation"),
     )
     for number in ordered[arguments.result_offset :]:
         original = records[number - 1]
@@ -123,7 +129,7 @@ def search_artifact_text(
         ):
             if not selected:
                 raise ValueError(
-                    "单条匹配记录超过输出容量，未将截断内容计作完整证据；请用 read_artifact 读取原资源。"
+                    prompts.render("conversation.search.record_capacity_exceeded")
                 )
             break
         selected.append(line)

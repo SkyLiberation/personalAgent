@@ -6,12 +6,17 @@ from personal_agent.application.capture.providers.web_search import WebSearchPro
 from personal_agent.application.capture.web_source import WebSearchArgs, WebSearchOutput
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.evidence import EvidenceItem
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import create_prompt_catalog
 from personal_agent.tools.base import governance_extras, tool_response, tool_success
 
 
-def build_web_search_tool(settings: Settings, provider: WebSearchProvider) -> BaseTool:
-    description = get_prompt("web_search.description")
+def build_web_search_tool(
+    settings: Settings, provider: WebSearchProvider,
+    *, prompts: PromptCatalog | None = None,
+) -> BaseTool:
+    prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
+    description = prompts.get("web_search.description")
 
     @tool(
         "web_search",

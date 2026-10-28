@@ -44,6 +44,8 @@ from personal_agent.application.research.planning import (
     ResearchRequestUnderstanding,
 )
 from personal_agent.kernel.llm_schemas import strip_json_fence
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref"}
 _TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
@@ -84,7 +86,9 @@ class ResearchService:
         save_note: Callable[..., object] | None = None,
         event_extractor: ResearchEventExtractor | None = None,
         default_limits: ResearchLimits | None = None,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
+        self._prompts = prompts
         self.store = store
         self.tools = tool_executor
         self.generate_text = generate_text
@@ -639,27 +643,7 @@ class ResearchService:
             for event in events[:10]
         ]
         prompt = (
-            "你是 research agent 的下一步策略决策器。你可以自己提出更有信息增益的 "
-            "search_web query，也可以在证据已经足够或预算不值得继续消耗时 stop。"
-            "只能输出 JSON，不能输出解释性正文。\n"
-            "允许 action：search_web, stop。\n"
-            "JSON schema：{\"action\":\"search_web|stop\",\"query\":\"...\","
-            "\"purpose\":\"...\",\"event_id\":\"...\",\"expected_gain\":\"official_confirmation|"
-            "independent_source|disambiguation|personal_relevance|recency|stop\","
-            "\"cost_level\":\"low|medium|high\",\"reason\":\"...\"}。\n"
-            "约束：search_web 的 query 必须具体、不能重复已执行查询；event_id 必须来自事件列表或为空；"
-            "不要为了补低价值信息消耗预算。\n"
-            f"主题：{definition.topic}\n要求：{definition.instructions}\n"
-            f"研究策略：{json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
-            f"初始查询计划：{json.dumps([query.model_dump(mode='json') for query in definition.queries], ensure_ascii=False)}\n"
-            f"已执行查询：{json.dumps(state.query_history, ensure_ascii=False)}\n"
-            f"剩余查询预算：{max(0, definition.limits.max_queries - state.usage.iteration_count)}\n"
-            f"剩余探索查询预算：{max(0, definition.limits.max_exploration_queries - state.usage.exploration_query_count)}\n"
-            f"剩余验证查询预算：{max(0, definition.limits.max_verification_queries - state.usage.verification_query_count)}\n"
-            f"剩余工具预算：{max(0, definition.limits.max_tool_calls - state.usage.tool_call_count)}\n"
-            f"事件：{json.dumps(event_payload, ensure_ascii=False)}\n"
-            f"证据缺口：{json.dumps(open_gaps, ensure_ascii=False)}\n"
-            f"可参考动作：{json.dumps(action_hints, ensure_ascii=False)}"
+            self._prompts.render('research_policy_decision', topic=definition.topic, instructions=definition.instructions, policy=json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False), query_plan=json.dumps([query.model_dump(mode='json') for query in definition.queries], ensure_ascii=False), query_history=json.dumps(state.query_history, ensure_ascii=False), remaining_queries=max(0, definition.limits.max_queries - state.usage.iteration_count), remaining_exploration=max(0, definition.limits.max_exploration_queries - state.usage.exploration_query_count), remaining_verification=max(0, definition.limits.max_verification_queries - state.usage.verification_query_count), remaining_tools=max(0, definition.limits.max_tool_calls - state.usage.tool_call_count), events=json.dumps(event_payload, ensure_ascii=False), gaps=json.dumps(open_gaps, ensure_ascii=False), action_hints=json.dumps(action_hints, ensure_ascii=False))
         )
         raw = self.generate_text(prompt, "research_policy_decision")
         parsed = _parse_llm_json_object(raw)
@@ -741,18 +725,7 @@ class ResearchService:
             for event in events[:10]
         ]
         prompt = (
-            "你是研究循环的下一步动作选择器。只能从候选 candidates 中选择一个，"
-            "不能发明新 action 或 query。目标是在有限预算内优先提升事件可信度，"
-            "尤其是补齐官方来源或独立来源。若候选都没有价值，选择 stop。\n"
-            "只输出 JSON：{\"candidate_id\":\"candidate_0\",\"reason\":\"...\"} "
-            "或 {\"candidate_id\":\"stop\",\"reason\":\"...\"}。\n"
-            f"主题：{definition.topic}\n要求：{definition.instructions}\n"
-            f"研究策略：{json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
-            f"已执行查询：{json.dumps(state.query_history, ensure_ascii=False)}\n"
-            f"剩余查询预算：{max(0, definition.limits.max_queries - state.usage.iteration_count)}\n"
-            f"剩余验证查询预算：{max(0, definition.limits.max_verification_queries - state.usage.verification_query_count)}\n"
-            f"事件：{json.dumps(event_payload, ensure_ascii=False)}\n"
-            f"候选：{json.dumps(candidate_payload, ensure_ascii=False)}"
+            self._prompts.render('research_next_action', topic=definition.topic, instructions=definition.instructions, policy=json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False), query_history=json.dumps(state.query_history, ensure_ascii=False), remaining_queries=max(0, definition.limits.max_queries - state.usage.iteration_count), remaining_verification=max(0, definition.limits.max_verification_queries - state.usage.verification_query_count), events=json.dumps(event_payload, ensure_ascii=False), candidates=json.dumps(candidate_payload, ensure_ascii=False))
         )
         raw = self.generate_text(prompt, "research_next_action")
         parsed = _parse_llm_json_object(raw)
@@ -907,25 +880,7 @@ class ResearchService:
             for event in events[:10]
         ]
         prompt = (
-            "评估当前 research 是否已经满足用户目标。只输出 JSON，不要输出 Markdown。\n"
-            "JSON schema：{\"coverage_score\":0.0,\"confidence_score\":0.0,"
-            "\"remaining_critical_gap_ids\":[\"...\"],\"marginal_gain\":0.0,"
-            "\"should_continue\":true,\"reason\":\"...\"}。\n"
-            "coverage_score 衡量是否已找到足够数量且覆盖主题的候选事件；"
-            "confidence_score 衡量来源支撑是否达到用户可信度目标；"
-            "marginal_gain 衡量继续搜索预计新增价值；"
-            "remaining_critical_gap_ids 只能引用给定 gaps 中仍阻碍目标满足的 gap id。"
-            "在预算有限时，如果继续搜索只能低收益重复，应 should_continue=false。\n"
-            f"主题：{definition.topic}\n要求：{definition.instructions}\n目标条数：{definition.max_items}\n"
-            f"研究策略：{json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False)}\n"
-            f"迭代次数：{state.usage.iteration_count}/{definition.limits.max_queries}\n"
-            f"探索查询：{state.usage.exploration_query_count}/{definition.limits.max_exploration_queries}\n"
-            f"验证查询：{state.usage.verification_query_count}/{definition.limits.max_verification_queries}\n"
-            f"工具调用：{state.usage.tool_call_count}/{definition.limits.max_tool_calls}\n"
-            f"连续低收益轮次：{state.usage.low_yield_rounds}\n"
-            f"已执行查询：{json.dumps(state.query_history, ensure_ascii=False)}\n"
-            f"事件：{json.dumps(event_payload, ensure_ascii=False)}\n"
-            f"证据缺口：{json.dumps(gap_payload, ensure_ascii=False)}"
+            self._prompts.render('research_satisfaction', topic=definition.topic, instructions=definition.instructions, max_items=definition.max_items, policy=json.dumps(definition.policy.model_dump(mode='json'), ensure_ascii=False), iterations=state.usage.iteration_count, max_queries=definition.limits.max_queries, exploration=state.usage.exploration_query_count, max_exploration=definition.limits.max_exploration_queries, verification=state.usage.verification_query_count, max_verification=definition.limits.max_verification_queries, tool_calls=state.usage.tool_call_count, max_tool_calls=definition.limits.max_tool_calls, low_yield_rounds=state.usage.low_yield_rounds, query_history=json.dumps(state.query_history, ensure_ascii=False), events=json.dumps(event_payload, ensure_ascii=False), gaps=json.dumps(gap_payload, ensure_ascii=False))
         )
         stage_start = _timer_start()
         state.usage.satisfaction_model_call_count += 1
@@ -1200,31 +1155,7 @@ class ResearchService:
         if self.generate_text is None:
             return fallback
         prompt = (
-            "将一次研究请求解析成规范化 research run，并生成初始搜索策略。"
-            "只输出 JSON，不要输出 Markdown 或解释。\n"
-            "JSON schema：{\"topic\":\"...\",\"instructions\":\"...\","
-            "\"max_items\":1,\"lookback_hours\":24,"
-            "\"policy\":{\"research_type\":\"technical_product_update|academic_research|company_financials|general_news\","
-            "\"source_preference\":[\"official\",\"docs\",\"github\",\"paper\",\"media\"],"
-            "\"evidence_requirement\":\"official_or_multi_source|official_required|paper_or_primary_source|primary_financial_source_required|multi_source\","
-            "\"ranking_objective\":\"confidence_first|personal_relevance_first|novelty_first|impact_first\","
-            "\"verification_strictness\":\"low|medium|medium_high|high\"},"
-            "\"query_plan\":[{\"query\":\"...\",\"intent\":\"official|docs|repo|paper|technical|media|latest|financial_filing|transcript\","
-            "\"priority\":0.9}]}。\n"
-            "要求：topic 只保留研究对象，不要包含“调研/最多几条/高可信”等控制语；"
-            "instructions 保留可信度、来源偏好、个人相关性、语言、排除项等约束；"
-            "policy 根据研究类型决定证据要求和排序目标；"
-            "max_items 取 1 到 20；lookback_hours 取 1 到 720；query_plan 最多使用剩余查询预算，"
-            "覆盖 primary source、repo/docs/paper/media 等不同证据角度。"
-            "如果用户没有指定某项，使用默认值。\n"
-            f"原始 topic/request：{run.topic}\n"
-            f"已有 instructions：{run.instructions}\n"
-            f"默认 max_items：{run.max_items}\n"
-            f"默认时间窗口小时数：{max(1, int((run.window_end - run.window_start).total_seconds() // 3600))}\n"
-            f"总查询预算：{run.limits.max_queries}\n"
-            f"初始探索查询预算：{run.limits.max_exploration_queries}\n"
-            f"证据验证查询预算：{run.limits.max_verification_queries}\n"
-            f"订阅 seed queries：{json.dumps(subscription.seed_queries if subscription else [], ensure_ascii=False)}"
+            self._prompts.render('research_request_understanding', topic=run.topic, instructions=run.instructions, max_items=run.max_items, lookback_hours=max(1, int((run.window_end - run.window_start).total_seconds() // 3600)), max_queries=run.limits.max_queries, max_exploration=run.limits.max_exploration_queries, max_verification=run.limits.max_verification_queries, seed_queries=json.dumps(subscription.seed_queries if subscription else [], ensure_ascii=False))
         )
         raw = self.generate_text(prompt, "research_request_understanding")
         parsed = _parse_llm_json_object(raw)

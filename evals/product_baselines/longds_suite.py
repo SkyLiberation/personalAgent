@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from personal_agent.kernel.config import Settings
 
-from .longds_judge import JudgeScoreReport, MeteredJudge, score
+from .longds_judge import JudgeScoreReport, MeteredJudge, require_qualification, score
+from .longds_judge_config import LongDSJudgeSettings, build_judge_configuration
 from .longds_materials import (
     DATASET_REVISION, TASK_NAME, LongDSInput, LongDSPreparation, LongDSTurn,
     json_bytes, seal, verify_preparation, verify_seal,
@@ -30,7 +31,6 @@ from .run_longds import ROOT, LongDSCapture, _configuration, _source_identity, _
 
 LITE_SHA256 = "51f03d65ce3149ae36fb283140ee9aaffca77d9d3bb13d5487d6cf04d443931f"
 SOURCE_DIRECTORY = ROOT / ".tmp/longds-design-20261023"
-QUALIFICATION = ROOT / ".tmp/longds-implementation-20261023/judge/qualification"
 REFERENCE_CONFIGURATION = ROOT / ".tmp/lv4/preparation-identity.json"
 TOKEN_LIMIT = 60_000_000
 
@@ -259,8 +259,12 @@ def _check_windows_paths(output: Path) -> None:
         raise ValueError("当前归档路径超过Windows安全长度，请使用更短的输出根")
 
 
-def run(root: Path, output: Path) -> SuiteProgress:
+def run(root: Path, output: Path, *, qualification_directory: Path,
+        judge_token_limit: int = 2_000_000) -> SuiteProgress:
     settings = configure()
+    judge_settings = LongDSJudgeSettings.from_env()
+    judge_configuration = build_judge_configuration(judge_settings, total_token_limit=judge_token_limit)
+    require_qualification(qualification_directory, judge_configuration)
     tasks = collect(root)
     _check_windows_paths(output)
     output.mkdir(parents=True, exist_ok=False)
@@ -281,6 +285,11 @@ def run(root: Path, output: Path) -> SuiteProgress:
         configuration_digest=sha256(json_bytes(_configuration(settings))).hexdigest())
     _write(output / "progress.json", progress)
     (output / "launch.json").write_bytes(json_bytes({"pid": os.getpid(), "started_at": progress.started_at.isoformat()}))
+    (output / "judge-qualification.json").write_bytes(json_bytes({
+        "directory": str(qualification_directory.resolve()),
+        "checksums_sha256": _digest_file(qualification_directory / "checksums.json"),
+        "configuration": judge_configuration.model_dump(mode="json"),
+    }))
     identity = json.loads(REFERENCE_CONFIGURATION.read_bytes())
     try:
         for index, task in enumerate(tasks, 1):
@@ -312,10 +321,10 @@ def run(root: Path, output: Path) -> SuiteProgress:
                     user_turns=len(prepared.turns), task_token_limit=TOKEN_LIMIT,
                     python_image_id=identity["python_image_id"], docker_endpoint=identity["docker_endpoint"])
                 stage = "score_failed"
-                verify_seal(QUALIFICATION)
-                judge = MeteredJudge(task_root / "judge", source_directory=SOURCE_DIRECTORY)
+                judge = MeteredJudge(task_root / "judge", source_directory=SOURCE_DIRECTORY,
+                                     token_limit=judge_token_limit, settings=judge_settings)
                 score(judge, materials=task_root / "materials", capture=task_root / "capture", name="official",
-                    qualification_directory=QUALIFICATION)
+                    qualification_directory=qualification_directory)
                 scores = JudgeScoreReport.model_validate_json((task_root / "judge/official/report.json").read_bytes())
                 result = TaskResult(task=task, planned_turns=planned, capture=capture,
                     status="completed" if capture.answered_turns == planned and scores.judged_turns == planned else "capture_failed",
@@ -363,6 +372,8 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--collect-only", action="store_true")
+    parser.add_argument("--qualification", type=Path)
+    parser.add_argument("--judge-token-limit", type=int, default=2_000_000)
     args = parser.parse_args()
     root = args.root.resolve()
     tasks = collect(root)
@@ -370,9 +381,10 @@ def main() -> None:
         print(json.dumps({"tasks": len(tasks), "turns": sum(len(source_turns(root, t)) for t in tasks),
             "language": "en", "model_calls": 0, "selected": [t.key for t in tasks]}, ensure_ascii=False, indent=2))
     else:
-        if args.output is None:
-            parser.error("执行时必须指定尚不存在的--output目录")
-        print(run(root, args.output.resolve()).model_dump_json(), flush=True)
+        if args.output is None or args.qualification is None:
+            parser.error("执行时必须指定尚不存在的--output目录及当前--qualification")
+        print(run(root, args.output.resolve(), qualification_directory=args.qualification.resolve(),
+                  judge_token_limit=args.judge_token_limit).model_dump_json(), flush=True)
 
 
 if __name__ == "__main__":

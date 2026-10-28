@@ -1,6 +1,8 @@
 """消费完整真实文件阶段，验证读取、搜索、检查及不可变草稿的 ID 交接。"""
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 import argparse
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,7 +34,10 @@ def run(prepared: Path, output: Path):
     (output/'runner-source.py').write_bytes(Path(__file__).read_bytes())
     for folder in ('uploads', 'generated_artifacts'):
         shutil.copytree(SOURCE/'server-data'/folder, output/'data'/folder)
-    artifacts = ArtifactService(Settings(data_dir=output/'data'))
+    settings = Settings(data_dir=output/'data')
+    artifacts = ArtifactService(settings, provider_policy=build_provider_policy(
+        base_url=settings.openai.base_url, provider=settings.openai.provider,
+    ))
     trace = InteractionTrace.model_validate_json((prepared/'feedback-trace.json').read_bytes())
     inputs = tuple(ArtifactSourceInput.model_validate(row) for row in load(prepared/'declaration/inputs.json'))
     trace = trace.model_copy(update={'revision':1, 'inputs':inputs, 'execution_order':(), 'concurrent_batches':(),

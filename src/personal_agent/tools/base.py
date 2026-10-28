@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from dataclasses import asdict
 import json
 from typing import Any
@@ -26,10 +29,10 @@ from personal_agent.kernel.contracts.tool import (
 )
 
 
-def require_gateway_context(config: RunnableConfig) -> ToolGatewayContext:
+def require_gateway_context(config: RunnableConfig, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> ToolGatewayContext:
     context = config.get("configurable", {}).get("__personal_agent_gateway_context")
     if not isinstance(context, ToolGatewayContext):
-        raise PermissionError("工具缺少受信执行上下文。")
+        raise PermissionError(prompts.render('tools.context_missing'))
     return context
 
 
@@ -113,12 +116,12 @@ def _artifact_from(outcome: ToolArtifact | dict[str, Any]) -> ToolArtifact:
     return ToolArtifact.model_validate(outcome)
 
 
-def tool_response(outcome: ToolArtifact | dict[str, Any]) -> tuple[str, ToolArtifact]:
+def tool_response(outcome: ToolArtifact | dict[str, Any], *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> tuple[str, ToolArtifact]:
     artifact = _artifact_from(outcome)
     content = (
         json.dumps(artifact.data, ensure_ascii=False, default=str)
         if artifact.ok
-        else str(artifact.error or "工具执行失败。")
+        else str(artifact.error or prompts.render('tools.execution_failed'))
     )
     return content, artifact
 

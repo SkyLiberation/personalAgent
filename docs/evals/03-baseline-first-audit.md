@@ -1,12 +1,12 @@
 # Baseline-first 审计
 
-> 2026-08-26 更新：本审计已促成 `InvestigationProject` 撤回。表中的 `E23`、`IP01`、`PLAN-001`、`LT*` 与 Investigation Consolidation 是历史反例和归档坐标，不再是当前可执行能力。
+> 历史审计，更新于 2026-08-26。本审计已促成 `InvestigationProject` 撤回；下文保留审计时的用例、风险与证据，不作为现行矩阵。当前用例和结果见[用例盘点](02-current-case-inventory.md)。`E23`、`IP01`、`PLAN-001`、`LT*` 与 Investigation Consolidation 仅保留历史反例和归档坐标。
 
-**当前 E2E catalog 把“目标回归用例”“机制诊断”“指标 baseline”和“产品失败 baseline”放在同一命名空间；只有少数能力可以定位到实现前、同输入、正式入口的失败 archive。**
+审计时的 E2E catalog 在同一命名空间登记了目标回归、机制诊断、指标 baseline 与产品失败 baseline。下表区分它们各自可支持的结论；现行准入规则见 [EVD](../devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)。
 
 ## 1. 有明确失败链的用例
 
-| 当前目标用例 | 可定位的失败证据 | 可以支持的结论 | 不能支持的结论 |
+| 审计目标用例 | 可定位的失败证据 | 可以支持的结论 | 不能支持的结论 |
 | --- | --- | --- | --- |
 | `L01` | `20260803T142413.474927Z-4864-39fedcf5`：自然召回没有 Observation，误报未找到 | Conversation 缺少 canonical personal knowledge read 接线 | 完整个人知识产品已验证 |
 | `E22` | `20260803T142932.564456Z-23720-19ba8517`：只能文字确认，无法形成 canonical delete action | 自然语言删除需要复用 lifecycle 写入口 | 所有 delete/restore 控制都需当前复杂度 |
@@ -19,23 +19,23 @@
 
 ## 2. 当前是回归，不是需求 baseline
 
-以下用例锁定已有产品或接口行为，但仓库没有为其当前完整设计找到实现前同输入失败证据：
+以下用例在审计时锁定已有产品或接口行为，但未找到其完整设计实现前的同输入失败证据：
 
 - `PLAN-001`：已删除 Project 的查询、steering 和 Web restart recovery；仅作历史说明；
-- `ASK-001A/B`：当前统一 Conversation answer owner 的结果；
+- `ASK-001A/B`：统一 Conversation answer owner 的结果；
 - `E05/E09/E10/E11/E12/E13`：现有 Application API 的纵向行为；
-- `DUR-001/OBS-001`：当前 trace scope 与诊断行为；
-- `L02/L03/L04/L05`：当前 loop 的并发、恢复、delegation 和 budget 行为；
-- `E16/E18/E19/E21`：当前 Provider profile；A2A profile 不再复制 `E17`，由 `L04` 的 Product E2E 与 `a2a_artifact_return` 横切检查共同覆盖；
-- `LT01–LT08、LT10–LT13`：已删除 Investigation runtime protocol 的历史 conformance；当前测试已移除。
+- `DUR-001/OBS-001`：trace scope 与诊断行为；
+- `L02/L03/L04/L05`：loop 的并发、恢复、delegation 和 budget 行为；
+- `E16/E18/E19/E21`：Provider profile；审计后的 A2A profile 去重由 `L04` 的 Product E2E 与 `a2a_artifact_return` 横切检查共同覆盖；
+- `LT01–LT08、LT10–LT13`：已删除 Investigation runtime protocol 的历史 conformance，可执行节点已移除。
 
-这些测试通过只能说明当前行为受到回归保护，不能作为新增 Aggregate、Queue、Planner、Projection 或治理机制的需求来源。
+这些测试的通过结果只证明原身份下的回归行为，不能作为新增 Aggregate、Queue、Planner、Projection 或治理机制的需求来源。
 
 ## 3. 为设计而构造的风险
 
-当前用例存在以下模式：
+审计发现以下模式：
 
-| 模式 | 当前实例 | 风险 |
+| 模式 | 历史实例 | 风险 |
 | --- | --- | --- |
 | 用户输入主动要求设计独有能力 | `E23/PLAN-001` 明确要求后台、进度、暂停、调整 | 场景恰好命中 Project 全套能力，但没有真实需求来源 |
 | 直接构造内部 contract | `IP01` 直接传 requirements、budget；LT 直接构造 Plan/Command/approval | 证明机制可运行，不能证明 Agent 会自主选择或用户需要它 |
@@ -46,7 +46,7 @@
 
 ## 4. 当前证据状态
 
-以下是审计时保存的历史机器门禁快照，不代表 2026-08-26 当前工作树：
+以下是审计保存的机器门禁快照，按其中 revision 与 dirty 身份解释：
 
 ```text
 target revision: 61ffadb041e7424892f5b9948fcd0e484f3b4ad6
@@ -56,4 +56,4 @@ same-revision trusted loop evidence: 0
 release capabilities: all unverified
 ```
 
-历史 archive 可以解释缺陷和设计决策，但不匹配当前 dirty revision，不能成为当前发布证据。
+该快照及历史 archive 可以解释缺陷和设计决策；它们不证明后续版本的发布资格。目标版本须按 [Release gate](04-running-and-release.md#release-gate)核对完整证据。

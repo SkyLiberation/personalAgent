@@ -7,6 +7,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.model_provider import ModelProvider, resolve_model_provider
 
 from personal_agent.kernel.config_models import (
     DEFAULT_GENERATIVE_MODEL,
@@ -35,6 +36,22 @@ from personal_agent.kernel.config_models import (
 )
 
 
+def _parse_generation_extra(name: str) -> dict[str, Any] | None:
+    """Unset inherits; an explicit object replaces; malformed input is refused."""
+    import os
+
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must contain a JSON object") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must contain a JSON object")
+    return value
+
+
 def settings_from_env(settings_cls: type):
     import os
 
@@ -55,11 +72,40 @@ def settings_from_env(settings_cls: type):
         or os.getenv("ROUTER_MODEL")
         or DEFAULT_GENERATIVE_MODEL
     )
-    structured_extra_body = (
-        _parse_json_env("STRUCTURED_EXTRA_BODY")
-        or _parse_json_env("ROUTER_EXTRA_BODY")
-        or {}
-    )
+    structured_provider = os.getenv("STRUCTURED_PROVIDER") or None
+    structured_extra_body = _parse_generation_extra("STRUCTURED_EXTRA_BODY")
+    if structured_extra_body is None:
+        structured_extra_body = _parse_generation_extra("ROUTER_EXTRA_BODY")
+    if structured_extra_body is None:
+        structured_extra_body = {}
+
+    def generation_binding(provider_env: str, extra_env: str, endpoint: str | None,
+                           model: str) -> tuple[ModelProvider, dict[str, Any]]:
+        same_endpoint = (endpoint or "").rstrip("/") == (structured_base_url or "").rstrip("/")
+        declared = os.getenv(provider_env) or (structured_provider if same_endpoint else None)
+        provider = resolve_model_provider(endpoint, declared)
+        extra = _parse_generation_extra(extra_env)
+        if extra is None:
+            same_binding = (same_endpoint and model == structured_model
+                            and provider == resolve_model_provider(structured_base_url, structured_provider))
+            extra = dict(structured_extra_body) if same_binding else {}
+        return provider, extra
+
+    openai_base_url = os.getenv("OPENAI_BASE_URL") or structured_base_url
+    openai_model = os.getenv("OPENAI_MODEL") or structured_model
+    openai_provider, openai_extra_body = generation_binding(
+        "OPENAI_PROVIDER", "OPENAI_EXTRA_BODY", openai_base_url, openai_model)
+    graphiti_base_url = os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL") or structured_base_url
+    graphiti_model = os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_MODEL") or structured_model
+    graphiti_provider, graphiti_extra_body = generation_binding(
+        "PERSONAL_AGENT_GRAPHITI_LLM_PROVIDER", "PERSONAL_AGENT_GRAPHITI_LLM_EXTRA_BODY",
+        graphiti_base_url, graphiti_model)
+    extract_base_url = (os.getenv("PERSONAL_AGENT_EXTRACT_BASE_URL") or structured_base_url
+                        or "https://api.xiaomimimo.com/v1")
+    extract_model = os.getenv("PERSONAL_AGENT_EXTRACT_MODEL") or structured_model
+    extract_provider, extract_extra_body = generation_binding(
+        "PERSONAL_AGENT_EXTRACT_PROVIDER", "PERSONAL_AGENT_EXTRACT_EXTRA_BODY",
+        extract_base_url, extract_model)
     return settings_cls(
         answer_result=AnswerResultConfig.model_validate_json(
             os.getenv("PERSONAL_AGENT_ANSWER_RESULT", '{}')
@@ -123,10 +169,10 @@ def settings_from_env(settings_cls: type):
             ),
             llm_api_key=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_API_KEY")
             or structured_api_key,
-            llm_base_url=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_BASE_URL")
-            or structured_base_url,
-            llm_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_MODEL")
-            or structured_model,
+            llm_base_url=graphiti_base_url,
+            llm_model=graphiti_model,
+            llm_provider=graphiti_provider,
+            llm_extra_body=graphiti_extra_body,
             llm_small_model=os.getenv("PERSONAL_AGENT_GRAPHITI_LLM_SMALL_MODEL")
             or structured_model,
             sync_max_attempts=int(
@@ -165,15 +211,17 @@ def settings_from_env(settings_cls: type):
             if os.getenv("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG")
             else None
         ),
+        prompt_language=os.getenv("PERSONAL_AGENT_PROMPT_LANGUAGE", "zh"),
         python_execution_config_path=(
             Path(os.environ["PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG"])
             if os.getenv("PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG")
             else None
         ),
         openai=OpenAIConfig(
+            provider=openai_provider,
             api_key=os.getenv("OPENAI_API_KEY") or structured_api_key,
-            base_url=os.getenv("OPENAI_BASE_URL") or structured_base_url,
-            model=os.getenv("OPENAI_MODEL") or structured_model,
+            base_url=openai_base_url,
+            model=openai_model,
             small_model=os.getenv("OPENAI_SMALL_MODEL") or structured_model,
             vision_model=os.getenv("OPENAI_VISION_MODEL", ""),
             transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1"),
@@ -185,9 +233,10 @@ def settings_from_env(settings_cls: type):
             embedding_api_key=os.getenv("EMBEDDING_API_KEY"),
             embedding_base_url=os.getenv("EMBEDDING_BASE_URL"),
             capacity=_parse_model_capacity_env("OPENAI_MODEL_CAPACITY"),
-            extra_body=structured_extra_body,
+            extra_body=openai_extra_body,
         ),
         structured=StructuredConfig(
+            provider=resolve_model_provider(structured_base_url, structured_provider),
             api_key=structured_api_key,
             base_url=structured_base_url,
             model=structured_model,
@@ -362,12 +411,11 @@ def settings_from_env(settings_cls: type):
             sample_rate=float(os.getenv("PERSONAL_AGENT_TRACE_SAMPLE_RATE", "1.0")),
         ),
         langextract=LangExtractConfig(
+            provider=extract_provider,
             api_key=os.getenv("PERSONAL_AGENT_EXTRACT_API_KEY") or structured_api_key,
-            base_url=os.getenv("PERSONAL_AGENT_EXTRACT_BASE_URL")
-            or structured_base_url
-            or "https://api.xiaomimimo.com/v1",
-            model_id=os.getenv("PERSONAL_AGENT_EXTRACT_MODEL") or structured_model,
-            extra_body=structured_extra_body,
+            base_url=extract_base_url,
+            model_id=extract_model,
+            extra_body=extract_extra_body,
             max_char_buffer=int(
                 os.getenv("PERSONAL_AGENT_EXTRACT_MAX_CHAR_BUFFER", "6000")
             ),

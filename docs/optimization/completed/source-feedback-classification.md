@@ -1,6 +1,6 @@
 # 来源核验的直接分类与反馈忠实性
 
-固定真实用例的来源分类及反馈局部优化已关闭。采用原隔离 `v13-relation-support`，没有增加下一版提示；完整资格为同版本六项6/6，其中两项是既有真实输出按新评分身份复核，四项是新调用。原 Source v19 曾完成范围及证据用途接入；现行统一六类 Source v31 已删除自动复核，writer v23 的实际消费由[接入记录](source-proof-boundary-isolation.md#生产接入与真实消费)拥有；不把原六项改记为后续版本成绩，局部关闭不代表完整用户结果通过。
+固定真实用例的来源分类及反馈局部优化已关闭：原隔离 `v13-relation-support` 完整资格为 6/6，含两项既有真实输出复核及四项新调用。后续反馈忠实性修正及生产迁移按各自版本记录，不冒用原六项成绩。现行 Source v31 已删除自动复核，writer v23 的消费见[接入记录](source-proof-boundary-isolation.md#生产接入与真实消费)；局部关闭不代表完整用户结果通过。
 
 ## 问题、方案与责任
 
@@ -8,33 +8,31 @@
 
 来源模型一次核查完整稿与实际证据，先按支持关系判断补证、澄清或冲突，再用一个类别和一项说明表达同一个独立问题。缺少主体或建议性前提只支持证据不足，不能推出相反性质。保真功能命名可以通过；转述具体文档条款时，忠实请求确认未解析指代也可接受，不按固定发现数量验收。字段、实例或版本身份必须来自原稿实际指定。
 
-保留五字段：`category`、`start_fragment_id`、`end_fragment_id`、`error_description`、`evidence_ids`。该 v13 历史方案的五类为证据不足、事实冲突、具体出处冲突、规范性质冲突、义务强度冲突；现行生产六类由[核验专题](../../topics/verification-and-completion.md)拥有。不恢复 `obligation_strength` 或判断维度。原六项方案没有增加调用；后续真实报告形成失真及其限定修正由下节拥有。每个独立问题分别输出发现，类别不能代替事实依据。Runtime 只校验 typed 结构、当前引用及最小有序范围，恢复原文；开放语义由 Source 判断。
+保留五字段：`category`、`start_fragment_id`、`end_fragment_id`、`error_description`、`evidence_ids`。v13 的历史五类为证据不足、事实冲突、具体出处冲突、规范性质冲突、义务强度冲突；现行六类由[核验专题](../../topics/verification-and-completion.md)拥有。删除 `obligation_strength` 及判断维度，原六项方案不增加调用。Runtime 只校验 typed 结构、当前引用及最小有序范围，恢复原文；Source 判断语义，每个独立问题的类别与说明须有同一事实依据。
 
 ## 已形成反馈的忠实性修正
 
 2026-10-13 新真实阶段 A6 的 v23 原生输出前两项正确，第三项却把 f2 的回传关系绑定到 f4，并混入通过性总括。该问题重新打开的是最终反馈忠实性，旧六项成功和本次原生成 3/4 保持。完整可见记录及一次中立追问都没有给出第三项的独立关系依据，但不能据此断定唯一隐藏原因。
 
-最终候选在绑定 `ResearchReview` 前，只对已实际形成的非空报告执行一次 `feedback_review:v1-formed-findings`。输入是原完整核验消息及实际五字段报告，模型核对原报告指向的关系，保留合法独立缺口、修正定位或引用，移除没有独立待修关系的总括项。原响应及核对结果分别保存；确定性代码不按重复键、固定数量或关键词删发现，不把推理计划当已接受报告。
+当轮候选在绑定 `ResearchReview` 前，对已形成的非空报告执行一次 `feedback_review:v1-formed-findings`，用原完整输入核对实际五字段报告，保留合法缺口、修正定位，移除无独立关系的总括项。复用模型 Port、Schema 与引用校验，无新业务字段或递归；原两阶段判断加各一次非空报告复核，最多四次调用。确定性代码不按数量、关键词或重复键删发现。
 
-核对复用同一个模型 Port、Schema 和引用校验，无新业务字段、类别、状态或持久报告，不递归兜底。空发现不增加核对调用，非空范围或引用报告各最多增加一次；两步原判断均为空时只需两次，若范围发现经核对清空、引用报告也进入核对，则最多四次。它保护已形成报告的忠实表达，不承诺找出原报告未指向的新问题。
-
-原七份完整真实阶段判据 **7/7** 达标：A6 原错误三项真实进入核对后修正，R1／P1／A2／S1 合法发现保持，U1／A3 实际范围及引用均为空；不追加稳定性门槛。见[密封结果](../../../.tmp/source-formed-feedback-review-20261013/REPORT.json)及[实际复核](../../../.tmp/source-formed-feedback-review-20261013/analysis.md)。新九逻辑／物理为五次报告核对及四次原尚未执行判断，110,517 tokens、399.11 秒，零恢复或重试。证明集合隔离、来源字段含义及联合真实用例身份由[独立固化记录](source-proof-boundary-isolation.md)拥有；生产尚未迁入，实际消费和最终用户结果由[接入设计](source-proof-boundary-isolation.md#生产接入与真实消费)验收。
+七份完整真实阶段 **7/7**：A6 错误三项经实际复核修正，R1／P1／A2／S1 合法发现保持，U1／A3 范围及引用均为空。九次新逻辑／物理调用含五次报告核对及四次原未执行判断，共 110,517 tokens、399.11 秒，零恢复或重试。见[密封结果](../../../.tmp/source-formed-feedback-review-20261013/REPORT.json)、[实际复核](../../../.tmp/source-formed-feedback-review-20261013/analysis.md)及[联合用例身份](source-proof-boundary-isolation.md)。这是当时未接入的局部资格；随后迁入及 2026-10-14 删除自动复核均由[接入记录](source-proof-boundary-isolation.md#生产接入与真实消费)拥有，不把旧复核恢复为现行路径。
 
 ## 明确反证与缺证的类别资格
 
 后续真实第十版 c6 在 schema 前提修复后，Source 又把英文字句的一种解析及中英文措辞差异判为明确事实冲突；一次 v1 核对沿用该类别并扩写整体覆盖。中立追问明确：范围结论来自解析推断，缺少独立模型集合事实，却用“可逐字指出差异”作为冲突依据。只有一个可能读法或没有确认新范围，均不足以排除稿件关系。原七项通过保持，新真实产物 Q1 进入原验收集。
 
-采用 `feedback_review:v2-clear-counterevidence`，只替换核对中的判断与修正句，净增 91 个指令字符：先按原输入判断有据、缺必要前提或有明确反证，再重新确定类别、说明及定位。判冲突须有同一关系的明确反向依据，文字差异和未被排除的合法读法不能升级为排他事实；保持真实独立缺口。无新字段、类别、状态或调用阶段，Scope v1、引用 v23、writer 与 Runtime 不变。组合身份为 `v1-returned-scope/v23-proof-identity/v2-clear-counterevidence`。
+当轮改用 `feedback_review:v2-clear-counterevidence`，仅替换核对判断与修正句，净增 91 个指令字符：按同一关系的支持、缺必要前提或明确反证重新确定类别、说明及定位。文字差异和未排除的合法读法不能升级为排他事实。无新字段、类别、状态或阶段，组合身份为 `v1-returned-scope/v23-proof-identity/v2-clear-counterevidence`，writer 与 Runtime 保持。
 
 固定八项 **8/8**，新 Q1 改为数量范围缺证，不再断定原文已否定原稿或保证整个最近集合；原 A6／R1／P1／A2／S1 的真实缺口及 U1／A3 空报告控制保持。原范围／引用任务和 SDK kwargs 相等后消费封存原始结果，不复用旧整体组合报告，不注入诊断、语法资料、标签或理想发现。六次新反馈核对、58,658 tokens，零 Schema 恢复、SDK／服务重试及新增未知；U1／A3 无新调用。见[密封八项结果](../../../.tmp/source-clear-counterevidence-20261013/REPORT.json)。达标即关闭这一局部问题，不追加稳定性门槛。
 
-该候选允许分类修正与说明对应同一原稿关系，不证明所有词义判断正确，也不把缺证报告当作原译文已错。原量词失败、追问、实际费用和完整用户结果由[评测登记](../../evals/02-current-case-inventory.md)拥有；生产接入和当前稿的真实修订另按[消费设计](source-proof-boundary-isolation.md#生产接入与真实消费)执行。不能为迎合旧错误类别直接改写原稿。
+该结果只证明固定用例的分类及说明保持同一关系，不把缺证等同于原译文已错。原量词失败、追问、费用和用户结果由[评测登记](../../evals/02-current-case-inventory.md)拥有；不能为迎合旧错误类别改写原稿。
 
 ## 接入状态与真实消费者
 
-隔离候选仅涉及研究契约、研究请求的原生范围校验和研究 Prompt 三个文件。来源请求由 `research_request` 构造，在 `verification_steps` 中形成绑定版本、claim 和 Prompt 身份的 `ResearchReview`；`research_review_context` 恢复实际相关原文，既有 selector 与 writer 消费。Writer 保留 `v21-direct-category` 的类别及单说明消费契约。
+原候选涉及研究契约、请求范围校验及研究 Prompt 三个文件。`research_request` 构造请求，`verification_steps` 形成绑定版本、claim 与 Prompt 的 `ResearchReview`；`research_review_context` 恢复原文，selector 和当轮 writer `v21-direct-category` 消费类别及单说明。Source v19 随后统一迁入生产者和消费者，旧三个解释字段删除；现行版本见页首接入记录。
 
-原局部候选Source为1,082字符，比撤回的v14少57字；v14额外身份句未达标，恢复v13没有新增概念、字段、类别或调用。实际两项反馈已由正式selector、writer消费并用真实原文修订，见[消费证据](../../../.tmp/source-feedback-consumption-20261011/sdk-consumption-audit.json)。后置输入作用域问题由[独立设计](source-cited-returned-scope.md)拥有，不重开此处六项。后续Source v19已统一迁入生产者和消费者，旧三个解释字段删除；不以局部用例或完整研究消费代替正式用户验收。
+原 Source 为 1,082 字符，比撤回的 v14 少 57 字，无新概念、字段、类别或调用。两项反馈已由正式 selector／writer 消费并用真实原文修订，见[消费证据](../../../.tmp/source-feedback-consumption-20261011/sdk-consumption-audit.json)。后置作用域问题由[独立记录](source-cited-returned-scope.md)拥有，不重开原六项，也不把消费成功当作完整用户验收。
 
 ## 决定性证据及边界
 

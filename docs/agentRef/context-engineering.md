@@ -73,3 +73,26 @@
 | [Anthropic 工具设计经验](https://www.anthropic.com/research/writing-tools-for-agents) | 参数错误应提供具体、可行动的修正信息；工具返回格式及体量用本地评测选择，不能凭格式名称推断效果 |
 
 本工程本轮采用“明确缺失字段、保留被拒原提议、说明可修改范围”的最小反馈。完整原生历史作为独立架构候选，后续须核对 typed Port、Journal 到模型的重建、批量整批拒绝、跨 Provider 推理记录及压缩时的调用／结果配对，不借此次参数修复临时重排消息。采用状态与局部验收由[主循环唯一设计](../optimization/to_verify/conversation-loop-boundaries.md#2026-10-22-必填参数恢复候选)拥有。
+
+## 7. 原始任务、动态要求与历史的位置
+
+2026-10-27 前期按固定源码复核模型输入的实际构造。Gemini CLI 八份文件经 GitHub 连接器读取并封存，Git blob 校验 8/8；另复用已校验的 smolagents／OpenHands 固定版本。来源、文件哈希及本地输入审计见[清单](../../.tmp/criterion-context-layout-20261027/source-manifest.json)和[布局审计](../../.tmp/criterion-context-layout-20261027/audit.json)。本节保留历史比较；当前要求区表达的采用依据改由[通用框架公共路径](#8-通用框架的要求表达与采用依据)拥有，不据模型专用或客户端特定表达作决定。未运行第三方项目或调用生成模型。
+
+| 实现与固定源码 | 实际组织及消费链 | 可采用部分与边界 |
+| --- | --- | --- |
+| smolagents `96f33faa`：[TaskStep](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/memory.py#L187-L199)、[规划更新构造](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L682-L713)、[实际模板](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/prompts/code_agent.yaml#L232-L263) | 原任务作为 user TaskStep 保留。启用重规划时，输入为包含原任务的前置指令→去掉旧模型计划的历史→明确要求更新事实和计划的尾部指令；新计划随后进入正常执行记忆 | 采用原任务、历史、当前动作要求分开组织。代码传入 `task` 变量不代表尾部模板实际重抄了任务；本次核对的尾部主要说明下一步要求。`planning_interval=None`，不能称为默认每次工具调用都追加 criterion |
+| OpenHands SDK `6530325e`：[system 构造](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/agent.py#L582-L600)、[消息物化](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/utils.py#L611-L639) | 首条 system 内容分静态 system 与动态 context 两块，静态块用于缓存；实际事件视图经 condenser 和消息转换进入模型，额外消息可在历史后追加 | 采用稳定规则与动态事实分离、历史视图单独物化。该动态块含环境／能力信息，不等于独立 criterion；不能据此推断普通每步请求会在末尾重述用户目标 |
+| Gemini CLI `3c311bea`：[环境分层](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/core/src/utils/environmentContext.ts#L62-L109)、[分区渲染](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/core/src/prompts/snippets.ts#L532-L571)、[主题再注入](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/core/src/prompts/promptProvider.ts#L265-L283) | `client.startChat` 将 systemInstruction 和初始历史分别传入 Chat；环境源码定义全局规则入 system、扩展／项目上下文入首条 user、子目录规则按工具即时加载的分层。Context 标签说明作用域和优先级；开启主题播报时，system 尾部追加 Active Topic | 采用清晰分区、作用域及有条件的简短当前主题。Active Topic 在 system 尾部，非整个 API 历史尾部；Todo 工具会返回当前清单，不证明每步自动追加全部清单，更不证明存在通用 criterion 抽取器 |
+
+三者没有统一采用“把全部 criterion 放在最后”的协议。共同可借鉴的是原始要求、模型派生理解、运行事实与当前动作要求职责清楚；具体位置须核对实际 Provider 消费的请求，源码布局本身不证明模型注意或执行正确。本工程的现状、最小位置候选及取舍由[SEM](../optimization/to_verify/longtask-semantic-consistency.md#2-参考替代方案与选择)拥有。
+
+## 8. 通用框架的要求表达与采用依据
+
+2026-10-27 按用户要求改用通用开源框架的公共输入路径作为要求区表达依据。固定 OpenCode `6b1bc48148085411e33a4358aab9dabfcdc04aa4` 与 LangChain `575db57ab3658e38ba1d8c40c2bf62110c8a0c27`，十份源码经 GitHub 连接器读取并封存，Git blob 校验 10/10，见[来源清单](../../.tmp/generic-context-presentation-20261027/source-manifest.json)。未运行项目、安装依赖或调用生成模型。
+
+| 公共实现及真实调用链 | 模型阅读的表达与内部结构 | 采用部分及排除项 |
+| --- | --- | --- |
+| OpenCode：[`baseTranscript`](https://github.com/anomalyco/opencode/blob/6b1bc48148085411e33a4358aab9dabfcdc04aa4/packages/core/src/session/model-request.ts#L92-L110)选择 agent 显式 system 或 [`SessionSystemPrompt.make`](https://github.com/anomalyco/opencode/blob/6b1bc48148085411e33a4358aab9dabfcdc04aa4/packages/core/src/session/system-prompt.ts#L3-L27)，再接 initial；消息历史另行转换。初始规则经 `SessionContext.load → SessionHistory.entriesForRunner → InstructionState.initial` 恢复 | 默认[公共 system 文本](https://github.com/anomalyco/opencode/blob/6b1bc48148085411e33a4358aab9dabfcdc04aa4/packages/core/src/session/runner/prompt/system.txt)用 Markdown 标题、自然语言和项目符号；规则内部有 typed 值与哈希，交给模型前经 [`renderInitial`](https://github.com/anomalyco/opencode/blob/6b1bc48148085411e33a4358aab9dabfcdc04aa4/packages/core/src/instructions/index.ts#L161-L168)渲染成文本并以空行连接 | 采用可读规则正文与内部结构分离、公共 system／动态规则／历史分别组装。该默认选择点不按模型名选提示；显式 agent override、模型媒体／传输适配另有边界，不将它们的专用表达当依据。不复制其规则状态、哈希或事件机制 |
+| LangChain：[`TodoListMiddleware.wrap_model_call`](https://github.com/langchain-ai/langchain/blob/575db57ab3658e38ba1d8c40c2bf62110c8a0c27/libs/langchain_v1/langchain/agents/middleware/todo.py#L231-L256)在通用 ModelRequest 的 system 内容后追加默认提示，再交 handler | [默认提示](https://github.com/langchain-ai/langchain/blob/575db57ab3658e38ba1d8c40c2bf62110c8a0c27/libs/langchain_v1/langchain/agents/middleware/todo.py#L119-L136)是 Markdown 标题、自然语言段落和项目符号；工具输入和 Todo 状态仍为 typed 对象，未因为阅读文本而取消结构化协议 | 采用由公共 renderer 生成可读正文、机器协议保持结构化的分工。该包装没有按模型名选择表达；middleware 可配置且不是所有 Agent 默认启用，不把 Todo 当作本工程新增能力或 criterion 标准识别器 |
+
+上述源码没有统一的 criterion 清单协议，也不证明自然语言必然优于 JSON。本工程据其公共表达选择“标题＋权威说明＋编号清单”，保留已有 criterion 原句，不增加模型转写；编号及具体中文标题是本工程的排版选择。模型可见位置与正文形式分别对照，内部 typed／JSON 协议保持。唯一采用契约、展示示例及验证边界由[SEM §4](../optimization/to_verify/longtask-semantic-consistency.md#4-架构分析契约与消费者)拥有。

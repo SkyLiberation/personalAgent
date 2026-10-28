@@ -43,4 +43,4 @@ personalAgent 是否引入任何计划机制，只能由本工程失败 baseline
 
 比较支持两种不同装配：面向明确研究委托的入口判断，以及通用执行循环中的按需提问。入口检查不等于必须问一次；工具也不等于必须先执行失败。提问工具的参数是模型生成的问题，不是模型作决定前自动拥有的全部 Context；前置模型请求构造与后续答复消费必须分别核对。
 
-本工程候选采用“明显歧义及时问、可自行取得的事实先查、执行中新出现关键缺口再问”的职责划分，复用原对话与等待结果，不先引入独立澄清模型、固定前置问卷或通用澄清状态平台。通用时机、输入与待验证行为由[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#澄清的时机和决策上下文)拥有，研究中的具体询问方向由[实验交付 Spec](../optimization/to_verify/knowledge-decision-delivery.md#23-输入不明确时怎样澄清)拥有。源码机制不是本工程失败 baseline 或行为通过证据。
+本工程候选采用“明显歧义及时问、可自行取得的事实先查、执行中新出现关键缺口再问”的职责划分，复用原对话与等待结果，不先引入独立澄清模型、固定前置问卷或通用澄清状态平台。通用时机、输入与待验证行为由[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#澄清的时机和决策上下文)拥有，研究中的具体询问方向由[实验交付 Spec](../optimization/to_verify/research-experiment-acceptance.md#13-输入不明确时怎样澄清)拥有。源码机制不是本工程失败 baseline 或行为通过证据。

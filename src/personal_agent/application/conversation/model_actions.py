@@ -23,7 +23,8 @@ from personal_agent.capabilities.contracts.model import (
     StructuredOutputFailure,
     StructuredOutputFailureCode,
 )
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_schema
 
 from .models import (
@@ -81,6 +82,7 @@ def build_model_action_definitions(
     *,
     experiment_run: bool = False,
     answer_actions: tuple[ModelActionDefinition, ...] = (),
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[ModelActionDefinition, ...]:
     """Project each visible capability exactly once plus typed control actions."""
     definitions: list[ModelActionDefinition] = []
@@ -90,9 +92,8 @@ def build_model_action_definitions(
                 name=_wire_name("tool", capability.name),
                 kind="tool",
                 target_name=capability.name,
-                description=(
-                    f"{capability.description} "
-                    "按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。"
+                description=prompts.render(
+                    "conversation.model_action.tool_description", description=prompts.localize_metadata(capability.description),
                 ),
                 input_schema=(strictify_schema(capability.input_schema)
                               if capability.strict else deepcopy(capability.input_schema)),
@@ -105,7 +106,9 @@ def build_model_action_definitions(
                 name=_wire_name("agent", capability.agent_id),
                 kind="agent",
                 target_name=capability.agent_id,
-                description=(f"委派一个边界明确的子目标。{capability.description}"),
+                description=prompts.render(
+                    "conversation.model_action.agent_description", description=prompts.localize_metadata(capability.description),
+                ),
                 input_schema=_agent_action_schema(
                     AgentDelegationProposal.model_json_schema(),
                 ),
@@ -116,7 +119,7 @@ def build_model_action_definitions(
             name=_wire_name("control", _WORKING_PLAN_TARGET),
             kind="working_plan",
             target_name=_WORKING_PLAN_TARGET,
-            description=get_prompt("conversation.working_plan.description").render(),
+            description=prompts.get("conversation.working_plan.description").render(),
             input_schema=_working_plan_action_schema(),
             strict=False,
         )
@@ -142,12 +145,13 @@ def model_visible_capability_policy_json(
     capabilities: EffectiveCapabilities,
     *,
     definitions: tuple[ModelActionDefinition, ...] | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> str:
     """Serialize policy metadata without duplicating action descriptions or schemas."""
     current = (
         definitions
         if definitions is not None
-        else build_model_action_definitions(capabilities)
+        else build_model_action_definitions(capabilities, prompts=prompts)
     )
     names = {(item.kind, item.target_name): item.name for item in current}
     return json.dumps(

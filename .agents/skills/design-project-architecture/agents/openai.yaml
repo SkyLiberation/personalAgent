@@ -1,0 +1,3 @@
+interface:
+  display_name: "架构设计与维护"
+  short_description: "从业务目标设计合理架构，核对职责、契约、依赖与运行链路并持续维护"

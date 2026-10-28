@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import hashlib
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -38,8 +41,10 @@ class PythonExecutionService:
         journal: PythonJournalPort,
         execution: PythonExecutionPort,
         profile: PythonExecutionProfile,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
+        self._prompts = prompts
         self.artifacts = artifacts
         self.journal = journal
         self.execution = execution
@@ -55,7 +60,7 @@ class PythonExecutionService:
         request_digest: str,
     ) -> PythonToolResult:
         if execution_scope.principal != self.profile.authorized_principal:
-            raise PermissionError("本主体未获Python执行部署授权")
+            raise PermissionError(self._prompts.render('python_execution.authorization'))
         expected = accepted_tool_request_digest(
             execution_scope=execution_scope,
             action_id=action_id,
@@ -63,7 +68,7 @@ class PythonExecutionService:
             arguments=arguments,
         )
         if request_digest != expected:
-            raise PermissionError("Python请求与已接受摘要不同")
+            raise PermissionError(self._prompts.render('python_execution.request_digest'))
         view = self.journal.load_python_execution(
             execution_scope=execution_scope,
             action_id=action_id,
@@ -76,18 +81,18 @@ class PythonExecutionService:
             or view.request_digest != request_digest
             or view.deployment_digest != self.profile.deployment_digest
         ):
-            raise PermissionError("Python请求未被本run按当前部署接受")
+            raise PermissionError(self._prompts.render('python_execution.accepted_deployment'))
         if view.command is not None:
             self._validate_command(view.command, view)
         if view.receipt is not None and view.receipt.status != "unknown":
             if view.command is None:
-                raise ValueError("Python回执缺少冻结Command")
+                raise ValueError(self._prompts.render('python_execution.receipt_command'))
             self.execution.cleanup(view.command)
             return self._response(view.receipt, execution_scope)
         command = view.command
         if command is None:
             if view.execution is not None or view.receipt is not None:
-                raise ValueError("Python执行记录缺少冻结Command")
+                raise ValueError(self._prompts.render('python_execution.execution_command'))
             command, inputs = self._command(view)
             self.journal.bind_python_command(
                 execution_scope=execution_scope,
@@ -104,7 +109,7 @@ class PythonExecutionService:
                 original = view.execution
                 if outcome.execution.output_available:
                     if outcome.execution != original:
-                        raise ValueError("Python恢复结果与已保存进程事实不同")
+                        raise ValueError(self._prompts.render('python_execution.recovery_fact'))
                 else:
                     # Reconciliation may lose a capture, but cannot erase an
                     # already committed exit code, OOM fact or actual runtime.
@@ -145,28 +150,22 @@ class PythonExecutionService:
         self, name: str, ref: ResourceRef, scope: ExecutionScope, *, max_bytes: int
     ) -> PythonInputContent:
         if ref.resource_type != "artifact" or ref.owner != scope.principal:
-            raise PermissionError("Python只能读取本主体的确切Artifact")
+            raise PermissionError(self._prompts.render('python_execution.input_owner'))
         metadata = self.artifacts.resource_item(
             ref,
             principal=scope.principal,
             owner=scope.principal,
         )
         if metadata.resource_ref != ref or metadata.size_bytes > max_bytes:
-            raise ValueError("Python输入身份或字节长度超过边界")
+            raise ValueError(self._prompts.render('python_execution.input_boundary'))
         stored, content = self.artifacts.read_upload(
             ref,
             principal=scope.principal,
             owner=scope.principal,
         )
         if stored.resource_ref != ref or stored.size_bytes != metadata.size_bytes:
-            raise ValueError("Python读取期间Artifact身份发生变化")
-        return PythonInputContent(
-            name=name,
-            resource_ref=ref,
-            content_digest=metadata.content_digest,
-            size_bytes=metadata.size_bytes,
-            content=content,
-        )
+            raise ValueError(self._prompts.render('python_execution.input_changed'))
+        return PythonInputContent.model_validate({'name': name, 'resource_ref': ref, 'content_digest': metadata.content_digest, 'size_bytes': metadata.size_bytes, 'content': content}, context=self._prompts)
 
     def _publish(
         self,
@@ -194,7 +193,7 @@ class PythonExecutionService:
     def _input_refs(self, view: PythonJournalView) -> tuple[ResourceRef, ...]:
         return tuple(resolve_artifact_ref(
             item.resource_id, view.allowed_refs,
-            principal=view.execution_scope.principal,
+            principal=view.execution_scope.principal, prompts=self._prompts,
         ) for item in view.arguments.input_files)
 
     def _command(
@@ -205,7 +204,7 @@ class PythonExecutionService:
             view.remaining_execution_seconds <= 0
             or self.clock() >= view.run_deadline_at
         ):
-            raise TimeoutError("当前run执行额度或绝对截止已耗尽")
+            raise TimeoutError(self._prompts.render('python_execution.budget_exhausted'))
         scope = view.execution_scope
         content = view.arguments.code.encode("utf-8")
         program_ref = self._publish(
@@ -236,14 +235,14 @@ class PythonExecutionService:
             (view.run_deadline_at - now).total_seconds(),
         )
         if reserved <= 0:
-            raise TimeoutError("准备Python输入时当前run截止或额度已耗尽")
+            raise TimeoutError(self._prompts.render('python_execution.input_budget_exhausted'))
         deadline = min(
             view.run_deadline_at,
             now + timedelta(microseconds=int(reserved * 1_000_000)),
         )
         reserved = (deadline - now).total_seconds()
         if reserved <= 0:
-            raise TimeoutError("Python剩余额度低于执行时钟精度")
+            raise TimeoutError(self._prompts.render('python_execution.timer_resolution'))
         limits = self.profile.limits.model_copy(update={"timeout_seconds": reserved})
         fields = dict(
             execution_scope=scope,
@@ -263,12 +262,7 @@ class PythonExecutionService:
         provisional = PythonExecutionCommand.model_construct(
             **fields, command_digest="0" * 64
         )
-        command = PythonExecutionCommand(
-            **fields,
-            command_digest=canonical_digest(
-                provisional.model_dump(mode="json", exclude={"command_digest"})
-            ),
-        )
+        command = PythonExecutionCommand.model_validate({**fields, 'command_digest': canonical_digest(provisional.model_dump(mode='json', exclude={'command_digest'}))}, context=self._prompts)
         return command, (source, *inputs)
 
     def _validate_command(
@@ -289,12 +283,12 @@ class PythonExecutionService:
                 view.arguments.input_files, self._input_refs(view), strict=True
             ))
         ):
-            raise PermissionError("冻结Python Command与已接受请求或部署不同")
+            raise PermissionError(self._prompts.render('python_execution.command_request'))
         expected = view.arguments.code.encode("utf-8")
         if command.program.content_digest != hashlib.sha256(
             expected
         ).hexdigest() or command.program.size_bytes != len(expected):
-            raise ValueError("冻结Python程序与已接受原字节不同")
+            raise ValueError(self._prompts.render('python_execution.program_bytes'))
 
     def _restore_inputs(
         self, command: PythonExecutionCommand, view: PythonJournalView
@@ -313,7 +307,7 @@ class PythonExecutionService:
             command.program,
             *command.inputs,
         ):
-            raise ValueError("Python原件与冻结Command不同")
+            raise ValueError(self._prompts.render('python_execution.original_command'))
         return contents
 
     def _publish_outcome(
@@ -321,12 +315,12 @@ class PythonExecutionService:
     ) -> PythonExecutionReceipt:
         fact = outcome.execution
         if fact.status == "dispatching":
-            raise ValueError("执行器不能以dispatching作为执行结果")
+            raise ValueError(self._prompts.render('python_execution.dispatching_result'))
         if (
             len(outcome.stdout) > command.limits.stdout_bytes
             or len(outcome.stderr) > command.limits.stderr_bytes
         ):
-            raise ValueError("执行器返回超过冻结捕获额度的字节")
+            raise ValueError(self._prompts.render('python_execution.capture_budget'))
         sources = (
             command.program.resource_ref,
             *(item.resource_ref for item in command.inputs),
@@ -350,9 +344,9 @@ class PythonExecutionService:
         status = fact.status
         error = fact.error_code
         if fact.stdout_truncated:
-            limitations.append("stdout已达到捕获限制；原件只包含实际捕获字节。")
+            limitations.append(self._prompts.render('python_execution.stdout_limit'))
         if fact.stderr_truncated:
-            limitations.append("stderr已达到捕获限制；原件只包含实际捕获字节。")
+            limitations.append(self._prompts.render('python_execution.stderr_limit'))
         stdout_ref = stderr_ref = None
         if fact.output_available:
             for stream, content in (
@@ -365,7 +359,7 @@ class PythonExecutionService:
                 except UnicodeDecodeError:
                     mime = "application/octet-stream"
                     limitations.append(
-                        f"{stream}含无效UTF-8；保留捕获原字节，不提供文本预览。"
+                        self._prompts.render('python_execution.invalid_utf8', stream=stream)
                     )
                     if stream == "stdout" and status == "succeeded":
                         status, error = "invalid_output", "invalid_output"
@@ -384,7 +378,7 @@ class PythonExecutionService:
                     stderr_ref = ref
         else:
             limitations.append(
-                "原作业输出不可恢复；未重新运行程序，不能按空输出来解释。"
+                self._prompts.render('python_execution.output_unavailable')
             )
             if status == "succeeded":
                 status, error = "failed", "output_unavailable"

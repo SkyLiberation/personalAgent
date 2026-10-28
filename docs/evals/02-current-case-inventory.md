@@ -1,5 +1,49 @@
 # 当前评测用例盘点
 
+本页登记用例边界、实际结果与归档坐标。可执行分类与产品结果契约以 [evidence_catalog.py](../../evals/e2e_quality/evidence_catalog.py)及目标版本的实际收集为准；运行方法见[运行与发布](04-running-and-release.md)。
+
+| 阅读目标 | 入口 |
+| --- | --- |
+| 最近登记的 LongDS task2 运行 | [2026-10-28 MiniMax](#2026-10-28-切回minimax重新执行task2)、[MiMo 分段](#2026-10-28-mimo引用投影与最新task2完整测试) |
+| LongDS Lite 原批次、续跑及事故恢复 | [23 项原稿执行](#2026-10-25-longds-v11-lite-剩余-23-项原稿执行原批次结束续跑已启动) |
+| 用例分类与用户结果边界 | [Conversation 与 Knowledge](#1-conversation-与-knowledge)至[已撤回的 Investigation](#7-已撤回的-investigation-lt-runtime-conformance) |
+| 场景删例、复用与替代边界 | [2026-10-17 场景审查与清理](#2026-10-17-场景审查与清理) |
+| 历史研究正式结果及对应失败 | [既有正式结果](#既有正式结果)及各日期记录 |
+
+各条记录按日期、代码、配置和归档身份解释；“当前”“执行中”“尚未”描述该条记录保存时的状态，本页不提供实时监控。后续结果保留独立身份，不覆盖旧失败、未知用量或原始评分。历史单元测试与 Contract 通过数仅保留原记录，不作为现行门禁。发布判断须取得目标 clean revision 的完整矩阵，不能由本页局部结果推定。
+
+## 2026-10-28 切回MiniMax重新执行task2
+
+用户要求生成模型切回`MiniMax-M3.1-Flash`，沿用`adaptive + medium`，从原英文第1轮重新执行34轮；评分器保持原MiMo Pro及有效资格。当前英文Markdown、criterion字符串契约、原题、CSV、分析镜像及direct/none保持，搜索按进程继续禁用。新计划、预算、停止和比较边界由[配置切换规格](../optimization/to_verify/prompt-language-selection.md#12-切回-minimax-后重新执行-task22026-10-28)拥有。冻结源码为`.tmp/mf28/code/`，采集为`.tmp/mt28/c/`，启动器`.tmp/task2-minimax-20261028/full.py`。准备核对3753份文件，与上一接续源码完全相同；全部生成配置及原Pro资格核对通过，未额外调用模型。北京时间21:18:00启动，实际worker PID32256；首轮已进入正式HTTP，实际SDK为MiniMax／adaptive／medium并收到API200，生成仍进行中，尚无本次完整成绩。旧完整运行和MiMo前缀均保留；后续状态以`.tmp/mt28/worker.json`及`final.json`为准。
+
+## 2026-10-28 MiMo引用投影与最新task2完整测试
+
+MiMo工具出站采用有限纯本地对象引用展开，canonical执行校验保持。两份原完整真实阶段各4次目标调用，共8/8合法；另2次合法直接执行未覆盖目标，原组停止报告不改写。用户接受8次目标成功后准入，21份实际SDK的生产对照与隔离候选相等；只补type的失败及一次内联诊断分别保留。新增阶段12次物理请求、679,860已知tokens、未知0、业务执行0。机制、原停止与用户新判据由[验证记录](../optimization/to_verify/verify_results/tool-schema-reference.md)拥有。
+
+原段`.tmp/rt28/`在第5轮意图阶段停止：已交付4/34、请求5轮、后续29轮未执行；写文件4次均成功，request为对象。生成33次物理、1,361,450已知tokens／未知1；Pro评分3/4正确（1、2、4通过），新增14,725。用户随后授权[取消单项criterion长度上限](../optimization/completed/intent-criterion-length.md)，原707字符typed回放及生产Schema消费通过；19:42:20以`.tmp/il28/code/`和`.tmp/ir28/c/`从第5轮接续。新段已在第8轮content_filter后停止：第5—7轮交付并评分3/3，后26轮未执行；39次物理、3,452,710已知／未知1，新评分16,362。两段累计交付7/34、正确6/7，Pro共享账本268,348／未知0，全部生成活动累计6,989,201已知／未知6；具体过滤规则未返回。原会话、许可、费用和前四轮结果保持。完整task2未完成，仍为unverified_flow_capture、不计发布，原件及边界见同一验证记录。
+
+## 2026-10-27 task2 Context 首批观察及实验接口迁移
+
+Context位置和自然语言展示已接入。完整真实第2轮阶段三组各10次完成，共1,352,424tokens、未知0；实际提议仍混用承接名单、候选池及前五，未显示一致改善。新空对话按原英文task2执行前三轮，3/3交付、独立官方评分2/3，第3轮错误加入Belgium；其criterion本次已保留“最多三项”。来源、逐组观察及剩余问题由[验证记录§11](../optimization/to_verify/verify_results/longds-analysis.md#11-context-首批实施与接口迁移)拥有。该运行保持direct/none、`unverified_flow_capture`，另31轮未执行，不计完整Product E2E或发布分子。
+
+用户随后要求完整34轮前后比较，并明确复用旧结果、不重跑旧生成。现完整采集和评分均结束：旧3/34，新2/34；新第1／2轮正确，第2轮改善，第4／7轮退步，其余31轮同分。新三段34/34交付、49,640,581已知生成tokens／未知3，保留摘要失败及额度阻塞后的两次操作恢复。新增11轮评分0/11、67,188tokens，全部评分账本541,083／1M、未知0；源封存、三段消息、原许可和逐轮来源核对通过。227次实际主模型请求确认新布局已生效，但本次未显示正确率改善；仍为direct/none的非发布采集。[完整结果及比较边界](../optimization/to_verify/verify_results/longds-analysis.md#12-task2-完整前后验证)不覆盖此前短前缀或旧成绩。
+
+当前Provider接口的活动实验迁移已补齐：513文件扫描无旧导入，38入口74个符号可导入，26/26离线Provider回放通过；LongDS Judge与两个LangExtract探针改用公共策略，批次入口显式准入新评分资格。新Judge正反资格1/0，前三轮1/1/0，累计27,312评分tokens（含资格6001）、未知0。旧封存成绩及运维脚本保留原身份，不配新源码直接续跑。工程检查及边界反事实见同一验证记录，不将静态兼容外推成全部数据集已重跑。
+
+## 2026-10-26 Provider 策略独立扩展重构
+
+按[固化规格](../optimization/completed/model-provider-extensibility.md)拆分三家策略、公共参数编码和配置工厂，四类 SDK 边界接收策略注入。相对已集中参数的当前源码快照，[最终回放](../../.tmp/model-provider-policy-20261026/replay-final-v2/report.json)为 26/26：两个完整历史主链阶段 2/2，HTTP 正文逐字节及响应投影保持；七项 SDK 边界 7/7，含 MiMo 工具流式；原配置/拒绝/Journal 15/15；配置注册新策略与未知 ID 拒绝 2/2。新实现加入隔离注册表后经原 SDK 出站，公共请求器及内置策略源码哈希未变。
+
+总计 19 次本机 HTTP，付费模型与工具执行均 0。源码身份门禁在整组运行前后核对全部生产 Python 和回放脚本一致；最终工作树再次核对该身份。生产源码相对本轮快照 +276/−126、净增 150 行，16 个文件，依赖仍为 14 包/43 边。独立评审的契约被回写与两处脚本漏传已处理；真实在线服务接受性、模型语义、完整产品 E2E 与发布矩阵未执行，局部结果不进入其分子。原参数集中轮的 23/23 保留以下原身份。
+
+实际工程命令为 `scripts/check_layers.py`、`ruff check --select F401,F811,F821 src scripts`（另覆盖迁移的 eval 脚本）、`scripts/check_dev_spec.py` 和 `git -c core.safecrlf=false diff --check`，均通过；使用本地 `.venv` Python。规范检查为路由 9/9、主细则样本 70/70、目录样本 9/9，856 个本地链接与 326 个锚点；另外本轮 11 份文档的 1,208 个本地链接及 322 个锚点通过。旧 HEAD 模式的文档运行命令也在[独立归档](../../.tmp/model-provider-policy-20261026/legacy-final/report.json)重新通过 23/23，原历史归档未覆盖。未运行停用单元测试。
+
+## 2026-10-26 Provider 配置与参数封装
+
+按[固化规格](../optimization/completed/model-provider-configuration.md)完成共享纯参数 profile 与四个既有生成 Adapter 接入，原模型 Port/Journal、治理、重试及输出协议保持。相对 `5e0963e` 的[离线报告](../../.tmp/model-provider-configuration-20261026/replay-v3/report.json)为 23/23：两个完整真实主链阶段 2/2，HTTP 正文 307,691／60,421 字节分别逐字节保持、响应投影相同；六项 SDK 配置接入检查 6/6；十五项配置/拒绝/Journal 往返检查 15/15。图片是代表性 1×1 PNG 的出站配置检查，不是历史真实图片阶段。
+
+两组实际 SDK 回环共 14 次 HTTP 请求，付费模型与工具执行均为 0；三家全部真实业务集成、图片语义和完整产品成功率未执行，不计产品 E2E 或发布分子。分层检查维持 14 包/43 边、无循环或禁止依赖；`ruff check --select F401,F811,F821 src scripts`、诊断脚本 lint、`check_dev_spec.py` 和 diff 检查通过。九份改动文档的 1,113 个本地链接和 296 个标题锚点通过；验收归档的生产及回放源码 checksum 与最终源码一致。生产代码新增 248 行、删除 92 行，净增 156 行，用于集中 profile、严格配置边界及实际模型绑定；未增加包依赖或服务调用层。
+
 ## 2026-10-25 Loop完整流程与提示式意图验证
 
 按[唯一Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)接入原生正文／动作、同承载反馈及按职责选择的内部typed输出。内部意图使用prompted_json，原类型、来源Admission、32,768输出和一次格式修复保持；本轮六文件+66／-35，审查Critical 0／Important 0。
@@ -38,7 +82,7 @@
 
 ## 2026-10-23 MiniMax low 完整流程验证（已停止）
 
-按 [Spec §9.11](../optimization/to_verify/knowledge-decision-delivery.md#911-minimax-low-的完整流程验证)，新轨迹于北京时间 20:49:33 启动，约 20:51:03 已停止，实际生成 PID `4372` 已退出。16 份 CSV 上传成功后，第 1 轮连续提交同类非法 Python 工具参数，收到反馈后仍未修复，Runtime 返回 HTTP 200／`limitation`。实际请求 1 轮、回答 0 轮、余 35 轮未执行；6 次物理请求，原始 SDK usage 合计与 Journal 均为 113,642 tokens，Journal usage 完整。没有第 17 轮检查点、恢复或官方成绩；未自动重跑。
+按 [MiniMax low 的完整流程验证](../optimization/to_verify/verify_results/longds-analysis.md#4-minimax-low-的完整流程验证)，新轨迹于北京时间 20:49:33 启动，约 20:51:03 已停止，实际生成 PID `4372` 已退出。16 份 CSV 上传成功后，第 1 轮连续提交同类非法 Python 工具参数，收到反馈后仍未修复，Runtime 返回 HTTP 200／`limitation`。实际请求 1 轮、回答 0 轮、余 35 轮未执行；6 次物理请求，原始 SDK usage 合计与 Journal 均为 113,642 tokens，Journal usage 完整。没有第 17 轮检查点、恢复或官方成绩；未自动重跑。
 
 另有独立采集缺口：收尾计量解析一份 SDK 归档时，其 `message.role` 是重复拼接的 `assistant`，不满足 typed 契约，导致正式 `report.json` 及 `checksums.json` 未生成；观察器随后因缺少封存文件拒绝收尾。该异常字段的形成边界尚未定位，不归因为供应商原始响应。评分调用零，旧 503 准入修正未被触发；本次是新的采集计量失败，不能将未封存原件写成完整采集通过。独立只读[停止审计](../../.tmp/minimax-longds-e2e-20261023/status-audit/report.json)已封存，原失败段保持。
 
@@ -90,7 +134,7 @@
 
 ## 2026-10-23 MiMo 两轮流程及独立评分
 
-按[Spec §9.10](../optimization/to_verify/knowledge-decision-delivery.md#910-切回-mimo-的长任务验证)，生成调用已实际改为 `mimo-v2.6-flash`／中国区 Token Plan 端点。仍使用原中文两轮、16 CSV、真实 Web／Python、`direct + none` 和原 L1 预算；新模型为独立身份，不与 DeepSeek 轨迹合并或归因为机制收益。
+按[切回 MiMo 的长任务验证](../optimization/to_verify/verify_results/longds-analysis.md#3-切回-mimo-的长任务验证)，生成调用已实际改为 `mimo-v2.6-flash`／中国区 Token Plan 端点。仍使用原中文两轮、16 CSV、真实 Web／Python、`direct + none` 和原 L1 预算；新模型为独立身份，不与 DeepSeek 轨迹合并或归因为机制收益。
 
 | 检查 | 实际结果与边界 |
 | --- | --- |
@@ -115,7 +159,7 @@
 
 ## 2026-10-23 可替换回答模块与无核验两轮流程
 
-按用户明确授权及[Spec §9.9](../optimization/to_verify/knowledge-decision-delivery.md#99-可替换回答模块与无核验流程验证)，当前 LongDS 独立采集装配 `direct + none`。原中文两轮、16 CSV、真实 Web／模型／Python／Journal 及预算保持，核验和 claim 不接入；分类为 `unverified_flow_capture`、`release_eligible=false`，不计完整产品 E2E 或发布通过，不改原带核验 target 的失败。
+按用户明确授权及[可替换回答模块与无核验流程验证](../optimization/to_verify/verify_results/longds-analysis.md#2-可替换回答模块与无核验流程验证)，当前 LongDS 独立采集装配 `direct + none`。原中文两轮、16 CSV、真实 Web／模型／Python／Journal 及预算保持，核验和 claim 不接入；分类为 `unverified_flow_capture`、`release_eligible=false`，不计完整产品 E2E 或发布通过，不改原带核验 target 的失败。
 
 | 检查 | 实际结果与证据边界 |
 | --- | --- |
@@ -130,7 +174,7 @@
 
 ## 2026-10-23 LongDS 准备、正式失败与相位检查点
 
-固定 v1.1 Lite 的 Netflix task3，36 轮完整中文题面及 16 份 CSV 已准备；数据共 3,454,619 字节，逐文件字节／Git blob／SHA-256 校验通过。答案和参考代码只留评测私有目录。准备及非 root／禁网／只读条件下的分析镜像导入检查不调用模型、不执行业务程序；来源、规格与预算由[研究 Spec §9](../optimization/to_verify/knowledge-decision-delivery.md#9-longds-长程数据分析设计)拥有。
+固定 v1.1 Lite 的 Netflix task3，36 轮完整中文题面及 16 份 CSV 已准备；数据共 3,454,619 字节，逐文件字节／Git blob／SHA-256 校验通过。答案和参考代码只留评测私有目录。准备及非 root／禁网／只读条件下的分析镜像导入检查不调用模型、不执行业务程序；来源、规格与预算由[LongDS 长程数据分析 Spec](../optimization/to_verify/longds-analysis.md#longds-长程数据分析-spec)拥有。
 
 | 轨迹 | 真实结果与边界 |
 | --- | --- |
@@ -156,7 +200,7 @@
 
 真实原E1的0140提交后／发布前及0145已完成两份完整阶段输入，分别通过生产Web恢复：2/2 HTTP200、同一回答原字节、resources=0、生成Artifact变化0、模型与实验新增0，原用量和执行记录相等，进程均停止。两阶段耗时11.625／10.375秒；它们是确定性完成与恢复的Offline回放，不计新自然任务E2E。最初清理误删两项Journal注入导致两次零模型启动失败，已保留并恢复，最终两个执行服务的构造调用AST与改前相同。
 
-按新明确范围对旧封存采集另行审计，实际Final成立，user_delivery=present_unscored；原下载失败与旧判据不覆盖改写，33份响应和3,178,471tokens不重复计费。下载429不构成Agent能力失败；原SQL健康闭合证据仍缺失，语义仍暂放，长任务能力未证明。设计由[整体Spec §8.5](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)拥有，代码、验证与限定结论见[本轮记录](../../.tmp/agent-capability-scope-20261022/report.md)。
+按新明确范围对旧封存采集另行审计，实际Final成立，user_delivery=present_unscored；原下载失败与旧判据不覆盖改写，33份响应和3,178,471tokens不重复计费。下载429不构成Agent能力失败；原SQL健康闭合证据仍缺失，语义仍暂放，长任务能力未证明。设计由[整体Agent能力范围收回与删除计划](../optimization/to_verify/verify_results/research-evaluation-and-delivery.md#7-agent能力范围收回与删除计划)拥有，代码、验证与限定结论见[本轮记录](../../.tmp/agent-capability-scope-20261022/report.md)。
 
 ## 2026-10-22 Python新接口接回生产与正式续验
 
@@ -185,9 +229,9 @@
 
 ## 2026-10-20 检索实验研究能力准入
 
-用户已授权按[研究能力增强 Spec](../optimization/to_verify/knowledge-decision-delivery.md#72-完整落地-implementation-plan)完整落地。E1／P1 正式 baseline 节点已收集 `2/2`，真实初始原件及许可清单的零模型预检通过；准备不计产品通过。两例各运行一次，均由 Web 将模型截止映射为 HTTP 503、pytest 失败、原整例归因 inconclusive。E1 约 800.14 秒，9 次物理请求中 4 成功、5 超时、已知 50,912 tokens；P1 约 689.687 秒，8 次物理请求中 4 成功、4 超时、已知 31,469 tokens。实际 Web 进程均已停止，无实验或用户交付，target 未执行。
+用户已授权按[研究能力增强 Spec](../optimization/to_verify/verify_results/research-experiment.md#32-完整落地-implementation-plan)完整落地。E1／P1 正式 baseline 节点已收集 `2/2`，真实初始原件及许可清单的零模型预检通过；准备不计产品通过。两例各运行一次，均由 Web 将模型截止映射为 HTTP 503、pytest 失败、原整例归因 inconclusive。E1 约 800.14 秒，9 次物理请求中 4 成功、5 超时、已知 50,912 tokens；P1 约 689.687 秒，8 次物理请求中 4 成功、4 超时、已知 31,469 tokens。实际 Web 进程均已停止，无实验或用户交付，target 未执行。
 
-原成绩和归因不改；[同轨迹局部审查](../optimization/to_verify/knowledge-decision-delivery.md#t0-同轨迹局部准入复审)复核完整正式工具面、许可材料消费与实际装配，已证明 E1 缺合法实验执行入口，可准入对应最小切片，不能外推超时修复或完整预算。一次末阶段真实输入回放为零动作诊断，单物理请求 116.375 秒、34,272 tokens，仍寻找执行路径，不计 Product。累计已知 116,653 tokens，另 9 次失败调用费用未知；原始封存、P1局部取证和后续准入由 Spec 拥有。工程工具及权重搜索仍不转计 Agent 决策或产品通过。
+原成绩和归因不改；[同轨迹局部审查](../optimization/to_verify/verify_results/research-experiment.md#t0-同轨迹局部准入复审)复核完整正式工具面、许可材料消费与实际装配，已证明 E1 缺合法实验执行入口，可准入对应最小切片，不能外推超时修复或完整预算。一次末阶段真实输入回放为零动作诊断，单物理请求 116.375 秒、34,272 tokens，仍寻找执行路径，不计 Product。累计已知 116,653 tokens，另 9 次失败调用费用未知；原始封存、P1局部取证和后续准入由 Spec 拥有。工程工具及权重搜索仍不转计 Agent 决策或产品通过。
 
 正式入口、独立角色及运行命令见[运行入口](04-running-and-release.md#检索实验研究能力准入)。该节点的阶段 0 判据只确定必要机器交付缺项，不以文本回答或文件存在接受完整交付；完整 target 的独立语义资格尚未取得。本次 `initial_closure` 的下载、复算和复现见下节，仍不形成发布资格。
 
@@ -207,7 +251,7 @@
 
 之后按用户授权[ADR 0038](../adr/0038-history-compaction-before-natural-pressure.md)接入压缩并执行一次独立真实阶段 Offline；不修改上述 E1 成绩。摘要首请求 42.469 秒、113,273 已知 tokens，以 length 截断停止，未激活检查点、后续模型调用为 0；[结果及用量对账](../../.tmp/ctx-compact-20261021-1/report.json)明确保留失败。零模型[实际原件审计](../../.tmp/ctx-compact-20261021-1/export-audit.json)确认 95 项原始输入按序导出、296,851 字节摘要匹配、实际摘要请求的 35 个旧单元来自原件，近期动作／反馈保护及异主体拒绝成立，508 原采集文件保持。摘要消费、检查点恢复、多次压缩、自然压力及修正后的 SDK 费用异常实际回放均未覆盖；静态审查和事后费用对账不替代这些成绩。本轮按停止线不重跑、不扩大摘要输出或原付费截止。
 
-正确 dense 52 条结果与计数完整进入终稿实际请求；错误数值起于模型 Plan 自述，并被模型自写报告和最终回答沿用。未发现来源、ref、工具投影损坏或历史压缩。六组指标和有限证据驱动的追加组合观察成立，但不抵消报告错误，不证明 Harness 独立收益。首轮 claim／语义 verifier／grader 为 0 符合当前范围；后续局部尝试及取舍由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口)拥有，不改判原成绩。
+正确 dense 52 条结果与计数完整进入终稿实际请求；错误数值起于模型 Plan 自述，并被模型自写报告和最终回答沿用。未发现来源、ref、工具投影损坏或历史压缩。六组指标和有限证据驱动的追加组合观察成立，但不抵消报告错误，不证明 Harness 独立收益。首轮 claim／语义 verifier／grader 为 0 符合当前范围；后续局部尝试及取舍由[唯一 Spec](../optimization/to_verify/verify_results/research-experiment.md#deepseek-接续-e1-的实际结果与错例分析缺口)拥有，不改判原成绩。
 
 ### 2026-10-22 参数恢复的局部对照失败
 
@@ -219,7 +263,7 @@
 
 ### 2026-10-22 当前版本完整流程 E2E 失败
 
-按用户“语义先放下，先验完整流程”的要求，沿[研究 Spec §8.3](../optimization/to_verify/knowledge-decision-delivery.md#83-当前版本完整流程-e2e2026-10-22)预声明并执行当前工作树的一条 E1 `initial_closure`。沿用原中文请求、四份公开材料、真实生产 Web／模型／工具／Completion，未注入代码、结果或期待数字；主模型 deepseek-flash thinking enabled，保留1小时／20M原上限。本轮流程0／1通过；正式 capture 的 `product_result=not_scored`，报告语义未评分，旧 E1 成绩保持。
+按用户“语义先放下，先验完整流程”的要求，沿[当前版本完整流程 E2E（2026-10-22）](../optimization/to_verify/verify_results/research-experiment.md#43-当前版本完整流程-e2e2026-10-22)预声明并执行当前工作树的一条 E1 `initial_closure`。沿用原中文请求、四份公开材料、真实生产 Web／模型／工具／Completion，未注入代码、结果或期待数字；主模型 deepseek-flash thinking enabled，保留1小时／20M原上限。本轮流程0／1通过；正式 capture 的 `product_result=not_scored`，报告语义未评分，旧 E1 成绩保持。
 
 正式运行524.688秒：19候选／19物理／19完整响应，1,174,922已知tokens，0未知。完成八项开发实验（BM25、dense、参考RRF、五次candidate）及一次自主Python执行；程序自选五份原件，退出0，耗时0.391秒，完整2,864字符stdout进入后续14份实际请求。后两次Python原始响应只交program、缺必填inputs，finish_reason均为tool_calls，非输出截断；两次均在准入前准确拒绝，重复无效动作规则返回limitation。第二次响应的可见记录已识别inputs必填，仍未提交；未发现传输丢字段或工具结果缺失，不能把缺少提示写成已证实唯一原因。
 
@@ -227,7 +271,7 @@
 
 前置F1曾因评测启动器漏传RETRIEVAL_E2E_PROCESS_FILE而在HTTP前退出，模型0；原失败保持。启动器复用现有ActualWebProcess绑定、监督及停止实际解释器后，新准备e1-2按原200／404／404／404、零模型、原件不变与实际停止通过；未改变生产权限或业务规则。collect-only收集原E1／P1节点2／2，没有运行P1或单元测试。本次未实施模型填参候选或重跑整例，具体后续准入由唯一Spec拥有。
 
-本次漏参的后续只读输入审计确认：第一次Python拒绝反馈完整位于下一次实发请求的114／114项，与Journal一致；模型仍只交program。第二次拒绝写入Journal后按原停止规则结束，没有第三次请求。返回记录计划绑定的7份引用均可见，未发现反馈／Schema／引用缺失；诊断字段过粗及immutable inputs同名歧义是表达不足，尚非已验证原因。647份原归档保持，新增模型调用0；[审计与因果限制](../optimization/to_verify/knowledge-decision-delivery.md#inputs-漏参的-context-与反馈审计2026-10-22)不改判原E1。
+本次漏参的后续只读输入审计确认：第一次Python拒绝反馈完整位于下一次实发请求的114／114项，与Journal一致；模型仍只交program。第二次拒绝写入Journal后按原停止规则结束，没有第三次请求。返回记录计划绑定的7份引用均可见，未发现反馈／Schema／引用缺失；诊断字段过粗及immutable inputs同名歧义是表达不足，尚非已验证原因。647份原归档保持，新增模型调用0；[审计与因果限制](../optimization/to_verify/verify_results/research-experiment.md#inputs-漏参的-context-与反馈审计2026-10-22)不改判原E1。
 
 ### 2026-10-22 非思考摘要的局部验证
 
@@ -245,7 +289,7 @@
 
 ### 2026-10-21至22 模型自主Python执行的局部验证
 
-按[整体方案](../optimization/to_verify/knowledge-decision-delivery.md#12-整体架构增强顺序与本轮切片)及[Python工具Spec](../optimization/to_verify/python-data-analysis-tool.md)实施独立执行入口，旧固定统计／Context注入保持撤回。首次[真实工具边界旅程](../../.tmp/python-analysis-implementation-20261021/execution-boundary-verification.md)使用0056的57份实际原件，6个新容器、进程合计3.61秒、0模型；覆盖成功、异常、超时、stdout超限、非法UTF-8、权限／摘要拒绝、伪工具输出及接受／派发／发布恢复。两项长路径提前拒绝的评测误判保留原报告并零容器补验；额度拒绝反馈也已零派发核对。不同代码身份分别封存，不将修后代码重标旧容器结果。
+按[整体方案](../optimization/to_verify/knowledge-decision-delivery.md#3-整体架构增强顺序与本轮切片)及[Python工具Spec](../optimization/to_verify/python-data-analysis-tool.md)实施独立执行入口，旧固定统计／Context注入保持撤回。首次[真实工具边界旅程](../../.tmp/python-analysis-implementation-20261021/execution-boundary-verification.md)使用0056的57份实际原件，6个新容器、进程合计3.61秒、0模型；覆盖成功、异常、超时、stdout超限、非法UTF-8、权限／摘要拒绝、伪工具输出及接受／派发／发布恢复。两项长路径提前拒绝的评测误判保留原报告并零容器补验；额度拒绝反馈也已零派发核对。不同代码身份分别封存，不将修后代码重标旧容器结果。
 
 独立代码审查修正每轮工具可见性缓存及原实验unknown恢复两项问题；[恢复调度回放](../../.tmp/python-analysis-implementation-20261021/rs1/recovery-scheduling-report.json)实际调用Conversation恢复、FileJournal及ToolExecutor。Python与原BM25均从缺后端形成unknown，再核对同Command的真实终态；tool_calls分别31→31、4→4，原请求／Command及旧快照保持，额度释放后工具投影恢复，0新容器／0模型。它不证明活动进程真实崩溃或实发SDK消费。
 
@@ -275,7 +319,7 @@ F1 `RETRIEVAL-EXPERIMENT-SCOPE-001` 已登记：唯一断言入口为 `evals/pro
 
 F2 `RETRIEVAL-EXPERIMENT-START-RESPONSE-001` 已登记为真实模型／正式 HTTP 的 boundary_evaluation，IN_PROCESS_HOOK 只关闭真实 start 的响应连接；实现与装配审查闭合。两项实际 CLI 身份混用均在业务连接前拒绝，零模型，见[身份检查](../../.tmp/research-capability-20261020/t5/f2-entry-preflight-1/report.json)。首次真实轨迹已按原截止结束，902.062 秒、8 物理／7 完整、182,652 已知 tokens／1 在途未知，源码和原 capture 校验和保持。原 BM25 作业真实启动后丢失响应，原控制器查询、停止并确认退出，恰好一次 create／start，无替代原作业；原失败如实传回模型。11 项执行安全检查点通过，模型之后对已确认失败另发新 action，不是未知作业盲重启。完整交付未到达，不计 E1 通过，见[安全审计](../../.tmp/research-capability-20261020/t5/f2-final-audit-1/report.json)和[实际反馈审读](../../.tmp/research-capability-20261020/t5/f2-final-audit-1/semantic-review.json)。主任务累计已知 1,553,770、历史未知 17 笔。
 
-逐查询分行格式已按先行设计实施：三个真实 worker 复算作业保留各 809 查询的原数值和顺序；四个同轨迹搜索与两项完整分页读取的 Offline Eval 通过，只证明可定位格式。原宿主依赖缺失和禁网完整构建失败均保留，实际使用固定旧镜像只复制评分模块的新镜像，未下载依赖。v6 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v6-final-seal.json)：7 物理／6 完整、147,838 已知 tokens／1 在途未知，902.046 秒、308 项准备源码保持，进程及实验容器均停。实际 SDK 收到前 120 行中的 119 条完整逐查询记录，后续 think 使用具体查询，格式局部目标成立。三项开发及可调 RRF 程序保存成功，候选未执行，未冻结／test／Final／下载；完整通过和资格仍未成立。主任务累计已知 1,701,608、历史未知 18 笔。真实结果引用混淆的审计与候选由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#业务结果与子文件的引用关系)拥有，当前不追加付费整例。
+逐查询分行格式已按先行设计实施：三个真实 worker 复算作业保留各 809 查询的原数值和顺序；四个同轨迹搜索与两项完整分页读取的 Offline Eval 通过，只证明可定位格式。原宿主依赖缺失和禁网完整构建失败均保留，实际使用固定旧镜像只复制评分模块的新镜像，未下载依赖。v6 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v6-final-seal.json)：7 物理／6 完整、147,838 已知 tokens／1 在途未知，902.046 秒、308 项准备源码保持，进程及实验容器均停。实际 SDK 收到前 120 行中的 119 条完整逐查询记录，后续 think 使用具体查询，格式局部目标成立。三项开发及可调 RRF 程序保存成功，候选未执行，未冻结／test／Final／下载；完整通过和资格仍未成立。主任务累计已知 1,701,608、历史未知 18 笔。真实结果引用混淆的审计与候选由[唯一 Spec](../optimization/to_verify/verify_results/research-experiment.md#业务结果与子文件的引用关系)拥有，当前不追加付费整例。
 
 资格材料及审读的 v2 契约已实现并经[限定审查](../../.tmp/research-capability-20261020/t5/qualification-consumers-migration-review-1.md)：来源审读绑定实际自然请求、完整材料与相邻控制，三态达标和取得资格分开，独立准确性审读消费全部 18 份原判断并绑定 Admission。原真实 v4／v5 缺交付输入均被构造器拒绝；新六项真实 CLI 拒绝为零模型／零业务连接、原 v6 文件不变，见[拒绝原件](../../.tmp/research-capability-20261020/t5/qualification-gate-preflight-3/report.json)。接受、控制语义和逐关系准确性仍待实际完整材料及真实 18 次组，不以静态或拒绝检查计通过。
 
@@ -295,7 +339,7 @@ v7 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v7-final-seal
 
 一次[Pro 原生协议筛选](../../.tmp/research-capability-20261020/t5/native-model-protocol-screen-1-final-seal.json)只切模型及容量身份，1 物理／1 完整、58,159 tokens、36.781 秒、零新增未知，314 源码及原件保持、进程已停；三个合法业务提议通过当前 decoder，未执行业务，也未覆盖 Plan 控制或完整研究交付。按一次边界关闭，仅保留为下一能力探索候选。累计 **2,744,867 known／19 历史 unknown**，新配置整例仍须配置准备及独立整体 critic 后另行准入。
 
-完成配置准备及独立 critic 后，单次 [Pro 完整能力探索 v10](../../.tmp/research-capability-20261020/t5/e1-v10-final-seal.json)已在 902.047 秒硬截止结束：11 物理／11 完整、393,457 known／零新增未知，314 源码保持；三轮同配置 BM25／dense，前五条有成功回执，末条仍 dispatching，无 RRF／冻结／test／Final／下载。[缺交付汇总](../../.tmp/research-capability-20261020/t5/e1-v10-missing-delivery-result-1.json)零模型运行，用户结果 failed，原 qualification_preparation 保持 not_scored。累计 **3,138,324 known／19 历史 unknown**，同配置不自动重跑。末 worker 截止后自行退出并按真实身份清理，原 Journal 不补业务成功；同批用量／Plan／Context 提交缺口及后续准入由[唯一设计](../optimization/to_verify/knowledge-decision-delivery.md#决策状态先于持久接受)拥有，不计 E2／F2 通过。
+完成配置准备及独立 critic 后，单次 [Pro 完整能力探索 v10](../../.tmp/research-capability-20261020/t5/e1-v10-final-seal.json)已在 902.047 秒硬截止结束：11 物理／11 完整、393,457 known／零新增未知，314 源码保持；三轮同配置 BM25／dense，前五条有成功回执，末条仍 dispatching，无 RRF／冻结／test／Final／下载。[缺交付汇总](../../.tmp/research-capability-20261020/t5/e1-v10-missing-delivery-result-1.json)零模型运行，用户结果 failed，原 qualification_preparation 保持 not_scored。累计 **3,138,324 known／19 历史 unknown**，同配置不自动重跑。末 worker 截止后自行退出并按真实身份清理，原 Journal 不补业务成功；同批用量／Plan／Context 提交缺口及后续准入由[唯一设计](../optimization/to_verify/verify_results/research-experiment.md#2-决策状态先于持久接受)拥有，不计 E2／F2 通过。
 
 接受前决策状态的确定性修复已完成[同轨反事实](../../.tmp/research-capability-20261020/t5/model-checkpoint-candidate-2/report.json)：相同真实响应和正式 Conversation 前缀，两个接受切点均从旧 44,634／Plan1／Context3 改为接受前后已提交 61,802／Plan2／Context4，原请求／完整 SDK 保持，零模型网络或业务。两切点不计独立模型样本；实际旧结果的完整值 writer 只证明赋值及事实保持。独立实现审查无阻断，不改旧 v10 原件，不计完整 E2 或研究交付。
 
@@ -305,9 +349,9 @@ v7 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v7-final-seal
 
 另经独立复审，零模型准备从真实0018前缀录放唯一上游并执行三个原读取，实际反馈进入下一正式请求；随后单独准入的[一次后继观察](../../.tmp/research-capability-20261020/t5/pro-read-consumption-observation-1-final-seal.json)已关闭：1物理／1完整、75,708 tokens、159.453秒、零新增未知。整批协议合法，仅四次搜索和一次读取提议，业务结果消费仍not_covered；输出未执行、不再加阶段，不计修复或E1准入。父、Windows包装、实际解释器及补充监督均停止，原件和314源码／ZIP保持；正常退出不计超时清理通过。上游50,820不重复计费，累计 **3,319,166 known／19历史unknown**。
 
-2026-10-21预算切片已移除生产部署及正式采集器的统一900秒默认。下一完整用例显式1小时，轮数／工具额度由生效Settings拥有，不存在5次读搜产品限制；设计和实现见[长任务预算](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)。零模型材料、真实Web阶段、时间反事实、配置拒绝和采集收尾已核对，未增加known／unknown消费；这些均非新的Product E2E或target。旧900秒结果保持；后续新初步版本的实际结果见下段。
+2026-10-21预算切片已移除生产部署及正式采集器的统一900秒默认。下一完整用例显式1小时，轮数／工具额度由生效Settings拥有，不存在5次读搜产品限制；设计和实现见[长任务预算](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)。零模型材料、真实Web阶段、时间反事实、配置拒绝和采集收尾已核对，未增加known／unknown消费；这些均非新的Product E2E或target。旧900秒结果保持；后续新初步版本的实际结果见下段。
 
-2026-10-21 新初步E1已按1小时／20M、64模型轮／256工具／4委派及Pro/enabled冻结配置执行一次，见[原件封存](../../.tmp/research-initial-closure-20261021/e1-initial-1-seal.json)和[实际汇总](../../.tmp/research-initial-closure-20261021/after-run-2/report.json)。任务1801.641秒收尾，POST503／GET200，实际解释器和包装均停止、未到整任务截止，315源码保持。8物理／7完整、400,864 known／1新增unknown；累计 **3,720,030 known／20历史及本轮unknown**，未知不记零。两项开发基线与参考RRF成功，模型另写融合程序，18次工具调用；未执行候选、未冻结／test／Final／下载，用户结果failed、原采集not_scored，claim／语义verifier为0。最后请求480.016秒触发本地单次截止，未取得完整响应；现有观察不能判定此前无首字节或API本身故障，归因见[只读审计](../../.tmp/request-deadline-audit-20261021/diagnosis.md)。没有自然容量失败，不据此接入压缩。21表前后业务行摘要相同，56笔SQL覆盖完整、知识行写入及相关未知0；这只覆盖本次失败轨迹。新汇总器误比较未使用备用seal的缺陷已用同一真实归档修正并零模型复验，222原件保持；不覆盖原失败或补填交付成绩。后续按[Spec预算与诊断](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)先处理单次模型边界，不自动追加整例。
+2026-10-21 新初步E1已按1小时／20M、64模型轮／256工具／4委派及Pro/enabled冻结配置执行一次，见[原件封存](../../.tmp/research-initial-closure-20261021/e1-initial-1-seal.json)和[实际汇总](../../.tmp/research-initial-closure-20261021/after-run-2/report.json)。任务1801.641秒收尾，POST503／GET200，实际解释器和包装均停止、未到整任务截止，315源码保持。8物理／7完整、400,864 known／1新增unknown；累计 **3,720,030 known／20历史及本轮unknown**，未知不记零。两项开发基线与参考RRF成功，模型另写融合程序，18次工具调用；未执行候选、未冻结／test／Final／下载，用户结果failed、原采集not_scored，claim／语义verifier为0。最后请求480.016秒触发本地单次截止，未取得完整响应；现有观察不能判定此前无首字节或API本身故障，归因见[只读审计](../../.tmp/request-deadline-audit-20261021/diagnosis.md)。没有自然容量失败，不据此接入压缩。21表前后业务行摘要相同，56笔SQL覆盖完整、知识行写入及相关未知0；这只覆盖本次失败轨迹。新汇总器误比较未使用备用seal的缺陷已用同一真实归档修正并零模型复验，222原件保持；不覆盖原失败或补填交付成绩。后续按[Spec预算与诊断](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)先处理单次模型边界，不自动追加整例。
 
 机械采集审计及 21 表知识快照分别完成限定静态审查；知识诊断为真实只读空 scope，不能计 v7 before／零写入或非空分页。v7 封存后才装配 target 前后快照及唯一 typed capture DTO，四份实际历史对象 JSON 值保持；[新六条 CLI 拒绝](../../.tmp/research-capability-20261020/t5/qualification-gate-preflight-4/report.json)仍为零模型／零业务连接，原件保持。完整接受、跨证据汇总及 target 尚未通过。
 
@@ -1410,10 +1454,7 @@ Tool result 和 durable execution 业务通知边界均为 `5/5 honest_boundary`
 根因分析或生产消融。整个样本组包含 62 次模型调用、47 个模型轮次、35 次工具调用和 515,546 个令牌；模型调用延迟 P95
 为 44.75 秒。执行期间代码身份变化的早期归档与历史错误 grader 归档均只作为无效诊断，不参与门禁或结果合并。
 
-它们位于
-`evals/product_baselines/`。后续执行统一归档到
-`data/e2e_traces/product_baselines/<case-id>/<baseline|target>/<run-id>/`；旧的固定
-`conv-*.json` 会被后续执行覆盖，已经降为非权威历史调试产物。
+这些用例位于 `evals/product_baselines/`。上述 `data/e2e_traces/` 是历史证据坐标，保留原身份；新运行按 [EVM 归档规则](../../evals/AGENTS.md#5-比较身份与归档)显式设置独立 `.tmp/` 输出根，命令见[新运行的归档位置](04-running-and-release.md#新运行的归档位置)。旧固定 `conv-*.json` 仅作历史调试产物，不作为配对或发布证据，也不沿用其可覆盖写法。
 
 ## 2. Knowledge lifecycle、Capture、Review
 
@@ -2570,7 +2611,7 @@ A6 正确报告回传步骤缺证，又将一般功能名称确定为对象绑�
 
 ## 2026-10-24 MiniMax medium 完整流程验证（已停止）
 
-按用户要求，canonical思考档位由low改为medium，adaptive保持；当前参数传播与完整实际SDK构造已核对，模型／材料／工具／Prompt及预算不因档位变化另改。唯一运行方案见 [研究 Spec §9.12](../optimization/to_verify/knowledge-decision-delivery.md#912-minimax-medium-的完整36轮验证)。
+按用户要求，canonical思考档位由low改为medium，adaptive保持；当前参数传播与完整实际SDK构造已核对，模型／材料／工具／Prompt及预算不因档位变化另改。唯一运行方案见 [MiniMax medium 的完整36轮验证](../optimization/to_verify/verify_results/longds-analysis.md#5-minimax-medium-的完整36轮验证)。
 
 本次启动于北京时间14:43:02，独立归档 `.tmp/minimax-medium-longds-e2e-20261024/`，生成PID8336，观察器绑定其实际退出后才评分。计划36轮及17→18原许可恢复；60M／36小时、每轮3600秒及原每run预算保持，direct＋none继续，因此仍是 unverified_flow_capture、release_eligible=false。
 
@@ -2579,6 +2620,27 @@ A6 正确报告回传步骤缺证，又将一般功能名称确定为对象绑�
 
 ## 2026-10-24 用量未知不停止的完整 LongDS 验证（已停止并评分）
 
-按用户明确授权移除用量统计不完整停止线，当前方案和固定验收由[研究 Spec §9.13](../optimization/to_verify/knowledge-decision-delivery.md#913-用量未知不再单独停止并继续完整验证)拥有。模型／摘要的整份真实失败阶段回放从拒绝变为允许，479,230 已知 tokens、原未知标记和封存保持；三份真实采集评分准入及 SDK 全载荷不变检查通过，独立审查无阻断。没有新增单元测试或付费准备调用。
+按用户明确授权移除用量统计不完整停止线，当前方案和固定验收由[用量未知不再单独停止，并继续完整验证](../optimization/to_verify/verify_results/longds-analysis.md#6-用量未知不再单独停止并继续完整验证)拥有。模型／摘要的整份真实失败阶段回放从拒绝变为允许，479,230 已知 tokens、原未知标记和封存保持；三份真实采集评分准入及 SDK 全载荷不变检查通过，独立审查无阻断。没有新增单元测试或付费准备调用。
 
 新轨迹使用独立身份 `.tmp/usage-nonblocking-longds-20261024/`，北京时间 15:33:36 启动，生成 PID 15876；首个实际 SDK 已核对 adaptive＋medium。计划原 36 轮、17→18 新进程恢复、direct＋none，未知费用继续单列，60M 生成／2M Judge 阈值只约束已知消费。仍为 `unverified_flow_capture`、`release_eligible=false`。本次 16:22:23 生成退出，16:25:16 评分完成：14 请求、13 交付、22 未执行，13 份回答评分 11 份正确，第 2／5 轮为 0。第 14 轮最终提交的两次 `json_object` 请求均返回 Markdown，JSON 解析及原修复失败，正式入口返回 503；响应及费用完整，不是本次用量门禁停止。生成 113 次／15,282,805 tokens，新增 Judge 13 次／51,689 tokens，未知均 0；49 次 Python 为 38 成功、10 失败、1 超时。未到 17→18 恢复或自然压缩，最大单次实际输入 272,105 tokens；旧 medium 首轮失败不改写。详情见[本次最终报告](../../.tmp/usage-nonblocking-longds-20261024/report.json)。
+
+
+## 2026-10-27 英文Prompt与MiMo task2
+
+本次只读复用上一轮MiniMax／中文Prompt的完整34个回答，由新资格的MiMo Pro按原官方协议重评，结果4/34（正确轮次1、2、3、8）。原DeepSeek2/34保持历史身份；评分器变化后的分数不能直接归为生成质量变化。重评消耗221,447 tokens，另有本次资格5,183 tokens，统一账本累计226,630，未知0。
+
+英文Prompt／MiMo Flash新生成在首轮因上游content_filter拒绝而中断：计划34轮、实际请求1轮、正式交付0轮、后33轮未执行，新答案评分未到达。进程已停止封存，无法比较新旧正确性；未把未执行计0分。使用原官方英文题面、固定材料和镜像及direct/none，不能作为完整核验后的发布证据。运行身份、先行验收和后续完整比较由[验证记录](../optimization/to_verify/verify_results/prompt-language-mimo.md)拥有，原始新账本在`.tmp/em27/`。
+
+随后按用户要求移除本次不需要的 `web_search`，使用独立工具配置 `.tmp/ns27/` 从首轮启动同一34轮计划。首轮因两次同类无效write_artifact参数停止，交付0、后33轮未执行；5次请求、88,154 tokens、未知0、471.797秒，无content_filter。搜索及网页读取动作均0，未将这次独立轨迹当作过滤根因证明。评分无新调用，旧Pro4/34不重评；终态汇总 `.tmp/ns27/final.json`。
+
+工程英文动态提示补齐后，独立 `LANG-ENTRY-1` 正式入口smoke在 `.tmp/ec27/sm/` 通过：原CSV前两行原文及12列名正确，实际read_artifact后提交终答；3次Flash／thinking enabled调用、19,368 tokens、未知0、41.609秒。3个完整实际请求无中文工程文字，源文保真，进程停止封存。它只验收语言和该CSV用户结果，不计task2完整得分、参数兼容或发布通过；详情见同一验证记录。
+
+补齐后原题轨迹`.tmp/ew27/c/`已交付第1轮，Pro评分0/1；第2轮意图请求超时，后32轮未执行。生成9次物理请求、203,868已知tokens、未知3次；评分新增4,364，共享Pro账本累计230,994。第1轮实际完成3次Python执行，未提出写文件。2026-10-28按用户要求从第2轮接续至34轮，使用同一冻结代码、对话、许可及完整事实，新捕获`.tmp/er28/c/`。旧单轮截止时间已过，因此重提第2轮时仅更换run身份；原失败及费用保留，第1轮答案与评分不重跑。恢复计划及终态由同一验证记录维护，尚无完整task2成绩。
+
+恢复随后已停止封存：新增第2、3轮答案，第4轮因重复无效动作返回limitation，后30轮未执行。累计交付并评分3轮、0/3正确；恢复生成15次请求、508,801已知tokens、未知0，新评分6,267tokens，共享Pro账本累计237,261。原失败和未知费用保持，汇总`.tmp/er28/final.json`；该轨迹不包含以下Markdown迁移。
+
+## 2026-10-28 工程提示的 Markdown 表达
+
+预声明的中英文正式入口各一次均通过：原CSV前两行原文及12个列名正确，实际模型为MiMo Flash、thinking enabled、direct/none。独立捕获`.tmp/md28/zh/`和`.tmp/md28/en/`均已停止封存；共6次物理请求、42,337已知tokens、未知0、53.203秒、评分调用0。该结果只验证本次排版接入和既定读取用户结果，不是完整研究核验或task2正确率改善。
+
+全资源与真实阶段输入对照覆盖33条双语模板、360条保持资源、1个新增包装、15个SDK请求物化及当前17工具／18动作／14阶段Schema；原句、变量、JSON和criterion保持。机制由[固化方案](../optimization/completed/prompt-markdown-presentation.md)拥有，源码身份、实际请求与审查边界见[验证记录](../optimization/to_verify/verify_results/prompt-markdown.md)。task2另有原冻结身份，成绩与费用没有混入本次smoke。

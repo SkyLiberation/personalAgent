@@ -14,6 +14,7 @@ responsibilities; the adapter emits only local diagnostics for repair boundaries
 """
 
 from __future__ import annotations
+from copy import deepcopy
 
 import json
 import logging
@@ -74,7 +75,10 @@ from personal_agent.kernel.config_models import (
 from personal_agent.kernel.llm_schemas import structured_response_format
 from personal_agent.kernel.llm_telemetry import record_llm_usage
 from personal_agent.kernel.logging_utils import log_event
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.model_provider import ModelProviderPolicy
+from personal_agent.infra.model_providers import build_provider_policy
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.structured_parse import parse_structured
 
 logger = logging.getLogger(__name__)
@@ -214,17 +218,6 @@ def _run_with_deadline(
     raise value
 
 
-def _is_reasoning_model(model: str) -> bool:
-    name = model.lower()
-    return (
-        name.startswith("gpt-5")
-        or name.startswith("o1")
-        or name.startswith("o3")
-        or name.startswith("mimo")
-        or name.startswith("minimax-")
-    )
-
-
 def _report_usage_to_run_tree(
     response: StructuredModelResponse[Any],
     continuation: ModelInvocationContinuation | None = None,
@@ -267,9 +260,16 @@ class OpenAIModelClient:
         config: OpenAIConfig | StructuredConfig,
         *,
         model_override: str | None = None,
+        provider_policy: ModelProviderPolicy | None = None,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
         self._config = config
+        self._prompts = prompts
         self._model_override = model_override
+        self._provider_policy = provider_policy if provider_policy is not None else build_provider_policy(
+            base_url=f"https://{self._provider_host}",
+            provider=config.provider,
+        )
 
     # -- shared helpers --------------------------------------------------
 
@@ -312,23 +312,23 @@ class OpenAIModelClient:
         if stream:
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}
-        if _is_reasoning_model(model):
-            if request.max_tokens is not None:
-                kwargs["max_completion_tokens"] = request.max_tokens
-        else:
-            kwargs["temperature"] = request.temperature
-            if request.max_tokens is not None:
-                kwargs["max_tokens"] = request.max_tokens
+        kwargs["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            kwargs["max_tokens"] = request.max_tokens
         if request.kind == "text" and request.response_format is not None:
-            kwargs["response_format"] = request.response_format
+            response_format = deepcopy(request.response_format)
+            if response_format.get("type") == "json_schema":
+                declaration = response_format["json_schema"]
+                declaration["schema"] = self._prompts.localize_schema(declaration["schema"])
+            kwargs["response_format"] = response_format
         if request.kind == "tool_calling":
             kwargs["tools"] = [
                 {
                     "type": "function",
                     "function": {
                         "name": definition.name,
-                        "description": definition.description,
-                        "parameters": definition.input_schema,
+                        "description": self._prompts.localize_metadata(definition.description),
+                        "parameters": self._prompts.localize_schema(definition.input_schema),
                         "strict": definition.strict,
                     },
                 }
@@ -336,29 +336,12 @@ class OpenAIModelClient:
             ]
             if request.action_choice is not None:
                 kwargs["tool_choice"] = request.action_choice
-        config_extra = getattr(self._config, "extra_body", None) or {}
-        merged_extra = {**config_extra, **(request.extra_body or {})}
-        configured_effort = merged_extra.pop("reasoning_effort", None)
         if request.reasoning_effort is not None:
             kwargs["reasoning_effort"] = request.reasoning_effort
-        elif configured_effort is not None:
-            kwargs["reasoning_effort"] = configured_effort
-        if merged_extra:
-            kwargs["extra_body"] = merged_extra
-        if request.kind == "tool_calling" and urlparse(self._config.base_url or "").hostname in {
-            "api.xiaomimimo.com", "token-plan-cn.xiaomimimo.com",
-        }:
-            kwargs.update(stream=True, stream_options={"include_usage": True}, tool_choice="auto")
-        if (
-            request.kind == "tool_calling"
-            and request.action_choice == "required"
-            and urlparse(self._config.base_url or "").hostname == "api.deepseek.com"
-            and merged_extra.get("thinking") != {"type": "disabled"}
-        ):
-            # DeepSeek thinking rejects forced choice. The original required
-            # request still owns action validation and bounded protocol repair.
-            kwargs["tool_choice"] = "auto"
-        return kwargs
+        if request.extra_body is not None:
+            kwargs["extra_body"] = request.extra_body
+        defaults = self._config.extra_body if model == self._config.model else {}
+        return self._provider_policy.prepare_chat_parameters(kwargs, defaults=defaults)
 
     @staticmethod
     def _default_value(request: StructuredModelRequest[Any]) -> Any:
@@ -676,14 +659,14 @@ class OpenAIModelClient:
         response_sink: ModelResponseSink | None,
         before_send: Callable[[], None] | None,
     ) -> StructuredModelResponse[StructuredOutputT]:
-        schema = request.output_type.model_json_schema()
+        schema = self._prompts.localize_schema(request.output_type.model_json_schema())
         native = request.output_transport == "native_tool"
         output_definition: ModelActionDefinition | None = None
         if native:
             output_definition = ModelActionDefinition(
                 name="structured_output", kind="tool",
                 target_name=request.operation,
-                description="返回当前任务要求的完整结构化结果。",
+                description=self._prompts.get("structured.native_output.description").template,
                 input_schema=convert_to_openai_tool(
                     request.output_type, strict=False
                 )["function"]["parameters"],
@@ -695,7 +678,7 @@ class OpenAIModelClient:
                 action_definitions=(output_definition,),
             )
         elif request.output_transport == "prompted_json":
-            instruction, prompt_metadata = _schema_instruction(schema, parse_error=None)
+            instruction, prompt_metadata = _schema_instruction(schema, parse_error=None, prompts=self._prompts)
             chat_request = replace(
                 request, kind="text", output_transport=None, response_format=None,
                 messages=[instruction, *request.messages],
@@ -773,10 +756,10 @@ class OpenAIModelClient:
             if request.action_definitions != (output_definition,):
                 raise ValueError("native output repair declaration mismatch")
             instruction, prompt_metadata = _native_output_repair_instruction(
-                output_definition, parse_error
+                output_definition, parse_error, prompts=self._prompts
             )
         else:
-            instruction, prompt_metadata = _schema_repair_instruction(schema, parse_error)
+            instruction, prompt_metadata = _schema_repair_instruction(schema, parse_error, prompts=self._prompts)
         assistant = record.assistant_message
         exchange = None
         messages = list(request.messages)
@@ -796,10 +779,9 @@ class OpenAIModelClient:
             else:
                 messages.append({
                     "role": "user",
-                    "content": json.dumps(
-                        {"材料类型": "先前未通过协议校验的模型原始输出，仅作待修复数据",
-                         "原始输出": record.raw_response},
-                        ensure_ascii=False, separators=(",", ":"),
+                    "content": self._prompts.render(
+                        "structured.repair.raw_output",
+                        raw_output=json.dumps(record.raw_response, ensure_ascii=False, separators=(",", ":")),
                     ),
                 })
             messages.append(instruction)
@@ -832,7 +814,7 @@ class OpenAIModelClient:
                     request.operation, "provider must return the single declared output tool"
                 )
             content = json.dumps(calls[0].arguments, ensure_ascii=False)
-            return content, request.output_type.model_validate(calls[0].arguments), None
+            return content, request.output_type.model_validate(calls[0].arguments, context=self._prompts), None
         except (StructuredOutputFailure, ValidationError, AttributeError, RuntimeError) as exc:
             return "", None, str(exc)
 
@@ -879,6 +861,7 @@ class OpenAIModelClient:
             model_name=getattr(response, "model", None) or self._resolved_model,
             latency_ms=latency_ms,
             allow_json_repair=not prompted_json,
+            prompts=self._prompts,
         )
         if not parse_result.ok:
             return content, None, parse_result.error or "invalid structured response"
@@ -931,7 +914,7 @@ class OpenAIModelClient:
                 ):
                     raise
                 errors.append(exc.reason_code)
-                repair_prompt = get_prompt("action.repair.system")
+                repair_prompt = self._prompts.get("action.repair.system")
                 repair_content = repair_prompt.render(validation_feedback=json.dumps(
                     {"reason_code": exc.reason_code,
                      "rejected_output": records[repair].raw_response},
@@ -973,8 +956,9 @@ class OpenAIModelClient:
 def _native_output_repair_instruction(
     output_definition: ModelActionDefinition,
     parse_error: str,
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    prompt = get_prompt("structured.native_tool.repair.system")
+    prompt = prompts.get("structured.native_tool.repair.system")
     return (
         {
             "role": "system",
@@ -993,8 +977,9 @@ def _native_output_repair_instruction(
 def _schema_repair_instruction(
     schema: dict[str, Any],
     parse_error: str,
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    prompt = get_prompt("structured.repair.system")
+    prompt = prompts.get("structured.repair.system")
     return (
         {
             "role": "system",
@@ -1018,10 +1003,11 @@ def _schema_instruction(
     schema: dict[str, Any],
     *,
     parse_error: str | None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[dict[str, str], dict[str, str]]:
     if parse_error is not None:
-        return _schema_repair_instruction(schema, parse_error)
-    prompt = get_prompt("structured.system")
+        return _schema_repair_instruction(schema, parse_error, prompts=prompts)
+    prompt = prompts.get("structured.system")
     return (
         {
             "role": "system",
@@ -1051,6 +1037,7 @@ class StrictJsonSchemaAdapter(OpenAIModelClient):
             instruction, prompt_metadata = _schema_repair_instruction(
                 schema,
                 parse_error,
+                prompts=self._prompts,
             )
             messages = [instruction, *messages]
             metadata = {**metadata, **prompt_metadata}
@@ -1073,7 +1060,7 @@ class JsonObjectStructuredAdapter(OpenAIModelClient):
         *,
         parse_error: str | None,
     ) -> StructuredModelRequest[StructuredOutputT]:
-        instruction, prompt_metadata = _schema_instruction(schema, parse_error=parse_error)
+        instruction, prompt_metadata = _schema_instruction(schema, parse_error=parse_error, prompts=self._prompts)
         return replace(
             request,
             messages=[instruction, *request.messages],
@@ -1455,15 +1442,18 @@ class ObservedStructuredModelClient:
 def build_structured_model_client(
     config: StructuredConfig,
     observability: LangSmithConfig,
+    *,
+    provider_policy: ModelProviderPolicy | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> StructuredModelClient | None:
     """Select the configured provider/model structured-output capability."""
     if not (config.api_key and config.base_url and config.model):
         return None
     adapter: StructuredModelClient
     if config.output_transport == "json_object":
-        adapter = JsonObjectStructuredAdapter(config)
+        adapter = JsonObjectStructuredAdapter(config, provider_policy=provider_policy, prompts=prompts)
     else:
-        adapter = StrictJsonSchemaAdapter(config)
+        adapter = StrictJsonSchemaAdapter(config, provider_policy=provider_policy, prompts=prompts)
     client: StructuredModelClient = RetryingStructuredModelClient(
         adapter,
         max_retries=config.max_retries,
@@ -1486,12 +1476,14 @@ def build_chat_model_client(
     observability: LangSmithConfig,
     *,
     model_override: str | None = None,
+    provider_policy: ModelProviderPolicy | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> StructuredModelClient | None:
     """Composition helper for Chat Completions (``tool_calling`` / ``text``)."""
     if not (config.api_key and config.base_url):
         return None
     client: StructuredModelClient = RetryingStructuredModelClient(
-        OpenAIModelClient(config, model_override=model_override),
+        OpenAIModelClient(config, model_override=model_override, provider_policy=provider_policy, prompts=prompts),
         max_retries=config.max_retries,
     )
     client = UsageRecordingStructuredModelClient(client)

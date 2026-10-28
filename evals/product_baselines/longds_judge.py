@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+from copy import deepcopy
 from hashlib import sha256
 from importlib.metadata import version
 import json
-import os
 from pathlib import Path
 import re
 from time import monotonic
@@ -19,21 +19,19 @@ from typing import Literal
 from uuid import uuid4
 
 from openai import OpenAI
+from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.adapters.web.routes.conversation import ConversationTurnResponse
 from personal_agent.application.conversation.journal_lock import exclusive_run_lock
 from personal_agent.application.python_execution.models import Digest
 
+from .longds_judge_config import (
+    JUDGE_SOURCE_SHA256, PROMPT_SHA256, TOKEN_LIMIT,
+    JudgeConfiguration, LongDSJudgeSettings, build_judge_configuration,
+)
 from .longds_materials import json_bytes, seal, verify_preparation, verify_seal
 from .retrieval_capture_audit import ObservedProviderCompletion
-
-
-PROMPT_SHA256 = "07844fdda634dcbb492e2ad2a9a5969cb3707de8f8b8c00c22d9817b320d2816"
-JUDGE_SOURCE_SHA256 = "80ea064624368ca74ef9a7f900e1ff2ef423fd8ff5ca401dcb349d97bda2c9c6"
-MODEL = "deepseek-v4-pro"
-TOKEN_LIMIT = 2_000_000
-OUTPUT_LIMIT = 32_768
 
 
 class LongDSJudgement(BaseModel):
@@ -45,20 +43,6 @@ class LongDSJudgement(BaseModel):
     failure: Literal["service_failure", "unknown_usage", "protocol_failure", "budget_exhausted"] | None = None
     attempts: int = Field(ge=0, le=3)
     call_ids: tuple[str, ...] = ()
-
-
-class JudgeConfiguration(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    model: Literal["deepseek-v4-pro"] = MODEL
-    provider_host: Literal["api.deepseek.com"] = "api.deepseek.com"
-    prompt_sha256: Digest = PROMPT_SHA256
-    source_sha256: Digest = JUDGE_SOURCE_SHA256
-    temperature: Literal[0] = 0
-    max_tokens: Literal[32768] = OUTPUT_LIMIT
-    timeout_seconds: Literal[480] = 480
-    sdk_max_retries: Literal[0] = 0
-    protocol_attempts: Literal[3] = 3
-    total_token_limit: Literal[2000000] = TOKEN_LIMIT
 
 
 class JudgeCallRecord(BaseModel):
@@ -134,21 +118,25 @@ def _parse(text: str) -> tuple[int, str, str] | None:
 
 
 class MeteredJudge:
-    def __init__(self, root: Path, *, source_directory: Path) -> None:
+    def __init__(self, root: Path, *, source_directory: Path, token_limit: int = TOKEN_LIMIT,
+                 settings: LongDSJudgeSettings | None = None) -> None:
+        settings = settings or LongDSJudgeSettings.from_env()
+        self.configuration = build_judge_configuration(settings, total_token_limit=token_limit)
+        self.configuration_digest = self.configuration.digest
+        self.prompt = load_prompt(source_directory)
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.prompt = load_prompt(source_directory)
-        self.configuration = JudgeConfiguration()
-        self.configuration_digest = sha256(self.configuration.model_dump_json().encode()).hexdigest()
         config = self.root / "configuration.json"
         with exclusive_run_lock("judge:" + str(self.root), self.root / "writer.lock"):
             if config.exists() and JudgeConfiguration.model_validate_json(config.read_bytes()) != self.configuration:
                 raise ValueError("不可在同一评分组中更换模型或协议")
             config.write_text(self.configuration.model_dump_json(indent=2), encoding="utf-8")
-        key = os.environ.get("DEEPSEEK_API") or os.environ.get("DEEPSEEK_API_KEY")
-        if not key:
-            raise ValueError("缺少现有DeepSeek评分凭据")
-        self.client = OpenAI(api_key=key, base_url="https://api.deepseek.com", max_retries=0, timeout=480)
+        self.client = OpenAI(api_key=settings.api_key.get_secret_value(), base_url=settings.base_url,
+                             max_retries=self.configuration.sdk_max_retries,
+                             timeout=self.configuration.timeout_seconds)
+        if str(self.client.base_url) != settings.base_url:
+            self.client.close()
+            raise ValueError("评分SDK实际端点与配置身份不一致")
 
     def usage(self) -> tuple[int, int]:
         known = unknown = 0
@@ -169,15 +157,15 @@ class MeteredJudge:
 
     def judge(self, directory: Path, *, turn_id: int, context: str, question: str,
               answer: object, solution: str) -> LongDSJudgement:
-        payload = {"model": MODEL, "temperature": 0, "max_tokens": OUTPUT_LIMIT,
-                   "messages": [{"role": "user", "content": self.prompt.format(
+        payload = deepcopy(self.configuration.request_parameters)
+        payload["messages"] = [{"role": "user", "content": self.prompt.format(
                        question=f"Context:\n{context.strip()}\n\nQuestion:\n{question.strip()}",
-                       ground_truth=_format(answer), solution=solution)}]}
+                       ground_truth=_format(answer), solution=solution)}]
         call_ids: list[str] = []
-        for _ in range(3):
+        for _ in range(self.configuration.protocol_attempts):
             with exclusive_run_lock("judge:" + str(self.root), self.root / "writer.lock"):
                 used, _ = self.usage()
-                if used + len(json_bytes(payload)) + OUTPUT_LIMIT + 8192 > TOKEN_LIMIT:
+                if used + len(json_bytes(payload)) + self.configuration.max_output_tokens + 8192 > self.configuration.total_token_limit:
                     return LongDSJudgement(turn_id=turn_id, score=None, attempts=len(call_ids), call_ids=tuple(call_ids),
                         failure="budget_exhausted")
                 call_id = "call-" + uuid4().hex
@@ -225,6 +213,7 @@ def qualify(judge: MeteredJudge, *, materials: Path, negative_capture: Path) -> 
     output.mkdir(exist_ok=False)
     source = Path(__file__).read_bytes()
     (output / "judge-source.py").write_bytes(source)
+    (output / "judge-config-source.py").write_bytes(Path(__file__).with_name("longds_judge_config.py").read_bytes())
     (output / "identity.json").write_bytes(json_bytes({
         "judge_source_sha256": sha256(source).hexdigest(), "openai_version": version("openai"),
         "pydantic_version": version("pydantic"), "prompt_sha256": PROMPT_SHA256,
@@ -245,6 +234,15 @@ def qualify(judge: MeteredJudge, *, materials: Path, negative_capture: Path) -> 
                       "unknown_usage_attempts": result.unknown_usage_attempts}))
 
 
+def require_qualification(directory: Path, configuration: JudgeConfiguration) -> JudgeQualification:
+    """Refuse stale grader identities before any expensive experiment work."""
+    verify_seal(directory)
+    qualification = JudgeQualification.model_validate_json((directory / "report.json").read_bytes())
+    if not qualification.qualified or qualification.configuration_digest != configuration.digest:
+        raise ValueError("本模型与协议的评分资格未通过")
+    return qualification
+
+
 def score(judge: MeteredJudge, *, materials: Path, capture: Path, name: str,
           turn_ids: list[int] | None = None, qualification_directory: Path | None = None) -> None:
     from .run_longds import LongDSCapture
@@ -254,10 +252,7 @@ def score(judge: MeteredJudge, *, materials: Path, capture: Path, name: str,
     if not LongDSCapture.model_validate_json((capture / "report.json").read_bytes()).actual_process_stopped:
         raise ValueError("实际生成进程尚未停止，不得评分")
     qualification_directory = qualification_directory or judge.root / "qualification"
-    verify_seal(qualification_directory)
-    qualification = JudgeQualification.model_validate_json((qualification_directory / "report.json").read_bytes())
-    if not qualification.qualified or qualification.configuration_digest != judge.configuration_digest:
-        raise ValueError("本模型与协议的评分资格未通过")
+    require_qualification(qualification_directory, judge.configuration)
     identity = json.loads((capture / "input-identity.json").read_bytes())
     if identity["preparation_sha256"] != sha256((materials / "preparation.json").read_bytes()).hexdigest():
         raise ValueError("评分输入与正式采集的准备身份不同")
@@ -266,6 +261,7 @@ def score(judge: MeteredJudge, *, materials: Path, capture: Path, name: str,
         raise ValueError("评分输出名称不合法")
     output.mkdir(exist_ok=False)
     (output / "judge-source.py").write_bytes(Path(__file__).read_bytes())
+    (output / "judge-config-source.py").write_bytes(Path(__file__).with_name("longds_judge_config.py").read_bytes())
     (output / "materials-source.py").write_bytes(Path(__file__).with_name("longds_materials.py").read_bytes())
     references = json.loads((materials / "evaluator-private/task.json").read_bytes())
     results: list[LongDSJudgement] = []
@@ -307,13 +303,19 @@ def main() -> None:
     parser.add_argument("--capture", type=Path, required=True)
     parser.add_argument("--name", default="l1-target")
     parser.add_argument("--turn-ids", nargs="+", type=int, choices=range(1, 51))
+    parser.add_argument("--token-limit", type=int, default=TOKEN_LIMIT)
+    parser.add_argument("--qualification", type=Path)
     args = parser.parse_args()
-    judge = MeteredJudge(args.judge_root, source_directory=args.source_directory)
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+    settings = LongDSJudgeSettings.from_env()
+    judge = MeteredJudge(args.judge_root, source_directory=args.source_directory,
+                         token_limit=args.token_limit, settings=settings)
     try:
         if args.command == "qualify":
             qualify(judge, materials=args.materials, negative_capture=args.capture)
         else:
-            score(judge, materials=args.materials, capture=args.capture, name=args.name, turn_ids=args.turn_ids)
+            score(judge, materials=args.materials, capture=args.capture, name=args.name, turn_ids=args.turn_ids,
+                  qualification_directory=args.qualification)
     finally:
         judge.client.close()
 

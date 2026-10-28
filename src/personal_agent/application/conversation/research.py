@@ -30,7 +30,8 @@ from personal_agent.capabilities.contracts.verification import (
     SourceReadingState,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .citations import (
     CitableInput,
@@ -265,6 +266,7 @@ def research_operation_schema(
     operation: type[BaseModel],
     current: ResearchClaims | None,
     inputs: Sequence[CitableInput],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> dict:
     """Project the current argument scope into the Provider's JSON Schema.
 
@@ -341,13 +343,11 @@ def research_operation_schema(
         if docs
         else r"^(?!)$"
     )
-    reference["description"] = (
-        "可见坐标来自本轮选择及当前集合已绑定引用。创建和增补只用本轮选择；正文修订的追加引用和引用替换均可保留目标 claim 已有坐标，新增坐标须本轮选中。完整行可选同一连续范围内的单行或子区间，不能跨缺行；"
-        "部分行只用原样坐标。当前范围："
-        + json.dumps(
+    reference["description"] = prompts.render(
+        "conversation.research.reference_scope", bounds=json.dumps(
             [bound.model_dump(mode="json") for bound in bounds],
             ensure_ascii=False,
-        )
+        ),
     )
     if "ResearchAnswerTarget" in definitions:
         definitions["ResearchAnswerTarget"]["properties"]["answer_segment_id"]["enum"] = (
@@ -389,6 +389,7 @@ def in_research_mode(
 
 def accepted_research(
     inputs: Sequence[InteractionInput], *, reuse_start_index: int = 0,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResearchClaims | None:
     """Completion reads only the exact current revision with an applicable pass."""
     current = current_claims(inputs)
@@ -396,10 +397,10 @@ def accepted_research(
         segment.text for segment in current.final_answer
     ).strip():
         return None
-    review = _applicable_source_review(current, inputs, reuse_start_index)
+    review = _applicable_source_review(current, inputs, reuse_start_index, prompts)
     if review is None or review.report.findings:
         return None
-    materialize_cited_draft(current.final_answer, inputs)
+    materialize_cited_draft(current.final_answer, inputs, prompts=prompts)
     return current
 
 
@@ -413,6 +414,8 @@ def admit_claim_change(
     inputs: Sequence[InteractionInput],
     initial_ref: ResourceRef,
     selected_ids: frozenset[str],
+    *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResearchClaims:
     """Only this owner assigns identities and changes exact current claim text."""
     current = current_claims(inputs)
@@ -438,25 +441,28 @@ def admit_claim_change(
     ) -> None:
         for part in parts:
             unselected = (
-                selected_citation_ids(part.references, inputs)
+                selected_citation_ids(part.references, inputs, prompts=prompts)
                 - inherited_ids
                 - selected_ids
             )
             if unselected:
                 raise ValueError(
-                    f"研究论断新增引用必须来自本轮选中的可见证据坐标；本轮未选坐标：{', '.join(sorted(unselected))}。"
+                    prompts.render(
+                        "conversation.research.unselected_references",
+                        unselected=", ".join(sorted(unselected)),
+                    )
                 )
 
     if isinstance(action, CreateClaims):
         if current is not None:
-            raise ValueError("已有集合必须使用当前版本上的局部编辑，不能重新创建。")
+            raise ValueError(prompts.render("conversation.research.collection_exists"))
         require_selected(action.claims)
         claims = identify(action.claims)
         reference = initial_ref
     else:
         if current is None or action.base_ref != current.resource_ref:
             raise ValueError(
-                "base_ref 必须精确匹配当前 research_claims.resource_ref；旧版没有被修改。"
+                prompts.render("conversation.research.base_ref_mismatch")
             )
         reference = current.resource_ref.model_copy(
             update={"revision": current.resource_ref.revision + 1}
@@ -475,11 +481,11 @@ def admit_claim_change(
                 None,
             )
             if index is None:
-                raise ValueError("claim_id 不属于当前版本。")
+                raise ValueError(prompts.render("conversation.research.claim_unknown"))
             if isinstance(action, DeleteClaim):
                 if len(claims) == 1:
                     raise ValueError(
-                        "不能删除当前版本的最后一条 claim；需保留至少一条有据论断。"
+                        prompts.render("conversation.research.last_claim")
                     )
                 claims = claims[:index] + claims[index + 1 :]
             elif isinstance(action, ReviseClaimFragment):
@@ -492,7 +498,7 @@ def admit_claim_change(
                 end = fragments.get(action.end_fragment_id)
                 if start is None or end is None or start.start > end.start:
                     raise ValueError(
-                        "两个片段 ID 必须属于当前 claim 的可见片段，且起点不得晚于终点；当前版本保持不变。"
+                        prompts.render("conversation.research.fragment_range_invalid")
                     )
                 updated = (
                     claim.text[: start.start]
@@ -500,13 +506,13 @@ def admit_claim_change(
                     + claim.text[end.end :]
                 )
                 if not updated.strip():
-                    raise ValueError("片段修订不能清空整个 claim。")
+                    raise ValueError(prompts.render("conversation.research.claim_empty"))
                 references = tuple(
                     dict.fromkeys((*claim.references, *action.additional_references))
                 )
                 require_selected(
                     (claim.model_copy(update={"references": references}),),
-                    selected_citation_ids(claim.references, inputs),
+                    selected_citation_ids(claim.references, inputs, prompts=prompts),
                 )
                 replacements = (
                     ResearchClaim(
@@ -518,7 +524,7 @@ def admit_claim_change(
                 claim = claims[index]
                 require_selected(
                     (claim.model_copy(update={"references": action.references}),),
-                    selected_citation_ids(claim.references, inputs),
+                    selected_citation_ids(claim.references, inputs, prompts=prompts),
                 )
                 replacements = (
                     ResearchClaim(
@@ -541,7 +547,7 @@ def admit_claim_change(
             if isinstance(segment, ResearchAnswerTarget):
                 existing = previous.get(segment.answer_segment_id)
                 if existing is None:
-                    raise ValueError("answer_segment_id 必须属于当前 base_ref 的实际最终回答；整次提交未应用。")
+                    raise ValueError(prompts.render("conversation.research.answer_segment_unknown"))
                 restored.append(existing)
             else:
                 restored.append(segment)
@@ -550,24 +556,27 @@ def admit_claim_change(
         answer = current.final_answer
     result = ResearchClaims(resource_ref=reference, claims=claims, final_answer=answer)
     # Coordinates must bind before any journal mutation or semantic call.
-    materialize_cited_draft(result.claims, inputs)
+    materialize_cited_draft(result.claims, inputs, prompts=prompts)
     if answer is not None:
         bound_claim_ids = selected_citation_ids(
-            tuple(reference for claim in result.claims for reference in claim.references), inputs
+            tuple(reference for claim in result.claims for reference in claim.references), inputs,
+            prompts=prompts,
         )
         bound_answer_ids = selected_citation_ids(
-            tuple(reference for segment in answer for reference in segment.references), inputs
+            tuple(reference for segment in answer for reference in segment.references), inputs,
+            prompts=prompts,
         )
         if not bound_answer_ids.issubset(bound_claim_ids):
-            raise ValueError("最终回答只能引用本次准入后 claims 已绑定的原文；整次提交未应用。")
-        materialize_cited_draft(answer, inputs)
+            raise ValueError(prompts.render("conversation.research.final_references_unbound"))
+        materialize_cited_draft(answer, inputs, prompts=prompts)
     return result
 
 
 def research_request(
-    name: str, output_type: type[BaseModel], payload: dict
+    name: str, output_type: type[BaseModel], payload: dict,
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> StructuredModelRequest:
-    prompt = get_prompt(name)
+    prompt = prompts.get(name)
     messages = [
         {"role": "system", "content": prompt.template},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -591,6 +600,7 @@ def _applicable_source_review(
     current: ResearchClaims,
     inputs: Sequence[InteractionInput],
     reuse_start_index: int,
+    prompts: PromptCatalog,
 ) -> ResearchReview | None:
     """A whole-revision judgment is valid only for the same complete input.
 
@@ -598,7 +608,7 @@ def _applicable_source_review(
     resource identity binds that frozen goal; evidence is rebuilt from the
     exact original prefix rather than copied into an approval mirror.
     """
-    version = research_source_prompt_version()
+    version = research_source_prompt_version(prompts=prompts)
     for index in range(len(inputs) - 1, reuse_start_index - 1, -1):
         review = inputs[index]
         if (
@@ -613,8 +623,8 @@ def _applicable_source_review(
             raise ValueError("research judgment has no original revision")
         if (
             original == current
-            and materialize_reference_sources(original.claims, prefix)
-            == materialize_reference_sources(current.claims, inputs)
+            and materialize_reference_sources(original.claims, prefix, prompts=prompts)
+            == materialize_reference_sources(current.claims, inputs, prompts=prompts)
             and _returned_research_sources(prefix) == _returned_research_sources(inputs)
             and materialize_source_reading_state(prefix)
             == materialize_source_reading_state(inputs)
@@ -628,10 +638,11 @@ def applicable_research_review(
     inputs: Sequence[InteractionInput],
     *,
     reuse_start_index: int,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResearchReview | None:
     if current is None:
         return None
-    return _applicable_source_review(current, inputs, reuse_start_index)
+    return _applicable_source_review(current, inputs, reuse_start_index, prompts)
 
 
 class ResearchSourceFeedback(_Strict):
@@ -641,17 +652,19 @@ class ResearchSourceFeedback(_Strict):
 
 def _claim_evidence(
     claim: ConversationAnswerSegment, inputs: Sequence[InteractionInput],
+    *, prompts: PromptCatalog,
 ) -> tuple[CitedEvidence, ...]:
     """Use existing document coordinates, avoiding per-claim eNNN collisions."""
     return tuple(
         CitedEvidence(id=location.evidence_id, text=location.text, source=location.source)
-        for location in materialize_reference_sources((claim,), inputs)
+        for location in materialize_reference_sources((claim,), inputs, prompts=prompts)
     )
 
 
 def research_review_context(
     review: ResearchReview | None,
     inputs: Sequence[InteractionInput],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResearchSourceFeedback | None:
     if review is None or not review.report.findings:
         return None
@@ -667,7 +680,7 @@ def research_review_context(
         evidence.id: evidence
         for evidence in (
             *_returned_research_evidence(prefix),
-            *(evidence for claim in original.claims for evidence in _claim_evidence(claim, prefix)),
+            *(evidence for claim in original.claims for evidence in _claim_evidence(claim, prefix, prompts=prompts)),
         )
         if evidence.id in relevant_ids
     }
@@ -710,13 +723,14 @@ def research_support_input(
     inputs: Sequence[InteractionInput],
     messages: Sequence[ConversationMessage],
     criteria: ReviewCriteria,
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResearchSourceInput:
     if not current.final_answer or not "".join(segment.text for segment in current.final_answer).strip():
-        raise MissingResearchFinalAnswer("最终回答尚未提交；当前研究可保留，须生成完整回答后才可核验与完成。")
-    claim_ids = selected_citation_ids(tuple(ref for claim in current.claims for ref in claim.references), inputs)
-    answer_ids = selected_citation_ids(tuple(ref for segment in current.final_answer for ref in segment.references), inputs)
+        raise MissingResearchFinalAnswer(prompts.render("conversation.research.final_answer_missing"))
+    claim_ids = selected_citation_ids(tuple(ref for claim in current.claims for ref in claim.references), inputs, prompts=prompts)
+    answer_ids = selected_citation_ids(tuple(ref for segment in current.final_answer for ref in segment.references), inputs, prompts=prompts)
     if not answer_ids.issubset(claim_ids):
-        raise ValueError("最终回答只能引用本版 claims 已绑定的真实坐标。")
+        raise ValueError(prompts.render("conversation.research.final_bound_coordinates"))
     return ResearchSourceInput(
         research_ref=current.resource_ref,
         conversation=tuple(messages),
@@ -725,14 +739,14 @@ def research_support_input(
             ResearchSourceClaim(
                 claim_id=claim.claim_id, draft=claim.text,
                 fragments=editable_claim_fragments(claim),
-                execution_evidence=_claim_evidence(claim, inputs),
+                execution_evidence=_claim_evidence(claim, inputs, prompts=prompts),
             )
             for claim in current.claims
         ),
         final_answer=tuple(
             ResearchAnswerUnit(
                 answer_segment_id=f"a{index}", draft=segment.text,
-                execution_evidence=_claim_evidence(segment, inputs),
+                execution_evidence=_claim_evidence(segment, inputs, prompts=prompts),
             )
             for index, segment in enumerate(current.final_answer, 1)
         ),
@@ -741,12 +755,13 @@ def research_support_input(
     )
 
 
-def research_source_prompt_version() -> str:
-    return get_prompt("conversation.research.support").version
+def research_source_prompt_version(*, prompts: PromptCatalog = DEFAULT_PROMPTS) -> str:
+    return prompts.get("conversation.research.support").version
 
 
 def validate_research_support(
     report: ResearchSupportReport, source_input: ResearchSourceInput,
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> None:
     """Own finding references; semantic correctness remains with the model."""
     returned_ids = {
@@ -763,26 +778,28 @@ def validate_research_support(
         target = finding.target
         if isinstance(target, ResearchRequirementTarget):
             if target.criterion_id not in requirement_ids:
-                raise ValueError("目标缺项必须引用当前冻结验收编号。")
+                raise ValueError(prompts.render("conversation.research.support_requirement_unknown"))
             allowed_ids = returned_ids
         elif isinstance(target, ResearchAnswerTarget):
             unit = answer_units.get(target.answer_segment_id)
             if unit is None:
-                raise ValueError("发现须定位当前最终回答段落。")
+                raise ValueError(prompts.render("conversation.research.support_answer_unknown"))
             bound_ids = {evidence.id for evidence in unit.execution_evidence}
             allowed_ids = bound_ids if finding.category == "citation_not_supported" else bound_ids | returned_ids
         else:
             start = fragments.get(target.start_fragment_id)
             end = fragments.get(target.end_fragment_id)
             if start is None or end is None or start[0].claim_id != end[0].claim_id or start[1] > end[1]:
-                raise ValueError("发现必须绑定同一当前 claim 的有序片段范围。")
+                raise ValueError(prompts.render("conversation.research.support_fragment_invalid"))
             bound_ids = {evidence.id for evidence in start[0].execution_evidence}
             allowed_ids = bound_ids if finding.category == "citation_not_supported" else bound_ids | returned_ids
         if len(set(finding.evidence_ids)) != len(finding.evidence_ids) or not set(finding.evidence_ids).issubset(allowed_ids):
-            raise ValueError("发现只能引用该类别及目标实际允许的已返回证据坐标。")
+            raise ValueError(prompts.render("conversation.research.support_evidence_invalid"))
 
 
-def research_support_output_type(source_input: ResearchSourceInput) -> type[ResearchSupportReport]:
+def research_support_output_type(
+    source_input: ResearchSourceInput, *, prompts: PromptCatalog = DEFAULT_PROMPTS
+) -> type[ResearchSupportReport]:
     """Publish the same contract with current IDs and read-boundary validation."""
     fragment_ids = tuple(fragment.fragment_id for claim in source_input.claims for fragment in claim.fragments)
     requirement_ids = tuple(item.criterion_id for item in source_input.requirements)
@@ -807,7 +824,9 @@ def research_support_output_type(source_input: ResearchSourceInput) -> type[Rese
     )
 
     def check_finding(value: ResearchSupportFinding) -> ResearchSupportFinding:
-        validate_research_support(ResearchSupportReport(findings=(value,)), source_input)
+        validate_research_support(
+            ResearchSupportReport(findings=(value,)), source_input, prompts=prompts
+        )
         return value
 
     bound_finding = Annotated[finding, AfterValidator(check_finding)]
@@ -818,12 +837,15 @@ def research_support_output_type(source_input: ResearchSourceInput) -> type[Rese
     return cast(type[ResearchSupportReport], report)
 
 
-def research_support_request(source_input: ResearchSourceInput) -> StructuredModelRequest:
+def research_support_request(
+    source_input: ResearchSourceInput, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> StructuredModelRequest:
     return replace(
         research_request(
             "conversation.research.support",
-            research_support_output_type(source_input),
+            research_support_output_type(source_input, prompts=prompts),
             source_input.model_dump(mode="json"),
+            prompts=prompts,
         ),
         max_tokens=131_072,
         max_output_repairs=2,
@@ -832,11 +854,12 @@ def research_support_request(source_input: ResearchSourceInput) -> StructuredMod
 
 def research_source_steps(
     source_input: ResearchSourceInput,
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> Generator[StructuredModelRequest, BaseModel | None, ResearchSupportReport]:
-    report = yield research_support_request(source_input)
+    report = yield research_support_request(source_input, prompts=prompts)
     assert isinstance(report, ResearchSupportReport)
     report = ResearchSupportReport.model_validate(report.model_dump(mode="json"))
-    validate_research_support(report, source_input)
+    validate_research_support(report, source_input, prompts=prompts)
     return report
 
 
@@ -847,15 +870,17 @@ def verification_steps(
     criteria: ReviewCriteria,
     *,
     reuse_start_index: int,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> Generator[StructuredModelRequest | ResearchReview, BaseModel | None, None]:
     """One judgment owns both support and goal coverage of this revision."""
     assert 0 <= reuse_start_index <= len(inputs)
-    if _applicable_source_review(current, inputs, reuse_start_index) is not None:
+    if _applicable_source_review(current, inputs, reuse_start_index, prompts) is not None:
         return
     report = yield from research_source_steps(
-        research_support_input(current, inputs, messages, criteria),
+        research_support_input(current, inputs, messages, criteria, prompts=prompts),
+        prompts=prompts,
     )
     yield ResearchReview(
         resource_ref=current.resource_ref, report=report,
-        source_prompt_version=research_source_prompt_version(),
+        source_prompt_version=research_source_prompt_version(prompts=prompts),
     )

@@ -56,10 +56,10 @@ def run(output: Path, *, group: str, definitions_path: Path | None = None):
                    if definitions_path is not None else original)
     messages = wire['messages']
     if group == 'candidate':
-        from personal_agent.kernel.prompts import get_prompt
+        from personal_agent.kernel.prompts import DEFAULT_PROMPTS
         messages = [dict(row) for row in messages]
         old = '全部原生动作只提交 arguments 对象，所有业务或控制字段均在该对象内；prepare_final 的 arguments 为空对象。'
-        template = get_prompt('conversation.action').template
+        template = DEFAULT_PROMPTS.get('conversation.action').template
         new = template[template.index('全部原生动作'):template.index('调用名只能')]
         if messages[0]['content'].count(old) != 1:
             raise ValueError('完整真实阶段的原协议指令不能唯一定位')

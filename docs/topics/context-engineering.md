@@ -17,10 +17,7 @@
 | Thread / Conversation | 本次会话的 committed messages、Observation 和会话内引用 | 不授予长期知识，也不改变资源 owner | Interaction journal 按 conversation/thread 恢复；跨 Conversation 的长期知识仍按 principal 读取 |
 | Execution / Project / Task | 当前运行可使用的资源、Tool、预算和父级关联 | 不成为资源 owner，也不能扩大 principal 原有权限 | `ExecutionScope` 绑定 principal、execution 与可选 project/thread/task；授权只能保持或缩小 |
 
-存储中的内部 owner key 由认证 principal 确定性派生，不是调用方可选择的产品 scope。HTTP 请求不能通过提交
-`owner_id` 或其他分区 ID 改写资源归属。未来若真实用户目标要求多人共享或同一用户隔离多个知识集合，必须先用
-正式入口执行同目标 baseline 并证明当前失败，再引入有明确 owner、membership 和生命周期的业务 Aggregate；不得
-恢复一个无场景的通用 workspace。
+存储中的内部 owner key 由认证 principal 确定性派生。HTTP 请求中的 `owner_id` 或其他分区 ID 不能改写资源归属。
 
 能力侧是另一条正交链，禁止和资源归属混为一个 `visibility` 字段：
 
@@ -39,8 +36,7 @@
 **当前实现边界**：资源链已按 Principal 先过滤；Conversation 的 capability projection 只消费
 definition/availability/exposure，没有 Principal/Policy 输入，也没有 capability requirement retrieval。
 因此 `EffectiveCapabilities` 只能称“模型可见集合”，不能称 authorized set。调用时仍必须由
-Admission/Gateway 校验 Authorization；只有失败 E2E 证明全量可见集合造成误选、成本或延迟问题后，才准入
-per-principal filter 或两阶段 capability discovery。
+Admission/Gateway 校验 Authorization。模型可见集合与已授权集合应分别解释。
 
 ## 四阶段协议
 
@@ -97,19 +93,16 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 
 原生工具历史由 [model_history.py](../../src/personal_agent/application/conversation/model_history.py)从 Journal 决策及已物化、可见的事实派生。完整 assistant／思考字段和 ID 配对的结果共同进入同一 Model Port；相同工具正文从 Typed execution inputs 去重。控制接纳有独立 canonical 事实，反馈按决策轮归属，后轮复用 ID 不改写旧成功。历史压缩按完整交换覆盖，原件同时保存 inputs 与完整响应；受保护成员保留整组。该机制及供应商差异由 [ADR 0042](../adr/0042-native-model-tool-continuation.md)和[唯一规格](../optimization/model-provider-transport.md#2026-10-23-原生工具会话续接规格)拥有。
 
+主循环的要求区从冻结 `ReviewCriteria.criteria` 只读物化。稳定通用 system 在前，完整会话随后；要求区以“用户要求的辅助理解”标题和原句编号清单放在本次 Typed execution inputs system 末段。没有执行输入时追加同角色的独立要求消息，空标准不产生区块。条目保留原语言、顺序和限定，不调用模型重写；内部 typed 标准及核验身份不变。Model Adapter 在其后继续追加原生 assistant/tool 历史，因此不声称要求区位于整个请求最末端。实现及质量边界见[SEM 首批记录](../optimization/to_verify/longtask-semantic-consistency.md#9-context-首批实施与真实用例观察)。
+
 ### 整体窗口与历史增长的当前边界
 
-2026-10-18 沿实际调用链核对：Conversation 的意图提取、动作／Final、研究选证、writer 和 verifier 各自构造输入，再经同一 Model Port 及 Provider Adapter 发出。已有外置、分页、去重和旧版本过滤，未找到覆盖全部路径的实际输入 token 窗口保护或 loop history compaction。已返回读取窗口仍会累积；同 run 恢复输入不等于压缩历史。
 
-关键坐标是 [Conversation 请求构造](../../src/personal_agent/application/conversation/service.py)的 `_research_selection_request()`／`_decide()`、[研究核验输入](../../src/personal_agent/application/conversation/research.py)的 `research_support_input()`，以及 [Provider 协议](../../src/personal_agent/infra/structured_model.py)：JSON mode 会追加完整 Schema，协议修复还会追加反馈。因此只测主循环原消息、单条字符数或输出 `max_tokens` 都不足以保护实际请求。构成度量在调用后记录，也不是窗口准入。
+`LoopBudgetPolicy.max_total_tokens` 约束已提交的累计用量。[Provider 末端检查](../../src/personal_agent/infra/model_capacity.py)则按显式 host／model 配置估算本轮完整文本请求，加上输出和协议预留后接受或拒绝。两者分别控制总消费与单次容量；单条字符数、主循环原消息长度或输出 `max_tokens` 不能替代完整请求检查。
 
-`LoopBudgetPolicy.max_total_tokens` 检查已提交累计用量，不是本轮窗口。2026-10-20 的研究实现已删除模型 intent／grant 中没有计数消费者的 `max_input_tokens` 镜像；[Provider 末端检查](../../src/personal_agent/infra/model_capacity.py)按显式 host／model 配置估算完整文本 body，加输出和协议预留后接受或拒绝，不改正文。Application 容量异常及费用保留链已接入。普通知识证据抽句、笔记摘要及 Graph 摘要与 loop history compaction 分属不同职责。
+容量拒绝后，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)将已闭合的旧 Observation／反馈及完整工具交换保存为不可变 Artifact，并在原 Journal 绑定摘要覆盖范围。摘要只供工作连续性使用，历史原件重读也不自动取得来源证据资格。当前选证原文、最新核验反馈、当前稿和原始预算保留；恢复重新校验来源与快照。摘要沿用部署的模型参数，原先局部关闭思考的配置已删除。接入依据及例外退出条件见 [ADR 0038](../adr/0038-history-compaction-before-natural-pressure.md)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
 
-2026-10-21 按[ADR 0038](../adr/0038-history-compaction-before-natural-pressure.md)的用户授权例外接入 [HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)，唯一设计由[主循环 §3.11](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)拥有。原容量 guard 拒绝后，协作者将已闭合旧 Observation／反馈导出为不可变 Artifact，以原 Journal 绑定覆盖；摘要只作工作上下文，读取历史原件也不取得来源证据资格。当前选证原文、最新核验反馈、当前稿和原始预算独立保留，恢复重新校验来源与快照。[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#deepseek-接续-e1-的实际结果与错例分析缺口)的首轮提交链已在真实 E1 到达下载、复算和复现。25 份新请求最大 estimated 输入 524,658，无容量拒绝；自然 C6／E3 及多次自然触发未覆盖。报告错例分析错误发生时正确记录仍完整可见，不归因为压缩丢失。
-
-2026-10-22 的历史验证中，摘要请求单独通过原 `StructuredModelRequest.extra_body` 关闭 thinking，保留原 8,192 输出上限，主任务模型配置保持。DeepSeek 真实阶段的摘要生成、后继主决策消费及新 Journal／Artifact 实例恢复已局部到达；摘要仍沿用旧报告的错误统计，未证明语义保真。实际身份、用量和未覆盖范围由[当前评测盘点](../evals/02-current-case-inventory.md#2026-10-22-非思考摘要的局部验证)拥有，其他供应商和自然触发不从该例外推。2026-10-23 用户改为统一开启 adaptive＋low 后，摘要局部关闭已删除，当前参数由[环境说明](../env.md#统一思考参数2026-10-23)拥有。
-
-2026-10-25的[LongDS完整证据](../evals/02-current-case-inventory.md)已到36轮交付、真实进程恢复及官方27/36评分；第30轮起的5个交互中自然触发本地estimated容量拒绝，摘要随后实际消费并继续工作。[原件审计](../../.tmp/loop-schema-redesign-20261024/v4-natural-compaction-audit.md)区分本地预算与Provider token实数：第31轮估算总量1,001,130超原1M，候选未发HTTP；全程真实最大单请求输入298,355。它证明本地容量路径及多次续跑，不证明服务端极限、全文语义保真或净成本收益。当前摘要继承同一medium部署；压缩后的跨进程检查点复用不从第17轮较早的恢复外推。
+LongDS 的 direct／none 流程已实际触发本地估算容量拒绝，完成摘要激活、后继消费和多次续跑；完整交付与答案正确性分别计分。本地估算压力不代表 Provider 实际 token 达到窗口极限，也不证明全文语义保真或净成本收益。较早的进程恢复不能证明压缩后检查点的跨进程复用。实际身份、分数及未覆盖项由 [Loop Schema §16](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)和[当前评测盘点](../evals/02-current-case-inventory.md)维护。
 
 ### 单次 Observation 的体积边界
 
@@ -155,16 +148,7 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 当前搜索和 `read_artifact` 返回的窗口原样保留。该投影是 request-local view，不改写 journal，不增加已读
 状态，也不把 Artifact 复制成第二事实源。
 
-CTX-001 的正式 HTTP E2E 同时读取三份超大冻结资料。改动前第二轮 typed inputs 为 48,815 字符、累计
-37,516 tokens，Runtime 在模型重读前耗尽历史总预算；更早的一次运行还证明模型会直接把截断头尾中的哈希
-误报为证据。另一次复跑还暴露模型连续重调原 MCP、12 次取得相同截断结果直至 Tool 预算耗尽。当前
-Admission 在同 capability 已有未读卸载结果时拒绝这种无进展 refetch，并要求使用已有 `ResourceRef.resource_id`；
-拒绝不消耗 Tool 预算。最终执行中模型用三个 `read_action_output` 窗口取得随机事实，typed inputs 为
-2,025 / 6,332 字符，三轮累计 18,512 tokens，并返回修正后的阈值。
-
-该证据只准入 Artifact-backed Observation 投影、“未重读不得 answer”和“未读结果不得由同资源 refetch
-冒充重读”。它**没有证明**普通 Conversation messages
-需要 segment index、滚动摘要、向量化历史或 Provider 原生 compaction，当前仍未接入这些机制。长任务候选已纳入整体窗口和历史压力设计；实际实施仍须从同一自然目标取得对应 baseline，不能复用 CTX-001 冒充历史压缩收益。
+同一能力已有未读卸载结果时，Admission 拒绝重复抓取，要求使用已有 `ResourceRef.resource_id` 重读，拒绝不消耗工具预算。历史 CTX-001 验证了紧凑投影、重读与重复抓取拦截的组合；其旧读取工具及用量保留原验证身份，当前读取协议见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。该证据不证明历史压缩收益，压缩的独立证据见上节。
 
 ### 拒稿后的完整基稿交接
 
@@ -178,7 +162,7 @@ Action 和 Final 在同一可见输入上生成 `CitableInput`，全部引用统
 
 当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_id`。文件选择只提交现有 ID，Runtime 从当前获准集合绑定完整 ResourceRef，见 [工具契约](tools.md#搜索读取与内部核验)。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`CitableInput.executed_query` 是请求内执行说明；引用恢复只使用排除查询字段的来源投影，位置规则由上节引用契约拥有。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
 
-查询说明随原 `materialize_citation_context` 进入既有 `Typed execution inputs` 消息，最新 Verification 的原有保留规则不变。整体 Context 行为候选已撤回；当前没有新增历史 user 消息、独立反馈分区或扩源指令。本轮局部成果见[完成文档](../optimization/completed/query-execution-handoff.md)，候选失败、保留范围及产品限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
+查询说明由 `materialize_citation_context` 放入 `Typed execution inputs`，最新 Verification 继续按原规则保留。局部交接成果见[完成文档](../optimization/completed/query-execution-handoff.md)；曾提出的历史消息重排、独立反馈分区与扩源指令已撤回，取舍及限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
 
 ### 上下文构成度量
 
@@ -186,15 +170,7 @@ Action 和 Final 在同一可见输入上生成 `CitableInput`，全部引用统
 capability 投影、system prompt 其余部分、committed messages、typed inputs——以及独立的原生 action definitions 分段，外加 Provider
 报告的 `input_tokens` 与 `turn_index`，随 `InteractionTrace` 生命周期存在。
 
-三条边界使它属于 Observability 而非产品行为：
-
-- 记录在 `generate` 调用**之后**发生，不参与 `visible_messages` 组装，`context_projection_ref`
-  的 digest 不变；
-- 用字符而非 tokenizer：字符由发出的字符串直接派生，tokenizer 会引入第二套 Provider 相关口径；
-- 不进入任何终止判据、预算判定或 Admission 分支。
-
-它可由 committed inputs 确定性重算，不构成第二写入口。逐轮构成属于 Observability 事实，不进入
-Context 选择、预算、Admission 或终止分支。
+该记录在 `generate` 调用后生成，可从已提交输入重算。字符直接来自发出的字符串，不另用 tokenizer 估算；它不参与 Context 选择、预算、Admission 或终止判断，也不改变 `context_projection_ref`。
 
 Conversation 从原 Interaction Journal 恢复消息、工作清单和已提交执行资料。周期 Research 从自己的业务存储及 worker queue 恢复，具体生命周期见 [Memory](memory.md#恢复边界)。
 

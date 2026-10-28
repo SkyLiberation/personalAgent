@@ -9,7 +9,8 @@ from personal_agent.application.retrieval_experiment.models import (
 from personal_agent.application.retrieval_experiment.service import (
     RetrievalExperimentService,
 )
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.tools.base import (
     ToolArtifact,
     governance_extras,
@@ -18,10 +19,12 @@ from personal_agent.tools.base import (
 )
 
 
-def build_retrieval_experiment_tool(service: RetrievalExperimentService) -> BaseTool:
+def build_retrieval_experiment_tool(
+    service: RetrievalExperimentService, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> BaseTool:
     @tool(
         "retrieval_experiment",
-        description=get_prompt("retrieval_experiment.description").template,
+        description=prompts.get("retrieval_experiment.description").template,
         args_schema=ExperimentToolArgs,
         response_format="content_and_artifact",
         extras=governance_extras(
@@ -32,9 +35,9 @@ def build_retrieval_experiment_tool(service: RetrievalExperimentService) -> Base
         ),
     )
     def retrieval_experiment(action: ExperimentAction, config: RunnableConfig):
-        context = require_gateway_context(config)
+        context = require_gateway_context(config, prompts=prompts)
         if context.accepted_request_digest is None:
-            raise PermissionError("实验请求缺少已接受记录。")
+            raise PermissionError(prompts.render('tools.experiment.acceptance_missing'))
         result = service.execute(
             action,
             execution_scope=context.execution_scope,
@@ -49,7 +52,7 @@ def build_retrieval_experiment_tool(service: RetrievalExperimentService) -> Base
                 evidence=[],
                 error=None
                 if succeeded
-                else f"实验状态：{result.receipt.status}；{result.receipt.error_code or '详见实际回执'}",
+                else prompts.render('tools.experiment.status', status=result.receipt.status, detail=result.receipt.error_code or prompts.render('tools.experiment.read_receipt')),
                 error_kind=None if succeeded else "unrecoverable",
             )
         )

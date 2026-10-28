@@ -1,6 +1,6 @@
 # Review Digest 能力说明
 
-Review Digest 是当前工程中已经落地的复习触达子系统。它不依赖用户一直打开前端页面，而是围绕长期记忆中的 `review_cards`，按订阅生成每日复习简报，优先通过飞书触达用户，并把用户反馈写回复习状态。
+Review Digest 按订阅从 `review_cards` 生成每日复习简报，通过飞书主动投递，并把用户反馈写回复习状态。前端提供配置与辅助反馈入口。
 
 核心闭环：
 
@@ -21,15 +21,13 @@ Review Digest 被拆在几个层次里：
 
 | 层次 | 代码位置 | 职责 |
 | --- | --- | --- |
-| Review Domain | `src/personal_agent/application/review/` | Digest 生成、格式化、job、scheduler、feedback use case |
+| Review 用例 | `src/personal_agent/application/review/` | 简报生成、格式化、定时执行和反馈处理 |
 | Memory / Review State | `MemoryFacade`、`PostgresMemoryStore` | `ReviewCard` 真源、到期查询、复习卡更新 |
 | Delivery | `application.review.delivery`、`FeishuDeliveryProvider` | 把消息投递到目标 channel |
 | Delivery Ledger | `PostgresReviewDigestStore` | 订阅、投递幂等、投递 item 映射、反馈事件 |
 | Feishu Inbound | `FeishuService` | 飞书命令、订阅命令、反馈命令优先分流 |
 | Web API | `adapters/web/routes/review.py` | 管理订阅、手动发送、查询记录、提交 Web 反馈 |
 | Frontend | `frontend/src/App.tsx` | Digest 页展示与辅助反馈操作 |
-
-前端是配置和辅助入口，不是复习触达主路径。主路径应优先走飞书或其他主动推送渠道。
 
 ## 数据模型
 
@@ -179,7 +177,7 @@ R1 稍后
 POST /api/review/cards/{review_card_id}/feedback
 ```
 
-提交成功后刷新 Digest。这个入口用于补充管理和桌面使用场景，飞书仍是主触达渠道。
+提交成功后刷新 Digest。
 
 ## 验证与证据
 

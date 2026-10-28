@@ -18,14 +18,10 @@ from personal_agent.kernel.config import Settings
 from personal_agent.kernel.llm_schemas import strictify_schema
 from personal_agent.kernel.llm_trace import log_llm_parse
 from personal_agent.kernel.logging_utils import log_event
+from personal_agent.kernel.model_provider import ModelProviderPolicy
 from personal_agent.memory.graphiti.ontology import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
-
-
-def _is_reasoning_model(model: str | None) -> bool:
-    name = (model or "").lower()
-    return name.startswith(("gpt-5", "o1", "o3"))
 
 
 ENTITY_TYPE_IDS: dict[str, int] = {name: idx for idx, name in enumerate(ENTITY_TYPES)}
@@ -343,10 +339,12 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
     """
 
     def __init__(self, *args, generation_extra_body: dict[str, Any],
+                 provider_policy: ModelProviderPolicy,
                  upload_inputs_outputs: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.upload_inputs_outputs = upload_inputs_outputs
         self.generation_extra_body = dict(generation_extra_body)
+        self._provider_policy = provider_policy
 
     async def _generate_response(
         self,
@@ -527,15 +525,10 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
         }
         if extra_body:
             kwargs["extra_body"] = extra_body
-        if _is_reasoning_model(model):
-            # GPT-5-compatible gateways fix sampling parameters at their
-            # defaults and use max_completion_tokens.
-            kwargs["max_completion_tokens"] = max_tokens
-        else:
-            kwargs["temperature"] = temperature
-            kwargs["max_tokens"] = max_tokens
+        kwargs["temperature"] = temperature
+        kwargs["max_tokens"] = max_tokens
         return await self.client.chat.completions.create(
-            **kwargs,
+            **self._provider_policy.prepare_chat_parameters(kwargs),
         )
 
     async def _respect_min_interval(self) -> None:
@@ -546,7 +539,7 @@ class GraphitiOpenAIClient(OpenAIGenericClient):
         GraphitiOpenAIClient._last_api_call_ts = time.monotonic()
 
 
-def build_graphiti_llm_client(settings: Settings) -> GraphitiOpenAIClient:
+def build_graphiti_llm_client(settings: Settings, *, provider_policy: ModelProviderPolicy) -> GraphitiOpenAIClient:
     return GraphitiOpenAIClient(
         config=LLMConfig(
             api_key=settings.graphiti.llm_api_key or settings.openai.api_key,
@@ -556,5 +549,6 @@ def build_graphiti_llm_client(settings: Settings) -> GraphitiOpenAIClient:
             or settings.openai.small_model,
         ),
         upload_inputs_outputs=settings.langsmith.upload_inputs,
-        generation_extra_body=settings.structured.extra_body,
+        provider_policy=provider_policy,
+        generation_extra_body=settings.graphiti.llm_extra_body,
     )

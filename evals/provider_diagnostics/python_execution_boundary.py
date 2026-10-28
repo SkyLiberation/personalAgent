@@ -7,6 +7,8 @@ execution; it must never be injected as a model's proposed analysis.
 
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 import argparse
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -274,7 +276,10 @@ class BoundaryJourney:
     def _components(self, root: Path, profile: PythonExecutionProfile | None = None):
         profile = profile or self.profile
         journal = FileInteractionJournal(root / "data/interaction_runs")
-        artifacts = ArtifactService(Settings(data_dir=root / "data"))
+        settings = Settings(data_dir=root / "data")
+        artifacts = ArtifactService(settings, provider_policy=build_provider_policy(
+            base_url=settings.openai.base_url, provider=settings.openai.provider,
+        ))
         backend = DockerPythonExecutionBackend(
             endpoint=self.endpoint, work_root=root / "jobs", profile=profile
         )

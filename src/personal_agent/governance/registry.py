@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import logging
 from typing import Any
 
@@ -54,8 +57,11 @@ class ToolExecutor:
         idempotency_store: IdempotencyStore | None = None,
         policy_engine: PolicyEngine | None = None,
         policy_decisions: PolicyDecisionRecorder | None = None,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
+        self._prompts = prompts
         self._gateway = ToolGateway(
+            prompts=prompts,
             audit_sink=audit_sink,
             idempotency_store=idempotency_store,
             policy_engine=policy_engine,
@@ -133,7 +139,7 @@ class ToolExecutor:
             )
         try:
             if isinstance(tool.args_schema, type):
-                tool.args_schema.model_validate(arguments)
+                tool.args_schema.model_validate(arguments, context=self._prompts)
         except Exception as exc:
             return InteractionToolCallValidation(
                 status="invalid_arguments",
@@ -154,7 +160,7 @@ class ToolExecutor:
             )
         try:
             if isinstance(tool.args_schema, type):
-                tool.args_schema.model_validate(arguments)
+                tool.args_schema.model_validate(arguments, context=self._prompts)
         except Exception as exc:
             return InteractionToolCallValidation(
                 status="invalid_arguments",
@@ -182,7 +188,7 @@ class ToolExecutor:
         **kwargs: Any,
     ) -> dict[str, Any]:
         if name not in self:
-            return tool_failure(f"未找到工具：{name}").model_dump(mode="json")
+            return tool_failure(self._prompts.render('tool_gateway.not_found', tool_name=name)).model_dump(mode="json")
         tool_call_id = f"direct-{name}"
         return self._gateway.invoke(
             name,
@@ -232,7 +238,7 @@ class ToolExecutor:
         """Invoke one runtime-owned workflow tool without model exposure."""
         if self._workflow_tool(name) is None:
             return tool_failure(
-                f"未找到工作流工具：{name}",
+                self._prompts.render('tool_gateway.workflow_not_found', tool_name=name),
                 error_kind="invalid_param",
             ).model_dump(mode="json")
         return self._gateway.invoke(

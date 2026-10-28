@@ -97,4 +97,20 @@ ADK 的轨迹匹配可要求相同工具与参数顺序，LangSmith 示例也允
 
 [`wrapped_connection`](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L324-L338)配置 cursor factory；其[同步 Cursor 子类](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L384-L418)将 execute／executemany 交给 `CursorTracer.traced_execution`。该[实际执行方法](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-dbapi/src/opentelemetry/instrumentation/dbapi/__init__.py#L867-L910)在未开启 SQL commenter 时调用原 query method 并保留其返回或异常，执行后记录观测。参数收集和 SQL commenter 为不同选项；该框架也支持保存查询文本，不能把使用它等同于已满足本工程隐私要求。
 
-可借鉴其把观察限定在真实数据库调用边界的取舍，不继承全进程 Python profile、连接代理、exporter 或新的持久总账。本工程若选择在专用评测进程透明包装现有 Cursor 方法，与上述 cursor factory 装配存在差异，须另核本地池、所有调用入口、实际参数／返回／异常保持和未知消费；不能只凭外部实现证明覆盖或省时。用途及重新准入由[研究交付 Spec](../optimization/to_verify/knowledge-decision-delivery.md#62-同一任务的最终证据汇总)拥有，执行记录不替代知识事实前后对照或产品结果。
+可借鉴其把观察限定在真实数据库调用边界的取舍，不继承全进程 Python profile、连接代理、exporter 或新的持久总账。本工程若选择在专用评测进程透明包装现有 Cursor 方法，与上述 cursor factory 装配存在差异，须另核本地池、所有调用入口、实际参数／返回／异常保持和未知消费；不能只凭外部实现证明覆盖或省时。用途及重新准入由[研究交付 Spec](../optimization/to_verify/verify_results/research-evaluation-and-delivery.md#6-同一任务的最终证据汇总)拥有，执行记录不替代知识事实前后对照或产品结果。
+
+## 8. 独立核验的价值与标准来源
+
+2026-10-26 复核官方文档，并复用[固定源码及调用链比较](runtime-recovery.md#9-原始目标工作记录与最终复核的分工)。本节区分“需要检查结果”“检查必须由独立模型完成”及“标准由谁提供”，不把三者当作同一个决定。
+
+| 实现与证据 | 标准从哪里来、怎样被消费 | 独立核验的适用边界 |
+| --- | --- | --- |
+| smolagents，原固定提交；[官方接口](https://huggingface.co/docs/smolagents/reference/agents)、[最终检查源码](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L569-L574)，A 级 | 原任务进入 Agent 记忆；调用方可提供 `final_answer_checks` 函数，消费答案、记忆及 Agent 后返回判断。接口没有强制前置标准提取模型 | 检查函数可选，不要求另加一个 LLM；默认空列表和耗尽后的其他出口按原固定源码解释 |
+| OpenHands SDK，原固定提交；[Critic 输入与反馈](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/critic_mixin.py#L50)、[配置接口](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/critic/base.py)，A 级 | Critic 直接接收包含当前候选的实际事件历史，具体评估实现拥有判断；这一装配没有要求先抽出一份独立标准清单 | Critic 及迭代修订可不配置，检查和修订也分别可选；这条代码不证明任意 Critic 都能可靠识别要求 |
+| Anthropic Managed Agents，[Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)，2026-10-26 官方动态接口，A 级 | 调用方通过 `user.define_outcome` 提供目标和必需 rubric；文档允许用优质样例辅助草拟 rubric。独立上下文 grader 按它检查实际交付物，反馈再交执行 Agent | Outcomes 是明确启用的交付模式，不能外推所有对话都默认需要 grader；独立上下文隔离实现过程，不保证判断正确 |
+| Anthropic，[Building effective agents](https://www.anthropic.com/research/building-effective-agents#workflow-evaluator-optimizer)，B 级官方方法文章 | Evaluator-optimizer 以清楚的评价依据和可用反馈支持修订，不将“模型再判断一次”本身当收益 | 推荐在评价标准清楚、修订有可衡量价值时采用；文章不是本工程的效果证据 |
+| Anthropic，[Outcomes 官方 Cookbook](https://platform.claude.com/cookbook/managed-agents-cma-verify-with-outcome-grader)，官方示例，B 级 | 强调写清通过所需证据、具体反馈及忽略项；指出模糊 rubric 容易让 grader 仅凭表面覆盖放行 | 可借鉴证据与边界设计，不照搬其示例的逐条规则、额外工具循环或多阶段拓扑 |
+
+据此可比较两种标准来源：调用方显式给出可检验 rubric，或让评估实现依据原任务及实际历史理解要求；没有观察到必须统一采用“另一个模型先识别标准，再由 grader 只按识别结果评分”的要求。这是所核对实现的范围，不是对所有智能体架构的普遍断言。
+
+本工程的采用和收益门禁由[长程语义候选](../optimization/to_verify/longtask-semantic-consistency.md#2-参考替代方案与选择)拥有；本节只保存外部事实。无法从这些资料直接推出独立核验优于主 Agent 自检，或默认增加它一定值得额外 tokens、延迟和误拒风险。

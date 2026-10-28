@@ -9,6 +9,8 @@ from personal_agent.application.artifacts.models import (
     TextPosition,
 )
 from personal_agent.application.artifacts.text_coordinates import TextCoordinates
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .observation_bounds import MAX_OBSERVATION_PAYLOAD_CHARS, serialized_length
 from .source_reading import ReturnedSourceLine, SourceReadWindow
@@ -35,7 +37,9 @@ class ReadArtifactArguments(BaseModel):
 
 class ArtifactReadResult(SourceReadWindow):
     next_read: ReadArtifactArguments | None
-    explanation: str = "line 是正文行号；只看见实际返回的文字。next_read 是可直接调用 read_artifact 的续读参数；读到末尾不等于此前各行均已读。"
+    explanation: str = Field(
+        default_factory=lambda: DEFAULT_PROMPTS.render("conversation.read.explanation")
+    )
 
 
 def read_artifact_text(
@@ -43,9 +47,10 @@ def read_artifact_text(
     *,
     arguments: ReadArtifactArguments,
     max_chars: int = MAX_OBSERVATION_PAYLOAD_CHARS,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ArtifactReadResult:
     if snapshot.resource_ref.resource_id != arguments.resource_id:
-        raise ValueError("读取快照与请求引用不一致。")
+        raise ValueError(prompts.render("conversation.read.snapshot_mismatch"))
     coordinates = TextCoordinates(snapshot.content)
     coordinates.offset(
         TextPosition(line=arguments.start_line, column=arguments.start_column)
@@ -58,6 +63,7 @@ def read_artifact_text(
         next_read=None,
         content_digest=snapshot.content_digest,
         eof_position=snapshot.eof_position,
+        explanation=prompts.render("conversation.read.explanation"),
     )
     if (arguments.start_line, arguments.start_column) == (
         snapshot.eof_position.line,
@@ -65,7 +71,11 @@ def read_artifact_text(
     ):
         return result
     if arguments.start_line > len(lines) and (lines or arguments.start_line != 1):
-        raise ValueError(f"start_line 超出正文范围，正文共 {len(lines)} 行。")
+        raise ValueError(
+            prompts.render(
+                "conversation.read.start_line_out_of_bounds", total_lines=len(lines)
+            )
+        )
     selected: list[ReturnedSourceLine] = []
     for number in range(
         arguments.start_line,
@@ -74,7 +84,9 @@ def read_artifact_text(
         original = lines[number - 1]
         start = arguments.start_column - 1 if number == arguments.start_line else 0
         if start > len(original):
-            raise ValueError("start_column 超出正文行长度。")
+            raise ValueError(
+                prompts.render("conversation.read.start_column_out_of_bounds")
+            )
 
         def candidate(size: int) -> ArtifactReadResult:
             end = start + size
@@ -119,6 +131,6 @@ def read_artifact_text(
             else:
                 high = mid - 1
         if low == 0:
-            raise ValueError("输出容量不足以返回正文及续读参数。")
+            raise ValueError(prompts.render("conversation.read.capacity_insufficient"))
         return candidate(low)
     return result

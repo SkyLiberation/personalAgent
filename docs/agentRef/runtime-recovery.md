@@ -49,7 +49,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 | OpenHands SDK `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1`，A类复用源码 | [`LocalConversation`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py)分别接受 `max_iteration_per_run` 与可空 `max_budget_per_run`；`_budget_exceeded_detail`读取所有注册LLM的combined metrics，包含agent和condenser。循环在相应边界调用检查，写入具名limit error后停止；已完成时保留FINISHED | 压缩调用应计入任务消费，不能因为主决策回合数未增加而漏账。成本检查是响应／步骤边界的限制，不等于没有在途超额。复用原已核源码，经本轮再次读取与SHA校验，不声称其为所有部署最新版本；另采集的旧0.59实现只作辅助，不替代这条SDK调用链 |
 | Anthropic Messages API task budgets，B类官方契约 | [任务预算说明](https://platform.claude.com/docs/en/build-with-claude/task-budgets)区分跨agentic loop的工作量提示与单请求 `max_tokens`。其倒计时对新增生成与tool result计数，不重复扣除每次重传的历史；提示不是硬费用上限。服务端压缩不重置已消耗预算，客户端改写历史须按该协议携带剩余值；建议测代表性任务的工作量分布，从p99起调 | 不能将其数值和每次 `usage.input+output` 的累计相等同。该协议只适用文档列出的模型／接口，不证明MiMo、Claude Code或本工程支持；其p99建议针对该工作量口径，不是统一的累计token推荐值 |
 
-本次比较支持把活动窗口、累计消费、任务时间和模型工作量提示分别解释，没有得到“1M窗口应固定对应200万累计额度”或“累计额度除以窗口就是可压缩次数”的依据。新增工作量计数器或费用门禁是否必要，仍需本工程实际轨迹和Provider计费依据；不能删除真实用量、扣掉cached tokens或在压缩后清零来伪装成新的预算口径。具体候选与尚缺证据回到[研究Spec预算节](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)，本参考页不决定本例的新额度。
+本次比较支持把活动窗口、累计消费、任务时间和模型工作量提示分别解释，没有得到“1M窗口应固定对应200万累计额度”或“累计额度除以窗口就是可压缩次数”的依据。新增工作量计数器或费用门禁是否必要，仍需本工程实际轨迹和Provider计费依据；不能删除真实用量、扣掉cached tokens或在压缩后清零来伪装成新的预算口径。具体候选与尚缺证据回到[研究Spec预算节](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)，本参考页不决定本例的新额度。
 
 ### 3.2 单请求超时、重试与任务截止
 
@@ -64,7 +64,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 同日核对可调参数，仍按B类官方契约解释：[Chat Completions](https://mimo.mi.com/docs/en-US/api/chat/openai-api)公开的thinking.type只有enabled／disabled；[Responses兼容说明](https://mimo.mi.com/docs/en-US/api/chat/responses)明确none关闭思考，其余effort值当前行为相同，尚不区分强度。因此不能把兼容SDK的low／medium／high字段当作MiMo已支持的强度调节。max_completion_tokens同时限制推理与最终输出，降低它可能截断交付，不能代替单独推理预算；stream只按生成进度传输。公开参数未提供tokens/秒控制，thinking开启时temperature／top_p还会被服务端固定。[Token Plan说明](https://mimo.mi.com/docs/en-US/quick-start/faq/token-plan/desktop-guide)明确当前各档均不支持mimo-v2.6-pro-ultraspeed；按量API的独立模型选项不能当作当前Token Plan的速率开关。
 
-本地真实请求已通过当前容量策略，最后失败没有完整响应或推理，仍无法区分合法慢生成与服务停滞。[本地归因审计](../../.tmp/request-deadline-audit-20261021/diagnosis.md)确认当前观察器只在完整body读取后记录send返回，不能用其response_received=false推断无首字节。下一步围绕同一实际失败body核对响应头、正文进展及本地关闭，再隔离验证单次时限。流式改造和自动重试都需要本服务的协议、取消与完整usage证据，当前不据外部实现准入；具体停止与恢复条件由[研究Spec](../optimization/to_verify/knowledge-decision-delivery.md#长任务预算与诊断范围)拥有。
+本地真实请求已通过当前容量策略，最后失败没有完整响应或推理，仍无法区分合法慢生成与服务停滞。[本地归因审计](../../.tmp/request-deadline-audit-20261021/diagnosis.md)确认当前观察器只在完整body读取后记录send返回，不能用其response_received=false推断无首字节。下一步围绕同一实际失败body核对响应头、正文进展及本地关闭，再隔离验证单次时限。流式改造和自动重试都需要本服务的协议、取消与完整usage证据，当前不据外部实现准入；具体停止与恢复条件由[研究Spec](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)拥有。
 
 ## 4. 可恢复状态的最小集合
 
@@ -106,7 +106,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 | [原始 τ-bench](https://arxiv.org/html/2406.12045v1)，§3、§5.2、§6 | 复合要求遗漏、工具与政策执行不一致；最终数据库奖励是必要而非充分条件，可能漏掉未经确认执行。`pass^k` 衡量多次全部成功 | 模拟零售／航空及历史模型结果不代表本项目失败率；不能把单次 E2E 或工具步骤通过率写成稳定性 |
 | [Lost in the Middle](https://aclanthology.org/2024.tacl-1.9.pdf)，TACL 2024，§2、§3 | 在所测模型中，输入容得下不等于模型能有效使用，相关信息位置影响静态问答与检索结果 | 它不是 compaction 实验，不证明当前模型仍有相同退化，也不直接准入历史摘要或专门埋针产品测试 |
 
-本地应分别核对容量、语义保留、目标覆盖、增量成果、执行失败、恢复、权限、预算及完成结果。后台运行、多 Agent 和跨天调度是否需要，仍由实际业务生命周期决定。研究场景的逐项审计和优先级由[唯一 Spec](../optimization/to_verify/knowledge-decision-delivery.md#31-长任务问题逐项对照)拥有，参考页不另建产品待办。
+本地应分别核对容量、语义保留、目标覆盖、增量成果、执行失败、恢复、权限、预算及完成结果。后台运行、多 Agent 和跨天调度是否需要，仍由实际业务生命周期决定。研究场景的逐项审计和优先级由[唯一 Spec](../optimization/to_verify/verify_results/research-experiment.md#11-长任务问题逐项对照)拥有，参考页不另建产品待办。
 
 ## 7. 机器产物与模型的读取单位
 
@@ -114,10 +114,23 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 [Anthropic 工具实践](https://www.anthropic.com/research/writing-tools-for-agents)，2025-09-11 工程报告，建议从实际轨迹定位低效调用，再调整工具返回的信息、分页和描述。它不规定本工程必须添加分析执行器或使用某种 JSON 格式，也不能替代真实失败与效果验收。
 
-本地只据已发生的按行读取困难评估逐查询指标的标准 JSON 换行，不修改公共搜索的计数含义，不预选错例或放宽模型执行权限；采用、对照和完整交付的条件由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#逐查询产物的可定位格式候选)拥有。格式适配只能直接证明可定位记录；延迟、聚合能力和用户结果须分别验收。
+本地只据已发生的按行读取困难评估逐查询指标的标准 JSON 换行，不修改公共搜索的计数含义，不预选错例或放宽模型执行权限；采用、对照和完整交付的条件由[研究 Spec](../optimization/to_verify/verify_results/research-experiment.md#逐查询产物的可定位格式候选)拥有。格式适配只能直接证明可定位记录；延迟、聚合能力和用户结果须分别验收。
 
 ## 8. 重复动作检测只提供停止边界
 
 2026-10-21 为复审三轮相同实验，核对 OpenHands SDK 固定提交 `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1` 的 [StuckDetector](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/stuck_detector.py) 和 [LocalConversation](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py)，A级源码及 SHA 见[归档](../../.tmp/research-capability-20261020/t5/repeated-experiment-reference-1/manifest.json)。启用时由会话装配 detector，同步／异步循环消费 `_check_stuck_or_nudge`：重复错误先给一次反馈，满足检测则写 STUCK 并停止；动作／观察相等和交替模式各有判据。
 
 它不能替模型分析错例或保证完成。当前比较还会比较动作 thought 和观察正文；本地每次实验的引用、耗时及中间读取不同，不能仅因配置相同就声称会命中该 detector。只读源码、未运行该项目；本工程暂不移植新检测状态、提示或阈值。先核实际输入和重复原因，确定性硬停止与局部拒绝边界继续保留；本地采用准入由唯一研究 Spec 拥有，当前没有新增机制或付费实验准入。
+
+## 9. 原始目标、工作记录与最终复核的分工
+
+2026-10-26 围绕 LongDS 的约束解释、分支混用和成文偏差，复核两个独立 A 级实现的实际装配及消费链。固定源码、19 份文件 SHA-256 和完整边界见[来源清单](../../.tmp/longtask-semantic-design-20261026/sources/source-manifest.json)与[机制比较](../../.tmp/longtask-semantic-design-20261026/sources/mechanism-comparison.json)。只读源码，没有运行第三方项目或调用付费模型。
+
+| 实现与固定提交 | 实际装配及消费者 | 默认值、限制与可复用机制 |
+| --- | --- | --- |
+| smolagents `96f33faaf028479119ec8d34507b47694cf14e34` | [`MultiStepAgent.run`](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L436) 保存原 `task/TaskStep`，`_run_stream` 可调 `_generate_planning_step`；更新计划重新输入原 task 与 observations／errors。[`PlanningStep.to_messages`](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/memory.py#L154) 在 summary 模式排除旧模型计划；普通 CodeAgent 步骤再消费 memory | `planning_interval=None`、`max_steps=20`。采用原目标与可变理解分离、真实成果重新消费；不据此新增定期规划或复制某个刷新间隔 |
+| 同一 smolagents 的最终检查 | [`_run_stream`](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L582) 在 final 输出时执行可选 `final_answer_checks`；错误进入 `ActionStep.error`，后继 memory 实际消费 | 默认检查列表为空。当前 action 在检查后才追加 memory；步数耗尽后的 `provide_final_answer` 不走同一检查。可复用反馈回环，不能把该入口当成本工程必需核验或 Completion 保证 |
+| OpenHands SDK `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1` | `AgentBase._initialize → resolve_tool → TaskTrackerTool.create`；[`TaskTracker`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-tools/openhands/tools/task_tracker/definition.py#L182) 的 view／plan 读写任务记录，有 `persistence_dir` 时保存 `TASKS.json`。[`Agent._step`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/agent.py#L748) 经 `prepare_llm_messages` 消费派生 Context View | 原事件与派生视图区分；摘要模板要求保留 user、任务、已完成／未完成和当前成果。任务记录是全量替换且不验证目标语义，摘要也无确定性保真判断；不能把任务状态当完成事实 |
+| 同一 SDK 的当前稿复核 | [`CriticMixin._evaluate_with_critic`](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/critic_mixin.py#L50) 显式将当前 candidate event 加入原 events，`critic_result → finalize → refinement followup` 进入下一轮模型 | 默认 `critic=None`、`iterative_refinement=None`；启用配置的默认阈值 0.6、最多 3 次。异常、缺结果或耗尽可继续 FINISHED；只采用当前稿与真实历史共同检查、反馈继续被模型消费，不采用阈值或该失败完成语义 |
+
+这两份实现没有保证数量、窗口、公式或跨轮状态选择必然正确。采用关系由[长程分析约束接续与语义核验候选](../optimization/to_verify/longtask-semantic-consistency.md#长程分析约束接续与语义核验候选)拥有：Runtime 直接提供完整用户原文，模型改写标准作为辅助理解，并复用原工作产物和核验入口，不新增事实图、第二份目标状态或常驻 Planner／Critic。实际改进仍由同轨迹完整输入、合法对照及连续用户结果验证。

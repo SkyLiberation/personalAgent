@@ -8,7 +8,8 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelResponse, StructuredOutputFailure, sealed_context_projection_ref,
 )
 from personal_agent.kernel.contracts.scope import ExecutionScope
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.kernel.contracts.resource import ResourceRef
 
 from .citations import CitableInput
@@ -43,9 +44,11 @@ class HistoryCompactor:
     def __init__(self, *, journal: InMemoryInteractionJournal,
                  artifacts: InteractionArtifactPort,
                  generate: Callable[[StructuredModelRequest[HistorySummary], str], StructuredModelResponse[HistorySummary]],
-                 record_usage: Callable[[CommittedUsage, StructuredModelResponse], CommittedUsage]) -> None:
+                 record_usage: Callable[[CommittedUsage, StructuredModelResponse], CommittedUsage],
+                 prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
         self.journal, self.artifacts = journal, artifacts
         self.generate, self.record_usage = generate, record_usage
+        self._prompts = prompts
 
     @staticmethod
     def _source(trace: InteractionTrace, end: int, covered_turns: tuple[int, ...] = ()) -> dict:
@@ -93,17 +96,17 @@ class HistoryCompactor:
                 or checkpoint.source_end > len(trace.inputs)
                 or checkpoint.snapshot_ref.owner != trace.principal
                 or _digest(self._source(trace, checkpoint.source_end, checkpoint.covered_decision_turns)) != checkpoint.source_digest):
-            raise ValueError("历史摘要的原始来源或主体已失效。")
+            raise ValueError(self._prompts.render("conversation.history.source_invalid"))
         snapshot = self.artifacts.read_snapshot(checkpoint.snapshot_ref,
                             principal=trace.principal, owner=trace.principal)
         if (snapshot.content_digest != checkpoint.snapshot_digest
                 or sha256(snapshot.content.encode("utf-8")).hexdigest() != checkpoint.snapshot_digest):
-            raise ValueError("历史原件快照摘要不一致。")
+            raise ValueError(self._prompts.render("conversation.history.snapshot_digest_invalid"))
         keys = {item_key(item) for item in trace.inputs[:checkpoint.source_end]}
         if len(set(checkpoint.covered_items)) != len(checkpoint.covered_items) or not set(checkpoint.covered_items) <= keys:
-            raise ValueError("历史摘要覆盖无效或重复条目。")
+            raise ValueError(self._prompts.render("conversation.history.coverage_invalid"))
         if not set(checkpoint.covered_decision_turns) <= {item.turn_index for item in trace.model_decisions}:
-            raise ValueError("历史摘要引用不存在的模型决策。")
+            raise ValueError(self._prompts.render("conversation.history.decision_missing"))
         return checkpoint
 
     def project(self, trace: InteractionTrace, visible: Sequence[CitableInput],
@@ -125,7 +128,7 @@ class HistoryCompactor:
                   "status": item.status}
                  for item in trace.inputs if isinstance(item, ActionObservation)]
         context = json.dumps({
-            "explanation": "派生工作摘要，只帮助继续任务；不是执行、来源或批准事实。原件可用 read_artifact／search_action_output 读取；历史快照不是论文来源。当前目标、工作清单、原稿和额度仍以本次独立输入为准。",
+            "explanation": self._prompts.get("conversation.history.context_explanation").template,
             "working_summary": checkpoint.working_summary,
             "history_snapshot_ref": checkpoint.snapshot_ref.model_dump(mode="json"),
             "source_range": [0, checkpoint.source_end], "execution_status_facts": facts,
@@ -184,8 +187,8 @@ class HistoryCompactor:
         groups = self._atomic_groups(trace, choices)
         choices = [item for group in groups for item in group]
         if not choices:
-            raise ValueError("没有新的闭合旧历史可压缩，已停止无进展的重复压缩。")
-        prompt = get_prompt("conversation.history_compaction")
+            raise ValueError(self._prompts.render("conversation.history.no_closed_progress"))
+        prompt = self._prompts.get("conversation.history_compaction")
         while choices:
             end = max(previous.source_end if previous else 0, choices[-1][0] + 1)
             covered_turns = self._covered_turns(trace, choices,
@@ -199,10 +202,11 @@ class HistoryCompactor:
             snapshot_ref = self.artifacts.write_generated(owner=trace.principal, execution_scope=scope,
                 producer_key=f"history:{run_ref}:{source_digest}", producer_ref=f"{run_ref}:inputs:0:{end}:{source_digest}",
                 kind="conversation_history", content=text, content_digest=content_digest,
-                source_artifact_refs=(), evidence_refs=(), limitations=("运行历史原件，不是外部证据。",))
+                source_artifact_refs=(), evidence_refs=(),
+                limitations=(self._prompts.get("conversation.history.snapshot_limitation").template,))
             exported = self.artifacts.read_snapshot(snapshot_ref, principal=trace.principal, owner=trace.principal)
             if exported.content != text or exported.content_digest != content_digest:
-                raise ValueError("历史原件导出不完整，不能让原历史退出输入。")
+                raise ValueError(self._prompts.render("conversation.history.export_incomplete"))
             messages = [{"role": "system", "content": prompt.template}, {"role": "user", "content": json.dumps({
                 "previous_summary": previous.working_summary if previous else None,
                 "snapshot_ref": snapshot_ref.model_dump(mode="json"),
@@ -235,9 +239,9 @@ class HistoryCompactor:
             raw = response.raw_response
             choices_out = (raw or {}).get("choices", ()) or ()
             if not summary or any(choice.get("finish_reason") == "length" for choice in choices_out):
-                raise ValueError("历史摘要为空或被截断，未激活。")
+                raise ValueError(self._prompts.render("conversation.history.summary_incomplete"))
             if self._source(paid, end, covered_turns) != source or paid.history_compaction != previous:
-                raise ConversationOperationConflict("摘要期间历史或检查点已变化，费用保留但不覆盖新状态。")
+                raise ConversationOperationConflict(self._prompts.render("conversation.history.source_changed"))
             checkpoint = HistoryCompactionCheckpoint(run_ref=run_ref, source_revision=trace.revision,
                 source_end=end, source_digest=source_digest, covered_items=tuple(sorted(
                     old_keys | {key for _, key in choices}, key=lambda key: (key.kind, key.action_id, key.decision_turn or 0))),
@@ -249,11 +253,11 @@ class HistoryCompactor:
                 previous_checkpoint_digest=_digest(previous.model_dump(mode="json")) if previous else None)
             def activate(current):
                 if current.revision != paid.revision or current.history_compaction != previous:
-                    raise ConversationOperationConflict("历史摘要激活时 Journal revision 冲突。")
+                    raise ConversationOperationConflict(self._prompts.render("conversation.history.activation_conflict"))
                 return current.model_copy(update={"revision": current.revision + 1, "history_compaction": checkpoint,
                     "model_decisions": tuple(record.model_copy(update={"consumed": True})
                         if record.operation == request.operation and record.status == "decoded" else record
                         for record in current.model_decisions)})
             self.journal.update(scope, activate)
             return checkpoint
-        raise ValueError("历史摘要没有安全覆盖区间。")
+        raise ValueError(self._prompts.render("conversation.history.no_safe_range"))

@@ -25,7 +25,8 @@ from personal_agent.capabilities.contracts.verification import (
     VerificationCriterion,
     VerificationCriterionResult,
 )
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.tools.base import (
     ToolArtifact,
@@ -86,6 +87,7 @@ class VerifyInteractionDraftArgs(BaseModel):
 
 def build_verify_interaction_draft_tool(
     generate: Callable[[ExecutionScope, StructuredModelRequest], StructuredModelResponse],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> BaseTool:
     @tool(
         "verify_interaction_draft",
@@ -116,9 +118,9 @@ def build_verify_interaction_draft_tool(
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
     ):
-        scope = require_gateway_context(config).execution_scope
-        prompt = get_prompt("interaction_verification.system")
-        support_prompt = get_prompt("interaction_verification.source_support")
+        scope = require_gateway_context(config, prompts=prompts).execution_scope
+        prompt = prompts.get("interaction_verification.system")
+        support_prompt = prompts.get("interaction_verification.source_support")
         verification_criteria = tuple(
             dict.fromkeys(
                 (
@@ -153,7 +155,7 @@ def build_verify_interaction_draft_tool(
                 for state in verification_input.source_reading_state
             ],
         }
-        cited_prompt = get_prompt("interaction_verification.cited_support")
+        cited_prompt = prompts.get("interaction_verification.cited_support")
         verification_key = sha256(verification_input.model_dump_json().encode("utf-8")).hexdigest()
         for unit_index, unit in enumerate(units):
             if not unit.draft.strip():
@@ -193,6 +195,7 @@ def build_verify_interaction_draft_tool(
                     rejected_draft=draft,
                     checked_draft=unit.draft,
                     findings=support.findings,
+                    explanation=prompts.render("verification.cited_support_rejection.explanation"),
                 )
                 return tool_response(
                     ToolArtifact(
@@ -244,7 +247,7 @@ def build_verify_interaction_draft_tool(
         ):
             return tool_response(
                 tool_failure(
-                    "最终核验模型输出未按当前 criterion_id 恰好覆盖每个验收项，不能形成核验回执。",
+                    prompts.render('tools.verification.criteria_coverage'),
                 )
             )
         statuses = tuple(result.status for result in report.criterion_results)

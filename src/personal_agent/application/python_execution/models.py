@@ -12,13 +12,15 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+from personal_agent.kernel.prompt_registry import PromptCatalog
 
 PROGRAM_MAX_BYTES = 128 * 1024
 INPUT_MAX_BYTES = 64 * 1024 * 1024
@@ -69,7 +71,7 @@ def canonical_digest(value: object) -> str:
     ).hexdigest()
 
 
-def validate_python_filename(name: str, *, allow_reserved: bool = False) -> str:
+def validate_python_filename(name: str, *, allow_reserved: bool = False, prompts: PromptCatalog = DEFAULT_PROMPTS) -> str:
     if (
         not _FILENAME.fullmatch(name)
         or name in {".", ".."}
@@ -77,47 +79,50 @@ def validate_python_filename(name: str, *, allow_reserved: bool = False) -> str:
         or name.split(".", 1)[0].casefold() in _DEVICES
         or (not allow_reserved and name.casefold() in _RESERVED)
     ):
-        raise ValueError("输入必须是合法、非保留的1—64字符ASCII平面文件名")
+        raise ValueError(prompts.render('python_validation.filename'))
     return name
 
 
 class PythonInputBinding(PythonModel):
     name: str = Field(
-        description=get_prompt("python_execution.parameter.input_name").template
+        description=DEFAULT_PROMPTS.get("python_execution.parameter.input_name").template
     )
     resource_id: str = Field(
         min_length=1,
-        description=get_prompt("python_execution.parameter.input_resource_id").template
+        description=DEFAULT_PROMPTS.get("python_execution.parameter.input_resource_id").template
     )
 
     @field_validator("name")
     @classmethod
-    def safe_name(cls, name: str) -> str:
-        return validate_python_filename(name)
+    def safe_name(cls, name: str, info: ValidationInfo) -> str:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
+        return validate_python_filename(name, prompts=prompts)
 
 
 class ExecutePythonArgs(PythonModel):
     code: str = Field(
-        description=get_prompt("python_execution.parameter.code").template
+        description=DEFAULT_PROMPTS.get("python_execution.parameter.code").template
     )
     input_files: tuple[PythonInputBinding, ...] = Field(
         default=(),
         max_length=INPUT_MAX_COUNT,
-        description=get_prompt("python_execution.parameter.input_files").template,
+        description=DEFAULT_PROMPTS.get("python_execution.parameter.input_files").template,
     )
 
     @field_validator("code")
     @classmethod
-    def bounded_code(cls, code: str) -> str:
+    def bounded_code(cls, code: str, info: ValidationInfo) -> str:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         if len(code.encode("utf-8")) > PROGRAM_MAX_BYTES:
-            raise ValueError("Python程序超过128 KiB")
+            raise ValueError(prompts.render('python_validation.program_size'))
         return code
 
     @model_validator(mode="after")
-    def valid_names(self) -> ExecutePythonArgs:
+    def valid_names(self, info: ValidationInfo) -> ExecutePythonArgs:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         names = [item.name.casefold() for item in self.input_files]
         if len(names) != len(set(names)):
-            raise ValueError("输入文件名不能重复或仅大小写不同")
+            raise ValueError(prompts.render('python_validation.input_names'))
         return self
 
 
@@ -173,20 +178,22 @@ class PythonInputIdentity(PythonModel):
 
     @field_validator("name")
     @classmethod
-    def safe_name(cls, name: str) -> str:
-        return validate_python_filename(name, allow_reserved=True)
+    def safe_name(cls, name: str, info: ValidationInfo) -> str:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
+        return validate_python_filename(name, allow_reserved=True, prompts=prompts)
 
 
 class PythonInputContent(PythonInputIdentity):
     content: bytes
 
     @model_validator(mode="after")
-    def verified_bytes(self) -> PythonInputContent:
+    def verified_bytes(self, info: ValidationInfo) -> PythonInputContent:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         if (
             len(self.content) != self.size_bytes
             or hashlib.sha256(self.content).hexdigest() != self.content_digest
         ):
-            raise ValueError("Python输入长度或原字节摘要不符")
+            raise ValueError(prompts.render('python_validation.input_bytes'))
         return self
 
     def identity(self) -> PythonInputIdentity:
@@ -208,36 +215,37 @@ class PythonExecutionCommand(PythonModel):
     command_digest: Digest
 
     @model_validator(mode="after")
-    def validate_command(self) -> PythonExecutionCommand:
+    def validate_command(self, info: ValidationInfo) -> PythonExecutionCommand:
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         if self.deadline_at <= self.accepted_at:
-            raise ValueError("Python deadline必须晚于接受时间")
+            raise ValueError(prompts.render('python_validation.deadline'))
         if (
             self.reserved_seconds > self.limits.timeout_seconds
             or self.reserved_seconds
             > (self.deadline_at - self.accepted_at).total_seconds()
         ):
-            raise ValueError("Python预留超过冻结限额或deadline")
+            raise ValueError(prompts.render('python_validation.reservation'))
         if (
             self.program.name != "program.py"
             or self.program.size_bytes > PROGRAM_MAX_BYTES
         ):
-            raise ValueError("Python程序身份或长度不合法")
-        names = [validate_python_filename(item.name).casefold() for item in self.inputs]
+            raise ValueError(prompts.render('python_validation.program_identity'))
+        names = [validate_python_filename(item.name, prompts=prompts).casefold() for item in self.inputs]
         if (
             len(names) != len(set(names))
             or sum(item.size_bytes for item in self.inputs) > INPUT_MAX_BYTES
         ):
-            raise ValueError("Python输入重复或超过64 MiB")
+            raise ValueError(prompts.render('python_validation.input_total'))
         if any(
             item.resource_ref.owner != self.execution_scope.principal
             or item.resource_ref.resource_type != "artifact"
             for item in (self.program, *self.inputs)
         ):
-            raise ValueError("Python Command只绑定本主体的Artifact")
+            raise ValueError(prompts.render('python_validation.input_owner'))
         if self.command_digest != canonical_digest(
             self.model_dump(mode="json", exclude={"command_digest"})
         ):
-            raise ValueError("Python Command摘要不一致")
+            raise ValueError(prompts.render('python_validation.command_digest'))
         return self
 
 

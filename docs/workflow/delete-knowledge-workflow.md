@@ -20,8 +20,7 @@ POST /api/knowledge-delete-commands/{command_id}/decision
   -> KnowledgeDeleteOperationView(executed, receipt)
 ```
 
-prepare 没有业务副作用。进程重启后，客户端可以 GET operation 并继续 decision。
-重复 confirm 返回同一 Receipt，不重复状态迁移。
+准备阶段只保存 Command 和待确认操作，不修改知识项或 Claim。进程重启后，客户端可查询操作并继续确认；重复确认返回同一 Receipt，不重复状态迁移。
 
 ## 恢复主链
 
@@ -46,14 +45,11 @@ Event 体系。
 - reject 后不能 confirm；
 - delete receipt 是恢复 previous states 的唯一依据；
 - Personal Knowledge aggregate 拥有 Item/Claim 状态，Lifecycle Service 不能复制事实；
-- 旧直接 DELETE、snapshot restore、Conversation Tool/Procedure 路径不可达。
+- Conversation 可准备同一种删除 Command，确认与执行仍经过本流程；旧直接 DELETE、snapshot restore 和直接执行删除的 Tool/Procedure 路径不可达。
 
 ## 为什么不用 Agent Workflow
 
-模型可以在更上游帮助用户寻找候选知识，但候选选择不能隐式触发删除。目标
-一旦成为明确 `note_id`，后续依赖固定且无开放语义分支。Planner、LangGraph
-interrupt、ToolGateway 包装和 lifecycle Event 都不会改善确认、重启、replay
-或恢复结果，只会增加第二状态机和同步路径，因此不进入该主链。
+模型可在上游帮助寻找候选知识。选定 `note_id` 后，后续只有准备、确认、执行与恢复等确定性迁移，由 `KnowledgeLifecycleService` 统一完成；候选选择本身不执行删除。
 
 ## E2E
 

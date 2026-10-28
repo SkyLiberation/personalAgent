@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from .contracts import (
     Coverage,
     DatasetManifest,
@@ -26,9 +29,10 @@ def freeze_experiment(
     *,
     program_digest: str | None = None,
     config_digest: str | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> FrozenExperiment:
     if result.dataset.split != "train":
-        raise ValueError("只能从开发结果冻结方案")
+        raise ValueError(prompts.render('experiment_rules.development_only'))
     query_ids = tuple(item.query_id for item in coverage.queries)
     if (
         not query_ids
@@ -38,20 +42,20 @@ def freeze_experiment(
         or coverage.split_id != result.dataset.split_id
         or coverage.split != "train"
     ):
-        raise ValueError("冻结结果缺少完整且一致的开发查询执行事实")
+        raise ValueError(prompts.render('experiment_rules.coverage'))
     if parent_digests != result.input_results or len(parents) != len(parent_digests):
-        raise ValueError("冻结提供的输入排名与实际运行不一致")
+        raise ValueError(prompts.render('experiment_rules.input_rankings'))
     for parent in parents:
         if parent.dataset != result.dataset or parent.config.method not in {
             "bm25",
             "dense",
         }:
-            raise ValueError("首版仅冻结同数据开发集的受信基线输入")
+            raise ValueError(prompts.render('experiment_rules.baseline_inputs'))
     if result.candidate and (
         program_digest != result.candidate.source_sha256
         or config_digest != result.candidate.config_sha256
     ):
-        raise ValueError("候选源码或配置与已执行版本不一致")
+        raise ValueError(prompts.render('experiment_rules.source_identity'))
     return FrozenExperiment(
         dataset_id=result.dataset.dataset_id,
         development_split_id=result.dataset.split_id,
@@ -68,16 +72,16 @@ def freeze_experiment(
     )
 
 
-def validate_final_dataset(frozen: FrozenExperiment, manifest: DatasetManifest) -> None:
+def validate_final_dataset(frozen: FrozenExperiment, manifest: DatasetManifest, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
     if manifest.split != "test" or manifest.dataset_id != frozen.dataset_id:
-        raise ValueError("test 数据与冻结的数据快照不一致")
+        raise ValueError(prompts.render('experiment_rules.final_dataset'))
     if set(manifest.query_ids) & set(frozen.development_query_ids):
-        raise ValueError("test 查询与开发查询重叠")
+        raise ValueError(prompts.render('experiment_rules.query_overlap'))
 
 
-def validate_final_result(frozen: FrozenExperiment, actual: ExperimentResult) -> None:
+def validate_final_result(frozen: FrozenExperiment, actual: ExperimentResult, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
     if recipe(actual) != frozen.recipe:
-        raise ValueError("实际 test 实现或模型与冻结版本不一致")
+        raise ValueError(prompts.render('experiment_rules.final_recipe'))
     if frozen.program_sha256 is not None and (
         actual.candidate is None
         or actual.candidate.image_id != frozen.candidate_image_id
@@ -85,4 +89,4 @@ def validate_final_result(frozen: FrozenExperiment, actual: ExperimentResult) ->
         or actual.candidate.config_sha256 != frozen.program_config_sha256
         or actual.candidate.timeout_seconds != frozen.candidate_timeout_seconds
     ):
-        raise ValueError("实际 test 候选身份与冻结方案不一致")
+        raise ValueError(prompts.render('experiment_rules.final_candidate'))

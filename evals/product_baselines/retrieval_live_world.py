@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 from hashlib import sha256
 from pathlib import Path
 
@@ -44,7 +46,7 @@ def prepare_live_world(
     """Only original materials and trusted resources; no rankings, code, plan or winner."""
     directory.mkdir(parents=True, exist_ok=False)
     initial = prepare_world(settings, scenario, limits=limits)
-    artifacts = ArtifactService(settings)
+    artifacts = ArtifactService(settings, provider_policy=build_provider_policy(base_url=settings.openai.base_url, provider=settings.openai.provider))
     private_path = SOURCE / "BeIR-scifact-qrels/test.tsv"
     private_bytes = private_path.read_bytes()
     private_ref = artifacts.save_upload(

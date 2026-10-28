@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -104,7 +107,9 @@ class DockerExperimentBackend:
         *,
         deployment: RetrievalDeployment,
         environment: LocalExperimentEnvironment,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
+        self._prompts = prompts
         self.deployment = deployment
         self.environment = environment
 
@@ -112,9 +117,9 @@ class DockerExperimentBackend:
         base = self.environment.workspace_root.resolve()
         root = base / command.command_digest
         if root.is_symlink() or root.resolve().parent != base:
-            raise ValueError("实验目录越界")
+            raise ValueError(self._prompts.render('experiment_backend.directory_escape'))
         if command.deployment_digest != self.deployment.deployment_digest:
-            raise ValueError("实验部署身份已失效")
+            raise ValueError(self._prompts.render('experiment_backend.deployment_stale'))
         return root
 
     def execute(
@@ -165,7 +170,7 @@ class DockerExperimentBackend:
             )
         saved = _read_state(root)
         if saved["command_digest"] != command.command_digest:
-            raise ValueError("原后端执行身份冲突")
+            raise ValueError(self._prompts.render('experiment_backend.execution_identity'))
         if saved.get("status") in {"succeeded", "failed", "timed_out", "output_limit"}:
             return self._outcome(command, root, saved)
         return self._run(command, root)
@@ -178,10 +183,10 @@ class DockerExperimentBackend:
             ref = row["resource_ref"]
             filename = row["filename"]
             if filename != canonical_digest(ref.model_dump(mode="json")) + ".bin":
-                raise ValueError("执行暂存文件名不合法")
+                raise ValueError(self._prompts.render('experiment_backend.filename'))
             path = root / "inputs" / filename
             if sha256_file(path) != row["content_digest"]:
-                raise ValueError("执行暂存原字节发生变化")
+                raise ValueError(self._prompts.render('experiment_backend.staging_bytes'))
             contents[ref] = path
         expected = {
             item.resource_ref: item.content_digest for item in command.bound_inputs
@@ -194,7 +199,7 @@ class DockerExperimentBackend:
         if set(contents) != set(expected) or any(
             sha256_file(contents[ref]) != digest for ref, digest in expected.items()
         ):
-            raise ValueError("实际输入与Command及部署许可不同")
+            raise ValueError(self._prompts.render('experiment_backend.input_binding'))
         return contents
 
     def _environment(
@@ -309,7 +314,7 @@ class DockerExperimentBackend:
                 )
             else:
                 frozen = workload.frozen.frozen
-                validate_final_dataset(frozen, manifest)
+                validate_final_dataset(frozen, manifest, prompts=self._prompts)
                 freeze_dir = root / "frozen"
                 if not freeze_dir.exists():
                     freeze_dir.mkdir()
@@ -480,20 +485,19 @@ class DockerExperimentBackend:
             )
         return tuple(jobs)
 
-    @staticmethod
-    def _capture_file(root: Path, relative: Path) -> Path | None:
+    def _capture_file(self, root: Path, relative: Path) -> Path | None:
         path = root / relative
         if not path.resolve().is_relative_to(root.resolve()):
-            raise ValueError("候选诊断文件越出当前命令目录")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_path'))
         for part in (path, *path.parents):
             if part.is_symlink():
-                raise ValueError("候选诊断路径不得包含符号链接")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_symlink'))
             if part == root:
                 break
         if not path.exists():
             return None
         if not path.is_file():
-            raise ValueError("候选诊断必须来自普通文件")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_file'))
         return path
 
     def _candidate_diagnostics(
@@ -524,10 +528,10 @@ class DockerExperimentBackend:
         }
         if files["result.json"] is None:
             if files["stdout.json"] is not None or files["stderr.log"] is not None:
-                raise ValueError("候选诊断捕获部分提交，缺少原结果快照")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_snapshot'))
             return ()
         if any(path is None for path in files.values()):
-            raise ValueError("候选诊断捕获部分提交，缺少固定原件")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_original'))
         capture_files = {name: path for name, path in files.items() if path is not None}
         job = TypeAdapter(_JobRecord).validate_python(
             read_json(capture_files["job.json"])
@@ -546,7 +550,7 @@ class DockerExperimentBackend:
             or saved.stdout_file != "stdout.json"
             or saved.stderr_file != "stderr.log"
         ):
-            raise ValueError("候选诊断捕获与原作业身份不一致")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_job'))
         matching_jobs = [
             item
             for item in fact.jobs
@@ -561,12 +565,12 @@ class DockerExperimentBackend:
             or (job.image_id or None) != matching_jobs[0].image_id
             or (job.image_id and job.image_id != self.deployment.candidate_image_id)
         ):
-            raise ValueError("候选诊断不属于当前命令的许可候选作业")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_authorization'))
         bindings = {
             item.resource_ref: item.content_digest for item in command.bound_inputs
         }
         if program_ref is None or program_ref not in bindings:
-            raise ValueError("候选诊断缺少命令绑定的源码")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_source'))
         expected_roles = {
             "program.py",
             "queries.json",
@@ -584,13 +588,13 @@ class DockerExperimentBackend:
                 and hashes["config.json"] != bindings.get(config_ref)
             )
         ):
-            raise ValueError("候选诊断输入角色或源码配置摘要与命令不同")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_input'))
         if isinstance(workload, FinalWorkload) and (
             hashes["program.py"] != workload.frozen.frozen.program_sha256
             or hashes.get("config.json", hashlib.sha256(b"").hexdigest())
             != workload.frozen.frozen.program_config_sha256
         ):
-            raise ValueError("候选诊断源码配置摘要与冻结不同")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_freeze'))
         parent_hashes = []
         expected_rankings = {}
         if isinstance(workload, DevelopmentWorkload):
@@ -603,7 +607,7 @@ class DockerExperimentBackend:
         else:
             baseline = self._capture_file(root, Path("baseline") / "result.json")
             if baseline is None:
-                raise ValueError("最终候选诊断缺少实际基线结果")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_baseline'))
             baseline_result = ExperimentResult.model_validate(read_json(baseline))
             for index, parent in enumerate(workload.frozen.frozen.inputs):
                 path = (
@@ -614,10 +618,10 @@ class DockerExperimentBackend:
                     )
                 )
                 if path is None:
-                    raise ValueError("最终候选诊断缺少实际父结果")
+                    raise ValueError(self._prompts.render('experiment_backend.diagnostic_parent'))
                 result = ExperimentResult.model_validate(read_json(path))
                 if recipe(result) != parent:
-                    raise ValueError("最终候选诊断的父生成规则与冻结不同")
+                    raise ValueError(self._prompts.render('experiment_backend.diagnostic_parent_recipe'))
                 parent_hashes.append(sha256_file(path))
                 expected_rankings[f"rankings_{index}.json"] = (
                     result.artifacts.rankings.sha256
@@ -650,7 +654,7 @@ class DockerExperimentBackend:
         if job.job_key != expected_key or any(
             hashes[name] != digest for name, digest in expected_inputs.items()
         ):
-            raise ValueError("候选诊断作业或公开输入摘要与当前命令不同")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_digest'))
         stdout_limit = min(job.limits.stdout_bytes, self.deployment.limits.stdout_bytes)
         stderr_limit = min(job.limits.stderr_bytes, self.deployment.limits.stderr_bytes)
         captures = {}
@@ -660,21 +664,21 @@ class DockerExperimentBackend:
         ):
             path = capture_files[name]
             if size < 0 or size > limit or path.stat().st_size != size:
-                raise ValueError("候选诊断原件长度与保存快照或捕获额度不同")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_size'))
             with path.open("rb") as stream:
                 captures[name] = stream.read(limit + 1)
             if len(captures[name]) != size:
-                raise ValueError("候选诊断读取期间原件长度发生变化")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_changed'))
         stdout, stderr = captures["stdout.json"], captures["stderr.log"]
         if hashlib.sha256(stdout).hexdigest() != saved.stdout_sha256:
-            raise ValueError("候选诊断 stdout 原字节摘要不符")
+            raise ValueError(self._prompts.render('experiment_backend.diagnostic_stdout_digest'))
         if resolved_after_capture:
             if stdout or stderr:
-                raise ValueError("旧未知候选捕获缺少容器身份却有非空内容")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_unknown_nonempty'))
             return ()
         if not job.container_id or not job.image_id:
             if stdout or stderr:
-                raise ValueError("候选身份尚未确定却存在非空诊断捕获")
+                raise ValueError(self._prompts.render('experiment_backend.diagnostic_unbound_nonempty'))
             return ()
         stdout_limitations = ()
         try:
@@ -683,7 +687,7 @@ class DockerExperimentBackend:
         except UnicodeDecodeError:
             stdout_type, stdout_suffix = "application/octet-stream", "bin"
             stdout_limitations = (
-                "候选 stdout 保留捕获原字节，含非 UTF-8 内容，不能作为 UTF-8 文本直接读取。",
+                self._prompts.render('experiment_backend.stdout_encoding'),
             )
         replaced = False
         try:
@@ -712,12 +716,12 @@ class DockerExperimentBackend:
                 content_type="text/plain",
                 content=stderr_projection,
                 limitations=(
-                    "候选 stderr 为 UTF-8 诊断投影，非原字节；"
-                    + ("发生非法字节替换；" if replaced else "未发生非法字节替换；")
+                    self._prompts.render('experiment_backend.stderr_projection')
+                    + (self._prompts.render('experiment_backend.stderr_replaced') if replaced else self._prompts.render('experiment_backend.stderr_not_replaced'))
                     + (
-                        "因发布字节额度在 UTF-8 字符边界截断。"
+                        self._prompts.render('experiment_backend.stderr_truncated')
                         if truncated
-                        else "未因发布字节额度截断。"
+                        else self._prompts.render('experiment_backend.stderr_not_truncated')
                     ),
                 ),
             ),
@@ -728,15 +732,15 @@ class DockerExperimentBackend:
     ) -> BackendOutcome:
         bundles = []
         manifest = (
-            load_manifest(root / "dataset" / "manifest.json")
+            load_manifest(root / "dataset" / "manifest.json", prompts=self._prompts)
             if saved.get("result_paths")
             else None
         )
         for relative in saved.get("result_paths", []):
             path = (root / relative).resolve()
             if not path.is_relative_to(root.resolve()):
-                raise ValueError("后端结果路径越界")
-            result = load_result(path)
+                raise ValueError(self._prompts.render('experiment_backend.result_path'))
+            result = load_result(path, prompts=self._prompts)
             bundles.append(
                 ResultBundle(
                     result=result,
@@ -759,7 +763,7 @@ class DockerExperimentBackend:
                         hashlib.sha256(content).hexdigest()
                         != manifest.artifact_sha256[f"{name}.json"]
                     ):
-                        raise ValueError("公开文本投影与实际prepare产物摘要不同")
+                        raise ValueError(self._prompts.render('experiment_backend.public_projection'))
         fact = ExperimentExecutionFact(
             status=saved["status"],
             jobs=self._jobs(root),

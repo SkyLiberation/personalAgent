@@ -4,7 +4,7 @@
 
 ## 背景与决定
 
-真实E1的原件及搜索计数正确，报告却把dense52写成38；撤回的自动统计候选主计数正确，但仍有排名解释矛盾。当前检索候选入口只接受排名JSON，没有通用分析执行契约。按[整体设计](../optimization/to_verify/knowledge-decision-delivery.md#12-整体架构增强顺序与本轮切片)及[工具Spec](../optimization/to_verify/python-data-analysis-tool.md)增加独立 `execute_python`，让模型选择程序与合法输入，实际执行后消费反馈。代码计算、报告语义、正式评分及完成分别验收。
+真实E1的原件及搜索计数正确，报告却把dense52写成38；撤回的自动统计候选主计数正确，但仍有排名解释矛盾。当前检索候选入口只接受排名JSON，没有通用分析执行契约。按[整体设计](../optimization/to_verify/knowledge-decision-delivery.md#3-整体架构增强顺序与本轮切片)及[工具Spec](../optimization/to_verify/python-data-analysis-tool.md)增加独立 `execute_python`，让模型选择程序与合法输入，实际执行后消费反馈。代码计算、报告语义、正式评分及完成分别验收。
 
 ## 责任与边界
 
@@ -30,4 +30,4 @@ Composition Root从当前许可部署映射只读执行Profile；Python协调及
 
 ## 2026-10-22 能力验收范围收回
 
-用户明确当前只验证Agent能力，不需要用户下载或结果打包。Python程序、输入清单及双流继续作为内部执行产物供模型读取和恢复；完成不再收集导出闭包或生成manifest／ZIP。执行、权限、输入和终态契约保持；现行完成与评测删除项由[整体Spec §8.5](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)拥有，旧文件交付身份不改写。
+用户明确当前只验证Agent能力，不需要用户下载或结果打包。Python程序、输入清单及双流继续作为内部执行产物供模型读取和恢复；完成不再收集导出闭包或生成manifest／ZIP。执行、权限、输入和终态契约保持；现行完成与评测删除项由[当前范围与历史文件交付的关系](../optimization/to_verify/research-experiment-protocol.md#5-当前范围与历史文件交付的关系)拥有，旧文件交付身份不改写。

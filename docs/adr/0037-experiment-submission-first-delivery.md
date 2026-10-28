@@ -2,7 +2,7 @@
 
 - 状态：Accepted，2026-10-22按用户目标修正范围；旧文件交付证据保持原身份
 - 范围：正式部署绑定的实验研究；普通对话和既有研究核验保持
-- 唯一规格：[研究Spec §8.5](../optimization/to_verify/knowledge-decision-delivery.md#85-agent能力范围收回与删除计划)
+- 唯一规格：[当前范围与历史文件交付的关系](../optimization/to_verify/research-experiment-protocol.md#5-当前范围与历史文件交付的关系)
 
 ## 问题与依据
 

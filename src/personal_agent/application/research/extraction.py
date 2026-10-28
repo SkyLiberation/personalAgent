@@ -27,6 +27,7 @@ from personal_agent.capabilities.contracts.model import (
     sealed_context_projection_ref,
 )
 from personal_agent.kernel.config import LangExtractConfig
+from personal_agent.kernel.model_provider import ModelProviderPolicy
 from personal_agent.kernel.contracts.research import ResearchSource
 from personal_agent.kernel.llm_schemas import strip_json_fence
 
@@ -393,9 +394,11 @@ class LangExtractResearchEventExtractor:
         self,
         config: LangExtractConfig,
         *,
+        provider_policy: ModelProviderPolicy,
         fallback: ResearchEventExtractor | None = None,
     ) -> None:
         self.config = config
+        self._provider_policy = provider_policy
         self.fallback = fallback or HeuristicResearchEventExtractor()
 
     def extract(
@@ -419,6 +422,7 @@ class LangExtractResearchEventExtractor:
                     prompt=RESEARCH_EVENT_PROMPT,
                     examples=RESEARCH_EVENT_EXAMPLES,
                     config=self.config,
+                    provider_policy=self._provider_policy,
                     openai_schema=build_research_event_openai_schema(),
                 )
                 frame = self._to_frame(annotated, source)

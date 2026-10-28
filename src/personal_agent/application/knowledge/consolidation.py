@@ -8,6 +8,8 @@ from typing import Callable
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import KnowledgeNote
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.memory import MemoryFacade
 
 logger = logging.getLogger(__name__)
@@ -34,7 +36,9 @@ class KnowledgeConsolidationUseCase:
         *,
         capture: Callable[..., object],
         generate_draft: Callable[[str], str | None],
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
+        self._prompts = prompts
         self._memory = memory
         self._capture = capture
         self._generate_draft = generate_draft
@@ -51,7 +55,7 @@ class KnowledgeConsolidationUseCase:
             return ConsolidationResult(
                 ok=False,
                 topic="",
-                error="请提供要整理的知识主题。",
+                error=self._prompts.render('knowledge.consolidation.topic_missing'),
             )
 
         sources = self._load_sources(
@@ -64,7 +68,7 @@ class KnowledgeConsolidationUseCase:
                 ok=False,
                 topic=normalized_topic,
                 source_note_ids=[note.id for note in sources],
-                error="至少需要两条属于当前用户的相关笔记才能整理。",
+                error=self._prompts.render('knowledge.consolidation.notes_missing'),
             )
 
         draft = self._draft(normalized_topic, sources)
@@ -73,7 +77,7 @@ class KnowledgeConsolidationUseCase:
                 ok=False,
                 topic=normalized_topic,
                 source_note_ids=[note.id for note in sources],
-                error="未能生成综述草稿。",
+                error=self._prompts.render('knowledge.consolidation.draft_missing'),
             )
 
         captured = self._capture(
@@ -142,13 +146,11 @@ class KnowledgeConsolidationUseCase:
 
     def _draft(self, topic: str, sources: list[KnowledgeNote]) -> str:
         blocks = [
-            f"【来源{index}】{note.body.title}\n{note.body.content}"
+            self._prompts.render("knowledge.consolidation.source", index=index, title=note.body.title, content=note.body.content)
             for index, note in enumerate(sources, start=1)
         ]
         joined = "\n\n".join(blocks)
         prompt = (
-            f"请把下面关于「{topic}」的多条笔记整理成一篇结构化知识综述。"
-            "合并重复内容、保留关键事实、用小标题组织，并在开头概述主题。\n\n"
-            f"{joined}"
+            self._prompts.render('knowledge.consolidation.draft', topic=topic, sources=joined)
         )
         return self._generate_draft(prompt) or f"# {topic}（综述）\n\n{joined}"

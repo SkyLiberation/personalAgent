@@ -18,9 +18,9 @@ Application Service
 
 工具工厂负责参数和协议适配，服务负责业务语义、写入及领域不变量。组合根在 [orchestration/runtime.py](../../src/personal_agent/orchestration/runtime.py)装配真实服务、注册表、Policy 和持久化适配器。
 
-模型原生动作由 [model_actions.py](../../src/personal_agent/application/conversation/model_actions.py)投影和解码。工具参数表达业务动作；工作进度通过独立 `control_working_plan` 提交，执行系统从已准入工作清单关联活动项。动作相位与 typed 最终提交分别调用模型，具体契约见 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)和 [ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)。
+模型原生动作由 [model_actions.py](../../src/personal_agent/application/conversation/model_actions.py)投影和解码。工具参数表达业务动作；工作进度通过独立 `control_working_plan` 提交，执行系统从已准入工作清单关联活动项。主循环同时接受动作和合法 assistant 正文，回答模块将正文或显式提交恢复为同一种 `FinalMessage`。当前协议见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，计划控制见 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)。
 
-当前全部原生 function.parameters 直接表达 canonical 业务参数，控制动作同样直接提交，prepare_final 为 {}。模型可见调用名来自同轮 ModelActionDefinition.name；完整 wire 校验通过后解码为原 Proposal，检索工具保留 canonical action 字段，write_artifact 保留 request 字段，不增加通用 arguments 包装或 payload_field。Python 由工具声明 strict=false 以保留可选参数，其他现有动作继续 strict=true；本地类型、权限、接受摘要与恢复仍由原 owner 执行。决定与验收见 [ADR 0043](../adr/0043-direct-code-agent-tool-parameters.md)，ADR 0036 保留为已替代的历史协议。
+原生 `function.parameters` 直接表达业务参数，控制动作同样直接提交。模型可见调用名来自同轮 `ModelActionDefinition.name`，解码器据此恢复内部 `Proposal`；检索工具保留 `action`，`write_artifact` 保留 `request`，不增加通用包装。`strict` 按各动作声明投影，Python 使用 `strict=false` 保留可选参数。参数类型、权限、接受摘要与恢复仍由原责任主体校验。参数协议见 [ADR 0043](../adr/0043-direct-code-agent-tool-parameters.md)。
 
 ## 注册与曝光
 
@@ -37,9 +37,9 @@ Application Service
 
 HTTP 直接执行通过 `invoke_direct()` 复用 Gateway；它有独立的身份及作用域入口，接口见 [API](../api.md#post-apitoolsnameexecute)。注册工具清单不等于普通模型可选工具清单。
 
-Conversation 还在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入自己的知识和 Artifact 操作；canonical 知识读取器存在时隐藏三个底层 note 读取工具。`retrieval_experiment` 只有在当前 run 已绑定实验许可时才投影；`execute_python` 还要求当前主体与部署绑定匹配、截止和共享执行额度可用、没有待对账执行。`_model_visible_capabilities_for_turn()` 从初始材料、实际写入／实验回执和卸载结果恢复当前合法资源，为读取参数投影确切引用；没有合法资源时隐藏 Artifact 读取／搜索，并隐藏本交互已成功消费的个人知识搜索。动作协议另加入工作清单、准备交付和配置的 Agent 委托；最终提交相位不提供这些动作定义。
+Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入知识和 Artifact 操作；个人知识读取器存在时隐藏三个底层 note 读取工具。`retrieval_experiment` 只在当前 run 已绑定实验许可时投影；`execute_python` 还要求主体与部署匹配、截止和共享额度可用、没有待对账执行。`_model_visible_capabilities_for_turn()` 从初始材料、写入／实验回执和卸载结果恢复合法资源，为读取参数提供确切引用。没有合法资源时隐藏 Artifact 读取／搜索，本交互已成功消费的个人知识搜索也不再投影。主决策另接收工作清单、回答提交及已配置的 Agent 委托动作，回答模块按当前任务决定可用的提交操作。
 
-2026-10-19 的[静态审计](../../.tmp/tool-design-review-20261019/local-audit.json)记录依赖、配置及计数条件，未启动部署或取得本轮实际模型菜单。不能从注册总数直接判断模型输入过大。已有 `TurnContextComposition.model_action_definition_chars` 记录动作定义字符量；精确 tokens、误选及用户结果仍须从对应正式轨迹取得。
+`TurnContextComposition.model_action_definition_chars` 记录每轮动作定义的字符量。模型实际收到的菜单取决于该轮投影，不能从注册总数推导输入体积、误选率或用户结果。
 
 ## 输入、结果与错误
 
@@ -76,7 +76,7 @@ Gateway 将 typed `ToolGatewayContext` 经 `RunnableConfig.configurable` 交给�
 
 普通整稿核验注册为 `workflow_activity`，由运行系统在适用提交后调用。研究模型提交 claims 与最终回答，Conversation 沿 Model Port 进行一次统一核验，再由 Completion 交付；两者都不进入普通模型可见工具面，见[核验专题](verification-and-completion.md)。
 
-研究实验的模型工具分别为 `write_artifact` 与 `retrieval_experiment`：前者创建或按确切快照补丁生成不可变程序／配置版本；后者执行开发实验、冻结确切结果或评测冻结方案。结果摘要从同一不可变原件只读投影 publication，表达业务结果与子文件的对应关系；组合和冻结继续消费原业务结果引用。模型可以根据真实指标及原件选择后续工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。程序用途、输入输出及交付契约由[研究设计](../optimization/to_verify/knowledge-decision-delivery.md#41-受限实验能力)拥有。当前工具已装配；能力验收核对实际执行、结果消费与回答，下载和打包不在范围，不能由注册事实推断研究语义通过。
+研究实验的模型工具分别为 `write_artifact` 与 `retrieval_experiment`：前者创建或按确切快照补丁生成不可变程序／配置版本；后者执行开发实验、冻结确切结果或评测冻结方案。结果摘要从同一不可变原件只读投影 publication，表达业务结果与子文件的对应关系；组合和冻结继续消费原业务结果引用。模型可以根据真实指标及原件选择后续工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。程序用途、输入输出及交付契约由[研究设计](../optimization/to_verify/research-experiment-protocol.md#2-受限实验能力)拥有。当前工具已装配；能力验收核对实际执行、结果消费与回答，下载和打包不在范围，不能由注册事实推断研究语义通过。
 
 公开文件工具统一由模型提交已有 `resource_id`：读取／搜索／检查直接提供该字符串，Python 的 input_files 每项为 name／resource_id，草稿 patch 用 base_resource_id。模型不重建 owner、资源类型或 revision；Artifact 从当前获准集合恢复唯一完整引用，未知、歧义、跨主体及版本不符明确拒绝。内部 ResourceRef、来源和执行回执保留，续读参数只包含文件 ID 与坐标；不增加可写 ID 表或全局文件搜索，见 [ADR 0044](../adr/0044-model-artifact-id-selection.md)。
 

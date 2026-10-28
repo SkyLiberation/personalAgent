@@ -115,7 +115,9 @@ def _write(path: Path, value: object) -> None:
 
 
 def _configuration(settings: Settings) -> dict[str, object]:
-    return {**configuration(settings), "answer_result": settings.answer_result.model_dump(mode="json")}
+    return {**configuration(settings), "answer_result": settings.answer_result.model_dump(mode="json"),
+            "prompt_language": settings.prompt_language,
+            "web_search_available": settings.web_search_available}
 
 
 def _usage(sdk: Path) -> tuple[int, int, int]:
@@ -196,16 +198,19 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
              task_token_limit: int | None = None, stop_after_checkpoint: bool = False) -> LongDSCapture:
     prepared = verify_preparation(materials)
     total_turns = len(prepared.turns)
-    if user_turns not in {2, total_turns} or (purpose == "baseline" and user_turns != 2):
-        raise ValueError("L1固定最多两轮，完整target须使用原题全部轮数")
+    if not 2 <= user_turns <= total_turns or (purpose == "baseline" and user_turns != 2):
+        raise ValueError("baseline固定两轮；target须显式选择2至原题总轮数的连续前缀")
     if (python_image_id is None) != (docker_endpoint is None):
         raise ValueError("分析镜像和Docker端点须同时显式提供")
     if user_turns > 2 and python_image_id is None and recovery_checkpoint is None:
         raise ValueError("L2须使用已固定的通用分析环境")
     if task_token_limit is not None and (type(task_token_limit) is not int or task_token_limit <= 0):
         raise ValueError("任务停止阈值必须为显式正整数")
-    if user_turns == 2 and task_token_limit not in (None, 20_000_000):
+    if purpose == "baseline" and task_token_limit not in (None, 20_000_000):
         raise ValueError("L1固定20M任务额度")
+    if (purpose == "target" and task_token_limit not in (None, 20_000_000)
+            and python_image_id is None and recovery_checkpoint is None):
+        raise ValueError("显式任务额度须绑定Python执行授权，不能只在用户轮次之间计量")
     if stop_after_checkpoint and (purpose != "target" or user_turns != total_turns or recovery_checkpoint is not None):
         raise ValueError("仅完整任务的原始运行可在第17轮真实完成后退出")
     effective_task_limit = task_token_limit if task_token_limit is not None else 20_000_000

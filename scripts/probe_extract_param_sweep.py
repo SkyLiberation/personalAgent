@@ -56,6 +56,7 @@ def main() -> int:
 
     from personal_agent.kernel.config import LangExtractConfig
     from personal_agent.application.extract.service import PreExtractService
+    from personal_agent.infra.model_providers import build_provider_policy
 
     print(f"[sweep] model={model_id}")
     print()
@@ -75,7 +76,7 @@ def main() -> int:
             min_doc_chars=100,
             fallback_on_error=False,
         )
-        svc = PreExtractService(cfg)
+        svc = PreExtractService(cfg, provider_policy=build_provider_policy(base_url=cfg.base_url, provider=cfg.provider))
         t0 = time.monotonic()
         try:
             section_map = svc.extract(text)

@@ -6,11 +6,18 @@ from personal_agent.kernel.prompt_registry import PromptSpec
 PROMPTS = {
     "python_execution.description": PromptSpec(
         name="python_execution.description",
-        version="v5-artifact-id-inputs",
+        version='v5-artifact-id-inputs-md1',
         owner="python_execution",
         output_contract="ExecutePythonArgs -> PythonToolResult",
-        template="""执行你提交的Python代码，返回输出和执行状态。每次独立执行，不保留变量；用print输出结果，末尾表达式不自动返回。
+        template="""
+
+## 执行方式
+执行你提交的Python代码，返回输出和执行状态。每次独立执行，不保留变量；用print输出结果，末尾表达式不自动返回。
+
+## 输入文件
 sys.argv[1]是只读输入目录，每个input_files项对应目录下的name；省略input_files表示没有输入文件。复用已有程序时，将原件绑定为输入文件，由代码读取或用runpy.run_path(..., run_name="__main__")运行；sys.argv[1]仍保留输入目录。
+
+## 环境与结果边界
 使用固定镜像中的标准库及已安装库，禁网、不可安装依赖。返回实际进程状态、退出码、诊断及程序、输入清单、stdout、stderr原件引用，预览有界，需更多内容时读取原件。未知终态须先核对原执行；成功只表示程序运行，分析方法和后续动作由你判断。""",
     ),
     **{

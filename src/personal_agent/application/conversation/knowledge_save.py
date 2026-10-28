@@ -7,6 +7,8 @@ import json
 from threading import RLock
 
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .errors import (
     ConversationFailure,
@@ -35,9 +37,11 @@ class ConversationKnowledgeSaveUseCase:
         *,
         writer: ConversationKnowledgeWriter | None,
         journal: InMemoryInteractionJournal,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
         self._writer = writer
         self._journal = journal
+        self._prompts = prompts
         self._confirmation_lock = RLock()
 
     def decide(
@@ -226,12 +230,11 @@ class ConversationKnowledgeSaveUseCase:
             status="awaiting_confirmation",
         )
 
-    @staticmethod
-    def turn_view(conversation_id, run_ref, operation):
+    def turn_view(self, conversation_id, run_ref, operation):
         messages = {
-            "awaiting_confirmation": "请确认是否保存所选内容。确认前不会写入长期知识。",
-            "rejected": "已取消保存，未写入长期知识。",
-            "executed": "已保存所选内容。",
+            "awaiting_confirmation": self._prompts.render("conversation.knowledge_save.awaiting_confirmation"),
+            "rejected": self._prompts.render("conversation.knowledge_save.rejected"),
+            "executed": self._prompts.render("conversation.knowledge_save.executed"),
         }
         return ConversationTurnView(
             interaction_run_ref=run_ref,

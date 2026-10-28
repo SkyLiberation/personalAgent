@@ -1,4 +1,6 @@
 """Standalone smoke test that writes results directly to a file."""
+
+from personal_agent.infra.model_providers import build_provider_policy
 import json
 import logging
 import os
@@ -31,7 +33,7 @@ settings = settings.model_copy(
         )
     }
 )
-store = GraphitiStore(settings)
+store = GraphitiStore(settings, provider_policy=build_provider_policy(base_url=settings.graphiti.llm_base_url or settings.openai.base_url, provider=settings.graphiti.llm_provider))
 
 print(f"Store configured: {store.configured()}", file=sys.stderr)
 
