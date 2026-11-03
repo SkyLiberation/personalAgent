@@ -20,6 +20,7 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 VerificationVerdict = Literal["passed", "failed"]
+VerificationKind = Literal["goal", "answer"]
 
 
 class ConversationEvidenceReference(BaseModel):
@@ -154,6 +155,35 @@ class SemanticVerificationReport(BaseModel):
     revision_feedback: str = ""
 
 
+class UserRequirementCheck(BaseModel):
+    """One correctable comparison of a user requirement with the submission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requirement: str = Field(
+        min_length=1, pattern=r"\S",
+        description="本轮实际适用的一项用户要求，写清对象及所要求的关系；依据原始用户消息及仍有效历史，不将模型自己的定义当作用户要求。",
+    )
+    status: Literal["satisfied", "not_satisfied", "insufficient_evidence"] = Field(
+        description="本项要求的判决：满足为 satisfied，明确遗漏或冲突为 not_satisfied，缺少不可替代前提而无法判断为 insufficient_evidence。",
+    )
+    feedback: str = Field(
+        min_length=1, pattern=r"\S",
+        description="本次待验内容怎样对应这一要求；有差异时指出实际偏离及需要修订的部分，不代写替代内容。",
+    )
+
+
+class UserRequirementAssessment(BaseModel):
+    """Requirement-level judgments, consumed by the runtime verifier adapter."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    checks: tuple[UserRequirementCheck, ...] = Field(
+        min_length=1,
+        description="JSON 对象数组，每项包含 requirement、status、feedback；逐项覆盖影响本轮交付的用户要求，至少一项，不能用字符串数组、单对象、null 或空数组替代。",
+    )
+
+
 class SemanticVerificationReceipt(SemanticVerificationReport):
     """A report plus the tool-computed facts an admission may rely on.
 
@@ -176,6 +206,7 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     criterion_results: tuple[BoundVerificationCriterionResult, ...] = Field(min_length=1)
+    checked_kind: VerificationKind
     verdict: VerificationVerdict
     receipt_id: str = Field(pattern=r"^svr_[0-9a-f]{20}$")
     verified_draft: str = Field(min_length=1, max_length=20_000)
@@ -184,10 +215,66 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class VerificationEvent(BaseModel):
+    """One actual submission and its verdict, projected from the Journal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: VerificationKind
+    submission_id: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=20_000)
+    disposition: Literal["answer", "clarification_required", "limitation", "failed"] | None = None
+    verdict: SemanticVerificationReceipt | None = None
+
+    @model_validator(mode="after")
+    def _paired_verdict(self):
+        if (self.kind == "answer") != (self.disposition is not None):
+            raise ValueError("only answer events carry the original disposition")
+        if self.verdict is not None and (self.verdict.checked_kind != self.kind
+                or self.verdict.verified_draft != self.content):
+            raise ValueError("verification verdict belongs to another submission")
+        return self
+
+
+class VerificationTurn(BaseModel):
+    """A user's original question and its time-ordered verification history."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    user_turn: int = Field(ge=1)
+    question: str = Field(min_length=1)
+    events: tuple[VerificationEvent, ...]
+    summary: str | None = None
+
+
+class VerificationContext(BaseModel):
+    """One responsibility's history; the last event is its current submission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: VerificationKind
+    turns: tuple[VerificationTurn, ...] = Field(min_length=1)
+    active_goal: str | None = None
+    binding: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _turn_order(self):
+        if tuple(item.user_turn for item in self.turns) != tuple(range(1, len(self.turns) + 1)):
+            raise ValueError("verification history must follow user-question order")
+        if any(event.kind != self.kind for turn in self.turns for event in turn.events):
+            raise ValueError("verification history contains another responsibility's events")
+        if not self.turns[-1].events or self.turns[-1].events[-1].verdict is not None:
+            raise ValueError("the current submission must await this verification")
+        return self
+
+
 __all__ = [
+    "VerificationContext",
+    "VerificationEvent",
+    "VerificationTurn",
+    "VerificationKind",
     "BoundVerificationCriterionResult",
     "SemanticVerificationReceipt",
     "SemanticVerificationReport",
+    "UserRequirementAssessment",
+    "UserRequirementCheck",
     "VerificationCriterionResult",
     "VerificationCriterion",
     "VerificationVerdict",

@@ -14,6 +14,7 @@ import re
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
 from personal_agent.capabilities.contracts.model import (
@@ -21,6 +22,7 @@ from personal_agent.capabilities.contracts.model import (
     ModelActionInvocation,
     ModelActionKind,
     StructuredOutputFailure,
+    StructuredModelResponse,
     StructuredOutputFailureCode,
 )
 from personal_agent.kernel.prompt_registry import PromptCatalog
@@ -29,12 +31,15 @@ from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_sc
 
 from .models import (
     AgentDelegationProposal,
+    ActionProtocolDiagnostic,
+    DecisionFeedback,
     ContinueTurnProposal,
     AnswerResultInvocation,
     EffectiveCapabilities,
     ToolCallProposal,
     WorkingPlanProposal,
 )
+from .goal_models import AnalysisGoal, GoalMaintenanceInvocation, RetainGoalArguments, GoalReadInvocation, ReadCurrentGoalArguments
 
 _WORKING_PLAN_TARGET = "working_plan"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -46,6 +51,24 @@ _RUNTIME_FIELD_NAMES = frozenset(
         "kind",
     }
 )
+
+
+def goal_action_definition(prompts: PromptCatalog) -> ModelActionDefinition:
+    return ModelActionDefinition(name="maintain_goal", kind="maintain_goal", target_name="maintain_goal",
+        description=prompts.get("conversation.goal.description").template,
+        input_schema=AnalysisGoal.model_json_schema(), strict=False)
+
+
+def goal_retain_action_definition(prompts: PromptCatalog) -> ModelActionDefinition:
+    return ModelActionDefinition(name="retain_goal", kind="maintain_goal", target_name="retain_goal",
+        description=prompts.get("conversation.goal.retain_description").template,
+        input_schema=RetainGoalArguments.model_json_schema(), strict=False)
+
+
+def goal_read_action_definition(prompts: PromptCatalog) -> ModelActionDefinition:
+    return ModelActionDefinition(name="read_current_goal", kind="read_current_goal", target_name="read_current_goal",
+        description=prompts.get("conversation.goal.read_description").template,
+        input_schema=ReadCurrentGoalArguments.model_json_schema(), strict=False)
 
 
 def _wire_name(prefix: str, target_name: str) -> str:
@@ -203,6 +226,8 @@ def _payload_failure_code(
         "tool": "provider_action_tool_payload_invalid",
         "agent": "provider_action_agent_payload_invalid",
         "answer_result": "provider_action_answer_result_payload_invalid",
+        "maintain_goal": "provider_action_goal_payload_invalid",
+        "read_current_goal": "provider_action_goal_payload_invalid",
     }[action_kind]
 
 
@@ -291,6 +316,16 @@ def _payload_failure(
     )
 
 
+def _wire_schema_error_details(error: SchemaValidationError) -> tuple[SchemaValidationError, ...]:
+    """Locate invalid fields inside a nullable value without choosing a union branch."""
+    alternatives = error.validator_value if error.validator == "anyOf" else ()
+    if len(alternatives) != 2 or {"type": "null"} not in alternatives:
+        return (error,)
+    children = tuple(child for child in error.context
+                     if not (child.validator == "type" and child.validator_value == "null"))
+    return tuple(detail for child in children for detail in _wire_schema_error_details(child)) or (error,)
+
+
 def _wire_payload(
     invocation: ModelActionInvocation,
     definition: ModelActionDefinition,
@@ -298,7 +333,9 @@ def _wire_payload(
     reveal_invalid_action_field_names: bool,
 ) -> dict[str, Any]:
     errors = tuple(
-        Draft202012Validator(definition.input_schema).iter_errors(invocation.arguments)
+        detail
+        for error in Draft202012Validator(definition.input_schema).iter_errors(invocation.arguments)
+        for detail in _wire_schema_error_details(error)
     )
     if errors:
         declared = _declared_field_names(definition.input_schema)
@@ -366,6 +403,12 @@ def decode_model_action_invocations(
             action_name=unknown_names[0],
         )
     answer_calls = [item for item in invocations if by_name[item.name].kind == "answer_result"]
+    goal_calls = [item for item in invocations if by_name[item.name].kind in ("maintain_goal", "read_current_goal")]
+    if goal_calls and len(invocations) != 1:
+        raise StructuredOutputFailure(
+            "agent_interaction_turn", "goal operations require an exclusive invocation; the batch was not executed",
+            reason_code="provider_action_goal_payload_invalid", action_name=goal_calls[0].name,
+            action_kind=by_name[goal_calls[0].name].kind)
     if answer_calls and len(invocations) != 1:
         raise StructuredOutputFailure(
             "agent_interaction_turn", "提交、修订和研究操作必须独占本轮；整批动作未执行。",
@@ -383,6 +426,17 @@ def decode_model_action_invocations(
             reveal_invalid_action_field_names=reveal_invalid_action_field_names,
         )
         try:
+            if definition.kind == "maintain_goal":
+                if definition.target_name == "retain_goal":
+                    RetainGoalArguments.model_validate(payload)
+                    goal = None
+                else:
+                    goal = AnalysisGoal.model_validate(payload)
+                return ContinueTurnProposal(goal_maintenance=GoalMaintenanceInvocation(
+                    call_id=invocation.call_id, arguments=goal))
+            if definition.kind == "read_current_goal":
+                return ContinueTurnProposal(goal_read=GoalReadInvocation(
+                    call_id=invocation.call_id, arguments=ReadCurrentGoalArguments.model_validate(payload)))
             if definition.kind == "answer_result":
                 return AnswerResultInvocation(call_id=invocation.call_id,
                     operation=definition.target_name, arguments=payload)
@@ -457,3 +511,29 @@ __all__ = [
     "decode_model_action_invocations",
     "model_visible_capability_policy_json",
 ]
+
+
+def provider_action_feedback(
+    error: StructuredOutputFailure, response: StructuredModelResponse, *, prompts: PromptCatalog,
+) -> DecisionFeedback:
+    read_error = error.action_kind == "read_current_goal" or error.action_name == "read_current_goal"
+    retain_error = error.action_name == "retain_goal"
+    goal_error = read_error or error.action_kind == "maintain_goal" or error.action_name == "maintain_goal"
+    return DecisionFeedback(
+        action_id="provider_action_protocol",
+        action_name=error.action_name or "provider_action_protocol",
+        reason_code=error.reason_code,
+        action_diagnostics=tuple(
+            ActionProtocolDiagnostic(field_path=path, error_type=kind)
+            for path, kind in zip(error.field_paths, error.error_types, strict=True)
+        ),
+        rejected_action_invocations=response.action_invocations,
+        message=(prompts.render("conversation.goal.rejected", reason_code=error.reason_code,
+            details_json=json.dumps({"field_paths": error.field_paths, "error_types": error.error_types}))
+            if goal_error else prompts.get("conversation.action_protocol_rejected").template),
+        repairable_fields=("action_calls",),
+        immutable_fields=("messages", "inputs"),
+        required_repair=prompts.get("conversation.goal.read_repair" if read_error else
+            "conversation.goal.retain_repair" if retain_error else
+            "conversation.goal.repair" if goal_error else "conversation.action_protocol_repair").template,
+    )

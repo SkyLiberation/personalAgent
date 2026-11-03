@@ -4,11 +4,6 @@ from personal_agent.kernel.prompt_registry import PromptTranslation
 
 
 TRANSLATIONS = {
-    "conversation.answer.base_unavailable": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="Select only the latest visible complete base draft.",
-    ),
     "conversation.answer.operation_unavailable": PromptTranslation(
         source_version="2026-10-27.v1",
         version="2026-10-27.en.v1",

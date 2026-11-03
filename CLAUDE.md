@@ -23,7 +23,7 @@
 - Product E2E 必须由目标用户的自然表达进入正式入口，经过生产 Composition Root、真实模型和 canonical 决策、执行、Verification、Completion 链路。脚本替代模型决策、直调组件或注入中间结果只能证明其实际边界，不能作为产品 E2E、baseline 或发布证据。
 - E2E 自动断言用户结果与必要反事实；对象、调用、Trace、状态或局部通过不能替代用户结果。原始用户结果与局部检查点分别计分，按最早责任与因果关系归因；内部路径只有属于公开契约时才能作为产品通过条件，独立后续失败不否定已成立机制。
 - 默认产品语言为中文。生产 Prompt 的任务逻辑，以及 Product E2E、Golden Set 与 Offline Eval 的用户输入、目标、成功标准、失败反馈和结果解释以中文为主。明确的多语言契约按相同语义建立自然表达镜像，分别验证与报告，不跨语言外推；代码、协议、命令与 URL 保留原文。
-- 模型语义设计或异常定位按 [CTX 输入审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)核对实际请求、构造链及同轨迹 think；决策依据仍不清楚时，按其规则进行中立追问或反问。依赖前置模型决策时，按 [EVD 连续验证](docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)消费实际输出。
+- 模型语义设计或异常定位按 [CTX 输入审计](docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)核对实际请求、构造链及同轨迹 think；依据不清时中立追问或反问。模型依赖链按 [EVD 连续验证](docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)消费实际输出。
 - 局部语义判断类修复的重复次数、组级验收与停止规则，按[方案推进验证规则](.agents/skills/analyze-proposal-progress/SKILL.md#3-方案验证与重复次数)执行。
 - 核验漏放按 [QLT](docs/devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)检查最小充分输入；按预声明判据仍不满足核验契约时，停止对应生产准入并重审任务设计。核验点通用，每次未识别归类到明确判据与真实轨迹用例。
 
@@ -34,7 +34,7 @@
 
 ### 2.3 只实现最小生产纵向切片
 
-- 满足当前目标和必要约束时选择最简单方案。新增概念、字段、分类、状态或流程按 [EVD 复杂度准入](docs/devSpec/change-evidence.md#5-复杂度说明complexity-justification)证明必要性，计入模型理解与代码维护成本。
+- 在满足当前目标和必要约束的合理方案中，选择整体理解与维护成本更低者；不为少改代码保留不合理旧方案。方案选择与新增复杂度按 [EVD](docs/devSpec/change-evidence.md#5-复杂度说明complexity-justification)说明依据。
 - 同一职责只保留一套现行设计与契约，迁移全部生产者、消费者和文档，删除旧路径；合法操作与适配器差异按 [ARC](docs/devSpec/architecture-ownership.md#11-同一职责采用唯一契约)界定。
 - 新结构有明确职责、正式入口、装配点、真实消费者和必要性依据，持久化事实有真实读写者。按 [ARC 可达性](docs/devSpec/architecture-ownership.md#7-生产可达性)检查，禁止为未来可能性预建结构。
 - 依赖方向为 `Interface -> Application Capability -> Domain/Product Aggregate`。Application 依赖 Port；外层实现 Port，在 Composition Root 装配。
@@ -54,7 +54,7 @@
 - 已有文字通过当前有效 typed 引用交回，由 Runtime 恢复原文；身份、定位与保真不依赖模型重抄。执行 [COD 文本引用](docs/devSpec/code-structure.md#21-已有文字通过引用传递)。
 - 生产、核验和评测 Prompt 是职责内通用、结果优先、最小充分的版本化契约；具体任务与材料来自当前输入。按 [COD](docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)设计，typed 输出只保证形状。
 - 同一事实只有一份权威文档，当前行为、历史诊断、候选与评测证据分开。契约变更同步正文；记录生命周期按 [DOC](docs/AGENTS.md)及[优化规则](docs/optimization/README.md)处理。
-- 设计说明问题、机制与具体防护，遵守[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)。先采用经核对且适用的成熟机制和默认参数，偏离须有具体依据，再按真实问题调整；执行 [EVD 采用规则](docs/devSpec/change-evidence.md#61-先参考采用再按实际调整)。框架类设计核对开源项目的实际装配与调用链，官方文档辅助；[外部来源分级](docs/devSpec/change-evidence.md#6-外部参考的证据分级)不替代本工程失败证据。
+- 设计遵守[设计文档写法](docs/chinese-writing-spec.md#61-设计文档写法)，说明问题、机制与防护。按 [EVD 采用规则](docs/devSpec/change-evidence.md#61-先参考采用再按实际调整)优先采用经核对且适用的成熟机制和默认参数，偏离须有依据，再按真实问题调整。开源方案须核对实际源码，方法见下表 skill；[外部参考](docs/devSpec/change-evidence.md#6-外部参考的证据分级)不替代本工程失败证据。
 
 ### 2.6 E2E 与 Offline Eval 优先，停用单元测试
 
@@ -92,15 +92,18 @@
 | `QLT` | Real E2E、Offline Eval、Golden Set 与真实环境 smoke 的验证设计；局部语义判断类修复、重复验证；解释停用范围与历史证据：单元测试、tests/、Contract、Integration；定位 E2E 阻塞、核验漏放、最小充分上下文；核对 Trace、安全、权限、审计与评测职责 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | 实施 Schema 迁移、协议迁移与兼容窗口；记录 ADR；执行发布评审、合并验收与完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |
 
-按实际任务读取并使用对应项目 skill。它们拥有方法与输出结构，准入和验收仍由上表细则拥有；混合任务只组合实际需要的方法。
+按任务用 skill；上下文模式修改必须调用[上下文管理](.agents/skills/manage-model-context/SKILL.md)并维护对应文档。方法归 skill，门禁归细则。
 
 | 任务 | 使用的 skill | 方法与输出职责 |
 | --- | --- | --- |
-| 架构定义与设计、业务适配检查或架构维护 | [架构设计与维护](.agents/skills/design-project-architecture/SKILL.md) | 从业务目标确定职责、契约、依赖与运行方式，检查合理性和实现一致性 |
-| 编写、修改、重构代码或检查局部结构质量 | [编码质量](.agents/skills/write-quality-code/SKILL.md) | 业务聚焦、高内聚低耦合、隔离变化、切面组合、单元规模与坏味道检查 |
+| LLM 决策 | [设计](.agents/skills/design-llm-decisions/SKILL.md)、[排障](.agents/skills/troubleshoot-llm-decisions/SKILL.md) | 决策设计与错误定位 |
+| 参考开源方案 | [参考开源方案](.agents/skills/reference-open-source-solutions/SKILL.md) | 源码追踪、实现对照与采用落点 |
+| 架构定义与设计、业务适配检查或架构维护 | [架构设计与维护](.agents/skills/design-project-architecture/SKILL.md) | 业务适配、职责契约、依赖装配与实现一致性 |
+| 编写、修改、重构代码或检查局部结构质量 | [编码质量](.agents/skills/write-quality-code/SKILL.md) | 业务聚焦、内聚耦合、变化隔离、切面与结构质量 |
+| 描述方案落地阻塞 | [问题描述](.agents/skills/describe-project-problems/SKILL.md) | 前因后果、链路传导、历史复现与关键责任 |
 | 解释工程问题、原因、机制或设计取舍 | [方案说明](.agents/skills/explain-project-solutions/SKILL.md) | 问题、做法与参考依据；窄问题只展开相关部分 |
-| 审计必要性、优化前后差异或逐点 E2E 覆盖 | [方案审计](.agents/skills/audit-project-proposals/SKILL.md) | 聚焦一个问题，检查设计清晰度、方向解耦、参考对比和证据 |
-| 制定具体方案验证计划，或分析已有方案的迭代受阻、去留与新问题关联 | [方案推进分析](.agents/skills/analyze-proposal-progress/SKILL.md) | 重复次数与组级验收；保留成立部分，核对参考、实现、验证及固定基线，按因果关系分开处理 |
+| 审计必要性、优化前后差异或逐点 E2E 覆盖 | [方案审计](.agents/skills/audit-project-proposals/SKILL.md) | 问题聚焦、设计清晰与解耦、参考对比及证据 |
+| 制定具体方案验证计划，或分析已有方案的迭代受阻、去留与新问题关联 | [方案推进分析](.agents/skills/analyze-proposal-progress/SKILL.md) | 实践核对、验证与因果分析，保留局部收益并决定去留 |
 
 | 目标目录 | 修改前追加读取 |
 | --- | --- |
@@ -133,7 +136,7 @@
 ## 5. 实现与评审行为
 
 - 改公共模型、Schema、状态或入口前搜索全部调用方和权威文档。保留工作树用户改动，禁止破坏性 Git 操作覆盖。
-- 先删除被替代或冲突内容，再做最小修改；依赖注入与错误分类执行 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止以空结果、默认成功或模糊 fallback 掩盖失败。
+- 按所选合理方案迁移消费者并删除被替代或冲突内容；依赖注入与错误分类执行 [COD](docs/devSpec/code-structure.md#5-错误注入与命名)，禁止以空结果、默认成功或模糊 fallback 掩盖失败。
 - 独立阻塞按 [EVD 第 7.1 节](docs/devSpec/change-evidence.md#71-独立阻塞优先解决并保持方案一致性)优先解决并接续原方案。同一阻塞一次有界修正后仍未解除，按 [EVD 第 7.2 节](docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)停止受影响实验、生产补丁和整轮重跑，复审并及时检索同类智能体机制后再准入。换措辞、模块或版本不重置记录；修正与协议重试、样本重复分别计数，隔离诊断及独立工作可继续。
 - 代码与实现评审只报告可定位、可复现且影响正确性、安全性、性能或维护门禁的问题；方案 critic 按 EVD 区分设计缺口与待证风险。结论不超过已执行证据，未执行的适用检查不得写成通过。
 

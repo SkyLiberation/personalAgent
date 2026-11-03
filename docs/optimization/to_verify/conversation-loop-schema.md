@@ -124,11 +124,11 @@ Runtime 将新普通正文及它的引用构成现有 `ConversationAnswerSegment
 
 普通交流、计算及当前 direct＋none 路径不被迫输出内部 Final union。文件、表格、程序和统计结果通过现有执行／文件工具产生实际 Artifact；最终正文按需要解释结果和引用真实产物。不自动创建报告文件、ZIP 或用户下载包。
 
-### 4.3 已存稿修订与引用保真
+### 4.3 拒稿后的完整重提与引用校验
 
-已有完整稿使用原生 `revise_final(base_resource_id,edits)`：只选择最新可见 SubmittedFinal 的资源 ID，并提交现有段落编辑操作。Runtime 从同一主体／run 的权威集合恢复完整 ResourceRef、基稿及未改段；得到完整候选后进入同一个提交／核验／Completion 流程。不要求重抄 owner/revision，不重发整份基稿。
+回答核验不通过时，原稿及实际反馈进入原Loop；模型选择继续取证或重新提交完整正文。普通正文和带沟通属性／行引用的submit_final始终进入同一个FinalMessage、SubmittedFinal、回答核验及Completion出口，不要求调用另一套答案段落编辑工具。原始稿件、引用及判决按实际顺序保留。
 
-仅在确有当前可修订稿时暴露该操作；新正文与修改已有稿是两种业务操作，共用一种原生控制协议和一种完整候选出口。删除模型侧 `FinalSubmission` 大 union；内部 `FinalRevision` 及原编辑校验只承担恢复完整候选的职责，不作为另一套生成协议。
+普通回答取消revise_final、FinalRevision及段落编辑Schema，决定见[ADR0049](../../adr/0049-answer-regeneration-in-original-loop.md)。完整重提时，必要引用由模型从当前合法范围选择并进入新稿，引用身份和范围仍由Runtime恢复与校验；旧稿通过状态不继承，Runtime不补造引用。claims的业务局部修改继续遵守自己的版本、原文引用和核验契约。本项不新增单块／多块参数分支，先行目标及验证由[Spec §9.16](analysis-goal-maintenance.md#916-回答拒稿后沿原循环重新生成)拥有。
 
 ### 4.4 主模型的普通文本
 
@@ -142,14 +142,16 @@ Runtime 将新普通正文及它的引用构成现有 `ConversationAnswerSegment
 
 ## 5. 能力内部的 typed 输出
 
+独立 Python 分析的 direct required 路径按 [ADR 0047](../../adr/0047-user-goal-verification-context.md)单独检查目标：原文拥有要求，辅助解释可错；只调用一次目标判断，不接入 claims 或来源检查。2026-10-30 该独立分析的 direct 主路径按 [SEM §7.5](longtask-semantic-consistency.md#75-独立分析由主模型直接理解并作答)合并任务理解与回答，不调用 Intent、不输出 criteria；原用户问答和实际执行 Context 连续累积。当前新六轮配置 none，没有目标核验调用。其他既有 Intent 消费者保留。
+
 确有程序消费者的结果仍采用类型校验。循环内意图、writer、Verifier、压缩不共用一个大 union，也不通过全局 JSON 成文模板来表达下一步动作。
 
 按实际职责采用已核对的输出策略：仍用原生输出工具的能力沿S4由原参数形成typed结果；意图判断的§15候选沿PydanticAI PromptedOutput／文本parser机制直接消费JSON文本。输出工具不进入业务网关、不产生Command，提示式JSON也不直接写业务事实；两者均经同一原类型与各自实际消费者。策略在请求前显式选择，不能因失败换承载重跑；Provider原生Schema功能只可在已核对支持的装配中使用。
 
 | 能力 | 模型决定 | 由代码恢复或推导 |
 | --- | --- | --- |
-| 意图及冻结标准 | 原 requirements、phase、background 语义及对应原始用户来源选择 | 来源采用当前请求中可见的消息／行引用，恢复原文；来源范围存在不代表语义正确。移除需要模型重抄用户原文的 source_span 协议，原后台／阶段语义须按完整真实用例重验 |
-| direct writer | 原生assistant正文，或带业务属性的submit_final／已有稿revise_final | 同一完整候选、引用绑定及提交身份；无独立普通成文阶段 |
+| 仍采用提取的意图及冻结标准 | 原 requirements、phase、background 语义及对应原始用户来源选择；独立 direct 分析无此调用 | 来源采用当前请求中可见的消息／行引用，恢复原文；来源范围存在不代表语义正确。移除需要模型重抄用户原文的 source_span 协议，原后台／阶段语义须按完整真实用例重验 |
+| direct writer | 原生assistant正文，或带业务属性的submit_final；拒稿后沿原循环完整重提 | 同一完整候选、引用绑定及提交身份；无独立普通成文或按段编辑阶段 |
 | claims writer | 已有 create/edit/recheck/return/stop 等真实操作、当前完整 final_answer | 只暴露当前稿状态允许的操作，不导出全部阶段 union。保留版本、证据和批准绑定；批准后恢复确切稿进入共享出口，不再额外调用 submit_final 重写 |
 | Verifier | 现有逐 criterion 的 status、feedback 及必要 revision_feedback | 原标准正文、输入范围、整体 verdict、digest、Receipt 均由原 owner 恢复／推导；none 不生成通过记录 |
 | 历史摘要 | 仅 working_summary | 覆盖项、来源 digest、原件位置、前序检查点和激活由 Runtime 计算，摘要不是执行或批准证据 |
@@ -190,7 +192,7 @@ claims 模块先提供 `select_research_evidence(next_step,needs,reason)`：参�
 
 claims 适用时不提供普通 submit_final(answer)，同轮绑定也拒绝该绕过；clarification／limitation 等原合法停止意图继续可用。模型不选择 writer 配置。后续 claim 消融固定同一传输、主循环、Verifier、上下文策略和评分器，以写作模块为预声明变量；本轮只迁移协议，不将未解决的 claim 语义写成已修复。
 
-该限制在尚无 current claims 的首次写作同样成立：普通提交的 disposition 范围排除 answer，普通 revise_final 不作为 claims 的修改入口；最终接纳还核对该 writer 的当前适用性及确切稿，不能只检查“当前是否已有 claim”。继承已有 claim 的引用范围沿同一个 selected_citation_ids binder 展开，连续行不能被动作 Schema 误当成未返回引用；Schema 与实际接纳共享范围依据。
+该限制在尚无 current claims 的首次写作同样成立：普通提交的 disposition 范围排除 answer；最终接纳还核对该 writer 的当前适用性及确切稿，不能只检查“当前是否已有 claim”。继承已有 claim 的引用范围沿同一个 selected_citation_ids binder 展开，连续行不能被动作 Schema 误当成未返回引用；Schema 与实际接纳共享范围依据。
 
 ## 6. Context、工具结果与拒绝
 
@@ -267,13 +269,13 @@ ModelDecisionRecord 引用相应响应原件；有可解析的真实 assistant �
 | 主循环业务／控制参数、整批绑定 | model_actions.py、models.py、working_plan.py；复用现有声明与 Admission，内部 kind/ID 不再由模型回传 |
 | 模型调用、唯一修复及交付 | service.py、answer_results.py；主循环接纳原生提交，writer 交回同一个完整候选 |
 | Provider 适配及内层 typed 输出 | capabilities/contracts/model.py、infra/structured_model.py、model_response.py；保持 Port 方向与原生响应，不向 Application 引入 SDK 或 HTTP |
-| 引用与完整修订稿 | citations.py、final_revisions.py、Artifact；按合法 ID 恢复原内部引用，未改文本保持 |
+| 引用与完整重提稿 | citations.py、原SubmittedFinal／Journal、Artifact；按合法 ID 恢复内部引用，完整新稿重新进入原核验 |
 | 原始响应、拒绝、执行及恢复 | journal.py、models.py、model_history.py、history_compaction.py；同一事实唯一写入口 |
 | 公有错误 | application/conversation/errors.py 与 Web／SSE Adapter；本地响应和上游状态分开，迁移全部现行捕获者 |
 
 实现前同时维护相关 ADR 和当前架构；设计接受不等于生产迁移完成。检查现有正式 Journal 是否有活跃消费者；没有兼容事实时按根规范破坏式替换。真实外部客户端或活跃存量 run 需要兼容时另按 REL 记录，不能猜补历史响应或在旧 run 中换协议。
 
-必须删除：prepare_final 声明、Prompt 与调用；普通独立 Final 成文分支；模型侧 FinalSubmission／FinalRevision 大 union；ContinueTurnProposal.finalization_requested、ModelCallDisposition.prepare_final、pending_finalization 及相关阶段提示；主循环隐藏输出修复；全局 unavailable 呈现。内部合法 FinalMessage、引用修订、候选持久化和必需核验不能随之删除。检索实验 Final／claims 的专有业务字段有真实消费者，按各自模块迁移输出通道，不以普通字符串替换它们的结果契约。
+必须删除：prepare_final声明、Prompt与调用；普通独立Final成文分支；模型侧FinalSubmission／FinalRevision大union；ContinueTurnProposal.finalization_requested、ModelCallDisposition.prepare_final、pending_finalization及相关阶段提示；主循环隐藏输出修复；全局unavailable呈现。普通回答内部FinalRevision及其合并模块另由ADR0049删除。内部合法FinalMessage、候选持久化、引用校验和必需核验保持。检索实验Final／claims的专有业务字段有真实消费者，按各自模块迁移输出通道，不以普通字符串替换它们的结果契约。
 
 ## 10. 验收与整体复审
 
@@ -540,7 +542,7 @@ JSON 是参数或数据编码，Markdown 是正文表达，两者不作为结果
 | --- | --- |
 | F-01 普通答案 | 新生成、无显式引用和特殊沟通属性的完整答案只使用普通正文；正文保留原文及现有失败判断，直接生成同一 `FinalMessage` |
 | F-02 属性提交 | 复用现有 `submit_final` 名称；用于带有效行引用的答案，或既有 clarification_required／limitation／failed。候选中 `answer` 必须有非空有效 references；纯正文加空引用的 answer 不再是可选替代提交。Schema 投影、参数校验、反馈及说明同步迁移，不依赖 Prompt 单独约束 |
-| F-03 现稿修订 | `revise_final` 只在当前完整基稿存在时可达，选择既有稿件及编辑内容；未改内容和引用按当前版本恢复，仍形成完整候选，不重写全文来迎合传输 |
+| F-03 拒稿后完整重提 | 原稿与拒绝进入原循环，后继完整新稿仍经原引用校验、回答核验和Completion；不要求答案段号或专用局部编辑操作 |
 | F-04 原件成稿 | 研究 Spec §10 的原件提交仍为独立候选，其依据是已有报告原文恢复及身份保真，不是增加另一种新文本编码。模型选择真实原件而非重复生成正文，全文读取、权限和同一完成出口保持；未实现前不暴露该操作 |
 | F-05 完成一致 | 所有合法候选共用当前保存、引用、核验、Completion 和恢复；claims 适用时，普通答案和原件选择均不能绕过当前 writer，既有带属性限制同样生效 |
 

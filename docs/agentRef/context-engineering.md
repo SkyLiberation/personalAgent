@@ -96,3 +96,15 @@
 | LangChain：[`TodoListMiddleware.wrap_model_call`](https://github.com/langchain-ai/langchain/blob/575db57ab3658e38ba1d8c40c2bf62110c8a0c27/libs/langchain_v1/langchain/agents/middleware/todo.py#L231-L256)在通用 ModelRequest 的 system 内容后追加默认提示，再交 handler | [默认提示](https://github.com/langchain-ai/langchain/blob/575db57ab3658e38ba1d8c40c2bf62110c8a0c27/libs/langchain_v1/langchain/agents/middleware/todo.py#L119-L136)是 Markdown 标题、自然语言段落和项目符号；工具输入和 Todo 状态仍为 typed 对象，未因为阅读文本而取消结构化协议 | 采用由公共 renderer 生成可读正文、机器协议保持结构化的分工。该包装没有按模型名选择表达；middleware 可配置且不是所有 Agent 默认启用，不把 Todo 当作本工程新增能力或 criterion 标准识别器 |
 
 上述源码没有统一的 criterion 清单协议，也不证明自然语言必然优于 JSON。本工程据其公共表达选择“标题＋权威说明＋编号清单”，保留已有 criterion 原句，不增加模型转写；编号及具体中文标题是本工程的排版选择。模型可见位置与正文形式分别对照，内部 typed／JSON 协议保持。唯一采用契约、展示示例及验证边界由[SEM §4](../optimization/to_verify/longtask-semantic-consistency.md#4-架构分析契约与消费者)拥有。
+
+## 9. 结果外置、卸载与历史摘要的分工
+
+2026-11-03补查固定源码，原件与校验保存在 `.tmp/context-unload-source-review-20261103/`。OpenCode四份源码Git blob校验4/4；复用压缩参考26份源码SHA-256均一致，另取得DeepAgents外置助手及其实际调用方。未运行第三方项目或付费模型。
+
+| 实现 | 实际调用和消费 | 采用边界 |
+| --- | --- | --- |
+| DeepAgents `fd3e64ab` | create_deep_agent默认装配FilesystemMiddleware；wrap_tool_call在结果进入state前调用_process_large_message，超过配置大小时由[_offload_tool_message_content](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/middleware/_message_eviction.py#L260)写backend，保留调用／消息身份和状态，回传预览及read_file路径。写失败保留原件；read_file另有窗口限制，避免反复外置读取结果 | 结果产生时控制正文进入量，已存在原件优先复用。历史摘要模块外置失败仍继续的有损分支，不适用于本工程承诺原件可恢复的契约 |
+| OpenCode `3104c1428ec91f809e5ab86631300de41eb6952e` | [SessionPrompt](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/session/prompt.ts#L1338)调用prune；配置启用时标记较早的已完成工具结果，保护近期轮次及预算；[toModelMessagesEffect](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/session/message-v2.ts#L290)用清理说明代替正文并移除附件，调用身份保留，存储原输出未删除 | 清理必须被后续请求物化实际消费；该路径本身不证明存在模型可调用的原件召回工具。本工程按既有Artifact读搜恢复，不照搬其固定保护token数 |
+| DeepSeek Harness `b150a551` | 既有pre-step先用model-free pruner裁剪工具文本，重新测量后才摘要完整消息区间；region.ts要求替换后缩小，surface更新进入后续请求及重放 | 裁剪、摘要、最终容量检查分别承担职责。摘要应看到用户目标变化与实际交互，不能仅凭工具结果推断交付状态；固定源码没有语义Judge保证摘要正确 |
+
+本工程的具体选择、失败依据、原件与快照证据隔离、80%触发及候选完整请求测量由[现行修订](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)拥有。上述代码只能证明对应机制，不证明本工程的摘要保真、质量或成本收益。

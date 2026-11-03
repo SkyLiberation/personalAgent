@@ -40,8 +40,10 @@ from .artifact_sources import trace_resource_refs
 from .tool_requests import WriteArtifactArgs
 
 from .errors import ConversationOperationNotFound, ConversationOperationConflict
+from .goal_models import goal_verification_action_id
+from .verification_admission import observed_receipts, INTERACTION_VERIFICATION_CAPABILITY
 from .journal_lock import exclusive_run_lock
-from .model_history import validate_decision_extension
+from .model_history import validate_decision_extension, prior_analysis_turns
 from .models import (
     ActionObservation,
     CommittedUsage,
@@ -290,6 +292,28 @@ class InMemoryInteractionJournal:
             )
         if previous is not None:
             validate_decision_extension(previous, trace)
+            if trace.goal_operations[:len(previous.goal_operations)] != previous.goal_operations:
+                raise ConversationOperationConflict("accepted goal operations are immutable")
+            for operation in trace.goal_operations[len(previous.goal_operations):]:
+                caller = next((item for item in trace.model_decisions
+                               if item.turn_index == operation.decision_turn), None)
+                if (operation.run_ref != trace.interaction_run_ref or caller is None or caller.assistant is None
+                        or operation.call_id not in caller.assistant.call_ids
+                        or not any(item.call_id == operation.call_id
+                                   and item.operation == ("read_current_goal" if operation.operation == "read" else "maintain_goal")
+                                   and item.status == "accepted" for item in caller.dispositions)):
+                    raise ConversationOperationConflict("goal operation is not bound to an accepted native call")
+                if operation.operation != "read":
+                    reference = operation.verification_ref
+                    expected = goal_verification_action_id(operation.run_ref, operation.decision_turn, operation.call_id)
+                    observation = next((item for item in trace.inputs
+                        if isinstance(item, ActionObservation) and item.action_id == expected), None)
+                    receipts = observed_receipts((observation,) if observation is not None else (),
+                        capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY}))
+                    if (reference is None or reference.kind != "tool_result" or reference.action_id != expected
+                            or len(receipts) != 1 or receipts[0].checked_kind != "goal"
+                            or receipts[0].verdict != "passed" or receipts[0].verified_draft != operation.goal.objective):
+                        raise ConversationOperationConflict("goal operation lacks its exact passed verification")
             for accepted in previous.accepted_tool_requests:
                 current = next(
                     (
@@ -559,15 +583,17 @@ class InMemoryInteractionJournal:
                                    for ref in trace_resource_refs(item)))
 
     def analysis_observations(self, trace: InteractionTrace) -> tuple[ActionObservation, ...]:
+        """Carry actual tool observations across the authorized analysis conversation."""
         observations: list[ActionObservation] = []
-        for source in self.analysis_traces(trace):
+        for source in prior_analysis_turns(trace, self.analysis_traces(trace)):
             if source.interaction_run_ref == trace.interaction_run_ref:
                 continue
-            owned = {item.action_id for item in source.accepted_tool_requests
-                     if item.tool_name in {"execute_python", "write_artifact"}}
+            owned = {item.action_id for item in source.accepted_tool_requests}
+            owned.update(call_id for decision in source.model_decisions
+                         if decision.assistant is not None
+                         for call_id in decision.assistant.call_ids)
             observations.extend(item for item in source.inputs if isinstance(item, ActionObservation)
-                                and item.action_id in owned and item.status == "succeeded"
-                                and item.capability_id in {"execute_python", "write_artifact"})
+                                and item.action_id in owned)
         return tuple(observations)
 
     def execution_budget(self, trace: InteractionTrace) -> RunExecutionBudget:

@@ -4,7 +4,7 @@
 
 回答结果由 Runtime 显式注入 direct 或 claims 模块，核验由 required/none 独立配置；同一个 Conversation 循环继续拥有执行、计量和唯一 Final。Journal 冻结装配，恢复及同对话新 run 不允许更换配置。默认保持 claims+required；无核验仅用于当前授权的独立流程诊断，范围与退出见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
 
-主循环采用原生 assistant 消息与动作协议，实施决定见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)。实际生成、完整任务结果及限制由[统一设计](../optimization/to_verify/conversation-loop-schema.md)与[评测盘点](../evals/02-current-case-inventory.md)维护。
+主循环采用原生 assistant 消息与动作协议，实施决定见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)。原生交换在真实 assistant／tool 消息之后追加对应 Runtime 反馈，取消了“仅最新”筛选；但新的真实运行已复现跨 run 同号回执被误删，以及两次压缩后仍超容量，当前完整历史契约尚未通过。归属、已成立部分与重新打开范围见[目标维护 Spec §9.18—§9.19](../optimization/to_verify/analysis-goal-maintenance.md#918-核验反馈与实际修复按原交互进入主循环)。实际生成、完整任务结果及限制由[统一设计](../optimization/to_verify/conversation-loop-schema.md)与[评测盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 依赖与 owner
 
@@ -23,7 +23,17 @@ HTTP / CLI / Message Adapter
 
 ## Conversation loop
 
-进入主决策前，`derive_interaction_intent` 用注册 Prompt 和 `prompted_json` 提取交互相位、显式验收条件及响应后的后台要求。模型引用原消息索引和行坐标，Runtime 恢复原文；requirements 可引用历史用户消息，phase／background 只取最新用户。Admission 校验来源与互斥，后台来源允许一次修订，随后冻结 requirements。真实后台要求按 `capability_missing` 拒绝，不创建任务。提取条件辅助理解，完整目标仍由原消息拥有；具体契约见[统一设计 §5](../optimization/to_verify/conversation-loop-schema.md#5-能力内部的-typed-输出)。
+独立Python direct分析在同一主循环使用`maintain_goal`完整创建或修订、`retain_goal({})`沿用目标；每个用户请求先完成维护，成功后开放正常工具。`read_current_goal({})`仅供按需查看当前完整目标，返回正文和修订号，不修改版本。2026-11-02按用户要求删除回答前紧邻读取门禁及相关Prompt，正文、回答工具和核验后修复均不要求先读。目标正文仅有一个`objective`字符串，材料与成果引用由原工具与历史提供；当前完整目标仍进入每次主请求，实际调用、回执和反馈按原轮次续接；无独立criteria提取或后台续跑。目标规则由`goal_models.py`及`goal_maintenance.py`拥有，非读取操作经下段目标定义核验通过后才生效；契约见[目标维护 Spec §9.9](../optimization/to_verify/analysis-goal-maintenance.md#99-单一目标正文与取消目标内成果引用)与[ADR 0048](../adr/0048-conversation-goal-maintenance.md)。下文“直接理解”表示没有独立Intent，仍须满足每轮维护前提。
+
+独立Python分析在目标创建、修订及沿用生效前调用目标定义核验，读取除外；direct required回答交付前调用回答交付核验。`task_context.kind`绑定当前职责，`turns`按用户轮次保留全部原话和同职责events：目标提交／判决／修订或回答／判决／修复后回答。两者使用专用提示、标准、调用标识及摘要检查点；当前目标为可纠正解释，原Journal为唯一事实来源。主循环仍累计完整工具与Runtime反馈，核验不重放普通工具或来源材料，不接claims。目标拒绝不生效，实际失败反馈沿原调用返回；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)。
+
+独立 Python 授权、非 retrieval deployment、direct writer 的分析路径由主模型在正常决策中直接理解任务，不先调用 Intent，不要求输出 criteria，也不加载上轮 criteria 或辅助条件清单。材料充分时直接回答，需要执行时按原工具协议续接。共享循环的 `ReviewCriteria` 保持空值，仅表示没有独立提取，不代表目标为空或验证通过；当前真实六轮验收见 [SEM §7.5](../optimization/to_verify/longtask-semantic-consistency.md#75-独立分析由主模型直接理解并作答)。
+
+主决策从同一原消息再派生集中用户原话区，历史及本轮来源分开，原文、索引和行号保留；不由新模型提取目标。更新后的分析指令要求保持未被用户修改的有效条件，区分必要条件与自定分析方法，并在提交前对照原话；仍是同一正常决策，不新增自查调用。该变化的真实依据及当前验收由 [SEM §7.8](../optimization/to_verify/longtask-semantic-consistency.md#78-用户原话集中呈现并持续约束主决策)拥有，结构到达不等于语义遵守。
+
+其他现有消费者进入主决策前，仍由 `derive_interaction_intent` 用注册 Prompt 和 `prompted_json` 提取交互相位、显式验收条件及响应后的后台要求。模型引用原消息索引和行坐标，Runtime 恢复原文；requirements 可引用历史用户消息，phase／background 只取最新用户。Admission 校验来源与互斥，后台来源允许一次修订，随后冻结 requirements。真实后台要求按 `capability_missing` 拒绝，不创建任务。提取条件辅助理解，完整目标仍由原消息拥有；具体契约见[统一设计 §5](../optimization/to_verify/conversation-loop-schema.md#5-能力内部的-typed-输出)。
+
+保留提取的消费者用 Markdown 区分当前问题、历史用户要求和可错历史解释，消费当前累计执行输入及摘要；上轮实际 criteria 按完整消息前缀与最终答复匹配 Journal。独立分析取消这一步后，主循环消费完整原问答及执行事实，并按实际问答匹配已结束运行，将工具调用、完整 assistant 与配对返回放回原轮次；当前轮在末尾续接。引用正文按单份坐标行展示，使用相同容量门禁与压缩恢复。旧 criteria、合并理解及历史布局六轮分别保留身份，均按用户要求配置 `direct+none`；当前机制及验证边界见[固化记录](../optimization/completed/conversation-tool-history.md)。
 
 `interaction_prompt.RemainingInteractionBudget` 向主决策物化剩余 model turns、tool calls、agent calls 和 tokens。存在 `run_deadline_at` 时，再由同一 Trace 截止与当前 UTC 派生 `wall_seconds_at_input`；无截止时省略。快照不暂停计时，恢复沿用原截止。任务墙钟和累计实验执行额度分别配置，参数与证据见[研究 Spec](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)，快照契约见[主循环 Spec §3.17](../optimization/to_verify/conversation-loop-boundaries.md#317-已有运行截止的模型可见投影)。
 
@@ -65,7 +75,7 @@ Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDe
 
 Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answer 为边界，不能从全部步骤 completed 推导；未交付任务的修订保持 Plan 身份。跨轮恢复按同一边界保留该 Plan 的成功执行资料，包括无活动项时的结果。新计划仍遵守 default/auto 审阅规则。整体候选、证据和限制见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
-普通可见正文形成默认 `answer` 候选；`submit_final(message, disposition, references)` 显式选择沟通属性与行引用，`revise_final(base_resource_id, edits)` 修改当前稿，三者进入同一 `FinalMessage` 出口。有调用时正文只作该轮说明，坏调用不能降为文字答案；空白、reasoning、截断或非法角色不形成候选。claims 模式保留逐段结构，普通正文不能绕过当前版本写作。终止、修订和研究操作独占批次，引用、适用核验、预算、计划及未决执行在交付前检查。
+普通可见正文形成默认 `answer` 候选；`submit_final(message, disposition, references)` 显式选择沟通属性与行引用，两者进入同一 `FinalMessage` 出口。回答被拒后，原稿及真实反馈回原循环，模型继续取证或重新提交完整回答；普通回答不再暴露专用按段修改工具，见[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)。有调用时正文只作该轮说明，坏调用不能降为文字答案；空白、reasoning、截断或非法角色不形成候选。claims模式保留逐段结构和业务修改，普通正文不能绕过当前版本写作。提交和研究操作独占批次，引用、适用核验、预算、计划及未决执行在交付前检查。
 
 意图判断及后台来源修订使用 `prompted_json`，以通用 Schema 指令、原始 JSON 文本和严格类型／来源校验承载，不请求工具或 API 格式功能。其他已迁移的内部 typed 能力使用原生输出声明，由 Infra 通过 LangChain 公共转换导出参数。两类承载都保留原件，按请求执行有限修复，不强转业务值。模板与版本见 [Prompt Registry](../llm-prompts.md)，验证范围见[统一设计 §15](../optimization/to_verify/conversation-loop-schema.md#15-内部意图判断采用提示式json的候选)。
 
@@ -130,3 +140,5 @@ Model Port 统一拥有传输重试；Schema 或语义错误按各自输出协�
 - 没有失败 baseline 与生产消费者时，不增加 Planner、Workflow、checkpoint、Registry 或兼容层。
 
 REST／SSE 共享安全错误投影，分别标明模型输出协议、上游请求或本地运行错误；字段与状态映射见 [API](../api.md#post-apiconversationturn)。
+
+独立分析的目标核验与回答核验已按职责拆分，当前契约见[Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)。两者分别输出`UserRequirementAssessment`并聚合为原回执；新连续前三轮已交付，原分[1,1,1]、预声明用户结果通过／通过／失败，见[记录§34](../optimization/to_verify/verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)；旧失败由[记录§33](../optimization/to_verify/verify_results/analysis-correctness.md#33-逐项用户要求核验的空会话连续前三轮)保留。

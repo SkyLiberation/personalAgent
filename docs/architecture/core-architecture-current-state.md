@@ -46,14 +46,20 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
-6. 回答模块按部署提供直接提交／修订或 claim 选证／写作操作。模型提交完整候选，运行系统持久化 `SubmittedFinal`，再执行适用核验及领域文件检查，通过后交付同一稿件。模型协议见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查见 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)。
+6. 回答模块按部署提供普通完整提交或claim选证／写作操作。普通回答拒稿后沿原Loop继续取证或完整重提，不提供答案按段修订工具，见[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)。模型提交完整候选，运行系统持久化`SubmittedFinal`，再执行适用核验及领域文件检查，通过后交付同一稿件。模型协议见[ADR0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查见[ADR0037](../adr/0037-experiment-submission-first-delivery.md)。
 7. 运行系统按装配契约完成适用核验和 Completion，交付确切 `FinalMessage` 正文。用户授权的无语义核验诊断不产生通过回执，也不计完整产品 E2E；边界见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
 
+独立Python direct分析由Conversation约束每轮先维护目标；`maintain_goal`完整写入、`retain_goal`沿用及可选的`read_current_goal`共用原Journal目标事实。目标正文只保留一个`objective`字符串，不另存成果引用；每次主请求物化当前完整目标，读取仅供按需查看，不是回答或修复的前提，也不修改版本；目标提议先语义核验，通过后维护成功事实。现行契约与验证边界见[目标维护 Spec §9.9](../optimization/to_verify/analysis-goal-maintenance.md#99-单一目标正文与取消目标内成果引用)。
+
 当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
+
+当前[职责分离设计](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)将非读取目标操作接到目标定义核验，将最终交付接到回答核验。两者复用原执行网关与回执，使用独立提示、判据及同职责历史；目标通过不代表交付完成。
 
 `ConversationWorkingPlan` 只协调当前对话的可验收工作项。模型可以根据用户调整提出新版本，Application 保护已完成事实和新旧版本边界。工作项清单不拥有 queue、lease、审批或 Agent 运行事实。
 
 ### 3.1 当前主循环的职责混合
+
+独立Python分析的direct路径在目标写入前核验任务定义，required路径在交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；回答核验另接收当前目标快照。原Journal为唯一事实来源，主循环完整原生历史保持。摘要按职责独立绑定，普通工具材料不交给核验，原claims与来源核验路径保持；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)。
 
 上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。原生协议已接入，直接回答装配的实际生成、连续交付及恢复范围见 [Loop 运行结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)；研究子流程的职责拆分仍是候选。
 
@@ -98,7 +104,7 @@ MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝�
 
 模型适配的阅读入口按职责组织：`infra/structured_model.py` 拥有公开工厂、SDK 调用、超时、协议修复、重试与观测装配；`infra/model_response.py` 集中响应 envelope、流内容、原生动作调用和用量归一化。现有 Adapter 与计量包装器直接消费这些解析函数，业务准入仍由 Application 拥有。解析规则的局部修改从新模块及其 typed 契约进入，调用与恢复问题从原适配入口进入。
 
-Conversation 主请求使用 `auto`，优先处理工具调用。没有调用时，`AnswerResult` 将完整合法的 assistant 正文转为 `FinalMessage` 候选；显式提交／修订还可携带沟通属性、引用和稿件编辑。候选沿同一 `SubmittedFinal`、核验与 Completion 链交付，正文、Verifier 原稿及回执 digest 使用同一原字符串。意图提取使用 `prompted_json`，原生 typed 输出请求使用 `required` 工具，修复沿用各自承载。实现与实际验证范围见 [Loop Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)。
+Conversation普通主请求使用`auto`，优先处理工具调用。没有调用时，`AnswerResult`将完整合法的assistant正文转为`FinalMessage`候选；显式submit_final可携带沟通属性及引用。普通稿被拒后沿同一Loop完整重提，claims继续使用自己的业务编辑。候选沿同一`SubmittedFinal`、核验与Completion链交付，正文、Verifier原稿及回执digest使用同一原字符串。独立Python direct分析仍由主模型直接理解并行动，无前置criteria调用；每个用户轮次先提供目标维护工具并使用`required`（首次仅maintain_goal，已有目标再提供retain_goal），目标核验及真实成功回执成立后恢复完整工具面及`auto`；未维护时仍可沿现有submit_final表达澄清、限制或失败，经适用核验后退出。目标事实由原Journal保存，目标与Runtime反馈持续进入原上下文，协议及待验语义见[ADR0048](../adr/0048-conversation-goal-maintenance.md)。其他已有意图提取消费者使用prompted_json，原生typed输出请求使用required工具，修复沿用各自承载。原完整运行证据见[Loop Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)。
 
 模型工厂以显式包装器组合单次调用准入、观测、用量和重试，实际顺序、SDK 流式 transport 与正式 SSE 的边界见[横切机制](cross-cutting.md#2-模型调用的实际组合)。模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索绑定与正文读取配置由[工具专题](../topics/tools.md)和[环境配置](../env.md)拥有。配置只证明部署选择，不证明服务健康或产品结果。
 
@@ -130,3 +136,5 @@ Trace、event、receipt 和评测归档记录事实，不改变生产决策。�
 - [Baseline-first 审计](../evals/03-baseline-first-audit.md)；
 - [评测执行与发布](../evals/04-running-and-release.md)；
 - [设计优化队列](../future/design-optimization-backlog.md)。
+
+独立分析的目标核验与回答核验已按职责拆分，当前契约见[Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)。两者分别输出`UserRequirementAssessment`并聚合为原回执；新连续前三轮已交付，原分[1,1,1]、预声明用户结果通过／通过／失败，见[记录§34](../optimization/to_verify/verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)；旧失败由[记录§33](../optimization/to_verify/verify_results/analysis-correctness.md#33-逐项用户要求核验的空会话连续前三轮)保留。

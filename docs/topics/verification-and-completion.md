@@ -17,6 +17,12 @@ Verification 是 Agent 内部元能力：
 
 ## 当前核验覆盖与适用边界
 
+独立Python分析分别核验目标定义与回答交付。`task_context.kind`由Runtime绑定，`turns`保留完整原始用户问题；目标核验的events只含目标提交、目标判决及修订，回答核验只含回答、回答判决及修复后回答，各自按原时间跨轮续接。当前目标作为可纠正任务依据单独交接。两者使用专用提示和标准，将逐项报告归一为原任务总项，不接普通工具、来源审读或claims。目标通过只允许目标生效，回答仍需核验及Completion；失败沿原调用反馈，Journal保存唯一事实，主循环完整历史保持。压缩及验收见[ADR0047](../adr/0047-user-goal-verification-context.md)。
+
+2026-11-02按用户取消回答前强制读取及相关Prompt，当前完整goal仍逐次提供。精确命中失败缓存时，Runtime复用原语义回执，并将引用原判据与反馈的本次拒绝放在最新提议之后；不付费重判，也不再将该稿恢复为待交付稿。一次真实阶段修正后，新前三轮全部交付、独立[1,0,1]；第三问5次拒稿后的第6稿通过，历史接续及实际修复成立，第二问仍未通过独立评分。目标核验v7及其英文镜像未改；设计与边界由[Spec §9.7—§9.8](../optimization/to_verify/analysis-goal-maintenance.md#98-移除回答前强制读取并重新验证)拥有，原§27失败保留。早期Prompt失败见[历史记录 §12](../optimization/to_verify/verify_results/analysis-correctness.md#12-目标优先-prompt-的中英文修正)。
+
+2026-11-01 当前维护goal交接候选在完整和最小充分输入下均未准确识别第三轮错误，未迁入生产；该历史候选由[Spec §9.6](../optimization/to_verify/analysis-goal-maintenance.md#96-当前执行目标接入既有目标核验)记录，不与本轮问答历史契约混用。
+
 2026-10-23 已接入[可替换回答模块](../../src/personal_agent/application/conversation/answer_results.py)：部署分别选择 direct/claims writer 与 required/none 核验，默认 `claims + required`，下文描述此默认配置。`none` 不产生通过回执，仍检查真实引用、权限、执行及费用；当前仅在用户授权的独立 LongDS 流程诊断使用，不计完整产品 E2E。配置在 Journal 冻结且同对话不能切换；契约及临时例外见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
 
 当前普通回答通过冻结的 `ReviewCriteria.requires_review` 决定是否执行整稿模型核验；进入该工具后，会把通用来源支持标准追加到用户标准。研究则采用同版本统一核验，交付不再重复普通核验。工具授权、引用合法性、业务写入和 Completion 各有确定性边界，不能因为某条回答没有额外模型核验就省略。
@@ -110,3 +116,5 @@ Conversation Review 的 Runtime-owned trigger 和 receipt-bound bytes 是结构�
 - `ASK-001B`：同一 FinalMessage 同时消费 personal knowledge 与官方 web Observation；
 
 引用继承的决定性证据见[引用继承记录](../optimization/completed/claim-retained-references.md)；旧逐项来源报告的适用性与复用经验见[来源报告复用记录](../optimization/completed/claim-source-review-reuse.md)。当前研究按完整版本统一核验，报告复用须保持任务、Prompt、版本、绑定原文、实际返回资料和读取状态等决定性输入不变，契约见 [ADR 0032](../adr/0032-conversation-research-claims.md#2026-10-16-当前决定)。旧逐项 Source、Coverage 和独立汇总不再是生产阶段。
+
+独立分析的目标核验与回答核验已按职责拆分，当前契约见[Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)。两者分别输出`UserRequirementAssessment`并聚合为原回执；新连续前三轮已交付，原分[1,1,1]、预声明用户结果通过／通过／失败，见[记录§34](../optimization/to_verify/verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)；旧失败由[记录§33](../optimization/to_verify/verify_results/analysis-correctness.md#33-逐项用户要求核验的空会话连续前三轮)保留。

@@ -74,19 +74,4 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template="Coordinate {missing} in reference {evidence_id} was not returned in full or does not exist. Select lines actually visible in citations; continuous ranges cannot skip missing lines, and partial lines must retain their exact character ranges. Continue reading if other content is needed.",
     ),
-    "conversation.final_revision.base_unavailable": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="Only the latest visible complete answer in this interaction can be revised; copy its resource_ref or submit a complete new draft.",
-    ),
-    "conversation.final_revision.segment_out_of_bounds": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="The edit position is outside the current base draft's segments; the entire batch of edits was not applied.",
-    ),
-    "conversation.final_revision.citation_rejected": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="The entire batch of edits was not applied: {error}",
-    ),
 }

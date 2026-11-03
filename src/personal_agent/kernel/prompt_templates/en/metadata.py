@@ -16,6 +16,22 @@ _BUSINESS_SUFFIX = (
 
 
 METADATA_TRANSLATIONS: dict[str, str] = {
+    '本轮实际适用的一项用户要求，写清对象及所要求的关系；依据原始用户消息及仍有效历史，不将模型自己的定义当作用户要求。': 'One user requirement applicable to this turn, specifying its object and required relationship. Derive it from original user messages and still-applicable history, without treating a model-authored definition as a user requirement.',
+    '本项要求的判决：满足为 satisfied，明确遗漏或冲突为 not_satisfied，缺少不可替代前提而无法判断为 insufficient_evidence。': 'Judgment for this requirement: satisfied when met, not_satisfied for a clear omission or conflict, and insufficient_evidence when an indispensable premise prevents judgment.',
+    '本次待验内容怎样对应这一要求；有差异时指出实际偏离及需要修订的部分，不代写替代内容。': 'How the current submission corresponds to this requirement. Identify actual differences and the parts needing revision without writing replacement content.',
+    'JSON 对象数组，每项包含 requirement、status、feedback；逐项覆盖影响本轮交付的用户要求，至少一项，不能用字符串数组、单对象、null 或空数组替代。': 'A nonempty JSON array of objects containing requirement, status, and feedback. Check each user requirement affecting this delivery. A string array, a single object, null, or an empty array is invalid.',
+
+    '按当前会话有效分支顺序派生的用户问题轮次，从1开始。': 'User-question turn derived from the current conversation branch in order, starting at 1.',
+    '该用户轮次提交的完整问题原文，由Runtime恢复。': 'The complete original user question for this turn, restored by Runtime.',
+    '该问题下按实际提交顺序排列的回答及对应核验判决，保留修复前后回答。': 'Answers and corresponding verification judgments for this question in actual submission order, preserving both original and repaired answers.',
+    '按用户问题顺序保留历史及当前问题的回答、核验与修复链；最后一项的最后一轮为当前待验回答，不含工具或执行材料。': 'Prior and current questions with their answer, verification, and repair chains in user-question order. The final round of the final turn is the current answer to verify; tool records and execution materials are excluded.',
+
+    '当前用户问题内按实际提交顺序派生的回答轮次，从1开始；相同稿件重提不形成新修复轮次。': 'Answer round derived from actual submission order within this user question, starting at 1. Resubmitting the same draft does not create a repair round.',
+    '本轮实际提交的完整模型回答原文，由Runtime从Journal恢复，不由核验模型重抄。': 'The complete exact model answer submitted in this round, restored by Runtime from the Journal rather than recopied by the verifier.',
+    '对应本轮回答的真实核验回执；尚无判决时为null，不补造通过或失败。': 'The actual verification receipt for this answer; null when no judgment is available, without inventing a pass or failure.',
+
+    '引用本次 success_criteria 中的 criterion_id；原文由 Runtime 恢复，不返回 criterion 正文。': "Reference criterion_id from this request's success_criteria; Runtime restores the original criterion text, which must not be returned.",
+    '完整任务定义正文，一个非空字符串。用Markdown分别写本轮交付、对象与判定关系、有效约束与未决事项、完成条件与依据；依据原用户要求和有效历史确定含义，明确影响结果的指代及关系。修订完整替换并保留未改要求，不提交额外业务字段，不用提纲、自述或结果猜测代替正文。': 'Complete task definition as one non-empty body string. Use Markdown for current deliverable, objects and decision relationships, applicable constraints and unresolved matters, and completion conditions and evidence. Resolve consequential referents and relationships from original user requirements and applicable history. Revision replaces the complete body while retaining unchanged requirements. Add no other business fields; outlines, assurances, or guessed results cannot substitute for the body.',
     "List the caller's current personal knowledge items with canonical knowledge_item_id, title, summary, and state. Use only to inspect the inventory or select a delete target; do not use it to answer from stored personal facts. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。": "List the caller's current personal knowledge items with canonical knowledge_item_id, title, summary, and state. Use only to inspect the inventory or select a delete target; do not use it to answer from stored personal facts. " + _BUSINESS_SUFFIX,
     'Prepare an immutable, user-confirmed save of knowledge already present in selected user messages. This action does not write knowledge. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': 'Prepare an immutable, user-confirmed save of knowledge already present in selected user messages. This action does not write knowledge. ' + _BUSINESS_SUFFIX,
     'Prepare the canonical governed deletion command for one observed personal knowledge item. This does not delete anything; user confirmation is required. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': 'Prepare the canonical governed deletion command for one observed personal knowledge item. This does not delete anything; user confirmation is required. ' + _BUSINESS_SUFFIX,

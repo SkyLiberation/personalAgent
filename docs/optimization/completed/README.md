@@ -4,6 +4,8 @@
 
 | 已解决的问题 | 固化记录 |
 | --- | --- |
+| 执行目标重复分成三个语义字段，并另存已有材料和成果编号 | [执行目标工具的单一正文契约](conversation-goal-contract.md) |
+| 跨用户轮次只保留工具观察，调用关系丢失且逐行引用包装过重 | [跨轮工具历史与单份引用展示](conversation-tool-history.md) |
 | 完整验收标准被任意长度上限拒绝 | [验收标准的完整字符串承载](intent-criterion-length.md) |
 | MiMo 将对象联合的引用参数返回为 JSON 字符串 | [对象参数的有限引用展开](tool-schema-reference-projection.md) |
 | 工程提示混用括号分区、Markdown 及硬编码动态标题 | [工程提示的 Markdown 表达](prompt-markdown-presentation.md) |

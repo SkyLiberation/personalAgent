@@ -35,6 +35,8 @@ S4 OpenAI适配器的[_convert_delta_to_message_chunk](https://github.com/langch
 
 2026-10-25 针对普通正文与结束工具是否形成重复协议，重新读取 S1／S2／S3 的装配、响应分类及终止消费者。重新取得的四份源码、复用的三份固定源码及校验和见[本轮来源](../../.tmp/framework-finalization-analysis-20261025/source-manifest.json)，未执行第三方代码或发起模型请求。以下只说明固定版本的机制，不声称代表各项目最新发布或证明本工程收益。
 
+2026-11-03补充核对回答拒绝后的修正：同一S1的`MultiStepAgent._run_stream`在配置final_answer_checks时验证当前完整答案；失败捕获为AgentError，写ActionStep.error、保存memory.steps并继续下一步，而不是调用专门的答案段号编辑工具。检查默认空，最大步数另有兜底，本工程只采用错误回原循环的组织，不复制其完成权限。S3的FinishAction直接携带完整message，可见正文路径也形成MessageEvent；该固定路径没有本工程的普通回答局部合并协议。答案按段修改原为本地引用保真适配，不能把文件编辑工具作为其已被这些项目采用的证据。本地采用决定由[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)及唯一Loop设计拥有，旧引用丢失事实与claims业务编辑另保留原边界。
+
 | 实现 | 实际组织方式 | 对本问题的含义 |
 | --- | --- | --- |
 | S1 smolagents | `MultiStepAgent` 注入 `FinalAnswerTool`；`ToolCallingAgent._step_stream` 经 `process_tool_calls` 将 `final_answer` 结果标为 `ActionOutput.is_final_answer`，原主循环消费该标记；`CodeAgent` 从执行器取得对应标记 | 正常步骤以明确的最终动作交回答案，正文格式不是完成协议。达到最大步数的兜底生成另有路径，不能概括为所有终态都只允许工具。不能据此要求本工程再次强制 finish，旧第 17 轮已经否定该适配 |

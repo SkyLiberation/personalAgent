@@ -2,6 +2,16 @@
 
 本文维护执行命令与归档方法；用例、实际成绩和发布证据状态由[用例盘点](02-current-case-inventory.md)维护。命令从仓库根运行，本机使用 `.venv` 解释器。
 
+完整反馈历史候选的 task2 已按[Spec §9.19](../optimization/to_verify/analysis-goal-maintenance.md#919-保留完整核验历史后的-task2-全量连续运行)在 `.tmp/task2-feedback-history-full-20261103/` 一次连续执行并封存。实际请求 5 轮、交付 4 轮，第五轮容量失败；历史碰撞缺陷重新打开，当前不直接启动另一整轮或复用输出目录。结果见[记录 §38](../optimization/to_verify/verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)。原命令以 `.venv/Scripts/python.exe -X utf8` 执行该目录的 `preflight.py`、`prepare_judge.py`、`launch.py prepare`、`launch.py run`；生成停止后运行 `audit.py`、`audit_split.py`、`audit_feedback_history.py`、`audit_regeneration.py`、`score.py` 与 `finalize.py`。审计明确保留缺失反馈失败，不将容量预拒绝当作 SDK 派发，也不重采评分覆盖原分。
+
+核验反馈历史的确定性离线回放命令：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.runtime_feedback_history_replay --source .tmp/task2-full-regeneration-20261103/c-recovery --output .tmp/runtime-feedback-history-20261103/replay-04
+```
+
+该命令读取已 seal 的完整真实轨迹，经过现行历史投影和 Adapter，仅输出候选 SDK 请求及报告，新增模型／工具调用为 0；输出目录必须尚不存在，重验使用独立目录，不覆盖历史结果。它检验反馈完整性、时间顺序及对应稿件，不接续暂停中的 task2，不代表模型修复或语义收敛通过。验收与已执行范围见[固化记录](../optimization/completed/conversation-tool-history.md#2026-11-03补齐核验反馈与实际修复的历史顺序)。
+
 先按改动范围选择入口，再设置独立归档根。定向实验中的日期、模型、预算和封存目录属于原比较身份；复用其方法时按对应规格重新声明身份，已有目录保持只读。
 
 | 任务 | 入口 |
@@ -165,6 +175,13 @@ gate 还会 fail closed 拒绝缺少 `UserOutcomeContract`、错层或使用 tes
 ```
 
 当前执行归档为`.tmp/mt28/`，`worker.json`区分生成、评分与已停止；`final.json`产生后才有本次交付和评分汇总，不能把进程启动当作测试通过。
+
+2026-10-29原段在第25轮额度拒绝后，按用户要求接续第25—34轮。使用同一冻结源码、原许可及完整canonical状态，旧24轮与4/24评分只读保留；判据由同一规格的接续小节拥有。执行一次prepare后才能run，新归档为`.tmp/mr29/`；生成封存后只评分新答案，不为恢复重设原任务额度。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 .tmp/task2-minimax-recovery-20261029/resume.py prepare
+.\.venv\Scripts\python.exe -B -u -X utf8 .tmp/task2-minimax-recovery-20261029/resume.py run
+```
 
 ### v1.1 Lite 剩余任务执行规格（2026-10-25）
 
@@ -752,3 +769,227 @@ LongDS CLI从独立`LONGDS_JUDGE_*`配置构建评分器，首次替换模型／
 ```
 
 参数阶段不执行生成代码。文件交接使用该次实际材料和候选源码，经生产读取／搜索、检查、草稿创建／补丁及恢复边界；零新模型和容器，不代替完整产品结果。Python 真执行沿当前 `python_execution_boundary` 的真实研究源及独立目录运行。旧协议回放保留原源码身份，新正式流程使用空 Journal。
+
+
+## criteria 与目标核验的连续阶段回放
+
+2026-10-29 用户已停止历史稿回放，当前执行[空对话六轮](#空对话六轮-criteria-与回答验证)。原阶段的中英文第六轮两条诊断链及脚本封存于 `.tmp/ci29/`，不再保留正式执行入口或重复计划；不得把旧测试回答与条件输入当前六轮模型。
+
+## 空对话六轮 criteria 与回答验证
+
+2026-10-29 按用户更正及 [SEM §7.4](../optimization/to_verify/longtask-semantic-consistency.md#74-从空对话运行六轮并累积业务-context)，停止上节旧稿回放。本次启动脚本只用原题及输入 CSV，空会话、全新 Journal／Artifact，不恢复旧运行；Runtime 使用 `direct+none`。新条件、执行和回答逐轮真实累积，评分仅在采集后进入独立评测侧。
+
+```powershell
+.\.venv\Scripts\python.exe .tmp/c629/launch.py prepare
+.\.venv\Scripts\python.exe .tmp/c629/launch.py run
+```
+
+`prepare` 已执行后不得重复覆盖其源码身份；`run` 使用封存代码、原通用 Docker 镜像和正式 HTTP 采集器，仅连续前六轮。任务总额度 9,854,351 tokens，另保留此前诊断 145,649 的累计费用；每轮原 40 决策、3600 秒及已配置容量保持。该配置属于 unverified flow capture，不替代独立核验验收或发布证据。实际结果见[验证记录 §14](../optimization/to_verify/verify_results/analysis-correctness.md#14-空对话前六轮与跨调用-context)。
+
+本组已完成，后处理命令为：
+
+```powershell
+.\.venv\Scripts\python.exe .tmp/c629/audit.py
+.\.venv\Scripts\python.exe .tmp/c629/score.py
+```
+
+`audit.py` 零模型核对新问答、criteria 及实际请求；`score.py` 已执行，不重复覆盖原评分目录。评分在采集封存且服务退出后独立进行，使用配置摘要一致的 `.tmp/em27/j/qualification`，内层 token limit 1M 与资格身份一致；当前六轮另以统一 300,000 tokens 外层额度按请求预留并计费，不按轮重置。评分原件位于 `.tmp/c629/j/`，汇总为 `.tmp/c629/score-report.json`；运行中不得把该侧材料传回 Agent。
+
+## 合并理解与回答后的空对话六轮
+
+2026-10-30 按 [SEM §7.5](../optimization/to_verify/longtask-semantic-consistency.md#75-独立分析由主模型直接理解并作答)，当前独立 Python direct 分析不再调用 Intent 或输出 criteria。新运行仅使用原题及 CSV，空对话、新主体与 Journal；逐轮消费本次真实回答和执行结果，Runtime 为 `direct+none`。源码封存后不在运行中修改 Prompt，不将旧稿、评分或参考答案交给 Agent。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/v630/launch.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/v630/launch.py run
+```
+
+先等待 prepare 正常完成，确认 identity.json 已封存，再执行 run。prepare 不能重复覆盖原身份。首段 `.tmp/u630/` 因跨轮读取观察未继承而主动停止，保留 804,633 已知 tokens／未知 1；从同一 10M 总额扣除已知并为未知预留 1M，本次完整新六轮额度为 8,195,367。固定原 MiniMax adaptive／medium、32,768 输出、原容量与 Docker 镜像，每轮 3600 秒；新空对话不消费首段回答。当前采集保持 unverified 身份，不代表已取得语义核验或发布资格。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/v630/audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/v630/prepare_judge.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/v630/score.py
+```
+
+audit 必须在六轮采集结束后检查 Context、无 criteria 调用和原生配对。prepare_judge 零模型核对原有效评分资格及配置，不送入旧答案；score 只在采集封存并退出后执行，当前总额度另限 300,000 tokens，沿与资格一致的内层 1M 身份，统一预留并计费。不得重复覆盖原评分组。结果与比较边界由 SEM 的验证记录拥有。
+
+## 工具历史布局优化后的空对话六轮
+
+2026-10-30 按 [SEM §7.6](../optimization/to_verify/longtask-semantic-consistency.md#76-工具历史按原轮次续接并精简发送包装)，新身份 `.tmp/h630/` 验证跨用户轮次原生交换及单份引用展示。`offline.py` 仅投影 v630 六个完整真实首步输入，零模型，不将该历史送入新运行。正式生成另从空对话读取原题及 CSV，`direct+none`、模型、参数和原镜像保持；评分仍在采集退出封存后独立进行。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/h630/offline.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/h630/launch.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/h630/launch.py run
+.\.venv\Scripts\python.exe -X utf8 .tmp/h630/audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/h630/qualify.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/h630/score.py
+```
+
+prepare 与 run 顺序执行，不覆盖原身份；当前 prepare、正式采集均只运行一次，复核使用已生成原件。生成上限 6M tokens，评分原 300K 外层限额因旧资格丢失、必要正反样例最坏预留 308,610，在付费前一次调整为 400K，资格与六轮评分共用账本；内层 1M 配置及判据不变。qualify 已执行且通过，不覆盖重跑；原启动失败、零调用准备错误和旧计划均保留。旧费用和未知消费另计。检查实际原问答、跨轮调用及推理保真、配对和轮次位置、引用原文、无 criteria／核验调用、工作树与冻结源码；分别报告用户结果和组织检查，不把当前 system 变短当作总请求开销降低。压缩未触发时单列未验证。
+
+## 用户原话与持续约束优化后的空对话六轮
+
+2026-10-30 按 [SEM §7.8](../optimization/to_verify/longtask-semantic-consistency.md#78-用户原话集中呈现并持续约束主决策)，当前候选每次主决策追加从本次真实会话派生的用户原话区，并更新主模型的条件延续与提交前对照指令。`.tmp/uc630/offline.py` 只审计旧 h630 六轮真实消息的中英文投影，不向新执行模型输入旧答案或程序。正式采集仍只用原题及 CSV，空会话、direct／none。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/uc630/offline.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/uc630/prepare_judge.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/uc630/launch.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/uc630/launch.py run
+.\.venv\Scripts\python.exe -X utf8 .tmp/uc630/audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/uc630/score.py
+```
+
+脚本从仓库根执行，offline 可显式设置 `PYTHONPATH=src;.`；其余正式脚本绑定根或冻结代码。prepare_judge 零模型核对同配置 h630 资格 seal，必须先完成再启动生成；不重跑资格。prepare 完成后再 run，原身份与源码不可覆盖。生成上限 6M，六份独立评分统一 300K 外层额度，内层 1M 配置及原判据保持，旧费用另计。六轮已生成后才能 audit／score；审计用户原文与索引逐字保真、每次主请求可见、本轮标识、原生历史和实际 SDK 绑定。第三轮语义失败仍完成计划内其他轮次，冻结运行中不改 Prompt、补反馈或替换失败样本。
+
+
+## 执行目标维护接入后的 task2 六轮
+
+2026-10-31，新身份 `.tmp/gm630/` 按[目标维护 Spec](../optimization/to_verify/analysis-goal-maintenance.md)和 ADR 0048 运行。当前生成 6M、独立评分统一 300K，原六问／CSV、模型、参数和镜像保持；全新会话，仅继承本次真实输出，不回放旧答案或人工目标。当前前置 Offline Eval 为零模型，六轮必须冻结后再运行。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm630/offline.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm630/prepare_judge.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm630/launch.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm630/launch.py run
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm630/audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm630/score.py
+```
+
+采集封存且进程退出后才独立评分，六份答案各一次，不把评分或标准回流模型。目标前置、目标正文、最终回答及 Runtime 反馈覆盖分别判定，未触发的拒绝或压缩不计已验证。
+
+首次 gm630 在第二轮目标引用协议失败后已停止并封存，1/2 交付、249,371 tokens 保留。一次有界引用选择符修正后，新空会话身份为 `.tmp/gm631/`，上述准备、运行、审计和评分命令的目录改为 gm631；另执行 `reference_replay.py` 和 `goal_audit.py`。新生成限额为原 6M 剩余 5,750,629，不恢复首段会话或输入首段答案，评分额度保持统一 300K。
+
+## 目标执行核对 Prompt 后的 task2 前三轮
+
+2026-10-31 用户授权的新身份 `.tmp/gm633/`，按目标维护 Spec §9 从第一问及 CSV 空会话连续执行前三轮一次。主任务 Prompt 为 `v4-goal-execution-review-md`，包含每轮维护、按目标执行、执行后及提交前核对，以及目标不明确时依据用户原话再次修订。核验器与 criteria 继续关闭；历史反馈只保留原交互，既有执行材料和用户原文视图保持。新生成限额 3M、独立评分 300K；原模型、参数、Docker、每轮限制及评分协议不变，全部旧费用与未知另计。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm633/prepare_judge.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm633/launch.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm633/launch.py run
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm633/audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm633/goal_audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm633/score.py
+```
+
+资格核对为零模型，先通过再冻结；生成结束及封存后检查全部实际输入，并对第 1／2／3 轮各独立评分一次。第三轮失败仍保留并结束既定三轮，不修改 Prompt、重抽样或注入正确结果；不将一次连续旅程称为三次独立重复。英文只登记实际注册／投影覆盖，不外推产品语义通过。
+
+gm633 第一轮目标数组格式连续错误后已封存，0/1 交付、2 次主请求、15,700 tokens，未评分。经子 Spec §9 先行复审，只修正 nullable Schema 子错误定位，v4 主任务规则保持；`gm634/diagnostic_replay.py` 零模型回放通过后，上述准备、运行、审计和评分命令目录改为 `.tmp/gm634/`。新空会话生成只剩原 3M 的 2,984,300，保留首段费用和失败，不回放首段目标或答案；同类阻塞再次终止则停止依赖重跑。
+
+gm634 在第二轮来源索引字符串错误后停止，第一轮已评分通过，原三轮未完成。用户随后明确取消 goal 来源索引，按子 Spec §4／§9 删除字段、校验和双语索引要求，并继续原三轮计划。新身份 `.tmp/gm635/`，先运行 `index_removal_replay.py`，再将准备／运行／审计／评分命令目录改为 gm635。生成额度为原 3M 剩余 2,691,176，独立评分外层额度为原 300K 剩余 294,947；内层配置和资格不变，前两段生成 308,824 及评分 5,053 保留。从原第一问和 CSV 空会话运行，不向模型输入旧目标、修正过的诊断输入或历史答案；旧带索引档案保留原冻结源码身份，不嫁接新 Schema。
+
+gm635 已退出封存：8 次主请求、159,129 tokens，第一轮已交付并独立评分通过，第二轮因其他数组格式错误终止，第三轮未执行。目标 Schema、实际调用及回执中的索引删除已核对；原三轮旅程仍未验收，停止继续逐字段补丁和自动重跑。当前段含评分共 9 次物理／162,957 tokens，原三轮计划三段累计 22 次物理／476,834 已知 tokens／未知 0。原件及边界见[验证记录 §20](../optimization/to_verify/verify_results/analysis-correctness.md#20-取消-goal-来源索引与原三轮续验)。
+
+用户本次授权补参数描述并继续，按[子 Spec §9.1](../optimization/to_verify/analysis-goal-maintenance.md#91-字段说明缺口的复审与本次续验)准备新身份 `.tmp/gm636/`：先执行 `schema_audit.py` 零模型输入审计，再将以上准备、运行、实际输入／目标审计及评分命令目录改为 gm636。原生成限额剩 2,532,047、原评分外层剩 291,119，内层评分配置和资格保持。仅更改字段元数据、总说明及英文资源；从原第一问和 CSV 空会话连续前三轮，运行中不再改 Prompt 或追加协议修复。
+
+gm636 已封存并停止：三轮全部交付，15 次主请求、514,885 tokens、185.375 秒；原协议独立评分 2/3（1、1、0），10,361 tokens，当前段共 18 次物理／525,246 已知 tokens／未知 0。15 份实际 Schema 说明及上下文审计通过，两次参数错误均恢复；第三轮仍反转集中度方向并补入不合格市场，未满足本次用户结果。含 gm633—gm636，原计划累计 40 次物理／1,002,080 已知 tokens，生成 982,838、评分 19,242，未重置限额。按停止线结束，不追加重跑；见[验证记录 §21](../optimization/to_verify/verify_results/analysis-correctness.md#21-目标工具字段描述与前三轮续验)。
+
+用户随后要求清除固定提示中的特定任务描述。按[子 Spec §9.2](../optimization/to_verify/analysis-goal-maintenance.md#92-固定提示通用性纠正)使用新身份 `.tmp/gm637/`：执行 `generic_input_audit.py`，再将前述资格、准备、运行、实际请求／目标审计和评分命令目录改为 gm637；另用 `request_generic_audit.py` 检查实际固定资源与动态材料边界。原生成限额剩 2,017,162、评分外层剩 280,758，内层配置及资格保持。主任务采用 v5-general-user-goal-md，从原第一问和 CSV 空会话连续前三轮；清理不冒充特定任务的语义修复，不追加核验器或回放旧答案。
+
+gm637 已退出封存，交付 3/3，独立评分 1/3（1、0、0）：20 次主请求、963,614 tokens、263.906 秒，评分三次、19,290 tokens，当前段 23 次物理／982,904 已知 tokens／未知 0。固定资源与实际 SDK、目标和历史审计通过；第二轮名单范围、第三轮补位仍失败。原前三轮计划累计 63 次物理／1,984,984 已知 tokens，生成 1,946,452、评分 38,532；剩余原限额分别 1,053,548／261,468，旧失败及未知保持原身份。通用性纠正已落实，原语义问题未验收，按停止线结束；详见[验证记录 §22](../optimization/to_verify/verify_results/analysis-correctness.md#22-固定提示通用性纠正与回归)。
+
+## 原失败回答的目标判决依据追问
+
+2026-10-31 用户授权检验目标理解，并要求用反问核对原答依据。按[子 Spec §9.3](../optimization/to_verify/analysis-goal-maintenance.md#93-目标理解与实际判决的隔离追问)，在 `.tmp/goal-comprehension-20261031/` 对 gm637 第二、三轮原最终 SDK 请求续接其同次响应和中立追问，属于隔离诊断，不是新 E2E 或修复验收。工具定义、模型和 Provider 参数保持，不执行工具或把诊断反馈送回原 Runtime。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/goal-comprehension-20261031/probe.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/goal-comprehension-20261031/probe.py run
+.\.venv\Scripts\python.exe -X utf8 .tmp/goal-comprehension-20261031/audit.py
+```
+
+prepare 与 run 已各执行一次，不覆盖归档或重跑；audit 为零模型只读复核。两次完整答复，共 171,107 tokens、未知 0；原生成余量减至 882,441，评分余额 261,468 不变。原完整前缀、目标回执和源码一致性通过，范围及数量例外的理解偏差与原记录相符；结论和自述限制见[验证记录 §23](../optimization/to_verify/verify_results/analysis-correctness.md#23-目标理解与实际判决的隔离追问)。不改原 1/3 成绩，不启动新的产品轮次或继续追问。
+
+## 回答前读取目标接入后的原前三轮
+
+2026-10-31 按[子 Spec §9.4](../optimization/to_verify/analysis-goal-maintenance.md#94-回答前读取当前目标的接入与验证)使用 `.tmp/gm638/`。先离线拒绝反事实与评分资格核对，再冻结源码、从原第一问及 CSV 空会话运行，读取与业务调用共享滚动历史。生成总上限因原余量不足在调用前由 3M 调为 4M；当前段限 1,882,441，评分原余额 261,468 不变。原模型、参数、Docker、恢复限制和 direct／none 保持。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/offline.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/prepare_judge.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/launch.py prepare
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/launch.py run
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/goal_read_audit.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/score.py
+.\.venv\Scripts\python.exe -X utf8 .tmp/gm638/final_audit.py
+```
+
+准备和采集已各一次完成，禁止覆盖或换身份重跑；只有读取审计和静态复核可重读原件。整组 audit 保留第三轮无答案失败，读取及前缀检查另计。第三轮目标参数重复格式错误后采集已停止，前两轮独立 2/2，第三轮未评分；本次不能宣称完整前三轮验收。当前段共 28 次物理／1,599,103 已知 tokens／未知 1；原账本累计生成及诊断 3,707,781、评分 47,413，未知另列。读取协议成立范围和原参数阻塞见[验证记录 §24](../optimization/to_verify/verify_results/analysis-correctness.md#24-回答前读取目标的接入与前三轮验证)，不追加提示补丁或自动重跑。
+
+
+### 目标工具扁平化的定向验证（2026-11-01）
+
+运行前契约、预算与停止条件由[目标维护 Spec §9.5](../optimization/to_verify/analysis-goal-maintenance.md#95-维护工具扁平化与分支分离)拥有。隔离诊断使用 `.venv/Scripts/python.exe -X utf8 .tmp/gm639/diagnose.py`，最多两次物理调用，不作产品 E2E；原协议历史保真。形状恢复成立后从第一问连续验证三轮，命令依次为 `.tmp/gm639/launch.py prepare`、`prepare_judge.py`、`launch.py run`、`audit.py`、`goal_read_audit.py`、`score.py`，各脚本均通过 `.venv/Scripts/python.exe -X utf8` 执行。正式采集的 direct/none 不具完整产品发布资格；评分独立且不回流 Runtime。原账本与失败保留，不补采或重新资格调用。
+
+
+### 当前goal接入目标核验的隔离试验（2026-11-01）
+
+输入、顺序、先阶段750K／12次上限、完整与最小诊断判据及条件正式三轮，由[目标维护 Spec §9.6](../optimization/to_verify/analysis-goal-maintenance.md#96-当前执行目标接入既有目标核验)及其预声明快照拥有。以仓库 `.venv/Scripts/python.exe -X utf8` 运行 `.tmp/gv640/prepare_inputs.py baseline`、`prepare_inputs.py candidate`、`run_workflow.py baseline 3`、`run_workflow.py candidate 3`、`run_workflow.py candidate 1`、`run_workflow.py candidate 3 --minimal`、`audit.py`。只有原目标operation可达，其他核验若到达立即拒绝继续调用；素材和源码封印保持，参考答案不送模型。
+
+四次已结束，完整／最小输入未识别目标错误，按停止线没有正式三轮或修订消费，不追加样本。该结果不满足局部语义修复组，不宣称稳定改善。全部原始调用、回执、104,994tokens及未知0由[验证记录 §26](../optimization/to_verify/verify_results/analysis-correctness.md#26-当前-goal-接入目标核验的可行性与最小输入诊断)拥有。
+
+
+### 单一目标正文与取消目标内成果引用（2026-11-02）
+
+按[目标维护 Spec §9.9](../optimization/to_verify/analysis-goal-maintenance.md#99-单一目标正文与取消目标内成果引用)，先以 `.tmp/gr644/preflight.py` 审计原完整真实阶段接口，再执行 `prepare_judge.py`、`launch.py prepare`、`launch.py run`。首次因 Docker 与评测数据库未运行退出，失败保持原归档；恢复依赖且只读检查通过后，使用 `.tmp/gr645/` 中同名准备／运行脚本重新从原第一问和 CSV 空会话连续三轮一次，生产源码保持相同，不回放旧模型输出。上述脚本均从仓库根以 `.venv/Scripts/python.exe -X utf8` 执行。
+
+生成停止且封存后，依次执行 gr645 的 `audit.py`、`verification_history_audit.py`、`goal_policy_audit.py`、`score.py` 和 `engineering_checks.py`。单一目标正文、每轮维护、原生历史与实际核验反馈消费分别审计；评分资格及原协议不变，评分不进入 Runtime。预算、原费用及停止条件由唯一 Spec 拥有，成绩写入[验证记录 §29](../optimization/to_verify/verify_results/analysis-correctness.md#29-单一目标正文与取消成果引用后的前三轮)，不重复执行付费评分或覆盖历史捕获。
+
+
+### 统一目标与回答核验的连续前三轮（2026-11-02）
+
+按[Spec §9.11](../optimization/to_verify/analysis-goal-maintenance.md#911-取消隔离前置验证并按新机制连续执行)执行；不运行隔离判定或历史模型回放。仓库根用`.venv/Scripts/python.exe -X utf8`依次运行`.tmp/gv647/prepare_judge.py`（复用资格，零模型调用）、`launch.py prepare`（冻结源码和输入身份）、`launch.py run`（原第一问、CSV、空会话连续三轮）。正式进程停止并封存后执行`audit.py`、`audit_unified.py`检查真实输入、目标写入前核验及反馈和历史续接，再用`score.py`按原协议对实际答案各评分一次；评分不回流Runtime。最后执行`engineering_checks.py`，实际结果及费用写入[记录§31](../optimization/to_verify/verify_results/analysis-correctness.md#31-统一目标与回答核验的空会话连续前三轮)，不覆盖旧运行。
+
+
+### 单正文内容契约的连续前三轮（2026-11-02）
+
+按[Spec §9.12](../optimization/to_verify/analysis-goal-maintenance.md#912-单正文的任务定义与四项内容核验)执行。在仓库根使用`.venv/Scripts/python.exe -X utf8`运行`.tmp/goal-quality-20261102/prepare_judge.py`、`launch.py prepare`、`launch.py run`；复用评分资格，零资格新调用。原第一问与CSV进入正式HTTP空会话，连续三轮实际维护、核验、执行和回答，真实历史滚动，不运行隔离模型验证。进程停止并封存后运行`audit.py`、`audit_unified.py`、`score.py`和适用用户结果核对；评分逐物理调用预留、原协议不变、不回流Runtime。结果及费用进入[记录§32](../optimization/to_verify/verify_results/analysis-correctness.md#32-单正文四项内容契约的空会话连续前三轮)。
+
+
+### 逐项用户要求核验的连续前三轮（2026-11-02）
+
+按[Spec §9.13](../optimization/to_verify/analysis-goal-maintenance.md#913-按用户要求逐项比较的统一核验)实施。本次身份`.tmp/goal-checks-20261102/`，仓库根以`.venv/Scripts/python.exe -X utf8`依次执行`preflight.py`（数据库、固定镜像和Schema零模型检查）、`prepare_judge.py`（复用旧资格）、`launch.py prepare`（冻结源码）及`launch.py run`（原第一问、CSV、空会话连续三轮一次）。不运行隔离模型或注入旧目标／回答；评分在生成停止封存后单独运行`score.py`，不回流Runtime。
+
+`audit.py`核对原生交互及SDK请求保真，`audit_unified.py`核对逐项真实输出、回执归一、目标写入前门禁和实际反馈续接；随后核对原用户结果与必要反事实，运行`engineering_checks.py`。实际成绩、费用和未触发边界由[记录§33](../optimization/to_verify/verify_results/analysis-correctness.md#33-逐项用户要求核验的空会话连续前三轮)拥有；本次已执行：第一轮terminal_limitation、正常答案0，后两轮未执行；报告形状及反馈绑定成立，语义失败，不补评分或整轮重采。
+
+### 分离目标与回答核验的连续前三轮（2026-11-03）
+
+按[Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)在`.tmp/goal-split-20261103/`封存本轮身份。仓库根用`.venv/Scripts/python.exe -X utf8`依次执行`preflight.py`、`prepare_judge.py`、`launch.py prepare`及`launch.py run`，从原第一问、CSV和空会话连续三轮一次；此前三步无新模型调用。新目标、回答、核验与修复均消费本轨迹实际产物，不回放旧答案或隔离核验。
+
+生成停止封存后执行`audit.py`（主循环输入及SDK保真）、`audit_split.py`（两类真实核验请求、同职责历史、回执及反馈）和`score.py`（原协议独立评分，不回流Runtime），随后执行工程检查。本次已完成：三轮正常交付，原分[1,1,1]、预声明用户结果通过／通过／失败。首个score.py在网络派发前因本轮待发请求计数检查错误退出，原失败保留；按子Spec独立恢复决定使用score-recovered.py和j-recovery完成三份答案各一次实际评分，原Prompt／资格／参数／余额保持，无生成重采。实际结果及费用由[记录§34](../optimization/to_verify/verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)拥有，原始失败与旧身份不覆盖。
+
+### 当前职责分离实现的task2全量运行（2026-11-03）
+
+用户要求完整运行原task2的34轮，计划、60M生成及1M独立评分额度、原参数和停止边界由[Spec §9.15](../optimization/to_verify/analysis-goal-maintenance.md#915-当前实现的task2全量连续运行)拥有。当前源码保持不变，独立身份`.tmp/task2-full-split-20261103/`从原第一问、CSV及空会话连续执行；不继承前三轮运行结果，不在运行中修复生产或使用独立评分筛选答案。
+
+仓库根用`.venv/Scripts/python.exe -X utf8`依次运行该身份下`preflight.py`、`prepare_judge.py`、`launch.py prepare`、`launch.py run`；生成停止封存后运行`audit.py`、`audit_split.py`、`score.py`及`finalize.py`。实际请求3/34、正常交付2轮，原独立分[1,0]；第三轮重复修订参数类型错误后limitation，后31轮未执行。主循环与两类核验历史审计成立，未触发压缩，未完成全量。新增生成32次／1377224已知tokens／未知1，独立评分2次／6930／未知0；结果由[记录§35](../optimization/to_verify/verify_results/analysis-correctness.md#35-当前实现的task2全量连续运行)拥有，不重采生成、不改写旧身份。
+
+### 回答拒稿后原循环重生成的连续前三轮（2026-11-03）
+
+按[Spec §9.16](../optimization/to_verify/analysis-goal-maintenance.md#916-回答拒稿后沿原循环重新生成)及ADR0049，独立身份`.tmp/answer-regeneration-20261103/`保护原工作树、冻结新源码，从原第一问、CSV及正式HTTP空会话连续前三轮一次。生成4M、原MiMo独立评分外层100K，模型／参数／材料／资格保持；不运行隔离模型回放或注入旧目标／答案／判决。
+
+仓库根以`.venv/Scripts/python.exe -X utf8`执行该身份下`preflight.py`、`prepare_judge.py`、`launch.py prepare`后再执行`launch.py run`。停止封存后运行`audit.py`、`audit_split.py`、`audit_regeneration.py`、`score.py`及`finalize.py`，评分不回流Runtime。首次零模型准备在资源清理过程中因Catalog中英文集合不一致退出，尚未冻结源码或发模型；完成清理后按顺序重新预检／冻结，不覆盖该准备失败。实际一次三轮均正常交付，原分[1,1,0]、用户结果通过／通过／失败；三份回答各一次通过核验，回答拒稿重生成未触发。实际请求、绑定及新费用由[记录§36](../optimization/to_verify/verify_results/analysis-correctness.md#36-普通回答改为原循环完整重提的连续前三轮)拥有，不将原题其余31轮记为本次计划内未完成或补0分。
+
+### 原循环重生成实现的task2完整34轮（2026-11-03）
+
+按用户新请求及[Spec §9.17](../optimization/to_verify/analysis-goal-maintenance.md#917-当前原循环重生成实现的task2全量运行)，在`.tmp/task2-full-regeneration-20261103/`保持当前580文件及原模型参数，从原第一问、CSV和空会话连续执行全部34轮一次。生成60M及独立评分1M，错误正常答案继续后续题；原有技术／正式终态边界保持，不沿用前三轮答案或为新运行修复生产。
+
+仓库根用`.venv/Scripts/python.exe -X utf8`依次运行preflight.py、prepare_judge.py、launch.py prepare、launch.py run。进程停止封存后运行audit.py、audit_split.py、audit_regeneration.py、score.py及最终汇总，实际SDK、压缩、历史、结果与成本分别报告，不回流评分。当前为已固定运行计划，尚无本次全量结果。
+
+该次首次Web启动健康检查超时，`c`封存为0用户／0模型；相同源码零模型启动诊断已健康200。按Spec固定一次发题前启动重试，独立输出`c-recovery`，原45秒健康检查、源码、参数和额度保持；不覆盖首试或当作已有轮次恢复。后处理脚本读取明确的`c-recovery`并将首试成本单列。
+
+用户随后要求第3轮结束先暂停：发题进程在等待第三轮时被挂起，Web端继续完成原第三轮。只读现场快照放本次归档；只有第三轮正常answer且原进程仍在时，才可核对PID及创建身份后接续第4题；正式非answer则只让原采集器记录并退出。不是新的空会话、原第17轮checkpoint或完整34轮结果；评分暂不启动。
+
+实际第3轮在40次主决策及30次回答退回后返回limitation，前2轮正常交付；只释放采集器记录正式终态后按原链路退出，第4—34轮未执行。c-recovery及p3副本均已seal，当前没有活跃采集进程；resume.py仅报告原终态，不会启动或跳过第三轮。评分仍暂停，后续须先核对第三轮阻塞与正式接续边界。实际结果、89次物理／7715814已知tokens／未知1及上下文审计由[记录§37](../optimization/to_verify/verify_results/analysis-correctness.md#37-原循环重生成实现的task2在第3轮后停止)拥有。
+
+### 结果卸载与完整交互压缩的task2连续验证（2026-11-03）
+
+当前设计和停止边界由[Spec §9.20](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)拥有。仓库根以 `.venv/Scripts/python.exe -X utf8` 依次执行 `.tmp/context-unload-task2-20261103/` 下的 `preflight.py`、`prepare_judge.py`、`launch.py prepare`、`launch.py run`；原34轮从第一题、CSV、新主体和空会话连续一次，生成60M、独立评分1M，原模型、1M容量与每轮40主决策保持。
+
+首次身份 `.tmp/context-unload-implementation-20261103/c-recovery` 第一题在模型派发前因GovernedModelClient缺少容量测量转交返回500，物理调用及tokens均0。一次有界修正后，正式模型工厂的零网络真实请求测量通过；当前新身份冻结582文件，不继承旧答案或覆盖原失败。仅在生成完全停止并封存后运行 `audit.py`、`audit_split.py`、`audit_regeneration.py` 和 `score.py`；审计按每次实际覆盖范围检查未覆盖的原生消息、判决与修复，不把合法摘要遗漏计为反馈丢失，也不以摘要存在代替后继消费。生成期间不得改生产或回流评分。
+
+本次实际已停止封存：十轮正常交付，原分3/10；第十一轮因机器重启中断。同run恢复沿原HTTP、主体、消息、许可及截止时间执行，复用已解码原件、新增模型0，机器再次重启后停止重启生成。`resume.py prepare/run`、`close_interrupted.py`保留两段现场并据真实OS、SDK及Journal记录采集终态，不伪造缺失的HTTP响应。上述审计在生成源码冻结状态执行；之后仅删除不可达函数／调用与未使用双语提示，`cleanup_projection.py before/after`的11个真实阶段完整投影一致。清理后的四份预期源码差异由post-cleanup-source-hashes.json明确记录；原冻结代码及审计不覆盖。详细结果、费用、实际命令及未验证边界见[记录§39](../optimization/to_verify/verify_results/analysis-correctness.md#39-结果卸载与完整交互压缩的-task2-连续验证)。

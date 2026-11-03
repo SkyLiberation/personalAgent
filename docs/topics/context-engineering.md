@@ -79,10 +79,19 @@ ArtifactRef 或 source span 读取必要片段，不复制进 runtime state。�
 
 ## Conversation 上下文
 
+2026-10-31 独立分析在上述原件与权限边界内提供[当前执行目标](../optimization/to_verify/analysis-goal-maintenance.md#6-目标维护与执行的上下文接续)。每次主请求从 Journal 恢复当前版本，维护、读取及业务步骤共享原生历史。最终答复前必须单独读取当前目标，完整回执和“现在请按照目标回答用户问题。”进入本轮最新原生交换；后续再行动时需重读，原 system 视图不是读取成功事实。匹配前驱的 Runtime 反馈保留在原交互，不在目标旁另行汇总或复制；本轮反馈不被前驱同键投影消耗。压缩保护决策反馈并恢复完整目标，摘要不能改写目标。原话区仍是来源视图，目标事实及只读操作由唯一 Journal 拥有。
+
+主任务 Prompt `v7-flat-goal-tool-md` 明确要求目标保存后约束方法选择，执行后及交付前依据实际结果对照当前目标。`maintain_goal` 直接接收整体目的字符串、有效要求字符串数组、本轮任务字符串和可选成果编号数组，完整替换；`retain_goal({})` 在已有目标及任务均无变化时沿用，版本由 Runtime 绑定。目标不够明确时，回查用户原话并额外调用维护工具修订，成功后继续；原话仍不足以确定关键条件时说明缺口，不自行补门槛。检查由同一主循环完成，不新增独立核验；实际目标理解及遵守效果由上述 Spec 的新前三轮结果限定。
+
+按用户后续要求，目标正文、条目和当前任务不再保存或输出 source_message_indices，Runtime 删除对应逐条索引校验，工具及中英文反馈同步使用新契约。原用户消息及既有原话视图仍提供理解依据，整轮输入、当前目标版本、作用域和成果资源绑定保持；取消来源索引不改变这些事实的 owner。旧带索引档案按原冻结源码读取，不向新目标 Schema 静默兼容。
+
+独立 Python 分析的目标核验通过 [verification_context.py](../../src/personal_agent/application/conversation/verification_context.py)从 Journal 恢复当前精确分支的用户问题、实际提交回答、对应核验及修复后回答。`goal_context.turns` 先按用户问题、再按回答轮次排列；新问题保留历史各组，组内轮号从1开始。实际请求用 Markdown 突出当前问题并逐轮配对回答和判决，不含工具、程序、执行回执、读取状态或 goal 快照。主回答模型仍保留完整任务 Context；普通来源核验、claims 和原 Intent 保持，契约见 [ADR 0047](../adr/0047-user-goal-verification-context.md)。
+
 Conversation 的短期事实由 Interaction journal 持有：
 
 ```text
 committed user/assistant messages
++ applicable working interpretations (no extracted criteria in standalone direct analysis)
 + accepted ActionObservation / DecisionFeedback
 + current usage and action order
 -> 经单条限制及请求级投影的 model context
@@ -91,18 +100,24 @@ committed user/assistant messages
 历史 assistant reply 只用于指代和会话连续性，不能作为事实证据。Tool/Agent observation 必须保留
 typed status、artifact/receipt ref 和错误分类；不能只压成一段无法区分来源的自然语言。
 
-原生工具历史由 [model_history.py](../../src/personal_agent/application/conversation/model_history.py)从 Journal 决策及已物化、可见的事实派生。完整 assistant／思考字段和 ID 配对的结果共同进入同一 Model Port；相同工具正文从 Typed execution inputs 去重。控制接纳有独立 canonical 事实，反馈按决策轮归属，后轮复用 ID 不改写旧成功。历史压缩按完整交换覆盖，原件同时保存 inputs 与完整响应；受保护成员保留整组。该机制及供应商差异由 [ADR 0042](../adr/0042-native-model-tool-continuation.md)和[唯一规格](../optimization/model-provider-transport.md#2026-10-23-原生工具会话续接规格)拥有。
+2026-10-30 当前独立 Python 的 direct 分析合并理解与作答，不调用前置 Intent，也不向主循环传入上轮 criteria 或辅助条件区。完整原问答、执行事实、实际模型／工具交换与适用摘要继续滚动累积，由 Journal 与 Artifact 恢复，主模型在正常决策中解释当前目标。跨轮工具观察按同一分析授权、实际接纳请求及原生 call ID 归属恢复，包括读取和失败状态，不再只继承成功 Python／写入；旧观察不产生再次执行权限。已有提取消费者继续使用当前／历史 user 的 Markdown 标识及上轮真实条件匹配；助手解释与旧条件均不升级为用户要求。两种实际入口的范围及新六轮由 [SEM §7.5](../optimization/to_verify/longtask-semantic-consistency.md#75-独立分析由主模型直接理解并作答)拥有，旧六轮原件保持。
 
-主循环的要求区从冻结 `ReviewCriteria.criteria` 只读物化。稳定通用 system 在前，完整会话随后；要求区以“用户要求的辅助理解”标题和原句编号清单放在本次 Typed execution inputs system 末段。没有执行输入时追加同角色的独立要求消息，空标准不产生区块。条目保留原语言、顺序和限定，不调用模型重写；内部 typed 标准及核验身份不变。Model Adapter 在其后继续追加原生 assistant/tool 历史，因此不声称要求区位于整个请求最末端。实现及质量边界见[SEM 首批记录](../optimization/to_verify/longtask-semantic-consistency.md#9-context-首批实施与真实用例观察)。
+独立分析每次主决策另从同一 Journal.messages 恢复专用“用户要求原文”区，按原消息索引和 L 行号展示全部已收到的 user 原话，本轮单列。它不做语义删选、模型改写或新目标持久化，不含 assistant、工具结果或未来输入；原始时间线及原生工具历史继续保留。该只读视图在执行材料／反馈之后、当前轮原生续接之前装配，原始文字不会因历史摘要而由模型解释替代。主模型按用户后续修改更新对应条件，提交前在原正常决策内对照有效原话，无新增 criteria／自查输出或核验调用。当前候选及六轮验证见 [SEM §7.8](../optimization/to_verify/longtask-semantic-consistency.md#78-用户原话集中呈现并持续约束主决策)。
+
+原生工具历史由 [model_history.py](../../src/personal_agent/application/conversation/model_history.py)从 Journal 决策及已物化、可见的事实派生。完整 assistant／思考字段和 ID 配对的结果共同进入同一 Model Port；相同工具正文从 Typed execution inputs 去重。独立 direct 分析还匹配同一授权下已结束运行的原用户前缀和实际终答，将历史交换插入对应最终答复之前；当前轮继续在末尾续接。布局只由请求中的 `before_message_index` 表达，Adapter 校验范围、顺序及 host／model，不增加可写历史副本。工具引用按 `evidence_id|原文` 单份展示，完整 typed 记录和引用绑定保持，文件 owner 由 Runtime 恢复。控制接纳有独立 canonical 事实，反馈按决策轮归属，后轮复用 ID 不改写旧成功。当前压缩可见集仍控制哪些结果能够重放，受保护成员保留整组；原件由 Journal／Artifact 保存。契约由 [ADR 0042](../adr/0042-native-model-tool-continuation.md)拥有，已成立的机制及证据边界见[固化记录](../optimization/completed/conversation-tool-history.md)。
+
+仍采用提取标准的主循环要求区从冻结 `ReviewCriteria.criteria` 只读物化；独立 direct 分析不产生该区块。稳定通用 system 在前，完整会话随后；适用要求区以“用户要求的辅助理解”标题和原句编号清单放在本次 Typed execution inputs system 末段。没有执行输入时追加同角色的独立要求消息，空标准不产生区块。条目保留原语言、顺序和限定，不调用模型重写；内部 typed 标准及核验身份不变。Model Adapter 在其后继续追加原生 assistant/tool 历史，因此不声称要求区位于整个请求最末端。早期实现及质量边界见[SEM 首批记录](../optimization/to_verify/longtask-semantic-consistency.md#9-context-首批实施与真实用例观察)。
 
 ### 整体窗口与历史增长的当前边界
 
 
 `LoopBudgetPolicy.max_total_tokens` 约束已提交的累计用量。[Provider 末端检查](../../src/personal_agent/infra/model_capacity.py)则按显式 host／model 配置估算本轮完整文本请求，加上输出和协议预留后接受或拒绝。两者分别控制总消费与单次容量；单条字符数、主循环原消息长度或输出 `max_tokens` 不能替代完整请求检查。
 
-容量拒绝后，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)将已闭合的旧 Observation／反馈及完整工具交换保存为不可变 Artifact，并在原 Journal 绑定摘要覆盖范围。摘要只供工作连续性使用，历史原件重读也不自动取得来源证据资格。当前选证原文、最新核验反馈、当前稿和原始预算保留；恢复重新校验来源与快照。摘要沿用部署的模型参数，原先局部关闭思考的配置已删除。接入依据及例外退出条件见 [ADR 0038](../adr/0038-history-compaction-before-natural-pressure.md)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
+主请求达到80%估算压力时，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)对按 run 绑定的完整旧交互前缀生成摘要，保留用户原话、当前目标、未决反馈及近期配对尾部。Python 执行层已外置全文、限制预览；旧预览随已覆盖完整交互退出请求，原 stdout/stderr 引用仍可读取；已覆盖的模型交换和旧答复正文不再被历史重建恢复。纯请求构造同时服务候选和正式调用，经模型 Port 测量完整 wire 输入，严格缩小才激活、最多两次；末端仍按输出和协议预留执行硬容量检查。原件快照及 lineage 只用于工作恢复，不取得业务证据资格。摘要沿用部署参数，当前实施和验收状态见[目标维护 Spec §9.20](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
 
 LongDS 的 direct／none 流程已实际触发本地估算容量拒绝，完成摘要激活、后继消费和多次续跑；完整交付与答案正确性分别计分。本地估算压力不代表 Provider 实际 token 达到窗口极限，也不证明全文语义保真或净成本收益。较早的进程恢复不能证明压缩后检查点的跨进程复用。实际身份、分数及未覆盖项由 [Loop Schema §16](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)和[当前评测盘点](../evals/02-current-case-inventory.md)维护。
+
+Intent 与主循环均在实际发送前使用同一容量门禁；因上下文容量拒绝时复用已有压缩器，重新物化适用摘要后继续。提取前先提交实际恢复输入，压缩仍绑定原 Journal 与 Artifact。原用户要求、当前条件和必要引用不由摘要改写；是否在某次运行触发压缩按实际记录报告，不以配置存在替代验证。
 
 ### 单次 Observation 的体积边界
 

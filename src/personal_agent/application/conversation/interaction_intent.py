@@ -24,6 +24,7 @@ from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from .models import (
     ConversationMessage,
     DecisionFeedback,
+    InteractionTrace,
     ReviewCriteria,
 )
 from .errors import ConversationFailure
@@ -110,16 +111,53 @@ def materialize_intent_messages(
 ) -> list[dict[str, object]]:
     """Show one numbered copy; coordinates still resolve against the originals."""
     projected = []
+    latest_user = next(
+        (index for index in range(len(messages) - 1, -1, -1)
+         if messages[index].role == "user"),
+        None,
+    )
     for index, message in enumerate(messages):
         item = message.model_dump(mode="json")
         if message.role == "user":
             lines = _user_lines(message.content)
             item["content"] = (
-                prompts.render("conversation.intent.user_source_header", index=index, line_count=len(lines))
+                prompts.render(
+                    "conversation.intent.current_user_source_header" if index == latest_user
+                    else "conversation.intent.user_source_header",
+                    index=index, line_count=len(lines),
+                )
                 + "".join(f"L{number}|{line}" for number, line in enumerate(lines, 1))
             )
         projected.append(item)
     return projected
+
+
+def materialize_previous_criteria(
+    messages: Sequence[ConversationMessage],
+    history: Sequence[InteractionTrace],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> list[dict[str, object]]:
+    """Expose only records matching the preceding actual user/assistant exchange."""
+    if len(messages) < 3 or messages[-2].role != "assistant":
+        return []
+    preceding_messages = tuple(messages[:-2])
+    contexts = []
+    for trace in history:
+        if (trace.messages != preceding_messages or trace.final_message is None
+                or trace.final_message.message != messages[-2].content
+                or trace.review_criteria is None):
+            continue
+        entries = [
+            f"{index}. " + criterion.replace("\n", "\n   ")
+            for index, criterion in enumerate(trace.review_criteria.criteria, 1)
+        ]
+        contexts.append({"role": "system", "content": prompts.render(
+            "conversation.intent.previous_criteria",
+            run_ref=trace.interaction_run_ref,
+            message_index=len(trace.messages) - 1,
+            criteria_text="\n".join(entries),
+        )})
+    return contexts
 
 
 def admit_interaction_intent(
@@ -180,6 +218,8 @@ def derive_interaction_intent(
     model_client: StructuredModelClient,
     *,
     messages: Sequence[ConversationMessage],
+    history: Sequence[InteractionTrace] = (),
+    runtime_context: str = "",
     propagate_revision_failures: bool = False,
     deadline_at: datetime | None = None,
     remaining_tokens: int | None = None,
@@ -197,8 +237,14 @@ def derive_interaction_intent(
     intent_prompt = prompts.get("conversation.interaction_intent")
     generate_model = generate or model_client.generate
     source_messages = materialize_intent_messages(messages, prompts=prompts)
+    previous_context = materialize_previous_criteria(messages, history, prompts=prompts)
+    runtime_messages = ([{"role": "system", "content": prompts.render(
+        "conversation.intent.runtime_context", context_text=runtime_context,
+    )}] if runtime_context else [])
     prompt_messages = [
         {"role": "system", "content": intent_prompt.template},
+        *previous_context,
+        *runtime_messages,
         *source_messages,
     ]
     response = generate_model(
@@ -255,6 +301,8 @@ def derive_interaction_intent(
                 proposal=response.value.model_dump_json(), feedback=feedback.model_dump_json(),
             ),
         },
+        *previous_context,
+        *runtime_messages,
         *source_messages,
     ]
     try:

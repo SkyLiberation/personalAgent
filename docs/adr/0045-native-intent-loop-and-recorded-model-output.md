@@ -10,7 +10,7 @@
 
 ## 决定与责任
 
-按[统一 Loop Schema 设计](../optimization/to_verify/conversation-loop-schema.md)及[实际开源调用链比较](../agentRef/model-interaction-protocols.md)，主循环使用原生消息／工具调用，优先处理调用；没有调用时，完整可见正文也形成回答候选。`submit_final` 携带沟通意图、行引用等属性，`revise_final` 修订现稿，两者进入同一提交出口。首版要求所有正文先调用 `submit_final`，已被第 17 轮反例否定。空准备动作与第二次普通成文已删除，claims 继续以业务操作接入同稿出口。
+按[统一 Loop Schema 设计](../optimization/to_verify/conversation-loop-schema.md)及[实际开源调用链比较](../agentRef/model-interaction-protocols.md)，主循环使用原生消息／工具调用，优先处理调用；没有调用时，完整可见正文也形成回答候选。`submit_final` 携带沟通意图、行引用等属性，与正文进入同一提交出口。2026-11-03按[ADR0049](0049-answer-regeneration-in-original-loop.md)取消普通回答专用按段修订，拒稿后由原循环重新生成完整稿。首版要求所有正文先调用 `submit_final`，已被第17轮反例否定。空准备动作与第二次普通成文已删除，claims继续以业务操作接入同稿出口。
 
 模型决定语义、工具、代码及正文。Runtime 恢复身份／范围／版本，Admission 只接纳或拒绝，执行 owner 写事实，Verifier 与 Completion 各守原职责。原生终止和研究操作独占批次，执行前检查，不根据模型自述批准自己。
 

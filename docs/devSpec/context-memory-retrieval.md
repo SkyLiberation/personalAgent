@@ -2,6 +2,8 @@
 
 > 本细则在任务涉及 Context、System Prompt、模型输入、反馈执行异常、Memory、RAG、Artifact、检索、权限过滤、预算物化或 Capability Projection 时生效。通用事实归属见[架构边界与事实归属](architecture-ownership.md)，测试要求见[测试、评估、观测与安全](quality-security.md)。
 
+任务导向的模型决策、复杂任务分解及输入输出与运行反馈协作，使用 [LLM 决策设计 skill](../../.agents/skills/design-llm-decisions/SKILL.md)；本细则拥有输入审计、Context 与存储边界。
+
 ## 1. Context 的处理顺序
 
 遵守[根规范第 2.4 节](../../AGENTS.md#24-决策执行与完成不得混装)的处理顺序：先按权限与作用域筛选可见内容，再按需求召回与既有语义选择契约选材，最后按预算物化 Context。该顺序不要求每次检索新增模型调用，开放语义与确定性筛选的归属仍按 ARC 判断。

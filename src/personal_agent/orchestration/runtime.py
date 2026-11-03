@@ -4,6 +4,7 @@ from personal_agent.infra.model_providers import build_provider_policy
 
 from personal_agent.infra.artifact_ripgrep import RipgrepArtifactSearch
 
+import json
 import logging
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -442,11 +443,18 @@ class AgentRuntime:
                 and config.capacity.model == config.model
                 for config in (self.settings.openai, self.settings.structured)
             ),
+            verification_input_budget=(
+                self.settings.structured.capacity.context_window_tokens - 32_768
+                - self.settings.structured.capacity.protocol_reserve_tokens
+                - len(json.dumps({"model": self.settings.structured.model,
+                    "extra_body": self.settings.structured.extra_body}, ensure_ascii=True).encode("ascii"))
+                if self.settings.structured.capacity is not None else None
+            ),
             action_diagnostics_reveal_field_names=(
                 self.settings.action_diagnostics_reveal_field_names
             ),
         )
-        if self._structured_client is not None and answer_result.verification_enabled:
+        if self._structured_client is not None:
             self._tool_executor.register(build_verify_interaction_draft_tool(
                 self._conversation_service.generate_verification,
                 prompts=self._prompts,

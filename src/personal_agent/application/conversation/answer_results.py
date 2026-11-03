@@ -19,11 +19,10 @@ from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .citations import CitationBindingError, materialize_cited_draft, materialize_citation_context, selected_citation_ids
 from .context_materialization import materialize_interaction_inputs
-from .final_revisions import materialize_final_revision
 from .models import (
     ConversationAnswerSegment, ConversationMessage, DecisionFeedback, FinalMessage,
-    InteractionInput, ReviewCriteria, SubmitFinalArguments, ReviseFinalArguments,
-    FinalRevision, FinalSegmentEdit, SubmittedFinal, ResearchEvidenceSelection, InitialResearchEvidenceSelection,
+    InteractionInput, ReviewCriteria, SubmitFinalArguments,
+    ResearchEvidenceSelection, InitialResearchEvidenceSelection,
 )
 from .research import (
     AddClaims, CreateClaims, DeleteClaim, RecheckClaims, ReplaceClaimReferences,
@@ -67,15 +66,8 @@ class DirectAnswerResult:
         return False
 
     def action_definitions(self, inputs, **conditions) -> tuple[ModelActionDefinition, ...]:
-        actions = [self._action("submit_final", SubmitFinalArguments.model_json_schema(),
-            self.prompts.get("conversation.answer.submit_description").template)]
-        submitted = next((item for item in reversed(inputs) if isinstance(item, SubmittedFinal)), None)
-        if submitted is not None:
-            schema = ReviseFinalArguments.model_json_schema()
-            schema["properties"]["base_resource_id"]["enum"] = [submitted.resource_ref.resource_id]
-            actions.append(self._action("revise_final", schema,
-                self.prompts.get("conversation.answer.revise_description").template))
-        return tuple(actions)
+        return (self._action("submit_final", SubmitFinalArguments.model_json_schema(),
+            self.prompts.get("conversation.answer.submit_description").template),)
 
     @staticmethod
     def _action(name, schema, description):
@@ -107,17 +99,6 @@ class DirectAnswerResult:
             args = SubmitFinalArguments.model_validate(invocation.arguments)
             return FinalMessage(disposition=args.disposition, segments=(ConversationAnswerSegment(
                 text=args.message, references=tuple(ConversationEvidenceReference(evidence_id=ref) for ref in args.references)),))
-        if invocation.operation == "revise_final":
-            args = ReviseFinalArguments.model_validate(invocation.arguments)
-            current = next((item for item in reversed(inputs) if isinstance(item, SubmittedFinal)), None)
-            if current is None or current.resource_ref.resource_id != args.base_resource_id:
-                raise ValueError(self.prompts.render("conversation.answer.base_unavailable"))
-            edits = tuple(FinalSegmentEdit(segment=edit.segment, operation=edit.operation, text=edit.text,
-                references=tuple(ConversationEvidenceReference(evidence_id=ref) for ref in edit.references)) for edit in args.edits)
-            return materialize_final_revision(
-                FinalRevision(base_ref=current.resource_ref, edits=edits), inputs,
-                prompts=self.prompts,
-            )
         raise ValueError(self.prompts.render("conversation.answer.operation_unavailable"))
 
     def decode_assistant_message(self, message: ModelAssistantMessage | None, inputs, **conditions) -> FinalMessage:
@@ -177,7 +158,6 @@ class ClaimAnswerResult(DirectAnswerResult):
         if not self.uses_claims(inputs, **conditions):
             return tuple(actions)
         # Ordinary answer/revision cannot become a second entrance to this writer.
-        actions = [action for action in actions if action.target_name != "revise_final"]
         for index, action in enumerate(actions):
             if action.target_name == "submit_final":
                 schema = deepcopy(action.input_schema)
@@ -208,10 +188,8 @@ class ClaimAnswerResult(DirectAnswerResult):
         return tuple(actions)
 
     def decode_operation(self, invocation, inputs, **conditions):
-        if self.uses_claims(inputs, **conditions) and (
-            invocation.operation == "revise_final"
-            or (invocation.operation == "submit_final" and invocation.arguments.get("disposition") == "answer")
-        ):
+        if (self.uses_claims(inputs, **conditions) and invocation.operation == "submit_final"
+                and invocation.arguments.get("disposition") == "answer"):
             raise ValueError(self.prompts.render("conversation.answer.research_writer_required"))
         if invocation.operation == "select_research_evidence":
             cls = InitialResearchEvidenceSelection if current_claims(inputs) is None else ResearchEvidenceSelection

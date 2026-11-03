@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Generic, Literal, Protocol, TypedDict, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 ModelRequestKind = Literal[
@@ -18,7 +18,7 @@ ModelRequestKind = Literal[
 ]
 ModelReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 ModelOutputTransport = Literal["native_tool", "prompted_json"]
-ModelActionKind = Literal["tool", "agent", "working_plan", "answer_result"]
+ModelActionKind = Literal["tool", "agent", "working_plan", "answer_result", "maintain_goal", "read_current_goal"]
 ModelInvocationFailureCategory = Literal[
     "provider_rejected",
     "provider_timeout",
@@ -38,6 +38,7 @@ StructuredOutputFailureCode = Literal[
     "provider_action_tool_payload_invalid",
     "provider_action_agent_payload_invalid",
     "provider_action_answer_result_payload_invalid",
+    "provider_action_goal_payload_invalid",
     "provider_action_multiple_working_plans",
     "provider_action_definition_invalid",
 ]
@@ -126,6 +127,20 @@ class ModelToolExchange(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     assistant: ModelAssistantMessage
     results: tuple[ModelToolResult, ...] = ()
+    runtime_feedback: tuple[str, ...] = ()
+    context_before: tuple[str, ...] = ()
+    before_message_index: int | None = Field(default=None, ge=0)
+
+    @model_serializer(mode="wrap")
+    def serialize_position(self, handler):
+        value = handler(self)
+        if self.before_message_index is None:
+            value.pop("before_message_index", None)
+        if not self.runtime_feedback:
+            value.pop("runtime_feedback", None)
+        if not self.context_before:
+            value.pop("context_before", None)
+        return value
 
     @model_validator(mode="after")
     def _complete_pairing(self):
@@ -326,6 +341,10 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     model_history: tuple[ModelToolExchange, ...] = ()
 
     def __post_init__(self) -> None:
+        positions = [len(self.messages) if item.before_message_index is None else item.before_message_index
+                     for item in self.model_history]
+        if any(position > len(self.messages) for position in positions) or positions != sorted(positions):
+            raise ValueError("native history positions must be ordered within the request messages")
         if self.consumer_key is not None and (not isinstance(self.consumer_key, str) or not self.consumer_key.strip()):
             raise ValueError("model consumer key must be a nonempty Runtime binding")
         if self.max_output_repairs < 0:
@@ -685,6 +704,10 @@ class StructuredModelResponse(Generic[StructuredOutputT]):
 
 
 class StructuredModelClient(Protocol):
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        """Measure a text/native-action wire request without IO; enforce configured hard limits."""
+        ...
+
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],

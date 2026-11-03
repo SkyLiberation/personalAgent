@@ -28,11 +28,11 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
-from langchain_core.utils.function_calling import convert_to_openai_tool
 from openai import APIError, APIStatusError, APITimeoutError, OpenAI
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, ValidationError
+from personal_agent.kernel.llm_schemas import native_output_parameters
 
 from personal_agent.capabilities.contracts.model import (
     ModelActionDefinition,
@@ -44,6 +44,7 @@ from personal_agent.capabilities.contracts.model import (
     ModelToolExchange,
     ModelToolResult,
     ModelCapacityRefused,
+    ModelCapacityCheck,
     ModelInvocationUnavailable,
     ProviderFailureDiagnostics,
     StructuredModelClient,
@@ -300,14 +301,23 @@ class OpenAIModelClient:
         stream: bool = False,
     ) -> dict[str, Any]:
         model = self._resolved_model
-        messages = list(request.messages)
+        messages = []
+        cursor = 0
         host = self._provider_host
         for exchange in request.model_history:
             if exchange.assistant.provider_host != host or exchange.assistant.model != model:
                 raise ModelCapacityRefused(request.operation, "capacity_profile_mismatch")
+            position = (len(request.messages) if exchange.before_message_index is None
+                        else exchange.before_message_index)
+            messages.extend(request.messages[cursor:position])
+            cursor = position
+            messages.extend({"role": "system", "content": content} for content in exchange.context_before)
             messages.append(exchange.assistant.payload)
             messages.extend({"role": "tool", "tool_call_id": result.call_id, "content": result.content}
                             for result in exchange.results)
+            messages.extend({"role": "system", "content": content}
+                            for content in exchange.runtime_feedback)
+        messages.extend(request.messages[cursor:])
         kwargs: dict[str, Any] = {"model": model, "messages": messages}
         if stream:
             kwargs["stream"] = True
@@ -362,6 +372,15 @@ class OpenAIModelClient:
         return self._create_chat_completion(
             client, request.operation, kwargs, before_send=before_send
         )
+
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        """Share final chat serialization and the existing hard-capacity owner, without network IO."""
+        if self._config.capacity is None:
+            return None
+        if request.kind == "structured":
+            raise ValueError("capacity measurement requires the final text or native-action request")
+        return check_model_capacity(operation=request.operation, provider_host=self._provider_host,
+            model=self._resolved_model, kwargs=self._chat_kwargs(request), capacity=self._config.capacity)
 
     def _provider_unavailable(
         self,
@@ -667,9 +686,7 @@ class OpenAIModelClient:
                 name="structured_output", kind="tool",
                 target_name=request.operation,
                 description=self._prompts.get("structured.native_output.description").template,
-                input_schema=convert_to_openai_tool(
-                    request.output_type, strict=False
-                )["function"]["parameters"],
+                input_schema=native_output_parameters(request.output_type),
                 strict=False,
             )
             chat_request = replace(
@@ -1090,6 +1107,9 @@ class RetryingStructuredModelClient:
         self._max_retries = max(0, int(max_retries))
         self._backoff_seconds = max(0.0, float(backoff_seconds))
 
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        return self._delegate.measure_capacity(request)
+
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
@@ -1320,6 +1340,9 @@ class UsageRecordingStructuredModelClient:
     def __init__(self, delegate: StructuredModelClient) -> None:
         self._delegate = delegate
 
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        return self._delegate.measure_capacity(request)
+
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
@@ -1372,6 +1395,9 @@ class ObservedStructuredModelClient:
     ) -> None:
         self._delegate = delegate
         self._payload_policy = payload_policy
+
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        return self._delegate.measure_capacity(request)
 
     def generate(
         self,

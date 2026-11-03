@@ -4,12 +4,6 @@ from personal_agent.kernel.prompt_registry import PromptSpec
 
 
 PROMPTS = {
-    "conversation.answer.base_unavailable": PromptSpec(
-        name="conversation.answer.base_unavailable",
-        version="2026-10-27.v1",
-        template="只能选择当前最新可见的完整基稿。",
-        owner="conversation",
-    ),
     "conversation.answer.operation_unavailable": PromptSpec(
         name="conversation.answer.operation_unavailable",
         version="2026-10-27.v1",

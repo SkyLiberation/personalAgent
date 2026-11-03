@@ -12,7 +12,7 @@
 
 | 入口 | 唯一主讲内容 |
 | --- | --- |
-| [EVD：变更证据与设计准入](change-evidence.md) | 设计顺序、基线与因果证据、连续模型链、复杂度、机制比较、优秀实践优先采用、偏离依据与真实问题驱动调整、方案问题的解决闭环、阻塞复审、累计设计改动的整体 critic、优化验收与重新打开 |
+| [EVD：变更证据与设计准入](change-evidence.md) | 设计顺序、基线与因果证据、连续模型链、复杂度、参考证据与采用准入、优秀实践优先采用、偏离依据与真实问题驱动调整、方案问题的解决闭环、阻塞复审、累计设计改动的整体 critic、优化验收与重新打开 |
 | [ARC：架构边界与事实归属](architecture-ownership.md) | 分层、事实与决策归属、模型边界、派生缓存与投影、契约一致性、设计阶段的架构分析、生产可达性与架构基线演进 |
 | [EXE：智能体决策与受治理执行](agentic-execution.md) | Proposal、Plan 及其审阅与 planning-safe 边界、Admission、执行、Verification、Completion、Command 与恢复协议 |
 | [CTX：上下文、记忆与检索](context-memory-retrieval.md) | 实际模型输入与 think 审计、中立追问、反馈表达、存储边界、能力投影与服务方等价绑定 |

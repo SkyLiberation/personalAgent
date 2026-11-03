@@ -26,6 +26,56 @@ Do not reject titles, transitions, or pure epistemic limitations containing no e
 
 
 TRANSLATIONS = {
+    'interaction_verification.history.request': PromptTranslation('v1', 'v1-en.1', '## Active goal (correctable working interpretation, subordinate to the user)\n\n{active_goal}'),
+    'interaction_verification.history.user_turn': PromptTranslation('v1', 'v1-en.1', """## Original user requirements, turn {number} (authoritative)
+
+{question}
+
+## Submissions and verdicts for this responsibility (correctable working material)
+
+{rounds}"""),
+    'interaction_verification.goal.history_item': PromptTranslation('v6-goal-only-history', 'v6-goal-only-history-en.1', '#### Goal submission {number}\n\n{draft}\n\n##### Corresponding goal-definition verdict\n\n{judgment_json}'),
+    'interaction_verification.answer.history_item': PromptTranslation('v1', 'v1-en.1', '#### Answer submission {number}; disposition: {disposition}\n\n{draft}\n\n##### Corresponding answer-delivery verdict\n\n{judgment_json}'),
+    'interaction_verification.history.pending': PromptTranslation('v1', 'v1-en.1', 'No completed verdict is available; do not invent a pass or failure.'),
+    'interaction_verification.history.no_goal': PromptTranslation('v1', 'v1-en.1', 'No goal has taken effect.'),
+    'interaction_verification.goal': PromptTranslation('v14-goal-definition-only', 'v14-goal-definition-only-en.1', """## Task
+
+Check whether the last goal submission faithfully defines the user's task for this turn. Review the task definition only; execution becomes available after acceptance. Do not assess completed work or a final answer.
+
+{criteria_json}
+
+## Input and judgment
+
+Original user messages and still-effective changes determine the requirements. The active goal, previous goal submissions, their verdicts, and actual revisions are correctable working records. Read them in original interaction order. Model-authored definitions and prior acceptance do not establish user requirements.
+
+For each requirement affecting this turn's result, compare its object, conditions, relationships, scope, and exceptions with what executing the goal as written would preserve. Identify omissions, scope changes, substituted relationships, and added obligations. Matching words, numbers, or topics does not establish agreement. Legitimate implementation methods may differ.
+
+When the user requests actual results, the goal must correctly specify obtaining and delivering them. Check that specification, not whether those results already exist. Actions awaiting execution, data still to obtain, and future answers need not already be present. The goal may identify unresolved facts and dependencies, but uncertainty cannot excuse requirements already changed. Report insufficient evidence only when an indispensable user premise is missing for judging the task definition, and identify it.
+
+## Output
+
+Return only Schema fields: a nonempty checks array of objects, each containing a concrete user requirement in requirement, status, and corresponding feedback. satisfied means the goal correctly expresses that requirement; not_satisfied means the task definition clearly omits or changes it; insufficient_evidence means an indispensable premise for judging the definition is missing. Feedback identifies the specific goal revision needed, without demanding execution first or writing the replacement goal. Do not substitute quality adjectives or section headings for requirements or output an overall score, aggregate verdict, or full reasoning trace. Review task definition only; do not add source-review, program-verification, or presentation-quality obligations."""),
+    'interaction_verification.answer': PromptTranslation('v1-answer-delivery-only', 'v1-answer-delivery-only-en.1', """## Task
+
+Check whether the last answer satisfies the user's requirements for this turn. Review the actual delivery, not the goal-maintenance process.
+
+{criteria_json}
+
+## Input and judgment
+
+Original user messages and still-effective changes determine the requirements. The active goal is a correctable working interpretation; previous answers, verdicts, and repairs are also working records. Read history in user-turn and original submission order. Determine what this turn must deliver and which earlier rules still govern it, without demanding repetition of completed earlier deliverables. Goals, self-assessments, old answers, and prior acceptance do not replace the original requirements.
+
+For each requirement affecting this turn's result, compare its object, conditions, relationships, scope, and exceptions with what the current answer actually does. Matching words, numbers, topics, or internal consistency does not establish satisfaction. Following an accepted goal does not excuse conflicts with the user's requirements. Use the answer's actual conclusions to identify omissions, scope changes, substituted conditions, and added obligations. Allow legitimate additions and different implementation methods.
+
+The disposition answer denotes a normal answer submission, clarification_required a clarification request, limitation a limitation explanation, and failed a failure explanation. Judge the actual disposition and current task. Do not automatically reject clarification or limitation messages for lacking final business results; check whether the stated gap agrees with visible facts and user requirements. Historical delivery and prior acceptance do not prove this answer correct.
+
+## Output
+
+Return only Schema fields: a nonempty checks array of objects, each containing a concrete user requirement in requirement, status, and corresponding feedback. Use satisfied when met, not_satisfied for a clear omission or conflict, and insufficient_evidence when an indispensable premise for judging delivery is missing. Feedback identifies how the answer differs and what needs revision; do not write a replacement answer. Do not substitute quality adjectives or section headings for requirements or output an overall score, aggregate verdict, or full reasoning trace. Check delivery of the user task only. Do not add source-review, independent program-verification, or presentation-quality obligations or invent facts or requirements."""),
+    'interaction_verification.goal.criteria': PromptTranslation('v1', 'v1-en.1', 'The goal must faithfully define original and still-effective user requirements: correctly specify what to obtain and deliver, without requiring execution to have already finished.'),
+    'interaction_verification.answer.criteria': PromptTranslation('v1', 'v1-en.1', 'This answer must satisfy original and still-effective user requirements; the active goal is a working interpretation, not a replacement for requirements or actual delivery.'),
+    'interaction_verification.history.compacted': PromptTranslation('v1', 'v1-en.1', '### Earlier verification summary for this responsibility (correctable history, not new user requirements)\n\n{summary}'),
+    'interaction_verification.requirement_feedback': PromptTranslation('v1', 'v1-en.1', 'User requirement: {requirement}\nJudgment: {status}\nCorrespondence: {feedback}'),
     "interaction_verification.system": PromptTranslation(
         'v5-criterion-references-md1', 'v5-criterion-references-en.1-md1',
         """

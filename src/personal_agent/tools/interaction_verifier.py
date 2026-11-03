@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from hashlib import sha256
-from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from personal_agent.capabilities.contracts.model import (
     StructuredModelRequest,
@@ -22,8 +21,13 @@ from personal_agent.capabilities.contracts.verification import (
     SemanticVerificationReceipt,
     SemanticVerificationReport,
     SourceReadingState,
+    UserRequirementAssessment,
     VerificationCriterion,
     VerificationCriterionResult,
+    VerificationContext,
+)
+from personal_agent.capabilities.contracts.verification_prompt import (
+    verification_messages, bound_verification_report, task_verification_criteria,
 )
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
@@ -38,36 +42,13 @@ from personal_agent.tools.base import (
 )
 
 
-def _bound_report_type(
-    report_type: type[SemanticVerificationReport],
-    criteria: tuple[VerificationCriterion, ...],
-) -> type[SemanticVerificationReport]:
-    """Expose only the current request's references, including system criteria."""
-    allowed_ids = tuple(item.criterion_id for item in criteria)
-    result_type = create_model(
-        "CurrentVerificationCriterionResult",
-        __base__=VerificationCriterionResult,
-        criterion_id=(
-            Literal[allowed_ids],
-            Field(description="只引用当前 success_criteria 的 criterion_id。"),
-        ),
-    )
-    return create_model(
-        f"Current{report_type.__name__}",
-        __base__=report_type,
-        criterion_results=(
-            tuple[result_type, ...],
-            Field(min_length=len(criteria), max_length=len(criteria)),
-        ),
-    )
-
-
 class VerifyInteractionDraftArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     draft: str = Field(min_length=1, max_length=20_000)
     success_criteria: tuple[str, ...] = Field(min_length=1)
     cited_units: tuple[CitedDraftUnit, ...] = ()
     source_reading_state: tuple[SourceReadingState, ...] = ()
+    task_context: VerificationContext | None = None
 
     @model_validator(mode="after")
     def check_draft_coverage(self):
@@ -78,11 +59,35 @@ class VerifyInteractionDraftArgs(BaseModel):
             raise ValueError(
                 "cited units must preserve the entire exact draft in order"
             )
+        if self.task_context is not None and self.task_context.turns[-1].events[-1].content != self.draft:
+            raise ValueError("verification history must end with the exact current submission")
         for unit in self.cited_units:
             ids = [evidence.id for evidence in unit.execution_evidence]
             if len(ids) != len(set(ids)):
                 raise ValueError("cited evidence ids must be unique within their unit")
         return self
+
+
+def _user_requirement_report(
+    assessment: UserRequirementAssessment, criterion: VerificationCriterion, *, prompts: PromptCatalog,
+) -> SemanticVerificationReport:
+    """Project actual requirement judgments into the existing receipt contract."""
+    statuses = tuple(check.status for check in assessment.checks)
+    status = ("not_satisfied" if "not_satisfied" in statuses else
+              "insufficient_evidence" if "insufficient_evidence" in statuses else "satisfied")
+    feedback = tuple(prompts.render(
+        "interaction_verification.requirement_feedback",
+        requirement=check.requirement, status=check.status, feedback=check.feedback,
+    ) for check in assessment.checks)
+    return SemanticVerificationReport(
+        criterion_results=(VerificationCriterionResult(
+            criterion_id=criterion.criterion_id, status=status, feedback="\n\n".join(feedback),
+        ),),
+        revision_feedback="\n\n".join(
+            text for check, text in zip(assessment.checks, feedback, strict=True)
+            if check.status != "satisfied"
+        ),
+    )
 
 
 def build_verify_interaction_draft_tool(
@@ -93,7 +98,7 @@ def build_verify_interaction_draft_tool(
         "verify_interaction_draft",
         description=(
             "Runtime-invoked semantic verification of an interaction draft against runtime-derived "
-            "success criteria plus a mandatory source-support criterion, using visible evidence. "
+            "success criteria using visible evidence; task_context selects its goal-definition or answer-delivery check. "
             "Returns a typed SemanticVerificationReceipt; it cannot execute effects or mark completion. "
             "Not exposed to the semantic decision maker: the interaction runtime decides when a draft is "
             "verified, so the model can neither skip verification nor author the criteria it is judged by."
@@ -117,47 +122,47 @@ def build_verify_interaction_draft_tool(
         config: RunnableConfig,
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
+        task_context: VerificationContext | None = None,
     ):
         scope = require_gateway_context(config, prompts=prompts).execution_scope
-        prompt = prompts.get("interaction_verification.system")
+        prompt = prompts.get(f"interaction_verification.{task_context.kind}" if task_context is not None
+            else "interaction_verification.system")
         support_prompt = prompts.get("interaction_verification.source_support")
-        verification_criteria = tuple(
-            dict.fromkeys(
-                (
-                    *success_criteria,
-                    support_prompt.template,
-                )
+        if task_context is not None:
+            criteria = task_verification_criteria(task_context.kind, prompts=prompts)
+            verification_criteria = tuple(item.criterion for item in criteria)
+            if success_criteria != verification_criteria:
+                raise ValueError("task verification requires its responsibility's runtime-owned criteria")
+        else:
+            verification_criteria = tuple(dict.fromkeys((*success_criteria, support_prompt.template)))
+            criteria = tuple(
+                VerificationCriterion(criterion_id=f"r{index}", criterion=text)
+                for index, text in enumerate(verification_criteria, start=1)
             )
-        )
-        criteria = tuple(
-            VerificationCriterion(criterion_id=f"r{index}", criterion=text)
-            for index, text in enumerate(verification_criteria, start=1)
-        )
         criteria_context = [item.model_dump(mode="json") for item in criteria]
         verification_input = VerifyInteractionDraftArgs(
             draft=draft,
             success_criteria=success_criteria,
             cited_units=cited_units,
-            source_reading_state=source_reading_state,
+            source_reading_state=source_reading_state, task_context=task_context,
         )
         units = verification_input.cited_units or (CitedDraftUnit(draft=draft),)
-        # Only writer-submitted evidence reaches either semantic consumer.
-        verification_payload = {
-            "draft": draft,
-            "success_criteria": criteria_context,
-            "execution_evidence": [
-                evidence.model_dump(mode="json", exclude={"id"})
-                for unit in units
-                for evidence in unit.execution_evidence
-            ],
-            "source_reading_state": [
-                state.model_dump(mode="json")
-                for state in verification_input.source_reading_state
-            ],
-        }
+        if task_context is not None:
+            verification_payload = {"draft": draft, "task_context": task_context.model_dump(mode="json")}
+        else:
+            verification_payload = {
+                "draft": draft,
+                "success_criteria": criteria_context,
+                "execution_evidence": [
+                    evidence.model_dump(mode="json", exclude={"id"})
+                    for unit in units for evidence in unit.execution_evidence
+                ],
+                "source_reading_state": [state.model_dump(mode="json")
+                    for state in verification_input.source_reading_state],
+            }
         cited_prompt = prompts.get("interaction_verification.cited_support")
         verification_key = sha256(verification_input.model_dump_json().encode("utf-8")).hexdigest()
-        for unit_index, unit in enumerate(units):
+        for unit_index, unit in enumerate(units if task_context is None else ()):
             if not unit.draft.strip():
                 continue
             cited_messages = [
@@ -205,41 +210,37 @@ def build_verify_interaction_draft_tool(
                         error_kind="unrecoverable",
                     )
                 )
-        messages = [
-            {
-                "role": "system",
-                "content": prompt.template,
-            },
-            {
-                "role": "user",
-                "content": json.dumps(verification_payload, ensure_ascii=False),
-            },
-        ]
+        messages = (verification_messages(task_context, criteria, prompts=prompts)
+                    if task_context is not None else [
+            {"role": "system", "content": prompt.template},
+            {"role": "user", "content": json.dumps(verification_payload, ensure_ascii=False)},
+        ])
+        operation = (f"interaction_{task_context.kind}_verification" if task_context is not None
+            else "interaction_semantic_verification")
         response = generate(
             scope,
             StructuredModelRequest(
-                operation="interaction_semantic_verification",
+                operation=operation,
                 consumer_key="semantic:" + sha256(json.dumps(verification_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest(),
                 version=prompt.version,
                 messages=messages,
-                output_type=_bound_report_type(
-                    SemanticVerificationReport,
-                    criteria,
-                ),
+                output_type=(UserRequirementAssessment if task_context is not None else
+                             bound_verification_report(SemanticVerificationReport, criteria)),
                 output_transport="native_tool",
                 context_projection_ref=sealed_context_projection_ref(
-                    purpose="interaction_semantic_verification",
+                    purpose=operation,
                     messages=messages,
                 ),
                 max_tokens=32_768,
                 temperature=0,
                 metadata={
                     "component": "interaction_verifier",
-                    "source_support_prompt_version": support_prompt.version,
+                    **({"source_support_prompt_version": support_prompt.version} if task_context is None else {}),
                 },
             )
         )
-        report = response.value
+        report = (_user_requirement_report(response.value, criteria[0], prompts=prompts)
+                  if task_context is not None else response.value)
         reported_ids = tuple(result.criterion_id for result in report.criterion_results)
         criteria_by_id = {item.criterion_id: item.criterion for item in criteria}
         if len(reported_ids) != len(criteria) or set(reported_ids) != set(
@@ -284,8 +285,9 @@ def build_verify_interaction_draft_tool(
                 )
                 for result in report.criterion_results
             ),
+            checked_kind=task_context.kind if task_context is not None else "answer",
             verdict=verdict,
-            receipt_id=f"svr_{draft_digest[:20]}",
+            receipt_id=f"svr_{verification_key[:20]}",
             verified_draft=draft,
             draft_digest=draft_digest,
             success_criteria=tuple(success_criteria),

@@ -27,7 +27,7 @@ def trace_resource_refs(trace: InteractionTrace) -> tuple[ResourceRef, ...]:
     refs = list(input_resource_refs(trace.inputs))
     refs.extend(trace.input_artifact_refs)
     if trace.history_compaction is not None:
-        refs.append(trace.history_compaction.snapshot_ref)
+        refs.extend((*trace.history_compaction.prior_snapshot_refs, trace.history_compaction.snapshot_ref))
     for accepted in trace.accepted_tool_requests:
         if accepted.tool_name == "write_artifact" and accepted.receipt is not None:
             refs.append(accepted.receipt.resource_ref)

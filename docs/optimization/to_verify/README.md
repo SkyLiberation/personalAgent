@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | Prompt 语言及生成／评分配置替换 | [封存输入与验证](verify_results/prompt-language-mimo.md) | [语言与 MiMo 配置 Spec](prompt-language-selection.md)；已固化的工程提示与动态反馈见[完成记录](../completed/english-owned-feedback.md) |
 | `CONVERSATION-LOOP-BOUNDARIES-001`：模型交互 Schema、原生动作、交付与恢复 | [完整运行结果及适用边界](conversation-loop-schema.md#16-完整运行结果与实际边界) | [统一交互契约](conversation-loop-schema.md)、[终答职责收窄候选](conversation-loop-schema.md#17-终答入口的框架分析与职责收窄候选) |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析与长程分析状态 | [LongDS 设计与事实依据](longds-analysis.md#longds-长程数据分析-spec) | [约束接续与语义核验候选](longtask-semantic-consistency.md#长程分析约束接续与语义核验候选)；原件成文和 claim 消融分别推进 |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析与长程分析状态 | [LongDS 设计与事实依据](longds-analysis.md#longds-长程数据分析-spec) | [执行目标维护 Spec](analysis-goal-maintenance.md)；此前约束呈现及核验尝试见[长程语义记录](longtask-semantic-consistency.md)，原件成文和 claim 消融分别推进 |
 | `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主 Python 数据分析 | [执行链与成文边界](verify_results/research-experiment.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python 数据分析工具 Spec](python-data-analysis-tool.md) |
 | `RESEARCH-GOAL-COVERAGE-001`：用户事实覆盖及 claim 增量贡献 | [统一链正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [复核标注与实际修订比较](research-goal-coverage.md#当前推荐复核标注再比较实际修订)、[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
 | `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入物化的费用与延迟 | [预算事实](research-input-budget.md) | [预算复审与待证收益](research-input-budget.md) |
@@ -36,11 +36,14 @@
 | SciFact 自然请求、R 需求、用例、评分及收益判据 | [实验请求与验收](research-experiment-acceptance.md) |
 | 共享程序／JSON 产物、快照及坐标 patch | [程序产物契约](program-artifact-contract.md) |
 | LongDS 逐轮依赖、LT 需求和 L0—L3 | [LongDS Spec](longds-analysis.md) |
+| 跨轮执行目标、每轮维护、按需读取及核验历史接续 | [目标与回答核验职责分离](analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)已接入专用提示及同职责滚动历史；前三轮原分[1,1,1]、用户结果通过／通过／失败，见[记录§34](verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)。随后原实现全量34轮尝试仅交付2轮、原分[1,0]，第三轮重复修订参数错误停止、后31轮未执行，见[记录§35](verify_results/analysis-correctness.md#35-当前实现的task2全量连续运行)。历史结果不改写 |
+| 普通回答拒稿后的原循环重生成 | [Spec §9.16](analysis-goal-maintenance.md#916-回答拒稿后沿原循环重新生成)及[ADR0049](../../adr/0049-answer-regeneration-in-original-loop.md)：取消普通答案按段修改工具，保留完整稿、反馈、引用及原核验。一次连续前三轮3/3交付、原分[1,1,0]；旧工具从实际SDK消失，该前三轮拒稿重生成未触发，见[记录§36](verify_results/analysis-correctness.md#36-普通回答改为原循环完整重提的连续前三轮)。随后全量尝试按用户要求第三轮后停止：前2轮交付，第3轮30次回答退回耗尽40次主决策，评分未启动，见[记录§37](verify_results/analysis-correctness.md#37-原循环重生成实现的task2在第3轮后停止) |
+| 完整核验反馈历史与压缩 | [现行修订 §9.20](analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)已接入 scoped 完整交互摘要、结果卸载、最终请求缩减及快照lineage保护；36个真实阶段确定性回放通过；新连续链交付10/34，56次主请求输入审计通过，两次自然压缩继续推进；原分3/10，机器两次重启后停止，见[记录§39](verify_results/analysis-correctness.md#39-结果卸载与完整交互压缩的-task2-连续验证)。旧第四轮反馈碰撞、第五轮容量失败及原分由[记录 §38](verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)保留，不用旧52阶段成绩替代新语义结果 |
 | NUM 精度、自检、计算成文及原件提交候选 | [结果成文候选](analysis-result-correctness.md) |
-| SEM 约束接续、成果适用性及语义核验候选 | [长程语义候选](longtask-semantic-consistency.md) |
+| 既有 SEM 约束呈现、成果适用性及语义核验尝试 | [长程语义候选与记录](longtask-semantic-consistency.md) |
 | 已执行验证、当时计划、失败归因及设计审阅 | [验证记录目录](verify_results/README.md) |
 
-这些文档共用原问题编号，不新增能力、准入项或运行条件。当前实现与候选、历史结果的事实强度保持原身份；正式成绩由评测文档拥有。
+这些文档共用原问题编号，本文不另建准入项或运行条件。目标维护的新工具及前置条件由对应子 Spec 唯一说明；已接入与语义通过分开记录，历史结果保持原身份，正式成绩由评测文档拥有。
 
 ## 按问题找方案
 

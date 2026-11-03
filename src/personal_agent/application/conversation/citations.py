@@ -243,6 +243,16 @@ def materialize_citation_context(
     return tuple(result)
 
 
+def render_citable_input(item: CitableInput, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> str:
+    """Render exact citation lines once; the typed catalog still owns binding."""
+    metadata = item.model_dump(mode="json", exclude_none=True, exclude={"citations"})
+    if item.observation.kind == "artifact_source":
+        # The existing read tools bind owner from the authenticated principal.
+        metadata["observation"]["resource"]["resource_ref"].pop("owner")
+    return prompts.render("conversation.model_input", metadata_json=json.dumps(metadata, ensure_ascii=False),
+        source_lines="\n".join(f"{line.evidence_id}|{line.text}" for line in item.citations))
+
+
 _CitationT = TypeVar("_CitationT", bound=CitationLine)
 
 

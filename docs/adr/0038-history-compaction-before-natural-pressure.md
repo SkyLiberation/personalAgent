@@ -1,6 +1,6 @@
 # ADR 0038：按用户授权提前接入历史压缩
 
-- 状态：Accepted，实施例外；自然压力与产品验收未覆盖
+- 状态：Accepted，实施例外；自然压力已有局部实测，完整产品验收未完成
 - 日期：2026-10-21
 - 例外复审／删除日期：2026-11-21；届时未取得所声明真实压力证据，删除未验收的生产压缩路径，保留原容量拒绝及原始证据
 - 唯一设计：[主循环 §3.11](../optimization/to_verify/conversation-loop-boundaries.md#311-context-压力与压缩)
@@ -13,9 +13,9 @@
 
 在 Conversation 的具名 Context 协作者接入主决策／Final 和研究选证的旧执行历史。初始用户要求保持完整；核验所需原文、当前稿、最新反馈、最近仍在消费的动作、未终态动作及 Artifact 目录保持。先从完整 typed 输入建立原引用和引用编号，再让旧历史退出本轮投影，避免改变 canonical 引用。意图提取没有可替换执行历史；来源核验的必需原文不使用本机制缩减，仍由原末端 guard 接受或明确拒绝。
 
-`HistoryCompactionCheckpoint` 只保存原 run、Journal revision、原始覆盖区间及 digest、实际替换条目的 typed key、只读历史快照引用及 digest、工作摘要、Prompt／响应身份和前检查点 digest。原 Journal 唯一拥有输入及预算，Artifact 唯一拥有快照字节。原件按原序确定性导出；模型只生成非权威工作摘要，原文身份、覆盖与授权由代码绑定。
+2026-11-03按[现行修订](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)替换为完整交互覆盖：`HistoryCompactionCheckpoint.sources` 以 run、最后覆盖决策及源 digest 绑定有序前缀，记录是否包括已交付结果、只读快照及 lineage、摘要和模型响应身份；删除旧条目 key 和无 run 的决策号覆盖。原 Journal 唯一拥有事实与预算，Artifact 拥有原件，摘要只服务发送视图。
 
-只有原末端 `context_capacity_exceeded` 才自动生成摘要；其他拒绝保持。摘要本身复用同一模型 Port、容量、deadline 和累计用量准入，不挂工具。单批装不下时只缩小待覆盖的安全旧区间，再由同一 guard 检查；不改变原模型窗口。费用先提交，按新的预期 Journal revision 原子激活检查点。后次压缩消费上一摘要及新增旧单元，不叠加全部摘要；无新增覆盖、摘要为空／截断、来源失效或额度不明时明确停止。
+主请求完整组装后在80%估算压力时前置摘要，最多两次，原末端硬容量检查保持。摘要复用同一模型 Port、容量、deadline 和累计准入，不调用业务工具。费用先提交，候选完整请求通过同一 Port 的严格缩减比较后按预期 revision 激活；保存失败、未缩减、源失效或硬容量仍不足均明确停止。后次压缩消费前摘要及新增完整交互，不叠加所有旧摘要，不扩大模型窗口。此修订的真实失败依据、参考、保护和验收由现行修订拥有；下文旧离线次数与日期仅属于原实施身份。
 
 每次请求及恢复重新核对来源摘要、主体、scope 和快照字节。最新检查点引用纳入现有读／搜索合法集合，读取再次核权；历史原件和读取反馈标为工作上下文，不取得论文来源或新事实资格。模型需要旧原文时使用原有读取工具。
 
@@ -55,3 +55,5 @@ git -c core.safecrlf=false diff --check
 当前部署已继承统一medium思考参数，最新实现及输出策略由[Loop Schema](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)拥有。LongDS真实36轮已交付并完成较早的第17→18轮进程恢复；第30、31、34、35、36轮后续自然触发原1M配置的本地estimated容量门禁，摘要激活、原件保持、后继实际消费及单次计费已有[严格审计](../../.tmp/loop-schema-redesign-20261024/v4-natural-compaction-audit.md)。这些是新身份的实际证据，不改写旧DeepSeek非思考或MiniMax／low记录。
 
 触发不等于Provider真实token达到1M；本次最大实际输入298,355。官方答案27/36，不宣称全文语义保真或原E3完整业务结果通过；压缩后检查点跨进程复用和原C6未覆盖反事实仍单列。例外未据此自动退出，结果与限制由[当前评测盘点](../evals/02-current-case-inventory.md)拥有。
+
+现行修订的两次自然压力、后继消费和外部中断由[结果§39](../optimization/to_verify/verify_results/analysis-correctness.md#39-结果卸载与完整交互压缩的-task2-连续验证)拥有；不以此覆盖本ADR旧样本身份或声明完整task2通过。

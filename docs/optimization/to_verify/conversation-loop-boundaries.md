@@ -214,7 +214,7 @@ LongDS 首轮正式基线发现，局部 Artifact 正文会被旧自动研究条
 
 | 职责 | 普通回答 | 研究 | 组织归属 |
 | --- | --- | --- | --- |
-| 模型提交及编辑 | `FinalSubmission` 提交 `FinalMessage` 或 `FinalRevision`，修订由 Runtime 恢复完整正文 | `InitialResearchSubmission`／`ResearchSubmission` 提交初稿或研究局部修改 | 分别保留各自 Prompt、Schema 和提议准入 |
+| 模型提交及编辑 | 普通正文或submit_final提交完整FinalMessage；拒稿后在原Loop重新生成完整稿，见[ADR0049](../../adr/0049-answer-regeneration-in-original-loop.md) | `InitialResearchSubmission`／`ResearchSubmission` 提交初稿或研究局部修改 | 分别保留各自Prompt、Schema和提议准入 |
 | 过程事实 | 原提交、修订基稿与适用反馈 | `ResearchClaims` 保存版本、claims 及 `final_answer`，`ResearchReview` 保存绑定版本的判断 | 原 Journal 与对应 owner，不为共用消息合并业务状态 |
 | 用户可交付候选 | 完整 `FinalMessage` | 从当前已批准研究稿的 `final_answer` 投影为同一 `FinalMessage` | 共用交付结构及正文段类型 |
 | 检查与返回 | 按当前任务契约检查 | 消费当前有效研究批准并检查其余必需事实 | 共用交付入口，最终由 `ConversationTurnView` 返回接口层 |
@@ -407,7 +407,7 @@ Conversation → 研究能力入口（目标、有效引用、约束）
 
 2026-10-21 用户已明确授权[ADR 0038 实施例外](../../adr/0038-history-compaction-before-natural-pressure.md)：先接入历史压缩，保留自然压力 baseline、C6／E3 及多次自然触发未覆盖。下文“实现须先取得自然压力”的限制仅在该例外期限和范围外适用，其余防护保持。实施顺序为：typed 检查点与原件投影 → 容量拒绝后的有界摘要及费用提交 → 决策／Final／选证投影与读取授权 → 真实阶段 Offline、恢复及静态检查；没有自然压力不记产品通过。
 
-**Context 管理是每次模型调用前的运行职责，历史压缩是其中一个有损手段。** 2026-10-21 已依 ADR 0038 接入 `HistoryCompactor`、typed 检查点和版本化中文摘要契约；主决策／Final 和研究选证在原容量拒绝后消费其投影。原 Journal、Artifact、预算及 Provider guard 仍拥有原职责。[当前专题](../../topics/context-engineering.md#整体窗口与历史增长的当前边界)拥有实现事实，本节唯一拥有历史压缩设计；开源实际装配见[两个独立实现](../../agentRef/context-engineering.md#5-压缩的实际装配消费与恢复)。代码接入不代表自然压力或最终交付验收通过，实际回放范围在 ADR 记录。
+**Context 管理是每次模型调用前的运行职责，历史压缩是其中一个有损手段。** 本节拥有通用容量边界；2026-11-03主循环跨轮卸载、完整交互覆盖、80%前置压力、16%近期尾部和严格请求缩减的现行修订由[目标维护 Spec §9.20](analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)拥有，并替换下文2026-10-21实施中工具观察级覆盖和仅容量拒绝后触发的旧策略。原 Journal、Artifact、预算及 Provider guard 仍拥有原职责。实现事实见[当前专题](../../topics/context-engineering.md#整体窗口与历史增长的当前边界)，开源实际装配见[压缩参考](../../agentRef/context-engineering.md#5-压缩的实际装配消费与恢复)。代码接入不代表语义及最终交付验收通过。
 
 先分清两种额度：任务总 tokens 控制累计耗用，单次窗口约束本轮可处理容量。累计用量超过窗口不说明任一请求超窗；单条工具结果不大，也不说明许多读取窗口合并后仍能装下。按 Provider 的实际协议核对：
 
@@ -774,6 +774,8 @@ Completion 满足 → 提交交付事实 → 交付确切正文
 核验服务不可用、协议失败或必需结果缺失，沿原契约停止或恢复，不能改成“无需核验”。同稿有效判断可复用；改变候选、资料或其他判断前提后，按原适用性规则决定是否失效。
 
 ### 4.1 完成依据从哪里来
+
+独立 Python 分析的 direct required 路径按 [ADR 0047](../../adr/0047-user-goal-verification-context.md)单独检查目标：原文拥有要求，辅助解释可错；只调用一次目标判断，不接入 claims 或来源检查。原 Intent 与其他路径保持。
 
 **Completion 消费已有责任主体提供的判断，不能自行把开放目标编译成一组充分条件。** 固定业务能力由原 Application 声明必要输出、权限、确认及可机械检查的结果关系；当前任务的对象与参数来自合法输入及批准。用户提出的内容、范围和质量要求属于开放语义，模型可协助提取，但原用户消息及有效调整仍是目标依据，不能只检查模型自行改写的 Plan 或标准子集。
 

@@ -84,4 +84,63 @@ findings 逐项列出确实超出证据的内容。所有发现针对本次 draf
 """,
 )
 
+PROMPTS.update({
+    'interaction_verification.history.request': PromptSpec(name='interaction_verification.history.request', version='v1', owner="interaction_verifier",
+        template='## 当前有效目标（可纠正的工作解释，不替代用户原话）\n\n{active_goal}', output_contract="UserRequirementAssessment"),
+    'interaction_verification.history.user_turn': PromptSpec(name='interaction_verification.history.user_turn', version='v1', owner="interaction_verifier",
+        template='## 第 {number} 轮用户原始要求（权威依据）\n\n{question}\n\n## 本职责提交与核验记录（可纠正的工作材料）\n\n{rounds}', output_contract="UserRequirementAssessment"),
+    'interaction_verification.goal.history_item': PromptSpec(name='interaction_verification.goal.history_item', version='v6-goal-only-history', owner="interaction_verifier",
+        template='#### 目标提交 {number}\n\n{draft}\n\n##### 对应目标核验判决\n\n{judgment_json}', output_contract="UserRequirementAssessment"),
+    'interaction_verification.answer.history_item': PromptSpec(name='interaction_verification.answer.history_item', version='v1', owner="interaction_verifier",
+        template='#### 回答提交 {number}；回答属性：{disposition}\n\n{draft}\n\n##### 对应回答核验判决\n\n{judgment_json}', output_contract="UserRequirementAssessment"),
+    'interaction_verification.history.pending': PromptSpec(name='interaction_verification.history.pending', version='v1', owner="interaction_verifier",
+        template='尚无已完成判决；不得补造通过或失败。', output_contract="UserRequirementAssessment"),
+    'interaction_verification.history.no_goal': PromptSpec(name='interaction_verification.history.no_goal', version='v1', owner="interaction_verifier",
+        template='尚无已生效目标。', output_contract="UserRequirementAssessment"),
+    'interaction_verification.goal': PromptSpec(name='interaction_verification.goal', version='v14-goal-definition-only', owner="interaction_verifier",
+        template="""## 任务
+
+核验最后一次目标提交是否忠实表达本轮用户任务。此次只审阅任务定义，通过后才允许执行；不验收执行成果或最终回答。
+
+{criteria_json}
+
+## 输入与判断
+
+用户原话及其仍有效的历史修改是要求依据。当前有效目标、历次目标提交、对应判决及修订都是可纠正的工作记录。按原交互顺序理解它们，不把模型自己的定义或旧通过当成用户要求。
+
+逐项比较影响本轮结果的用户要求：作用于什么对象，规定哪些条件、关系、范围及例外，目标按原样执行是否保留这些要求。检查遗漏、范围改变、条件关系替换和新增义务；词语、数字或主题相同不足以证明一致。合法实现方法可以不同。
+
+用户要求交付实际结果时，目标必须正确规定取得和交付这些结果；本次检查该规定是否正确，不要求结果已经取得。待执行动作、待取数据和未来答案无需已经存在。目标可以明确待取得的事实及依赖，但不能用未知掩盖已经改变的用户要求。仅当判断任务定义确实缺少不可替代的用户前提时，才报告依据不足，并指出该前提。
+
+## 输出
+
+仅返回 Schema 所需的 checks 非空对象数组，每项含具体用户要求 requirement、status 和对应说明 feedback。satisfied 表示目标正确表达该要求；not_satisfied 表示任务定义明确遗漏或改变该要求；insufficient_evidence 表示缺少判断任务定义所必需的前提。反馈指出目标应修订的具体差异，不要求先执行目标，不代写目标。不要用质量形容词或段落标题代替要求，不输出总体分数、总体判决或完整思考过程。只审任务定义，不增加来源审读、程序复核或表达质量义务。""", output_contract="UserRequirementAssessment"),
+    'interaction_verification.answer': PromptSpec(name='interaction_verification.answer', version='v1-answer-delivery-only', owner="interaction_verifier",
+        template="""## 任务
+
+核验最后一次回答是否满足本轮用户要求。此次审阅实际交付内容，不审阅目标维护过程。
+
+{criteria_json}
+
+## 输入与判断
+
+用户原话及其仍有效的历史修改是要求依据。当前目标是可纠正的工作解释，历次回答、判决及修复也是工作记录。按用户轮次及原提交顺序理解历史，确定本轮需要交付什么、哪些旧规则仍约束此次交付；不要求重复已完成的旧交付。目标、自述、旧回答或旧通过不能替代原要求。
+
+对每项影响本轮结果的用户要求，比较要求作用的对象、条件、关系、范围及例外与当前回答实际采用的内容。词语、数字、主题相同或内部自洽不足以证明满足；按已接受目标执行也不能豁免与原要求的冲突。结合稿内实际结论判断遗漏、范围改变、条件替换或新增义务，保留合法补充及不同实现方法。
+
+回答属性 answer 表示模型提交正常答案，clarification_required 表示澄清请求，limitation 表示限制说明，failed 表示失败说明。按其实际属性及本轮任务判断；澄清或限制说明不因缺少最终业务结果自动拒绝，需核对所述缺口与可见事实及用户要求是否相符。历史交付和核验通过不证明本次答案正确。
+
+## 输出
+
+仅返回 Schema 所需的 checks 非空对象数组，每项含具体用户要求 requirement、status 和对应说明 feedback。满足记 satisfied，明确遗漏或冲突记 not_satisfied，缺少判断交付所必需的前提记 insufficient_evidence。反馈指出回答实际怎样偏离要求及需修订的部分，不代写答案。不要用质量形容词或段落标题代替要求，不输出总体分数、总体判决或完整思考过程。只检查用户任务的交付，不增加来源审读、独立程序复核或表达质量义务，不编造事实或要求。""", output_contract="UserRequirementAssessment"),
+    'interaction_verification.goal.criteria': PromptSpec(name='interaction_verification.goal.criteria', version='v1', owner="interaction_verifier",
+        template='目标必须忠实定义原始用户要求及仍有效历史要求：正确规定要取得和交付什么，而不要求此刻已经执行完成。', output_contract="UserRequirementAssessment"),
+    'interaction_verification.answer.criteria': PromptSpec(name='interaction_verification.answer.criteria', version='v1', owner="interaction_verifier",
+        template='本次回答必须满足原始用户要求及仍有效历史要求；当前目标是工作解释，不替代原要求或实际交付。', output_contract="UserRequirementAssessment"),
+    'interaction_verification.history.compacted': PromptSpec(name='interaction_verification.history.compacted', version='v1', owner="interaction_verifier",
+        template='### 本职责较早核验交互摘要（可纠正历史，不是新增用户要求）\n\n{summary}', output_contract="UserRequirementAssessment"),
+    'interaction_verification.requirement_feedback': PromptSpec(name='interaction_verification.requirement_feedback', version='v1', owner="interaction_verifier",
+        template='用户要求：{requirement}\n判决：{status}\n对应说明：{feedback}', output_contract="UserRequirementAssessment"),
+})
+
 __all__ = ["PROMPTS"]

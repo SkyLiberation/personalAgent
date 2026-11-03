@@ -39,7 +39,7 @@ ADR 按[中文结构](../chinese-writing-spec.md#6-各类文档的附加要求)�
 | 代码或 Prompt | [COD](code-structure.md)的类型、不变量、错误与模块边界明确；Prompt 通用、版本化，实际输入审计及适用模型评测通过 |
 | 执行或恢复协议 | [EXE](agentic-execution.md)的准入、执行事实、Verification、Completion 分离，权限、幂等和恢复反事实通过 |
 | 迁移或兼容 | 第 1 节要求满足；被替代的旧字段、路径、权威镜像、旁路和 fallback 清理，例外有真实消费者与期限 |
-| 新机制或复杂度 | [EVD](change-evidence.md#5-复杂度说明complexity-justification)的最小改动、复杂度及适用外部比较有依据 |
+| 新机制或复杂度 | [EVD](change-evidence.md#5-复杂度说明complexity-justification)的方案选择、必要改动、净复杂度及适用外部比较有依据 |
 | 验证与安全 | [QLT](quality-security.md)规定的适用 E2E、Offline Eval、真实 smoke 及工程静态检查通过，未维护或运行停用单元测试 |
 | 评测或发布声明 | [EVM](../../evals/AGENTS.md#5-比较身份与归档)的身份与封存满足；发布另有目标 clean revision 的完整矩阵，不由定向或局部通过替代 |
 | 优化记录或活动设计 | [优化](../optimization/README.md)及 [Future](../future/README.md)的候选、失败总结、固化和引用收敛满足，不将未覆盖记为失效 |

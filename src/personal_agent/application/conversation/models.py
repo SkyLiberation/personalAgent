@@ -38,7 +38,8 @@ from personal_agent.application.python_execution.models import (
     PythonExecutionReceipt,
 )
 from .tool_requests import WriteArtifactArgs
-from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
+from .history_models import HistoryCompactionCheckpoint, HistoryItemKey, VerificationHistoryCheckpoint
+from .goal_models import GoalMaintenanceInvocation, GoalOperationRecord, GoalReadInvocation
 
 
 ConversationInteractionMode = Literal["default", "auto"]
@@ -224,49 +225,10 @@ class FinalMessage(_StrictModel):
         return "".join(segment.text for segment in self.segments)
 
 
-class FinalSegmentEdit(_StrictModel):
-    segment: int = Field(ge=1, description="基稿 segments 中从 1 开始的位置。")
-    operation: Literal["add_references", "replace_references", "replace_segment"]
-    references: tuple[ConversationEvidenceReference, ...] = ()
-    text: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def _edit_has_one_meaning(self):
-        if (self.operation == "replace_segment") != (self.text is not None):
-            raise ValueError("only replace_segment requires complete segment text")
-        if self.operation == "add_references" and not self.references:
-            raise ValueError("add_references requires at least one reference")
-        return self
-
-
-class FinalRevision(_StrictModel):
-    kind: Literal["revise_final"] = "revise_final"
-    base_ref: ResourceRef
-    edits: tuple[FinalSegmentEdit, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _edits_do_not_overlap(self):
-        if len({edit.segment for edit in self.edits}) != len(self.edits):
-            raise ValueError("one submission may edit each base segment only once")
-        return self
-
-
 class SubmitFinalArguments(_StrictModel):
     message: str = Field(min_length=1)
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
     references: tuple[str, ...] = ()
-
-
-class FinalSegmentEditArguments(_StrictModel):
-    segment: int = Field(ge=1)
-    operation: Literal["add_references", "replace_references", "replace_segment"]
-    references: tuple[str, ...] = ()
-    text: str | None = Field(default=None, min_length=1)
-
-
-class ReviseFinalArguments(_StrictModel):
-    base_resource_id: str = Field(min_length=1)
-    edits: tuple[FinalSegmentEditArguments, ...] = Field(min_length=1)
 
 
 class AnswerResultInvocation(_StrictModel):
@@ -299,6 +261,8 @@ class ContinueTurnProposal(_StrictModel):
     wait_for_user: bool = False
     message: str = Field(default="", max_length=4_000)
     working_plan_call_id: str | None = Field(default=None, min_length=1)
+    goal_maintenance: GoalMaintenanceInvocation | None = None
+    goal_read: GoalReadInvocation | None = None
 
     @model_validator(mode="after")
     def _action_ids_are_unique(self) -> "ContinueTurnProposal":
@@ -341,6 +305,9 @@ class ReviewCriteria(_StrictModel):
     ``ungrounded_spans`` keeps the dropped derivations visible: a turn that could
     not trace any criterion to the user is distinguishable from one that was
     never a review request.
+
+    Standalone direct analysis does not derive this contract. Its empty value
+    leaves task understanding in the main model and authority in user messages.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -645,7 +612,7 @@ class ResearchExperimentDelivery(_StrictModel):
 class ModelCallDisposition(_StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     call_id: str = Field(min_length=1)
-    operation: Literal["working_plan", "answer_result", "knowledge_save", "knowledge_delete"]
+    operation: Literal["working_plan", "answer_result", "knowledge_save", "knowledge_delete", "maintain_goal", "read_current_goal"]
     status: Literal["accepted", "deferred", "prepared"]
     plan_id: str | None = None
     plan_revision: int | None = Field(default=None, ge=1)
@@ -825,8 +792,10 @@ class ModelDecisionRecord(_StrictModel):
 
 
 class InteractionTrace(_StrictModel):
+    goal_operations: tuple[GoalOperationRecord, ...] = ()
     answer_result_binding: AnswerResultConfig | None = None
     history_compaction: HistoryCompactionCheckpoint | None = None
+    verification_history_compactions: tuple[VerificationHistoryCheckpoint, ...] = Field(default=(), max_length=2)
     revision: int = Field(default=1, ge=1)
     interaction_run_ref: str
     conversation_id: str = Field(min_length=1)
@@ -858,6 +827,9 @@ class InteractionTrace(_StrictModel):
 
     @model_validator(mode="after")
     def execution_authorization_is_bound(self) -> InteractionTrace:
+        kinds = tuple(item.kind for item in self.verification_history_compactions)
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("verification history has duplicate responsibility checkpoints")
         turns = [record.turn_index for record in self.model_decisions if record.turn_index is not None]
         if turns != sorted(set(turns)) or any(
             record.input_start > len(self.inputs) or (record.turn_index is not None and record.turn_index > self.usage.model_turns + 1)

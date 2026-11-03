@@ -88,22 +88,4 @@ PROMPTS = {
         template="引用 {evidence_id} 中的 {missing} 未完整返回或不存在。请选择 citations 中实际可见的行；连续范围不能跳过缺行，部分行须原样保留字符范围，需要其他内容时继续读取。",
         owner="conversation",
     ),
-    "conversation.final_revision.base_unavailable": PromptSpec(
-        name="conversation.final_revision.base_unavailable",
-        version="2026-10-27.v1",
-        template="只能修订本次交互中最新可见的完整回答；请复制其 resource_ref，或提交完整新稿。",
-        owner="conversation",
-    ),
-    "conversation.final_revision.segment_out_of_bounds": PromptSpec(
-        name="conversation.final_revision.segment_out_of_bounds",
-        version="2026-10-27.v1",
-        template="修改位置不在当前基稿 segments 中；整批修改未应用。",
-        owner="conversation",
-    ),
-    "conversation.final_revision.citation_rejected": PromptSpec(
-        name="conversation.final_revision.citation_rejected",
-        version="2026-10-27.v1",
-        template="整批修改未应用：{error}",
-        owner="conversation",
-    ),
 }

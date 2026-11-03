@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Generic
+from typing import Any, Callable, Generic
 
 from personal_agent.capabilities.contracts.model import (
     ModelCallIntent,
+    ModelCapacityCheck,
     ModelInvocationDenial,
     ModelInvocationGrant,
     ModelInvocationContinuation,
@@ -106,6 +107,10 @@ class GovernedModelClient(Generic[StructuredOutputT]):
     def transport(self) -> StructuredModelClient:
         """Return the admitted provider transport for composition diagnostics."""
         return self._delegate
+
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        """Local measurement performs no model invocation and creates no egress grant."""
+        return self._delegate.measure_capacity(request)
 
     def generate(
         self,

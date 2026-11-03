@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from personal_agent.application.capture.web_source import (
     WEB_SOURCE_FORMAT,
@@ -11,13 +11,36 @@ from personal_agent.application.capture.web_source import (
 )
 from personal_agent.application.conversation.models import (
     ActionObservation,
+    ConversationMessage,
     InteractionInput,
 )
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 READ_ACTION_OUTPUT_CAPABILITY = "read_action_output"
 READ_ARTIFACT_CAPABILITY = "read_artifact"
 SEARCH_ACTION_OUTPUT_CAPABILITY = "search_action_output"
 ARTIFACT_OUTPUT_CAPABILITIES = frozenset({READ_ACTION_OUTPUT_CAPABILITY, READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY})
+
+
+def materialize_analysis_user_requirements(
+    messages: Sequence[ConversationMessage], *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> str:
+    """Quote user-owned sources without interpreting or storing another goal."""
+    users = [(index, message) for index, message in enumerate(messages) if message.role == "user"]
+    if not users:
+        return ""
+    sources = []
+    for index, message in users:
+        lines = message.content.splitlines(keepends=True) or [""]
+        sources.append(prompts.render(
+            "conversation.analysis.current_user_source" if index == users[-1][0]
+            else "conversation.analysis.historical_user_source",
+            message_index=index, line_count=len(lines),
+            source_text="".join(f"L{number}|{line}" for number, line in enumerate(lines, 1)),
+        ))
+    return prompts.render("conversation.analysis.user_sources",
+        historical_user_sources="\n\n".join(sources[:-1]), current_user_source=sources[-1])
 
 
 def materialize_interaction_inputs(
