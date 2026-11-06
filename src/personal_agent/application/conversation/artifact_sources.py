@@ -2,7 +2,9 @@
 
 from collections.abc import Iterable
 from personal_agent.kernel.contracts.resource import ResourceRef
+from .goal_models import AnalysisGoalRef
 from .models import (
+    AcceptedArtifactToolRequest,
     ActionObservation,
     ArtifactSourceInput,
     InteractionInput,
@@ -23,8 +25,24 @@ def input_resource_refs(inputs: Iterable[InteractionInput]) -> tuple[ResourceRef
     return tuple(dict.fromkeys(refs))
 
 
-def trace_resource_refs(trace: InteractionTrace) -> tuple[ResourceRef, ...]:
+def trace_goal_draft_refs(trace: InteractionTrace, *, base: AnalysisGoalRef | None = None) -> tuple[ResourceRef, ...]:
+    refs = {op.draft_ref for op in trace.goal_operations
+            if op.operation == "read" and op.draft_ref is not None and (base is None or op.base_goal_ref == base)}
+    pending = [item.receipt for item in trace.accepted_tool_requests
+               if isinstance(item, AcceptedArtifactToolRequest) and item.receipt is not None]
+    while pending:
+        added = [receipt for receipt in pending
+                 if receipt.source_artifact_refs and all(ref in refs for ref in receipt.source_artifact_refs)]
+        if not added:
+            break
+        refs.update(receipt.resource_ref for receipt in added)
+        pending = [receipt for receipt in pending if receipt not in added]
+    return tuple(sorted(refs, key=lambda ref: ref.resource_id))
+
+
+def trace_resource_refs(trace: InteractionTrace, *, include_goal_drafts: bool = True) -> tuple[ResourceRef, ...]:
     refs = list(input_resource_refs(trace.inputs))
+    refs.extend(operation.draft_ref for operation in trace.goal_operations if operation.draft_ref is not None)
     refs.extend(trace.input_artifact_refs)
     if trace.history_compaction is not None:
         refs.extend((*trace.history_compaction.prior_snapshot_refs, trace.history_compaction.snapshot_ref))
@@ -47,4 +65,7 @@ def trace_resource_refs(trace: InteractionTrace) -> tuple[ResourceRef, ...]:
         refs.extend(record.receipt.diagnostic_refs)
         if record.receipt.frozen_ref is not None:
             refs.append(record.receipt.frozen_ref)
+    if not include_goal_drafts:
+        drafts = set(trace_goal_draft_refs(trace))
+        return tuple(dict.fromkeys(ref for ref in refs if ref not in drafts))
     return tuple(dict.fromkeys(refs))

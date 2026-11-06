@@ -1,6 +1,8 @@
 # 环境变量
 
-回答结果模块由 `PERSONAL_AGENT_ANSWER_RESULT` 的 JSON 配置装配，例如 `{"writer":"direct","verification":"none"}`。合法 writer 为 `direct`、`claims`，核验为 `required`、`none`；未配置沿用 `claims + required`。该部署配置不是模型动作，在新运行与对话中绑定，不能中途切换；`none` 当前仅供独立流程诊断，不生成核验通过事实或产品发布资格，临时范围见 [ADR 0041](adr/0041-replaceable-answer-result-modules.md)。
+回答结果模块由 `PERSONAL_AGENT_ANSWER_RESULT` 的 JSON 配置装配，例如 `{"writer":"direct"}`；合法 writer 为 `direct`、`claims`，默认 `claims`。目标和结果核验统一由 [`config/feature_flags.toml`](../config/feature_flags.toml) 的 `features.goal_verification`、`features.answer_verification` 控制，默认均开启。`PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 可指定另一份 TOML；未指定时从进程工作目录的 `config/feature_flags.toml` 读取。文件缺失、格式错误、未知键、缺项或非布尔值时启动失败。旧 JSON 的 `verification` 字段已移除，继续传入会被拒绝。
+
+开关在进程启动时读取，经 Runtime 注入并在 Journal 的运行及对话边界绑定。修改配置后使用新进程和独立会话；恢复不能切换实验臂。关闭核验不生成通过事实，不提供完整核验或发布资格；两类核验的适用范围、关闭语义和比较条件由[实验组 1](ablation/experiment.md)拥有，决定见 [ADR 0050](adr/0050-verification-feature-flags.md)。
 
 参考 [.env.example](../.env.example)。
 

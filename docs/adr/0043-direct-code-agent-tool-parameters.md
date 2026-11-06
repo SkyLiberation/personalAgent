@@ -12,6 +12,8 @@
 
 所有原生 function.parameters 直接使用 canonical 业务参数；同步迁移普通工具、Agent、控制动作及解码，不再增加统一 arguments 外壳或检索 action 的去壳／还原协议。保留标准 API 自身的 function.arguments JSON 字符串，它与被删除的业务包装不是同一层。
 
+草稿写入使用两个具体模型动作。创建和补丁各自声明所需的直接参数，解码恢复同一个内部写入请求契约。原权限与事实仍绑定内部写入能力。详见[工具契约](../topics/tools.md#输入结果与错误)。
+
 工具定义通过标准 strict 布尔值选择声明方式，Python 工具在 extras 中声明 strict=false，经 Registry、可见能力、ModelActionDefinition 传至 Adapter；其他工具默认继续 strict=true。可选值由唯一 typed 参数解析边界应用默认，不由 Admission 选择或补齐文件。strict=false 不关闭本地 Schema、授权与类型检查，structured response_format 保持原严格契约。
 
 ## 迁移、防护与退出

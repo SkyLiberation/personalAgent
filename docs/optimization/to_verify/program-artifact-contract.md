@@ -9,10 +9,10 @@
 | 操作 | 模型提交 | Runtime／Artifact owner 产生的结果 |
 | --- | --- | --- |
 | `read_artifact` | 保留 `resource_id`、`start_line`、`limit`、`start_column`，引用必须是当前有权读取的确切产物 | 当前引用、`content_digest`、行号／列号、实际返回正文、`next_read` 及完整源文的 `eof_position`；保留单条输出上限，不将分页结束解释成全文已读 |
-| `write_artifact.create` | `operation="create"`、`filename`、`content_type`、`content`；正文为本次新生成文本，首版支持 Python 源码和 JSON 配置 | 不可变文本快照的 `resource_ref`、媒体类型、字节数和服务端计算的 `content_digest`；文件名仅是显示／导出名称，不能含目录或决定存储路径 |
-| `write_artifact.patch` | `operation="patch"`、`base_resource_id`、非空 `edits`；每项为 `range={start:{line,column},end:{line,column}}` 与 `new_text`，不提交 `old_text`、旧全文或自算 hash | 从旧快照恢复原文，一次校验及应用全部修改；新快照沿用其文件名／媒体类型，返回新引用、来源引用、字节数／digest 及有界变更摘要，旧产物不改写 |
+| `tool_create_artifact` | `filename`、`content_type`、`content`，正文为新生成文本 | 不可变文本快照的 `resource_ref`、媒体类型、字节数和服务端计算的 `content_digest`。文件名用于显示和导出 |
+| `tool_patch_artifact` | `base_resource_id`、非空 `edits`，每项直接提供起止行列和 `new_text` | 从基稿快照恢复原文，一次校验和应用全部修改。新快照返回新引用、来源引用、字节数／digest 及有界变更摘要 |
 
-`create`／`patch` 使用由 `operation` 区分的严格 typed union，混入其他分支字段或未知字段即拒绝。程序和配置仍使用现有 `ResourceRef` 身份，`program_ref` 只是执行参数中对同一引用的用途约束，不建立第二种独立可写程序身份。MIME、单次正文／补丁字节、修改数及输出上限由准备阶段公开的能力约束限定，服务端校验真实 UTF-8 字节，模型不决定资源上限。
+Conversation 根据调用名选择明确的顶层 Schema，严格校验后将创建和补丁分别构造成内部 `CreateArtifact` 和 `PatchArtifact`，共用 Artifact 的写入准入和执行入口。内部 `WriteArtifactArgs.request` 继续用于原 Journal 和 Gateway 的 typed 契约。程序和配置使用现有 `ResourceRef` 身份。MIME、正文和补丁字节数、修改数及输出上限由 Artifact 负责校验。
 
 读取元数据及正文由同一 Artifact owner 返回为 typed 文本快照，分页只是该快照的投影；不能仅从现有 `read_text()` 的裸字符串推断版本或由读取窗口拼回权威源码。新写入统一以确切 UTF-8 字节计算内容摘要，补丁同时检查新增文本和修改后产物的总字节上限。读、搜索、修改及执行共同消费该 owner 的原文与身份。
 
@@ -23,9 +23,9 @@
 下列为调用顺序示意，`v1`／`v2` 是返回的完整 typed 引用的人读简称，不是模型拼出的路径或版本号：
 
 ```text
-write_artifact(create, filename="fusion.py", content_type="text/x-python", content=新代码) → v1
+tool_create_artifact(filename="fusion.py", content_type="text/x-python", content=新代码) → v1
 read_artifact(resource_id=v1.resource_id, start_line=15, limit=10) → 当前片段及坐标
-write_artifact(patch, base_resource_id=v1.resource_id, edits=[{range:[18:1,20:1), new_text:新实现}]) → v2
+tool_patch_artifact(base_resource_id=v1.resource_id, edits=[{start_line:18, start_column:1, end_line:20, end_column:1, new_text:新实现}]) → v2
 受控 Python 执行(program_ref=v2, input_result_refs=实际输入结果) → 真实结果
 ```
 
@@ -47,7 +47,7 @@ P1 不强制模型先读再改或必须修改多次，一次正确生成也可�
 
 | 契约 | 固定行为与必要消费者 |
 | --- | --- |
-| 新程序及配置 | `write_artifact` 的 `request` 为严格 create／patch union。create 仅接受 `text/x-python` 的 `.py` 或 `application/json` 的 `.json`；filename 为最多 120 个字符的安全显示名，不含路径、控制字符或响应头分隔。单份草稿及一次补丁新增正文各最多 65,536 UTF-8 字节，补丁最多 32 项；Runtime 不修正文或 JSON 语法，实际执行另验 |
+| 新程序及配置 | 模型调用分别经过严格创建或补丁声明，内部归一为 `write_artifact` 的 typed 请求。Python、JSON 和 Markdown 采用匹配的媒体类型和后缀。文件名为最多 120 个字符的安全显示名。单份草稿及一次补丁新增正文各最多 65,536 UTF-8 字节，补丁最多 32 项。程序执行另验 |
 | 上传身份 | 上传身份绑定认证 owner、filename、MIME 和确切原字节，不再只由 filename／bytes 生成全用户共用身份；跨用户同名同内容互不覆盖，同用户不同不可变描述形成不同快照。重复同一请求只复用完整一致记录，不覆写已绑定 owner／描述 |
 | 坐标与读取 | 保持现有 Python `splitlines` 的逻辑行语义，owner 保留全部换行原字节并提供唯一位置映射；CRLF 是完整换行单位。末尾换行的 EOF 为下一行第 1 列，空文为 `(1,1)`；读取恰在 EOF 返回空页且无续页。read／search／patch 共同消费该映射，读取窗口附同一快照 digest 和 EOF，不靠片段重组 |
 | 多项补丁 | 所有范围针对同一 base；非空范围不得交叠，同点不得重复插入，插入不得位于替换范围内部。允许相邻替换及边界插入：插入在替换起点时位于替换文字前，在终点时位于其后；按原位置从后向前应用，输入 edits 顺序不改变结果。先验证全部范围及最终字节额度，再提交一个新快照，失败零写入 |

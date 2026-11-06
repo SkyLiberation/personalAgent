@@ -41,6 +41,7 @@ from personal_agent.capabilities.contracts.model import (
     ModelResponseRecord,
     ModelResponseSink,
     ModelStreamProtocolFailure,
+    ModelRuntimeFeedback,
     ModelToolExchange,
     ModelToolResult,
     ModelCapacityRefused,
@@ -305,13 +306,16 @@ class OpenAIModelClient:
         cursor = 0
         host = self._provider_host
         for exchange in request.model_history:
-            if exchange.assistant.provider_host != host or exchange.assistant.model != model:
-                raise ModelCapacityRefused(request.operation, "capacity_profile_mismatch")
             position = (len(request.messages) if exchange.before_message_index is None
                         else exchange.before_message_index)
             messages.extend(request.messages[cursor:position])
             cursor = position
             messages.extend({"role": "system", "content": content} for content in exchange.context_before)
+            if isinstance(exchange, ModelRuntimeFeedback):
+                messages.append({"role": "system", "content": exchange.feedback})
+                continue
+            if exchange.assistant.provider_host != host or exchange.assistant.model != model:
+                raise ModelCapacityRefused(request.operation, "capacity_profile_mismatch")
             messages.append(exchange.assistant.payload)
             messages.extend({"role": "tool", "tool_call_id": result.call_id, "content": result.content}
                             for result in exchange.results)

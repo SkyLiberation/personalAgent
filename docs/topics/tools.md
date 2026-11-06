@@ -20,7 +20,7 @@ Application Service
 
 模型原生动作由 [model_actions.py](../../src/personal_agent/application/conversation/model_actions.py)投影和解码。工具参数表达业务动作；工作进度通过独立 `control_working_plan` 提交，执行系统从已准入工作清单关联活动项。主循环同时接受动作和合法 assistant 正文，回答模块将正文或显式提交恢复为同一种 `FinalMessage`。当前协议见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，计划控制见 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)。
 
-原生 `function.parameters` 直接表达业务参数，控制动作同样直接提交。模型可见调用名来自同轮 `ModelActionDefinition.name`，解码器据此恢复内部 `Proposal`；检索工具保留 `action`，`write_artifact` 保留 `request`，不增加通用包装。`strict` 按各动作声明投影，Python 使用 `strict=false` 保留可选参数。参数类型、权限、接受摘要与恢复仍由原责任主体校验。参数协议见 [ADR 0043](../adr/0043-direct-code-agent-tool-parameters.md)。
+原生 `function.parameters` 直接表达业务参数，控制动作同样直接提交。模型可见调用名来自同轮 `ModelActionDefinition.name`，解码器据此恢复内部 `Proposal`。检索工具保留 `action`。草稿创建和补丁有各自的直接参数声明，共用内部 `write_artifact` 执行能力。`strict` 按各动作声明投影，Python 使用 `strict=false` 保留可选参数。参数类型、权限、接受摘要与恢复仍由原责任主体校验。参数协议见 [ADR 0043](../adr/0043-direct-code-agent-tool-parameters.md)。
 
 ## 注册与曝光
 
@@ -45,7 +45,11 @@ Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/applicat
 
 工具使用显式 Pydantic `ArgsSchema` 表达必填项、范围及字段说明。Conversation 在执行前校验工具名和参数；原生工具调用的形状合法后，仍须通过 Application 准入。
 
-原生动作协议拒绝通过 `DecisionFeedback.action_diagnostics` 返回解码器的字段位置及错误类型，通过 `rejected_action_invocations` 原样返回同批结构化调用；整批均未执行。未声明名称通过已有 `action_name` 指明首个具体拒绝对象，空诊断不代表该未知动作具有合法参数 Schema；重复未知名仍共用原协议错误族的修复额度，见[名称反馈保真](../optimization/completed/unknown-action-name-feedback.md)。允许范围仍由当前动作 Schema 拥有，不自动修正或解包。其余反馈边界与待验收条件见[主循环 Spec](../optimization/to_verify/conversation-loop-boundaries.md#312-动作协议拒绝的事实反馈)。
+模型用 `tool_create_artifact` 新建草稿，顶层提供 `filename`、`content_type` 和 `content`。用 `tool_patch_artifact` 编辑已有草稿，顶层提供基稿 `base_resource_id` 和非空 `edits`。每项编辑直接提供 `start_line`、`start_column`、`end_line`、`end_column` 和 `new_text`。两种动作的调用名确定操作。目标维护阶段只开放当前可读草稿的补丁。
+
+补丁坐标基于同一基稿，行号和 Unicode 字符列从1开始，结束位置不含在内。起止相同表示插入，非空范围配合空字符串表示删除。原生参数接受正整数和无前导零的 ASCII 十进制数字字符串。Conversation 按当次 Schema 校验后构造内部写入请求，已接受请求及读搜回执使用整数坐标。原始模型调用留在交换记录，草稿引用和范围由原执行契约校验。
+
+原生动作协议拒绝记录首个拒绝对象、字段诊断和同批原提议。整批均未执行。模型查看配对的原调用，或反馈中保留的未配对提议。未声明动作的反馈以当次可用工具和维护状态为依据，重复未知名共用原修复额度。参见[主循环拒绝反馈约定](../context/agent-loop.md#23-动作拒绝的重试上下文)和[名称反馈保真](../optimization/completed/unknown-action-name-feedback.md)。
 
 工具契约的类型源是 [kernel/contracts/tool.py](../../src/personal_agent/kernel/contracts/tool.py)，包装函数由 [tools/base.py](../../src/personal_agent/tools/base.py)拥有。
 

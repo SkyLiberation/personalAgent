@@ -20,6 +20,7 @@ from personal_agent.capabilities.contracts.verification import (
     ConversationAnswerSegment,
     ConversationEvidenceReference,
 )
+from personal_agent.capabilities.contracts.verification_prompt import verification_judgment_text
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
@@ -27,7 +28,9 @@ from .context_materialization import (
     ARTIFACT_OUTPUT_CAPABILITIES,
     select_visible_successful_observations,
 )
-from .models import ActionObservation, InteractionInput
+from .goal_models import GOAL_PENDING_ACTION_REJECTED
+from .models import ActionObservation, DecisionFeedback, InteractionInput
+from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY, observed_receipts
 from .artifact_search import SearchActionOutputArguments, SourceSearchResult
 from .source_reading import (
     ReturnedSourceLine,
@@ -245,10 +248,23 @@ def materialize_citation_context(
 
 def render_citable_input(item: CitableInput, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> str:
     """Render exact citation lines once; the typed catalog still owns binding."""
-    metadata = item.model_dump(mode="json", exclude_none=True, exclude={"citations"})
+    if (isinstance(item.observation, DecisionFeedback)
+            and item.observation.reason_code == GOAL_PENDING_ACTION_REJECTED):
+        return f"{item.observation.message}\n{item.observation.required_repair}"
+    metadata = item.model_dump(mode="json", exclude_none=True,
+        exclude={"citations": True, "observation": {"artifact_recovery_ref"}})
     if item.observation.kind == "artifact_source":
         # The existing read tools bind owner from the authenticated principal.
         metadata["observation"]["resource"]["resource_ref"].pop("owner")
+    if (isinstance(item.observation, ActionObservation)
+            and item.observation.capability_id == INTERACTION_VERIFICATION_CAPABILITY):
+        receipts = observed_receipts((item.observation,), capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY}))
+        if receipts and receipts[0].verdict == "passed":
+            receipt = receipts[0]
+            metadata["observation"]["payload"] = {
+                "data": receipt.model_dump(mode="json", include={"checked_kind", "verdict", "receipt_id", "draft_digest"}),
+                "message": verification_judgment_text(receipt, prompts=prompts),
+            }
     return prompts.render("conversation.model_input", metadata_json=json.dumps(metadata, ensure_ascii=False),
         source_lines="\n".join(f"{line.evidence_id}|{line.text}" for line in item.citations))
 

@@ -38,7 +38,7 @@
 | LongDS 逐轮依赖、LT 需求和 L0—L3 | [LongDS Spec](longds-analysis.md) |
 | 跨轮执行目标、每轮维护、按需读取及核验历史接续 | [目标与回答核验职责分离](analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)已接入专用提示及同职责滚动历史；前三轮原分[1,1,1]、用户结果通过／通过／失败，见[记录§34](verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)。随后原实现全量34轮尝试仅交付2轮、原分[1,0]，第三轮重复修订参数错误停止、后31轮未执行，见[记录§35](verify_results/analysis-correctness.md#35-当前实现的task2全量连续运行)。历史结果不改写 |
 | 普通回答拒稿后的原循环重生成 | [Spec §9.16](analysis-goal-maintenance.md#916-回答拒稿后沿原循环重新生成)及[ADR0049](../../adr/0049-answer-regeneration-in-original-loop.md)：取消普通答案按段修改工具，保留完整稿、反馈、引用及原核验。一次连续前三轮3/3交付、原分[1,1,0]；旧工具从实际SDK消失，该前三轮拒稿重生成未触发，见[记录§36](verify_results/analysis-correctness.md#36-普通回答改为原循环完整重提的连续前三轮)。随后全量尝试按用户要求第三轮后停止：前2轮交付，第3轮30次回答退回耗尽40次主决策，评分未启动，见[记录§37](verify_results/analysis-correctness.md#37-原循环重生成实现的task2在第3轮后停止) |
-| 完整核验反馈历史与压缩 | [现行修订 §9.20](analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)已接入 scoped 完整交互摘要、结果卸载、最终请求缩减及快照lineage保护；36个真实阶段确定性回放通过；新连续链交付10/34，56次主请求输入审计通过，两次自然压缩继续推进；原分3/10，机器两次重启后停止，见[记录§39](verify_results/analysis-correctness.md#39-结果卸载与完整交互压缩的-task2-连续验证)。旧第四轮反馈碰撞、第五轮容量失败及原分由[记录 §38](verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)保留，不用旧52阶段成绩替代新语义结果 |
+| 完整核验反馈历史与压缩 | [现行修订§9.20](analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)已接入scoped完整交互摘要、结果卸载、最终请求缩减及快照lineage保护；旧真实阶段回放和原分保持。最新独立连续链交付20/34，107次主请求审计通过、5次自然压缩后继续；重启中断后已按用户要求补齐20份答案原评分，7/20通过。目标解释仍有错误、完整34轮未完成，见[记录§40](verify_results/analysis-correctness.md#40-原运行到期后的-task2-独立连续重验)。旧同号反馈及容量失败由[记录§38](verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)保留 |
 | NUM 精度、自检、计算成文及原件提交候选 | [结果成文候选](analysis-result-correctness.md) |
 | 既有 SEM 约束呈现、成果适用性及语义核验尝试 | [长程语义候选与记录](longtask-semantic-consistency.md) |
 | 已执行验证、当时计划、失败归因及设计审阅 | [验证记录目录](verify_results/README.md) |

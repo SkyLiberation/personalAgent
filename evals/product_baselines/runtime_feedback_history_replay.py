@@ -11,12 +11,12 @@ from pydantic import BaseModel
 
 from personal_agent.application.conversation.citations import CitableInput, materialize_citation_context, render_citable_input
 from personal_agent.application.conversation.context_materialization import materialize_interaction_inputs
-from personal_agent.application.conversation.model_history import prior_analysis_turns, project_conversation_history
+from personal_agent.application.conversation.model_history import goal_pending_rejection, prior_analysis_turns, project_conversation_history
 from personal_agent.application.conversation.models import ActionObservation, InteractionTrace, SubmittedFinal
 from personal_agent.application.conversation.verification_admission import INTERACTION_VERIFICATION_CAPABILITY
 from personal_agent.application.conversation.verification_admission import observed_receipts
 from personal_agent.capabilities.contracts.model import (
-    ModelActionDefinition, StructuredModelRequest, sealed_context_projection_ref,
+    ModelActionDefinition, ModelRuntimeFeedback, StructuredModelRequest, sealed_context_projection_ref,
 )
 from personal_agent.infra.structured_model import OpenAIModelClient
 from personal_agent.kernel.config import Settings
@@ -107,7 +107,8 @@ def replay(source: Path, output: Path) -> None:
                 originals = []
                 for run in (*ancestors, prefix):
                     for record in run.model_decisions:
-                        if record.turn_index is not None and record.consumed and record.assistant is not None:
+                        if (record.turn_index is not None and record.consumed and record.assistant is not None
+                                and goal_pending_rejection(run, record) is None):
                             originals.extend(exchange.assistant.payload for exchange in record.protocol_exchanges)
                             originals.append(record.assistant.payload)
                     expected.extend(item for item in run.inputs if isinstance(item, ActionObservation)
@@ -143,6 +144,8 @@ def replay(source: Path, output: Path) -> None:
                     if receipt.verified_draft not in drafts:
                         raise ValueError('核验反馈被绑定到其他目标或回答')
                 for exchange in history:
+                    if isinstance(exchange, ModelRuntimeFeedback):
+                        continue
                     ids = exchange.assistant.call_ids
                     if ids != tuple(result.call_id for result in exchange.results):
                         raise ValueError('原始工具调用与结果配对失效')
@@ -154,7 +157,8 @@ def replay(source: Path, output: Path) -> None:
                 target.write_bytes(json_bytes(wire))
                 stages.append({'user_turn': len(previous) + 1, 'main_turn': decision.turn_index,
                     'original_invocation_id': decision.invocation_id, 'verifications': len(expected),
-                    'runtime_feedback_messages': sum(len(item.runtime_feedback) for item in history),
+                    'runtime_feedback_messages': sum(
+                        1 if isinstance(item, ModelRuntimeFeedback) else len(item.runtime_feedback) for item in history),
                     'complete_history': True, 'chronological_feedback': True,
                     'original_assistants_preserved': True, 'tool_pairing': True})
             previous.append(trace)

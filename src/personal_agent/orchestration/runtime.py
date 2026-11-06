@@ -417,7 +417,7 @@ class AgentRuntime:
         from personal_agent.application.conversation.answer_results import DirectAnswerResult, ClaimAnswerResult
         answer_result = (
             DirectAnswerResult if self.settings.answer_result.writer == "direct" else ClaimAnswerResult
-        )(self.settings.answer_result)
+        )(self.settings.answer_result, feature_flags=self.settings.feature_flags)
         self._conversation_service = ConversationService(
             self._structured_client,
             prompts=self._prompts,

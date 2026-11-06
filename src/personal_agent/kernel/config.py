@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import Field
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.feature_flags import FeatureFlags, load_feature_flags
 
 from personal_agent.kernel.config_models import (
     _StrictBase,
@@ -44,6 +45,7 @@ class Settings(_StrictBase):
     retrieval_experiment_config_path: Path | None = None
     python_execution_config_path: Path | None = None
     answer_result: AnswerResultConfig = Field(default_factory=AnswerResultConfig)
+    feature_flags: FeatureFlags = Field(default_factory=load_feature_flags)
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)

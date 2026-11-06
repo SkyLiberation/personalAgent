@@ -179,15 +179,110 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template="The current model request exceeds its declared capacity boundary, or the deployment's capacity information does not match the actual request. This call was stopped.",
     ),
-    'conversation.service.historical_source_rejected': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='Historical originals may be read only as working context, not as source-verification material.',
+    'conversation.service.artifact_unread': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='This turn cannot end as `{disposition}` while the omitted portion of original `{resource_id}` is unread.',
     ),
-    'conversation.service.historical_source_repair': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='Use read_artifact or search_action_output to read the historical original.',
+    'conversation.service.artifact_refetch': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='The same request already produced offloaded original `{resource_id}`. Fetching it again cannot show the omitted content.',
+    ),
+    'conversation.service.artifact_repair_read': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Use `{tool}` with `resource_id` set to `{resource_id}` and choose a relevant `start_line`.',
+    ),
+    'conversation.service.artifact_repair_search': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Use `{tool}` with `resource_id` set to `{resource_id}` and a `keyword` to locate relevant content.',
+    ),
+    'conversation.service.artifact_repair_unavailable': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='No declared read or search action accepts original `{resource_id}` in this request.',
+    ),
+    'conversation.service.historical_source_rejected': PromptTranslation(
+        source_version='2026-11-06.v2',
+        version="2026-11-06.en.v2",
+        template='Historical original `{resource_id}` is readable as working context and is ineligible as source-verification material.',
+    ),
+    'conversation.service.duplicate_call_id': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Call identity `{call_id}` is bound to an earlier committed operation. The duplicate did not execute.',
+    ),
+    'conversation.service.duplicate_call_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Use the committed result first. If a new operation is necessary, issue a new valid call. The native tool protocol binds its identity.',
+    ),
+    'conversation.knowledge.exclusive': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="This batch contained {count} actions. The knowledge operation requires its own confirmation proposal. No action in the batch executed.",
+    ),
+    'conversation.knowledge.exclusive_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Reissue this knowledge operation by itself and wait for the user to confirm the exact proposal.",
+    ),
+    'conversation.knowledge.save_unavailable': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Governed knowledge saving is unavailable in this deployment.",
+    ),
+    'conversation.knowledge.save_unavailable_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Explain that saving is currently unavailable and preserve the user's original content and intent.",
+    ),
+    'conversation.knowledge.delete_unavailable': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="This deployment cannot look up the target or prepare a deletion for confirmation.",
+    ),
+    'conversation.knowledge.delete_unavailable_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Explain that deletion cannot currently be prepared.",
+    ),
+    'conversation.knowledge.source_repeated': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="selections[{position}] repeats source message {index}. Select each user message at most once.",
+    ),
+    'conversation.knowledge.source_not_user': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="selections[{position}] sets source_message_index to {index}, which does not identify a user message.",
+    ),
+    'conversation.knowledge.source_span_invalid': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="The text_span in selections[{position}] is blank or does not match a contiguous span in message {index}.",
+    ),
+    'conversation.knowledge.source_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Eligible user message indexes are {indexes}. Select one exact nonblank span per message, excluding save or confirmation instructions. Ask the user for the source if none is available.",
+    ),
+    'conversation.knowledge.delete_target_missing': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Knowledge ID {target_id} was not found among the current user's eligible deletion targets.",
+    ),
+    'conversation.knowledge.delete_target_stop': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="There is no target that can be confirmed in this request. Explain the limitation or clarify the target with the user. Preserve existing knowledge.",
+    ),
+    'conversation.knowledge.delete_target_retry': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Call `{inventory_tool}` to obtain the inventory. If a returned `knowledge_item_id` matches the user's target, issue `{delete_tool}` alone to prepare confirmation. Explain or clarify if no item matches.",
+    ),
+    'conversation.knowledge.delete_target_reuse': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Use the inventory already returned in this interaction. If a listed `knowledge_item_id` matches the user’s target, call `{delete_tool}` alone to prepare confirmation. Otherwise explain the limitation or clarify the target.',
+    ),
+    'conversation.knowledge.inventory_already_returned': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='This interaction already returned a successful personal knowledge inventory.',
+    ),
+    'conversation.knowledge.inventory_reuse': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Continue using the inventory already returned. If it lacks the required item, explain the limitation or clarify the target.',
+    ),
+    'conversation.knowledge.arguments_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Correct the arguments using the validation details, preserving the target and scope requested by the user.",
+    ),
+    'conversation.knowledge.operation_repair': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template="Explain why the operation did not start. Clarify missing business input with the user while preserving the original goal.",
     ),
     'conversation.service.execution_permission_missing': PromptTranslation(
         source_version='2026-10-27.v1',

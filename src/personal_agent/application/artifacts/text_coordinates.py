@@ -80,5 +80,5 @@ class TextCoordinates:
         ):
             result = result[:start] + text + result[end:]
         if len(result.encode("utf-8")) > DRAFT_MAX_BYTES:
-            raise ValueError("patched draft exceeds the 65536-byte UTF-8 limit")
+            raise ValueError(f"patched draft exceeds the {DRAFT_MAX_BYTES}-byte UTF-8 limit")
         return result

@@ -242,7 +242,7 @@ Netflix task2 的 20 轮已交付结果和未决执行单独保留；本次可�
 
 生成进程已停止且 seal 有效后，独立评分才读取实际 Final。Judge 资格与 2M 独立额度由 Spec 固定；下面复用已通过的同配置资格，不重复计资格样本或把评分回灌生成侧。
 
-用户授权的无 claim／核验流程使用相同采集入口，运行前显式设置 `$env:PERSONAL_AGENT_ANSWER_RESULT = '{"writer":"direct","verification":"none"}'`，输出另取尚不存在的目录。本次目录为 `.tmp/answer-result-modules-20261023/l1-direct-flow`，该配置自动记录为 `unverified_flow_capture`、`release_eligible=false`；不得计作完整 Product E2E。默认配置对照不设置该变量；同对话与同 run 不能换装配，后续 claim 消融使用独立对话并固定 verification，实际确认 claim 机制已被消费。预算与判据由[可替换回答模块与无核验流程验证](../optimization/to_verify/verify_results/longds-analysis.md#2-可替换回答模块与无核验流程验证)拥有。
+用户授权的无 claim／核验流程使用相同采集入口，运行前显式设置 `$env:PERSONAL_AGENT_ANSWER_RESULT = '{"writer":"direct"}'`，并通过 `$env:PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 选择已声明的独立 TOML，输出另取尚不存在的目录。目标和结果核验的取值与适用范围由[实验组 1](../ablation/experiment.md)拥有；关闭任一核验记录为 `unverified_flow_capture`、`release_eligible=false`，不计完整 Product E2E。默认对照使用默认全开配置；同对话与同 run 不能换装配，后续 claim 消融使用独立对话并固定两项核验开关，实际确认 claim 机制被消费。历史 `.tmp/answer-result-modules-20261023/l1-direct-flow` 的旧 `verification=none` 原件和成绩不改写，原预算与判据由[可替换回答模块与无核验流程验证](../optimization/to_verify/verify_results/longds-analysis.md#2-可替换回答模块与无核验流程验证)拥有。
 
 ```powershell
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_judge score --judge-root .tmp/longds-implementation-20261023/judge --source-directory .tmp/longds-design-20261023 --materials .tmp/longds-implementation-20261023/materials --capture .tmp/longds-implementation-20261023/l1-python-target --name l1-python-target
@@ -993,3 +993,35 @@ prepare 与 run 已各执行一次，不覆盖归档或重跑；audit 为零模�
 首次身份 `.tmp/context-unload-implementation-20261103/c-recovery` 第一题在模型派发前因GovernedModelClient缺少容量测量转交返回500，物理调用及tokens均0。一次有界修正后，正式模型工厂的零网络真实请求测量通过；当前新身份冻结582文件，不继承旧答案或覆盖原失败。仅在生成完全停止并封存后运行 `audit.py`、`audit_split.py`、`audit_regeneration.py` 和 `score.py`；审计按每次实际覆盖范围检查未覆盖的原生消息、判决与修复，不把合法摘要遗漏计为反馈丢失，也不以摘要存在代替后继消费。生成期间不得改生产或回流评分。
 
 本次实际已停止封存：十轮正常交付，原分3/10；第十一轮因机器重启中断。同run恢复沿原HTTP、主体、消息、许可及截止时间执行，复用已解码原件、新增模型0，机器再次重启后停止重启生成。`resume.py prepare/run`、`close_interrupted.py`保留两段现场并据真实OS、SDK及Journal记录采集终态，不伪造缺失的HTTP响应。上述审计在生成源码冻结状态执行；之后仅删除不可达函数／调用与未使用双语提示，`cleanup_projection.py before/after`的11个真实阶段完整投影一致。清理后的四份预期源码差异由post-cleanup-source-hashes.json明确记录；原冻结代码及审计不覆盖。详细结果、费用、实际命令及未验证边界见[记录§39](../optimization/to_verify/verify_results/analysis-correctness.md#39-结果卸载与完整交互压缩的-task2-连续验证)。
+
+### 原运行到期后的task2全量重验（2026-11-03晚）
+
+用户再次要求继续时，旧第十一轮截止时间已过；不修改原许可恢复，按[Spec§9.21](../optimization/to_verify/analysis-goal-maintenance.md#921-系统中断后的-task2-完整验证重新执行)从新主体和空会话执行原34题。新归档`.tmp/cu-full-20261103/`复用原`preflight.py`、`prepare_judge.py`、`launch.py prepare/run`、原正式baseline及采集／审计／独立评分工具；冻结当前源码，模型与每轮限制不变。仅使用剩余生成53607951和独立评分952535额度，旧744次／39531277已知及未知3继续累计。旧seal和成绩不改写，任何技术或正式非answer终态仍停止；生产不修改，不做隔离模型实验。运行结果只归入新身份，不冒充原第十二轮接续或确定性收益。
+
+实际生成在第21轮被OS重启中断，20轮正常交付；`close_interrupted.py`从真实Journal和SDK封存无HTTP响应的中断事实。`audit.py`、`audit_split.py`、`audit_regeneration.py`、`artifact_projection.py`完成无模型检查。原`score.py`评分前三轮后再次遇OS重启，`close_grading_interrupted.py`仅按三个有效seal及第4次未决请求保存原分和未知用量，没有重启评分或制造响应；进度日志／预留文件损坏原件保持。原始请求、每轮report、绑定响应及checksums优先于日志文本，结果见[记录§40](../optimization/to_verify/verify_results/analysis-correctness.md#40-原运行到期后的-task2-独立连续重验)。
+
+2026-11-04用户要求补齐20轮评分时，只运行新归档`.tmp/cu-score-resume-20261104/score.py prepare/run`，引用原已封存采集及前三轮report，从第4轮继续。旧归档不写入，旧第4次未知调用预留52839tokens后，新派发额度886684；资格、Prompt、模型、请求参数和官方评分函数保持。补评结束引用前三轮与新增逐轮report合成20轮汇总，旧未知和原分仍按原身份保留，不重启业务生成。
+
+补评实际完成：新增17次调用、94777已知tokens、新未知0，20份答案原分7/20通过。新归档`audit.py`核对全部20轮实际请求、原答案、官方解析、逐轮seal及用量；旧归档保持。逐轮原分、预算与比较边界见[补评结果](../optimization/to_verify/verify_results/analysis-correctness.md#已交付20轮的原评分补齐2026-11-04)。
+
+### 逐次回答目标绑定与核验上下文（2026-11-04）
+
+实验组 1 的接入检查复用下列两轮入口。当前可用 `--feature-flags <TOML>` 显式选择独立实验配置；配置原件随采集归档。评测器修正后，可用 `--continue-source <已封存首轮目录>` 在生产源码、配置和授权保持时续接第二轮，继承累计预算，不重采首轮；`--audit-source` 对已有交付及错误反事实进行零模型资格检查。已执行命令身份为 `.tmp/feature-flags-20261105/` 下的 `target-on`、`target-on-continued`、`target-off`、`target-off-continued` 及 `qualification-*`，实际结果、费用和未覆盖边界由[实验组 1 接入规格](../ablation/experiment.md#接入规格2026-11-05)拥有。关闭核验的采集标为 `unverified_flow_capture`，不提升为完整产品通过。
+
+在仓库根使用 `.venv/Scripts/python.exe -X utf8`。实现前的固定旧真实轨迹、VCTX-1 至 VCTX-4、两轮中文请求及费用边界由[固化方案](../optimization/completed/verification-context-goal-binding.md)拥有。以下输出均采用独立身份，不覆盖已有目录。
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.verification_context_projection --source .tmp/context-unload-task2-20261103/c-recovery --output .tmp/verification-context-format-20261104/goal-binding-offline --user-turns 3
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.verification_context_projection --source .tmp/context-unload-task2-20261103/c-recovery --output .tmp/verification-context-format-20261104/goal-revision-offline --user-turns 9 --verification-only-turn 9
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.run_verification_context_target --output .tmp/verification-context-format-20261104/e2e
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.verification_context_projection --source .tmp/verification-context-format-20261104/e2e --output .tmp/verification-context-format-20261104/e2e-projection --user-turns 2 --expect-current-wire
+.\.venv\Scripts\python.exe -X utf8 -m evals.product_baselines.run_verification_context_target --audit-source .tmp/verification-context-format-20261104/e2e --output .tmp/verification-context-format-20261104/outcome-qualification-final
+```
+
+第三条实际派发真实模型和 Python，其他命令只读真实阶段、不派发模型。旧调用的旧 Schema 序列化身份只在历史评测读取边界核对，生产不增加兼容路径。第 9 轮回放保留前 8 轮原历史，仅检查两类核验阶段，不运行主循环压缩器。`--expect-current-wire` 检查当前中文核验消息与原实发请求相等；英文只检查物化。
+
+结果为 42、10、28 项阶段检查分别全通过；真实两轮交付均通过，首次弱数字断言由封存结果及错误反事实资格 11/11 补正。具体成本与证据边界由[盘点](02-current-case-inventory.md#2026-11-04-逐次回答目标绑定与核验上下文)拥有，不把零模型回放当成产品 E2E 或另加模型用量。评审及资格过程原件保留，生产源码与实际采集相同，评测断言后续修改另存源码身份。
+
+### 核验上下文修正后的task2后台验证（2026-11-04）
+
+计划与预算由[Spec§9.23](../optimization/to_verify/analysis-goal-maintenance.md#923-核验上下文修正后的-task2-后台连续验证)拥有。新归档`.tmp/vctx-task2-20261104/`先执行零模型preflight.py、prepare_judge.py和launch.py prepare，冻结当前源码；再以隐藏后台进程启动pipeline.py，顺序完成原34轮正式生成、输入／职责／修复审计及独立原评分。状态入口status.json，生成日志generation.log，原采集c-recovery，评分score-report.json，最终汇总summary.json；每个阶段独立留日志及退出码。旧归档只读，不复制旧模型输出给新运行，不在本对话持续监控。流水线只验证冻结身份，工作区后续变动另记，不写回生产源码或自动修改权威文档。

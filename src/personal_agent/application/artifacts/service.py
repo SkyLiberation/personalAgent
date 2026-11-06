@@ -40,6 +40,7 @@ from .models import (
     ArtifactWriteReceipt,
     ArtifactWriteRequest,
     CreateArtifact,
+    DRAFT_SUFFIXES,
     GeneratedArtifactPublication,
     MachineArtifactPublication,
     resolve_artifact_ref,
@@ -396,10 +397,8 @@ class ArtifactService:
                 )
             filename = base.record.filename
             content_type = base.record.content_type
-            if content_type not in {"text/x-python", "application/json"}:
-                raise ValueError(
-                    "patch base is not a supported program or configuration"
-                )
+            if content_type not in DRAFT_SUFFIXES:
+                raise ValueError("patch base is not a supported text draft")
             content = TextCoordinates(base.content).apply_edits(request.edits)
             source_refs = (base_ref,)
             edits_applied = len(request.edits)

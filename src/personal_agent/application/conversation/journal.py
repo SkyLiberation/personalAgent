@@ -284,6 +284,7 @@ class InMemoryInteractionJournal:
             or previous.deployment_digest != trace.deployment_digest
             or previous.python_authorization_digest != trace.python_authorization_digest
             or previous.answer_result_binding != trace.answer_result_binding
+            or previous.feature_flags_binding != trace.feature_flags_binding
             or previous.run_deadline_at != trace.run_deadline_at
             or previous.max_execution_seconds != trace.max_execution_seconds
         ):
@@ -305,6 +306,10 @@ class InMemoryInteractionJournal:
                     raise ConversationOperationConflict("goal operation is not bound to an accepted native call")
                 if operation.operation != "read":
                     reference = operation.verification_ref
+                    if not trace.feature_flags_binding.goal_verification:
+                        if reference is not None:
+                            raise ConversationOperationConflict("未启用目标核验的操作不能绑定通过回执")
+                        continue
                     expected = goal_verification_action_id(operation.run_ref, operation.decision_turn, operation.call_id)
                     observation = next((item for item in trace.inputs
                         if isinstance(item, ActionObservation) and item.action_id == expected), None)
@@ -580,7 +585,8 @@ class InMemoryInteractionJournal:
 
     def readable_resource_refs(self, trace: InteractionTrace) -> tuple[ResourceRef, ...]:
         return tuple(dict.fromkeys(ref for item in self.analysis_traces(trace)
-                                   for ref in trace_resource_refs(item)))
+                                   for ref in trace_resource_refs(
+                                       item, include_goal_drafts=item.interaction_run_ref == trace.interaction_run_ref)))
 
     def analysis_observations(self, trace: InteractionTrace) -> tuple[ActionObservation, ...]:
         """Carry actual tool observations across the authorized analysis conversation."""

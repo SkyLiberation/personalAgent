@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from threading import RLock
+from pydantic import ValidationError
 
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.prompt_registry import PromptCatalog
@@ -131,58 +132,53 @@ class ConversationKnowledgeSaveUseCase:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="knowledge_save_requires_independent_confirmation",
-                message="A knowledge save proposal must be the only action in its turn.",
+                message=self._prompts.render("conversation.knowledge.exclusive", count=len(all_actions)),
                 repairable_fields=("actions",),
                 immutable_fields=("messages",),
-                required_repair="Propose only the knowledge_save action so its exact payload can be confirmed.",
+                required_repair=self._prompts.get("conversation.knowledge.exclusive_repair").template,
             ), None
         if self._writer is None:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="capability_missing",
-                message="The governed knowledge save capability is unavailable.",
+                message=self._prompts.get("conversation.knowledge.save_unavailable").template,
                 immutable_fields=("messages",),
-                required_repair="Explain that saving is unavailable; do not claim that knowledge was saved.",
+                required_repair=self._prompts.get("conversation.knowledge.save_unavailable_repair").template,
                 disposition="fail_closed",
             ), None
         try:
             arguments = KnowledgeSaveArguments.model_validate(action.arguments)
-        except ValueError:
-            return self._source_feedback(action.action_id), None
-        indexes = tuple(
-            selection.source_message_index for selection in arguments.selections
-        )
-        if len(indexes) != len(set(indexes)):
-            return self._source_feedback(action.action_id), None
-        if any(
-            index < 0 or index >= len(messages) or messages[index].role != "user"
-            for index in indexes
-        ):
-            return self._source_feedback(action.action_id), None
-        if any(
-            not selection.text_span.strip()
-            or selection.text_span.strip()
-            not in messages[selection.source_message_index].content
-            for selection in arguments.selections
-        ):
-            return self._source_feedback(action.action_id), None
+        except ValidationError as error:
+            details = "\n".join(
+                f"{'.'.join(map(str, item['loc']))}: {item['msg']}"
+                for item in error.errors(include_input=False, include_url=False, include_context=False)
+            )
+            return self._source_feedback(action.action_id, details, messages), None
+        seen = set()
+        for position, selection in enumerate(arguments.selections):
+            index = selection.source_message_index
+            if index in seen:
+                reason = "conversation.knowledge.source_repeated"
+            elif index >= len(messages) or messages[index].role != "user":
+                reason = "conversation.knowledge.source_not_user"
+            elif not (span := selection.text_span.strip()) or span not in messages[index].content:
+                reason = "conversation.knowledge.source_span_invalid"
+            else:
+                seen.add(index)
+                continue
+            detail = self._prompts.render(reason, position=position, index=index)
+            return self._source_feedback(action.action_id, detail, messages), None
         return None, arguments
 
-    @staticmethod
-    def _source_feedback(action_id):
+    def _source_feedback(self, action_id, detail, messages):
+        allowed = [index for index, message in enumerate(messages) if message.role == "user"]
         return DecisionFeedback(
             action_id=action_id,
             reason_code="invalid_knowledge_save_source",
-            message=(
-                "Knowledge save selections must be exact non-empty spans from unique "
-                "existing user messages."
-            ),
+            message=detail,
             repairable_fields=("selections",),
             immutable_fields=("messages", "action_id"),
-            required_repair=(
-                "Select the exact user-authored knowledge span, excluding the request "
-                "to save and confirmation instructions."
-            ),
+            required_repair=self._prompts.render("conversation.knowledge.source_repair", indexes=allowed),
         )
 
     @staticmethod

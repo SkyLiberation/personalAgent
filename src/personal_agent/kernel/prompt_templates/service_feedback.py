@@ -214,17 +214,111 @@ PROMPTS = {
         template='当前模型请求超过已声明的容量边界，或部署容量信息与实际请求不匹配；本次调用已停止。',
         owner="conversation",
     ),
+    'conversation.service.artifact_unread': PromptSpec(
+        name='conversation.service.artifact_unread', version='v1', owner='conversation',
+        template='当前原件 `{resource_id}` 的省略部分尚未查阅，本轮暂不能以 `{disposition}` 结束。',
+    ),
+    'conversation.service.artifact_refetch': PromptSpec(
+        name='conversation.service.artifact_refetch', version='v1', owner='conversation',
+        template='相同请求已产生外置原件 `{resource_id}`。重复抓取无法看到被省略的内容。',
+    ),
+    'conversation.service.artifact_repair_read': PromptSpec(
+        name='conversation.service.artifact_repair_read', version='v1', owner='conversation',
+        template='可调用 `{tool}`，将 `resource_id` 设为 `{resource_id}`，按 `start_line` 读取相关窗口。',
+    ),
+    'conversation.service.artifact_repair_search': PromptSpec(
+        name='conversation.service.artifact_repair_search', version='v1', owner='conversation',
+        template='可调用 `{tool}`，将 `resource_id` 设为 `{resource_id}`，用 `keyword` 定位相关内容。',
+    ),
+    'conversation.service.artifact_repair_unavailable': PromptSpec(
+        name='conversation.service.artifact_repair_unavailable', version='v1', owner='conversation',
+        template='当前声明中没有可用于原件 `{resource_id}` 的读搜动作。',
+    ),
     'conversation.service.historical_source_rejected': PromptSpec(
         name='conversation.service.historical_source_rejected',
-        version='2026-10-27.v1',
-        template='历史原件仅可作为工作上下文读取，不能作为来源核验材料。',
+        version='2026-11-06.v2',
+        template='历史原件 `{resource_id}` 仅可作为工作上下文读取，不能作为来源核验材料。',
         owner="conversation",
     ),
-    'conversation.service.historical_source_repair': PromptSpec(
-        name='conversation.service.historical_source_repair',
-        version='2026-10-27.v1',
-        template='使用 read_artifact 或 search_action_output 读取历史原件。',
-        owner="conversation",
+    'conversation.service.duplicate_call_id': PromptSpec(
+        name='conversation.service.duplicate_call_id', version='v1', owner='conversation',
+        template='调用 `{call_id}` 的身份已绑定到先前提交的操作，本次重复调用未执行。',
+    ),
+    'conversation.service.duplicate_call_repair': PromptSpec(
+        name='conversation.service.duplicate_call_repair', version='v1', owner='conversation',
+        template='先使用已提交操作的结果。确需新操作时发起新的合法调用，调用身份由原生工具协议绑定。',
+    ),
+    'conversation.knowledge.exclusive': PromptSpec(
+        name='conversation.knowledge.exclusive', version='v1', owner='conversation',
+        template="本次同时提交了 {count} 个动作。待用户确认的知识操作必须单独提交，整批未执行。",
+    ),
+    'conversation.knowledge.exclusive_repair': PromptSpec(
+        name='conversation.knowledge.exclusive_repair', version='v1', owner='conversation',
+        template="单独重新发起这项知识操作，等待用户确认确切提议。",
+    ),
+    'conversation.knowledge.save_unavailable': PromptSpec(
+        name='conversation.knowledge.save_unavailable', version='v1', owner='conversation',
+        template="当前部署的知识保存能力不可用。",
+    ),
+    'conversation.knowledge.save_unavailable_repair': PromptSpec(
+        name='conversation.knowledge.save_unavailable_repair', version='v1', owner='conversation',
+        template="说明当前无法保存，保留用户原始内容和意图。",
+    ),
+    'conversation.knowledge.delete_unavailable': PromptSpec(
+        name='conversation.knowledge.delete_unavailable', version='v1', owner='conversation',
+        template="当前部署无法查询目标或准备删除确认。",
+    ),
+    'conversation.knowledge.delete_unavailable_repair': PromptSpec(
+        name='conversation.knowledge.delete_unavailable_repair', version='v1', owner='conversation',
+        template="说明删除当前无法准备。",
+    ),
+    'conversation.knowledge.source_repeated': PromptSpec(
+        name='conversation.knowledge.source_repeated', version='v1', owner='conversation',
+        template="selections[{position}] 重复选择了来源消息 {index}。每条用户消息只能选择一次。",
+    ),
+    'conversation.knowledge.source_not_user': PromptSpec(
+        name='conversation.knowledge.source_not_user', version='v1', owner='conversation',
+        template="selections[{position}] 的 source_message_index 为 {index}，该位置没有用户消息。",
+    ),
+    'conversation.knowledge.source_span_invalid': PromptSpec(
+        name='conversation.knowledge.source_span_invalid', version='v1', owner='conversation',
+        template="selections[{position}] 的 text_span 为空白或不匹配消息 {index} 的连续原文。",
+    ),
+    'conversation.knowledge.source_repair': PromptSpec(
+        name='conversation.knowledge.source_repair', version='v1', owner='conversation',
+        template="可选用户消息索引为 {indexes}。每条消息只选一个非空连续原文片段，排除保存指令和确认话语。没有可选原文时，请用户提供。",
+    ),
+    'conversation.knowledge.delete_target_missing': PromptSpec(
+        name='conversation.knowledge.delete_target_missing', version='v1', owner='conversation',
+        template="目标知识 ID {target_id} 未出现在当前用户的可删除候选范围。",
+    ),
+    'conversation.knowledge.delete_target_stop': PromptSpec(
+        name='conversation.knowledge.delete_target_stop', version='v1', owner='conversation',
+        template="当前缺少可确认的目标。说明限制或向用户确认目标，保持现有知识。",
+    ),
+    'conversation.knowledge.delete_target_retry': PromptSpec(
+        name='conversation.knowledge.delete_target_retry', version='v1', owner='conversation',
+        template="调用 `{inventory_tool}` 获取清单。选中与用户目标一致的 `knowledge_item_id` 后，单独调用 `{delete_tool}` 提议删除。未找到对应项时说明或澄清。",
+    ),
+    'conversation.knowledge.delete_target_reuse': PromptSpec(
+        name='conversation.knowledge.delete_target_reuse', version='v1', owner='conversation',
+        template='使用本次已经取得的知识清单。若其中的 `knowledge_item_id` 与用户目标一致，单独调用 `{delete_tool}` 提议删除。没有匹配项时说明限制或澄清目标。',
+    ),
+    'conversation.knowledge.inventory_already_returned': PromptSpec(
+        name='conversation.knowledge.inventory_already_returned', version='v1', owner='conversation',
+        template='本次交互已成功取得个人知识清单。',
+    ),
+    'conversation.knowledge.inventory_reuse': PromptSpec(
+        name='conversation.knowledge.inventory_reuse', version='v1', owner='conversation',
+        template='根据已返回的清单继续处理。没有所需条目时说明限制或澄清目标。',
+    ),
+    'conversation.knowledge.arguments_repair': PromptSpec(
+        name='conversation.knowledge.arguments_repair', version='v1', owner='conversation',
+        template="根据具体校验原因修正参数，保持用户要求的操作对象与范围。",
+    ),
+    'conversation.knowledge.operation_repair': PromptSpec(
+        name='conversation.knowledge.operation_repair', version='v1', owner='conversation',
+        template="说明操作未开始及实际拒绝原因。需要业务信息时向用户确认，保持原目标。",
     ),
     'conversation.service.execution_permission_missing': PromptSpec(
         name='conversation.service.execution_permission_missing',

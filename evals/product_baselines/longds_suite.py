@@ -215,10 +215,20 @@ def prepare_original(root: Path, task: TaskIdentity, directory: Path) -> LongDSP
     return verify_preparation(directory)
 
 
-def configure() -> Settings:
+def configure(output: Path) -> Settings:
     load_dotenv(ROOT / ".env", override=True)
     settings = Settings.from_env()
     expected = json.loads(REFERENCE_CONFIGURATION.read_bytes())["expected_configuration"]
+    # Translate the sealed external configuration at this read boundary only.
+    # Original captures and their source identity remain unchanged.
+    writer = expected["answer_result"]["writer"]
+    legacy_verification = expected["answer_result"].get("verification", "required")
+    flags = expected.get("feature_flags", {"goal_verification": True,
+                                         "answer_verification": legacy_verification == "required"})
+    flag_path = (output / "feature_flags.toml").resolve()
+    flag_path.write_text("[features]\n" + "".join(
+        f"{key} = {str(value).lower()}\n" for key, value in flags.items()), encoding="utf-8")
+    expected = {**expected, "answer_result": {"writer": writer}, "feature_flags": flags}
     if (settings.structured.model != expected["structured"]["model"]
             or settings.openai.model != expected["openai"]["model"]
             or settings.structured.extra_body != expected["structured"]["extra_body"]):
@@ -237,7 +247,8 @@ def configure() -> Settings:
         PERSONAL_AGENT_OPENAI_MAX_RETRIES=str(expected["openai"]["max_retries"]),
         PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS="40", PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS="256",
         PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS="4", PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS="10000000",
-        PERSONAL_AGENT_ANSWER_RESULT='{"writer":"direct","verification":"none"}', PYTHONDONTWRITEBYTECODE="1")
+        PERSONAL_AGENT_ANSWER_RESULT=json.dumps({"writer": writer}),
+        PERSONAL_AGENT_FEATURE_FLAGS_CONFIG=str(flag_path), PYTHONDONTWRITEBYTECODE="1")
     effective = Settings.from_env()
     if _configuration(effective) != expected:
         raise ValueError("实际模型、容量或执行配置与原完整运行不一致")
@@ -261,13 +272,13 @@ def _check_windows_paths(output: Path) -> None:
 
 def run(root: Path, output: Path, *, qualification_directory: Path,
         judge_token_limit: int = 2_000_000) -> SuiteProgress:
-    settings = configure()
+    output.mkdir(parents=True, exist_ok=False)
+    settings = configure(output)
     judge_settings = LongDSJudgeSettings.from_env()
     judge_configuration = build_judge_configuration(judge_settings, total_token_limit=judge_token_limit)
     require_qualification(qualification_directory, judge_configuration)
     tasks = collect(root)
     _check_windows_paths(output)
-    output.mkdir(parents=True, exist_ok=False)
     code = output / "code"
     code.mkdir()
     _source_identity(code)

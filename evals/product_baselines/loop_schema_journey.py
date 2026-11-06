@@ -29,6 +29,21 @@ TOPIC = ROOT / ".tmp/loop-schema-redesign-20261024"
 SOURCE = ROOT / ".tmp/usage-nonblocking-longds-20261024/l2-prefix-17"
 
 
+def feature_flag_profile(original: dict) -> dict:
+    """Translate a sealed external profile for the current candidate only."""
+    answer = dict(original["answer_result"])
+    legacy_verification = answer.pop("verification", "required")
+    if legacy_verification not in ("required", "none"):
+        raise ValueError("Unknown archived answer verification configuration")
+    return {**original, "answer_result": answer, "feature_flags": original.get("feature_flags", {
+        "goal_verification": True, "answer_verification": legacy_verification == "required"})}
+
+
+def source_profile(source_root: Path) -> dict:
+    original = load(SOURCE / "configuration.json")
+    return feature_flag_profile(original) if source_root.resolve() == ROOT.resolve() else original
+
+
 def bind_launch_imports() -> Path:
     """A frozen copy must bind its selected source before importing packages."""
     parser = argparse.ArgumentParser(add_help=False)
@@ -223,6 +238,15 @@ def seed_stage(group: str, data: Path, checkpoint_index: Path) -> StageSeed:
         original = load(path)
         (original_archive / f"{original['interaction_run_ref']}.json").write_bytes(path.read_bytes())
         projected = dict(original)
+        translated_binding = False
+        if group == "candidate" and original.get("answer_result_binding") is not None:
+            profile = feature_flag_profile({"answer_result": original["answer_result_binding"]})
+            projected["answer_result_binding"] = profile["answer_result"]
+            projected["feature_flags_binding"] = original.get("feature_flags_binding", profile["feature_flags"])
+            translated_binding = projected["answer_result_binding"] != original["answer_result_binding"]
+            if translated_binding:
+                changes.append({"run_ref": original["interaction_run_ref"], "field": "answer_result_binding",
+                    "adaptation": "archived verification setting to typed feature flag binding; originals preserved"})
         if group == "candidate" and path != active_path:
             if original["final_message"] is None:
                 raise ValueError("只允许投影已完成历史run的旧模型控制记录")
@@ -305,7 +329,8 @@ def seed_stage(group: str, data: Path, checkpoint_index: Path) -> StageSeed:
                     SOURCE / "sdk" / f"{candidate_id}.candidate.request.json").sha256})
         validated = InteractionTrace.model_validate(projected)
         serialized = validated.model_dump(mode="json")
-        if any(serialized[name] != value for name, value in original.items() if name != "model_decisions"):
+        if any(serialized[name] != value for name, value in original.items()
+               if name != "model_decisions" and not (translated_binding and name == "answer_result_binding")):
             raise ValueError("只读历史投影改动了usage/执行/来源/messages/Final等原始事实")
         directory = data / "interaction_runs" / validated.interaction_run_ref
         directory.mkdir(parents=True, exist_ok=True)
@@ -522,7 +547,7 @@ def materialize(source_root: Path, checkpoint_index: Path, output: Path, *, grou
     if settings.data_dir.resolve() != data.resolve():
         raise ValueError("正式Composition Root没有使用本组独立数据目录")
     from evals.product_baselines.run_longds import _configuration
-    if _configuration(settings) != load(SOURCE / "configuration.json"):
+    if _configuration(settings) != source_profile(source_root):
         raise ValueError("实际模型/推理/容量/预算/回答装配与封存profile不同")
     context = build_web_app_context(settings, logging.getLogger(__name__))
     service = context.service
@@ -603,7 +628,7 @@ def execute_sample(source_root: Path, checkpoint_index: Path, output: Path, *, g
     clock = ReplayClock(stage_clock.anchor)
     bind_stage_clock(clock)
     settings = Settings.from_env()
-    if _configuration(settings) != load(SOURCE / "configuration.json"):
+    if _configuration(settings) != source_profile(source_root):
         raise ValueError("执行配置不同于准备时的原封存profile")
     context = build_web_app_context(settings, logging.getLogger(__name__))
     service = context.service
@@ -842,7 +867,10 @@ def execution_environment(source_root: Path, data: Path, output: Path, *, fixtur
     principal = AuthenticatedPrincipal.model_validate(entry["authorization"]["authorized_principal"])
     env = _environment(settings, output, principal=principal, api_key="offline-phase-preflight", port=0,
                        authorization_file=SOURCE / "python-deployment.json")
-    original = load(SOURCE / "configuration.json")
+    original = source_profile(source_root)
+    if source_root.resolve() == ROOT.resolve():
+        (output / "feature_flags.toml").write_text("[features]\n" + "".join(
+            f"{key} = {str(value).lower()}\n" for key, value in original["feature_flags"].items()), encoding="utf-8")
     env.update(PYTHONPATH=os.pathsep.join((str(source_root / "src"), str(source_root))),
                PERSONAL_AGENT_DATA_DIR=str(data), PYTHONUTF8="1",
                PERSONAL_AGENT_ANSWER_RESULT=json.dumps(original["answer_result"]),

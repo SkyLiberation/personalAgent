@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator, model_serializer
-from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
+from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelHistoryEntry, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
 from personal_agent.capabilities.contracts.research import (
     ResearchClaims,
     ResearchReview,
@@ -20,6 +20,7 @@ from personal_agent.application.knowledge_lifecycle.models import (
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.feature_flags import FeatureFlags
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.application.conversation.observation_bounds import ReadWindowRequest
 from personal_agent.application.artifacts.models import (
@@ -355,6 +356,14 @@ class DecisionFeedback(_StrictModel):
     immutable_fields: tuple[str, ...] = ()
     required_repair: str = ""
     disposition: Literal["revise", "clarify", "fail_closed"] = "revise"
+    artifact_recovery_ref: ResourceRef | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_artifact_recovery(self, handler):
+        value = handler(self)
+        if self.artifact_recovery_ref is None:
+            value.pop("artifact_recovery_ref", None)
+        return value
 
     @model_validator(mode="after")
     def validate_repair_paths(self) -> "DecisionFeedback":
@@ -709,7 +718,7 @@ class StoredModelRequest(_StrictModel):
     extra_body: dict[str, Any] | None
     metadata: dict[str, Any]
     max_output_repairs: int
-    model_history: tuple[ModelToolExchange, ...]
+    model_history: tuple[ModelHistoryEntry, ...]
     request_digest: str
 
     @classmethod
@@ -794,6 +803,7 @@ class ModelDecisionRecord(_StrictModel):
 class InteractionTrace(_StrictModel):
     goal_operations: tuple[GoalOperationRecord, ...] = ()
     answer_result_binding: AnswerResultConfig | None = None
+    feature_flags_binding: FeatureFlags = Field(default_factory=FeatureFlags)
     history_compaction: HistoryCompactionCheckpoint | None = None
     verification_history_compactions: tuple[VerificationHistoryCheckpoint, ...] = Field(default=(), max_length=2)
     revision: int = Field(default=1, ge=1)

@@ -6,6 +6,7 @@
 
 | 阅读目标 | 正文与数据 |
 | --- | --- |
+| Feature flag 配置、实验组及功能变更时的同步维护 | [实验组登记](experiment.md)、[控制 skill](../../.agents/skills/manage-feature-flags/SKILL.md)；两类核验已接入，默认开启 |
 | 额外 claim 的比较规格、局部收益、成本与未测边界 | [主报告](claim-verifier.md)、[原始汇总](claim-verifier-data.json) |
 | 固定指标与历史基线的只读重算 | [指标规格](claim-verifier.md#21-具体评估指标)、[冻结计划](claim-verifier-baseline.plan.json)、[指标快照](claim-verifier-metrics.json)、[运行命令](../evals/04-running-and-release.md#claim-指标持续评估) |
 | 全部反馈的事后 AI 初审及限制 | [初审报告](claim-complete-review-20261020.md)、[逐行数据](claim-complete-review-20261020.json) |

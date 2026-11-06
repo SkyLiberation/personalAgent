@@ -23,7 +23,7 @@ Verification 是 Agent 内部元能力：
 
 2026-11-01 当前维护goal交接候选在完整和最小充分输入下均未准确识别第三轮错误，未迁入生产；该历史候选由[Spec §9.6](../optimization/to_verify/analysis-goal-maintenance.md#96-当前执行目标接入既有目标核验)记录，不与本轮问答历史契约混用。
 
-2026-10-23 已接入[可替换回答模块](../../src/personal_agent/application/conversation/answer_results.py)：部署分别选择 direct/claims writer 与 required/none 核验，默认 `claims + required`，下文描述此默认配置。`none` 不产生通过回执，仍检查真实引用、权限、执行及费用；当前仅在用户授权的独立 LongDS 流程诊断使用，不计完整产品 E2E。配置在 Journal 冻结且同对话不能切换；契约及临时例外见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
+2026-10-23 已接入[可替换回答模块](../../src/personal_agent/application/conversation/answer_results.py)；2026-11-05 核验选择统一迁为[实验组 1 的 feature flags](../ablation/experiment.md)。writer 默认 `claims`，目标与结果核验默认均开启，下文描述开启时的行为。关闭核验不产生通过回执，仍检查真实引用、权限、执行及费用；未完整核验的采集不计完整产品 E2E 或发布证据。配置在 Journal 冻结且同对话不能切换；当前契约见 [ADR 0050](../adr/0050-verification-feature-flags.md)，旧 `required/none` 配置由其替换。
 
 当前普通回答通过冻结的 `ReviewCriteria.requires_review` 决定是否执行整稿模型核验；进入该工具后，会把通用来源支持标准追加到用户标准。研究则采用同版本统一核验，交付不再重复普通核验。工具授权、引用合法性、业务写入和 Completion 各有确定性边界，不能因为某条回答没有额外模型核验就省略。
 

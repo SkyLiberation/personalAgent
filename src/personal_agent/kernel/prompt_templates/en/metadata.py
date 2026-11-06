@@ -3,6 +3,8 @@
 Keys are the original typed-schema metadata; values do not alter schema validation.
 """
 
+from ..artifacts import PROMPTS as ARTIFACT_SOURCE
+from ..supplemental import PROMPTS as SUPPLEMENTAL_SOURCE
 from .artifacts import TRANSLATIONS as ARTIFACTS
 from .conversation import TRANSLATIONS as CONVERSATION
 from .python_execution import TRANSLATIONS as PYTHON
@@ -16,6 +18,26 @@ _BUSINESS_SUFFIX = (
 
 
 METADATA_TRANSLATIONS: dict[str, str] = {
+    '一基行号。从工具返回的范围取值，优先传正整数，也可传不带前导零的十进制数字字符串。': 'One-based line number from a returned range. Prefer a positive integer. A decimal digit string without leading zeros is also accepted.',
+    '一基 Unicode 字符列。从工具返回的范围取值，优先传正整数，也可传不带前导零的十进制数字字符串。': 'One-based Unicode character column from a returned range. Prefer a positive integer. A decimal digit string without leading zeros is also accepted.',
+    '唯一的顶层字段。operation 及其对应的全部参数都放在此对象内。': 'The only top-level field. Put operation and all parameters for that operation inside this object.',
+    '修改已有草稿时，在 request 内将 operation 设为 patch。': 'Set operation to patch inside request when editing an existing draft.',
+    '直接传编辑数组，即使只改一处。每项都包含同级的 range 和 new_text。全部坐标基于 base_resource_id 的原草稿。': 'Pass the array of edits directly, even for one edit. Each item contains range and new_text at the same level. All coordinates refer to the original draft identified by base_resource_id.',
+    '这一条编辑在原草稿中的替换范围。必须同时提供 start 和 end。': 'The range this edit replaces in the original draft. Provide both start and end.',
+    '写入该范围的完整替换文本，与 range 同级。以空字符串替换非空范围会删除该范围。': 'The full replacement text for this range, at the same level as range. An empty string deletes a nonempty range.',
+    '范围的起点，包含该位置。': 'The inclusive start position of the range.',
+    '范围的终点，不包含该位置。补丁中与 start 相同表示在该处插入。': 'The exclusive end position of the range. In a patch, use the same start and end to insert at that position.',
+    '新草稿的显示文件名。后缀须与 content_type 对应。': 'The display filename of the new draft. Its suffix must match content_type.',
+    '草稿正文的媒体类型，选择 Python、JSON 或 Markdown 对应的值。': 'The media type of the draft content. Choose the value for Python, JSON, or Markdown.',
+    '新草稿的完整正文。': 'The complete content of the new draft.',
+    '起点行号，从 1 开始。': 'The one-based start line.',
+    '起点 Unicode 字符列，从 1 开始。': 'The one-based start column in Unicode characters.',
+    '终点行号，从 1 开始。': 'The one-based end line.',
+    '终点 Unicode 字符列，从 1 开始。终点不包含在替换范围内。': 'The one-based end column in Unicode characters. The end position is exclusive.',
+    '写入该范围的完整替换文本。以空字符串替换非空范围会删除该范围。': 'The full replacement text for the range. An empty string deletes a nonempty range.',
+    '同一基稿上的编辑数组。单次编辑也直接放进数组。每项提供起止行列和替换正文。': 'An array of edits to the same base draft, including when making a single edit. Each item gives the start and end lines and columns and the replacement text.',
+    '本轮目标候选文稿的resource_id，来自read_current_goal或其后write_artifact补丁的成功回执；Runtime恢复全文，不重抄正文。': 'resource_id of a goal candidate in this turn, from read_current_goal or its subsequent successful write_artifact patch. Runtime restores the complete body; do not transcribe it.',
+    '本轮目标候选文稿的 resource_id，取自 read_current_goal 或后续 tool_patch_artifact 的成功回执。Runtime 按引用恢复全文。': 'The resource_id of this turn’s goal draft from read_current_goal or a subsequent successful tool_patch_artifact call. Runtime resolves the complete body from the reference.',
     '本轮实际适用的一项用户要求，写清对象及所要求的关系；依据原始用户消息及仍有效历史，不将模型自己的定义当作用户要求。': 'One user requirement applicable to this turn, specifying its object and required relationship. Derive it from original user messages and still-applicable history, without treating a model-authored definition as a user requirement.',
     '本项要求的判决：满足为 satisfied，明确遗漏或冲突为 not_satisfied，缺少不可替代前提而无法判断为 insufficient_evidence。': 'Judgment for this requirement: satisfied when met, not_satisfied for a clear omission or conflict, and insufficient_evidence when an indispensable premise prevents judgment.',
     '本次待验内容怎样对应这一要求；有差异时指出实际偏离及需要修订的部分，不代写替代内容。': 'How the current submission corresponds to this requirement. Identify actual differences and the parts needing revision without writing replacement content.',
@@ -31,13 +53,16 @@ METADATA_TRANSLATIONS: dict[str, str] = {
     '对应本轮回答的真实核验回执；尚无判决时为null，不补造通过或失败。': 'The actual verification receipt for this answer; null when no judgment is available, without inventing a pass or failure.',
 
     '引用本次 success_criteria 中的 criterion_id；原文由 Runtime 恢复，不返回 criterion 正文。': "Reference criterion_id from this request's success_criteria; Runtime restores the original criterion text, which must not be returned.",
-    '完整任务定义正文，一个非空字符串。用Markdown分别写本轮交付、对象与判定关系、有效约束与未决事项、完成条件与依据；依据原用户要求和有效历史确定含义，明确影响结果的指代及关系。修订完整替换并保留未改要求，不提交额外业务字段，不用提纲、自述或结果猜测代替正文。': 'Complete task definition as one non-empty body string. Use Markdown for current deliverable, objects and decision relationships, applicable constraints and unresolved matters, and completion conditions and evidence. Resolve consequential referents and relationships from original user requirements and applicable history. Revision replaces the complete body while retaining unchanged requirements. Add no other business fields; outlines, assurances, or guessed results cannot substitute for the body.',
+    '完整任务定义正文，一个非空字符串。用Markdown分别写本轮交付、对象与判定关系、有效约束与未决事项、完成条件与依据；依据原用户要求和有效历史确定含义，明确影响结果的指代及关系。不提交额外业务字段，不用提纲、自述或结果猜测代替正文。': 'Complete task definition as one non-empty body string. Use Markdown for current deliverable, objects and decision relationships, applicable constraints and unresolved matters, and completion conditions and evidence. Resolve consequential referents and relationships from original user requirements and applicable history. Add no other business fields; outlines, assurances, or guessed results cannot substitute for the body.',
     "List the caller's current personal knowledge items with canonical knowledge_item_id, title, summary, and state. Use only to inspect the inventory or select a delete target; do not use it to answer from stored personal facts. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。": "List the caller's current personal knowledge items with canonical knowledge_item_id, title, summary, and state. Use only to inspect the inventory or select a delete target; do not use it to answer from stored personal facts. " + _BUSINESS_SUFFIX,
     'Prepare an immutable, user-confirmed save of knowledge already present in selected user messages. This action does not write knowledge. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': 'Prepare an immutable, user-confirmed save of knowledge already present in selected user messages. This action does not write knowledge. ' + _BUSINESS_SUFFIX,
     'Prepare the canonical governed deletion command for one observed personal knowledge item. This does not delete anything; user confirmation is required. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': 'Prepare the canonical governed deletion command for one observed personal knowledge item. This does not delete anything; user confirmation is required. ' + _BUSINESS_SUFFIX,
     "Search the caller's personal knowledge for evidence only when the latest user request asks to recall or use their stored facts. Questions such as 'what is my saved X?' or 'do I still have X saved?' are already sufficient requests: call without asking for a storage location or separate consent. Do not call when personal data is mentioned only to exclude, withhold, protect, or forbid its use. Return original evidence quotes and conflict facts. 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。": "Search the caller's personal knowledge for evidence only when the latest user request asks to recall or use their stored facts. Questions such as 'what is my saved X?' or 'do I still have X saved?' are already sufficient requests: call without asking for a storage location or separate consent. Do not call when personal data is mentioned only to exclude, withhold, protect, or forbid its use. Return original evidence quotes and conflict facts. " + _BUSINESS_SUFFIX,
     '个人知识库归属用户 ID。': 'User ID owning the personal knowledge base.',
-    '保存本任务的新 Python 程序或 JSON 配置；create 新建，patch 用 base_resource_id 选择当前可读草稿，按该快照的行列范围生成新快照。保存成功不代表执行或研究完成。 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': ARTIFACTS["artifact.write.description"].template + " " + _BUSINESS_SUFFIX,
+    ARTIFACT_SOURCE["artifact.write.description"].template: ARTIFACTS["artifact.write.description"].template,
+    SUPPLEMENTAL_SOURCE["conversation.model_action.tool_description"].render(
+        description=ARTIFACT_SOURCE["artifact.write.description"].template,
+    ): ARTIFACTS["artifact.write.description"].template + " " + _BUSINESS_SUFFIX,
     '分析当前用户知识库中的孤岛、薄弱连接和潜在冲突。 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': "Analyze isolated nodes, weak connections, and potential conflicts in the current user's knowledge base." + " " + _BUSINESS_SUFFIX,
     '列出用户最近的 Research 执行记录，用于诊断简报是否运行、失败或投递。 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': "List the user's recent Research execution records to diagnose whether a briefing ran, failed, or was delivered." + " " + _BUSINESS_SUFFIX,
     '列出用户的周期性情报订阅，供 Agent 判断是否需要新增、暂停或调整。 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。': "List the user's recurring intelligence subscriptions so the Agent can decide whether to add, pause, or adjust one." + " " + _BUSINESS_SUFFIX,
@@ -84,7 +109,7 @@ METADATA_TRANSLATIONS.update({
     "可选的完整最终回答顺序；新段提交 text/references，未改段以当前 base_ref 的 answer_segment_id 引用。": "Optional complete final-answer order; submit new segments with text/references and reference unchanged segments by answer_segment_id in the current base_ref.",
     "与本次正文修订一同提交的新增引用；已有引用由 Runtime 保留，新增坐标须本轮选中。": "Additional references submitted with this body revision; Runtime retains existing references, and new coordinates must have been selected in this turn.",
     "只引用当前 success_criteria 的 criterion_id。": "Reference only criterion_id values in the current success_criteria.",
-    '保存本任务的新 Python 程序或 JSON 配置；create 新建，patch 用 base_resource_id 选择当前可读草稿，按该快照的行列范围生成新快照。保存成功不代表执行或研究完成。': "Save a new Python program or JSON configuration for this task; create makes a new artifact, while patch uses base_resource_id to select a currently readable draft and creates a new snapshot using that exact snapshot's line and column ranges. A successful save does not mean execution or research is complete.",
+    '保存本任务的 Python 程序、JSON 配置或 Markdown 文稿；create 新建，patch 用 base_resource_id 选择当前执行的可读草稿，按该快照的行列范围生成新快照。保存成功不代表任务完成。': "Save a Python program, JSON configuration or Markdown draft for this task. Create makes a new artifact; patch selects a readable draft by base_resource_id and applies ranges on its exact snapshot. Saving does not complete the task.",
     '分析当前用户知识库中的孤岛、薄弱连接和潜在冲突。': "Analyze isolated nodes, weak connections, and potential conflicts in the current user's knowledge base.",
     '列出用户最近的 Research 执行记录，用于诊断简报是否运行、失败或投递。': "List the user's recent Research execution records to diagnose whether a briefing ran, failed, or was delivered.",
     '列出用户的周期性情报订阅，供 Agent 判断是否需要新增、暂停或调整。': "List the user's recurring intelligence subscriptions so the Agent can decide whether to add, pause, or adjust one.",

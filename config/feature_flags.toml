@@ -1,0 +1,11 @@
+# 消融实验的 feature flag 配置；管理入口：
+# .agents/skills/manage-feature-flags/SKILL.md
+# 实验组登记：docs/ablation/experiment.md
+# Settings 在启动时读取；Runtime 注入并在每个对话绑定快照。
+# 修改后使用新进程和独立会话，已有运行不切换实验臂。
+
+[features]
+# 是否接入目标核验器。
+goal_verification = true
+# 是否接入回答核验器。
+answer_verification = true

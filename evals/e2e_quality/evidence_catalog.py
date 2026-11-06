@@ -268,7 +268,33 @@ LONGDS_OUTCOME = UserOutcomeContract(
 )
 
 
+VERIFICATION_CONTEXT_OUTCOME = UserOutcomeContract(
+    outcome_id="VERIFICATION-CONTEXT-001",
+    persona="通过多轮中文对话请求计算并接续先前结果的用户",
+    source_ref="docs/optimization/to_verify/analysis-goal-maintenance.md#922-核验交互逐条物化与通过判决精简",
+    natural_goal="使用 Python 计算37×43并报告结果，再将上轮结果加17。",
+    observable_result="正式入口连续两轮正常交付1591、1608；回答分别关联当时已通过的goal，真实核验消费有序历史和绑定对象的通过短记录。",
+    counterfactuals=("失败核验反馈完整保留，未通过不能正常交付", "原始判决和执行事实不因发送投影精简改变",
+                     "未来判决、理想目标和期望答案不注入生产输入"),
+    baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+    baseline_ref="docs/optimization/to_verify/analysis-goal-maintenance.md#922-核验交互逐条物化与通过判决精简",
+    assertion_owner="evals/product_baselines/run_verification_context_target.py",
+)
+
+
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
+    EvidenceCase(
+        evidence_id="VERIFICATION-CONTEXT-001.two_turn_http",
+        case_id="VERIFICATION-CONTEXT-001",
+        module="run_verification_context_target.py",
+        test_name="run",
+        layers=frozenset({EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=VERIFICATION_CONTEXT_OUTCOME,
+        covered_invariants=frozenset({"verification.chronological_messages", "verification.bound_pass_projection",
+                                      "verification.answer_goal_snapshot"}),
+    ),
     EvidenceCase(
         evidence_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001.native_start_http",
         case_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001",
@@ -703,6 +729,7 @@ def validate_catalog() -> None:
         )
     expected = {
         EvidenceClass.PRODUCT_E2E: {
+            "VERIFICATION-CONTEXT-001",
             "AUD-001",
             "E14",
             "E22",

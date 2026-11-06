@@ -9,4 +9,3 @@ class AnswerResultConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     writer: Literal["direct", "claims"] = "claims"
-    verification: Literal["required", "none"] = "required"

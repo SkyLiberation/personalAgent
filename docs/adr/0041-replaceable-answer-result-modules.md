@@ -2,6 +2,8 @@
 
 状态：接受，已实现；实际阶段、两轮流程与两轮独立评分通过。日期：2026-10-23。
 
+2026-11-05 配置决定由 [ADR 0050](0050-verification-feature-flags.md)替换：writer 仍由 `AnswerResultConfig` 选择，两类核验统一由 TOML feature flags 选择。下文 `required`、`none` 及原日期属于历史配置和证据，不再是当前入口。
+
 ## 问题与决定
 
 LongDS 首轮已经完成 7 次 Python，但普通核验 10 次拒绝，最终触及主决策上限。该例未进入 claim 写作。用户明确要求先不接入核验和 claim，确保分析流程运行，并要求后续能够消融 claim。

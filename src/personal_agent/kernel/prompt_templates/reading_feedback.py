@@ -36,8 +36,8 @@ PROMPTS = {
     ),
     "conversation.search.explanation": PromptSpec(
         name="conversation.search.explanation",
-        version="2026-10-27.v1",
-        template="只返回命中行的正文，超长行给出局部文字与 start_column、line_length；line 可作为 read_artifact 的 start_line。搜索结束或零命中不表示全文已读或相关语义不存在。",
+        version="v2-draft-ranges",
+        template="返回命中行；超长行给出局部正文和 start_column、line_length。line 可用作 read_artifact 的 start_line。可编辑文稿的 match_ranges 给出补丁行列范围；match_ranges_truncated 为真时，用更具体的词缩小搜索。结束或零命中不表示全文已读或相关语义不存在。",
         owner="conversation",
     ),
     "conversation.search.snapshot_mismatch": PromptSpec(

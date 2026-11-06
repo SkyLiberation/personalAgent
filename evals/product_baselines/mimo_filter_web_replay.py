@@ -19,6 +19,7 @@ from .run_longds import baseline
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--feature-flags", type=Path, required=True)
     args = parser.parse_args()
     root = Path.cwd()
     history = root / ".tmp/research-mimo-longds-20261023/l2-prefix-17/sdk"
@@ -62,7 +63,8 @@ def main():
     thread.start()
     load_dotenv(root / ".env", override=True)
     os.environ.update(HTTP_PROXY=f"http://127.0.0.1:{server.server_address[1]}", NO_PROXY="127.0.0.1",
-        PYTHON_DOTENV_DISABLED="1", PERSONAL_AGENT_ANSWER_RESULT='{"writer":"direct","verification":"none"}',
+        PYTHON_DOTENV_DISABLED="1", PERSONAL_AGENT_ANSWER_RESULT='{"writer":"direct"}',
+        PERSONAL_AGENT_FEATURE_FLAGS_CONFIG=str(args.feature_flags.resolve()),
         PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS="480", PERSONAL_AGENT_STRUCTURED_MAX_RETRIES="0",
         PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS="40", PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS="256",
         PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS="4", PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS="10000000")

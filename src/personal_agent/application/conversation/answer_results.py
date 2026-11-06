@@ -13,6 +13,7 @@ from copy import deepcopy
 from personal_agent.capabilities.contracts.model import StructuredModelRequest, ModelActionDefinition, ModelAssistantMessage
 from personal_agent.kernel.llm_schemas import model_tool_wire_name
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.feature_flags import FeatureFlags
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
@@ -52,11 +53,12 @@ AnswerStep = StructuredModelRequest | InteractionInput
 @dataclass(frozen=True)
 class DirectAnswerResult:
     config: AnswerResultConfig
+    feature_flags: FeatureFlags = field(default_factory=FeatureFlags, kw_only=True)
     prompts: PromptCatalog = field(default=DEFAULT_PROMPTS, kw_only=True)
 
     @property
     def verification_enabled(self) -> bool:
-        return self.config.verification == "required"
+        return self.feature_flags.answer_verification
 
     @property
     def delivery_prompt_name(self) -> str:

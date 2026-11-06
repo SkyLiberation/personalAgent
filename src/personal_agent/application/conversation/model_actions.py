@@ -8,7 +8,9 @@ execute anything.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
+from functools import partial
 import json
 import re
 from typing import Any
@@ -17,6 +19,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
+from personal_agent.application.artifacts.models import CreateArtifact
 from personal_agent.capabilities.contracts.model import (
     ModelActionDefinition,
     ModelActionInvocation,
@@ -25,6 +28,7 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelResponse,
     StructuredOutputFailureCode,
 )
+from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_schema
@@ -39,7 +43,16 @@ from .models import (
     ToolCallProposal,
     WorkingPlanProposal,
 )
-from .goal_models import AnalysisGoal, GoalMaintenanceInvocation, RetainGoalArguments, GoalReadInvocation, ReadCurrentGoalArguments
+from .goal_models import (
+    AnalysisGoal, GOAL_PENDING_ACTION_REJECTED, GoalMaintenanceInvocation,
+    GoalReadInvocation, ReadCurrentGoalArguments, RetainGoalArguments, SubmitGoalDraftArguments,
+)
+from .tool_requests import (
+    CREATE_ARTIFACT_ACTION,
+    PATCH_ARTIFACT_ACTION,
+    ArtifactPatchArguments,
+    decode_artifact_write_arguments,
+)
 
 _WORKING_PLAN_TARGET = "working_plan"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -53,15 +66,22 @@ _RUNTIME_FIELD_NAMES = frozenset(
 )
 
 
-def goal_action_definition(prompts: PromptCatalog) -> ModelActionDefinition:
-    return ModelActionDefinition(name="maintain_goal", kind="maintain_goal", target_name="maintain_goal",
-        description=prompts.get("conversation.goal.description").template,
-        input_schema=AnalysisGoal.model_json_schema(), strict=False)
+def goal_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True,
+                           has_goal: bool = False, draft_refs: tuple[ResourceRef, ...] = ()) -> ModelActionDefinition:
+    name = "conversation.goal.submit_description" if has_goal else "conversation.goal.description"
+    schema = (SubmitGoalDraftArguments if has_goal else AnalysisGoal).model_json_schema()
+    if has_goal and draft_refs:
+        schema["properties"]["resource_id"]["enum"] = [ref.resource_id for ref in draft_refs]
+    return ModelActionDefinition(name="maintain_goal", kind="maintain_goal",
+        target_name="submit_goal_draft" if has_goal else "maintain_goal",
+        description=prompts.get(name if verification_enabled else name + "_unverified").template,
+        input_schema=schema, strict=False)
 
 
-def goal_retain_action_definition(prompts: PromptCatalog) -> ModelActionDefinition:
+def goal_retain_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True) -> ModelActionDefinition:
     return ModelActionDefinition(name="retain_goal", kind="maintain_goal", target_name="retain_goal",
-        description=prompts.get("conversation.goal.retain_description").template,
+        description=prompts.get("conversation.goal.retain_description" if verification_enabled
+                                else "conversation.goal.retain_description_unverified").template,
         input_schema=RetainGoalArguments.model_json_schema(), strict=False)
 
 
@@ -100,6 +120,25 @@ def _working_plan_action_schema() -> dict[str, Any]:
     return schema
 
 
+def _artifact_write_definitions(prompts: PromptCatalog) -> tuple[ModelActionDefinition, ...]:
+    return (
+        ModelActionDefinition(
+            name=CREATE_ARTIFACT_ACTION,
+            kind="tool",
+            target_name="write_artifact",
+            description=prompts.get("artifact.create_action.description").template,
+            input_schema=_schema_without_fields(CreateArtifact.model_json_schema(), frozenset({"operation"})),
+        ),
+        ModelActionDefinition(
+            name=PATCH_ARTIFACT_ACTION,
+            kind="tool",
+            target_name="write_artifact",
+            description=prompts.get("artifact.patch_action.description").template,
+            input_schema=strictify_schema(ArtifactPatchArguments.model_json_schema()),
+        ),
+    )
+
+
 def build_model_action_definitions(
     capabilities: EffectiveCapabilities,
     *,
@@ -107,9 +146,12 @@ def build_model_action_definitions(
     answer_actions: tuple[ModelActionDefinition, ...] = (),
     prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[ModelActionDefinition, ...]:
-    """Project each visible capability exactly once plus typed control actions."""
+    """Project visible business operations and typed control actions."""
     definitions: list[ModelActionDefinition] = []
     for capability in capabilities.tools:
+        if capability.name == "write_artifact":
+            definitions.extend(_artifact_write_definitions(prompts))
+            continue
         definitions.append(
             ModelActionDefinition(
                 name=_wire_name("tool", capability.name),
@@ -176,23 +218,27 @@ def model_visible_capability_policy_json(
         if definitions is not None
         else build_model_action_definitions(capabilities, prompts=prompts)
     )
-    names = {(item.kind, item.target_name): item.name for item in current}
+    agent_names = {item.target_name: item.name for item in current if item.kind == "agent"}
+    tools = {item.name: item for item in capabilities.tools}
+    tool_policies = []
+    for action in current:
+        if action.kind != "tool":
+            continue
+        tool = tools[action.target_name]
+        tool_policies.append({
+            "name": action.name,
+            "capability_id": tool.name,
+            "read_only": tool.read_only,
+            "planning_safe": tool.planning_safe,
+            "safely_retryable": tool.safely_retryable,
+            "emits_verified_artifact": tool.emits_verified_artifact,
+        })
     return json.dumps(
         {
-            "tools": [
-                {
-                    "name": names[("tool", item.name)],
-                    "capability_id": item.name,
-                    "read_only": item.read_only,
-                    "planning_safe": item.planning_safe,
-                    "safely_retryable": item.safely_retryable,
-                    "emits_verified_artifact": item.emits_verified_artifact,
-                }
-                for item in capabilities.tools
-            ],
+            "tools": tool_policies,
             "agents": [
                 {
-                    "name": names[("agent", item.agent_id)],
+                    "name": agent_names[item.agent_id],
                     "agent_id": item.agent_id,
                     "task_types": item.task_types,
                     "allowed_operations": item.allowed_operations,
@@ -304,6 +350,7 @@ def _payload_failure(
     reason: str,
     field_paths: tuple[str, ...],
     error_types: tuple[str, ...],
+    repair_hints: tuple[str, ...] = (),
 ) -> StructuredOutputFailure:
     return StructuredOutputFailure(
         "agent_interaction_turn",
@@ -313,6 +360,7 @@ def _payload_failure(
         action_kind=action_kind,
         field_paths=field_paths,
         error_types=error_types,
+        repair_hints=repair_hints,
     )
 
 
@@ -326,10 +374,51 @@ def _wire_schema_error_details(error: SchemaValidationError) -> tuple[SchemaVali
     return tuple(detail for child in children for detail in _wire_schema_error_details(child)) or (error,)
 
 
+_JSON_TYPE_NAMES = {
+    dict: "object",
+    list: "array",
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    type(None): "null",
+}
+
+
+def _wire_type_repair(
+    error: SchemaValidationError,
+    field_path: str,
+    *,
+    describe_path: Callable[[tuple[object, ...]], str],
+    prompts: PromptCatalog,
+) -> str | None:
+    if error.validator != "type":
+        return None
+    expected = error.validator_value
+    actual = _JSON_TYPE_NAMES.get(type(error.instance))
+    if actual is None:
+        return None
+    if expected == "array" and isinstance(error.instance, dict) and len(error.instance) == 1:
+        member, value = next(iter(error.instance.items()))
+        if isinstance(value, list):
+            return prompts.render(
+                "conversation.action_array_wrapper_repair",
+                field_path=field_path,
+                array_path=describe_path((*error.absolute_path, member)),
+            )
+    return prompts.render(
+        "conversation.action_type_repair",
+        field_path=field_path,
+        expected=expected if isinstance(expected, str) else " / ".join(expected),
+        actual=actual,
+    )
+
+
 def _wire_payload(
     invocation: ModelActionInvocation,
     definition: ModelActionDefinition,
     *,
+    prompts: PromptCatalog,
     reveal_invalid_action_field_names: bool,
 ) -> dict[str, Any]:
     errors = tuple(
@@ -338,8 +427,13 @@ def _wire_payload(
         for detail in _wire_schema_error_details(error)
     )
     if errors:
-        declared = _declared_field_names(definition.input_schema)
+        describe_path = partial(
+            _field_path,
+            declared_fields=_declared_field_names(definition.input_schema),
+            reveal_invalid_action_field_names=reveal_invalid_action_field_names,
+        )
         diagnostics: list[tuple[str, str]] = []
+        repair_hints: list[str] = []
         required_diagnostics: set[tuple[str, str]] = set()
         for error in errors:
             location = tuple(error.absolute_path)
@@ -351,11 +445,7 @@ def _wire_payload(
             )
             for missing_location in locations:
                 diagnostic = (
-                    _field_path(
-                        missing_location,
-                        declared_fields=declared,
-                        reveal_invalid_action_field_names=reveal_invalid_action_field_names,
-                    ),
+                    describe_path(missing_location),
                     f"schema_{error.validator}",
                 )
                 if error.validator == "required":
@@ -363,12 +453,15 @@ def _wire_payload(
                         continue
                     required_diagnostics.add(diagnostic)
                 diagnostics.append(diagnostic)
+                if hint := _wire_type_repair(error, diagnostic[0], describe_path=describe_path, prompts=prompts):
+                    repair_hints.append(hint)
         raise _payload_failure(
             action_name=invocation.name,
             action_kind=definition.kind,
             reason="action payload does not match its declared wire schema",
             field_paths=tuple(path for path, _ in diagnostics),
             error_types=tuple(kind for _, kind in diagnostics),
+            repair_hints=tuple(repair_hints),
         )
     return invocation.arguments
 
@@ -377,6 +470,7 @@ def decode_model_action_invocations(
     invocations: tuple[ModelActionInvocation, ...],
     definitions: tuple[ModelActionDefinition, ...],
     *,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
     reveal_invalid_action_field_names: bool = False,
 ) -> ContinueTurnProposal | AnswerResultInvocation:
     """Decode provider actions without authorizing, repairing, or executing them."""
@@ -423,6 +517,7 @@ def decode_model_action_invocations(
         payload = _wire_payload(
             invocation,
             definition,
+            prompts=prompts,
             reveal_invalid_action_field_names=reveal_invalid_action_field_names,
         )
         try:
@@ -430,6 +525,8 @@ def decode_model_action_invocations(
                 if definition.target_name == "retain_goal":
                     RetainGoalArguments.model_validate(payload)
                     goal = None
+                elif definition.target_name == "submit_goal_draft":
+                    goal = SubmitGoalDraftArguments.model_validate(payload)
                 else:
                     goal = AnalysisGoal.model_validate(payload)
                 return ContinueTurnProposal(goal_maintenance=GoalMaintenanceInvocation(
@@ -458,6 +555,8 @@ def decode_model_action_invocations(
                 wait_for_user = payload.get("wait_for_user", False)
                 continue
             if definition.kind == "tool":
+                if definition.target_name == "write_artifact":
+                    payload = decode_artifact_write_arguments(definition.name, payload).model_dump(mode="json")
                 actions.append(
                     ToolCallProposal(
                         action_id=invocation.call_id,
@@ -515,25 +614,39 @@ __all__ = [
 
 def provider_action_feedback(
     error: StructuredOutputFailure, response: StructuredModelResponse, *, prompts: PromptCatalog,
+    goal_maintenance_actions: tuple[str, ...] | None = None,
 ) -> DecisionFeedback:
     read_error = error.action_kind == "read_current_goal" or error.action_name == "read_current_goal"
     retain_error = error.action_name == "retain_goal"
     goal_error = read_error or error.action_kind == "maintain_goal" or error.action_name == "maintain_goal"
+    message = prompts.get("conversation.action_protocol_rejected").template
+    repair = prompts.get("conversation.action_protocol_repair").template
+    reason_code = error.reason_code
+    if error.reason_code == "provider_action_unknown" and error.action_name:
+        message = prompts.render("conversation.action_unavailable", action_name=error.action_name)
+        if goal_maintenance_actions is not None:
+            reason_code = GOAL_PENDING_ACTION_REJECTED
+            repair = prompts.render("conversation.goal.pending_action_repair",
+                                    actions=", ".join(goal_maintenance_actions))
+    elif goal_error:
+        message = prompts.render("conversation.goal.rejected", reason_code=error.reason_code,
+            details_json=json.dumps({"field_paths": error.field_paths, "error_types": error.error_types}))
+        repair = prompts.get("conversation.goal.read_repair" if read_error else
+                             "conversation.goal.retain_repair" if retain_error else "conversation.goal.repair").template
+    if error.repair_hints:
+        remaining_repair = (repair,) if goal_error or len(error.repair_hints) < len(error.field_paths) else ()
+        repair = "\n".join((*error.repair_hints, *remaining_repair))
     return DecisionFeedback(
         action_id="provider_action_protocol",
         action_name=error.action_name or "provider_action_protocol",
-        reason_code=error.reason_code,
+        reason_code=reason_code,
         action_diagnostics=tuple(
             ActionProtocolDiagnostic(field_path=path, error_type=kind)
             for path, kind in zip(error.field_paths, error.error_types, strict=True)
         ),
         rejected_action_invocations=response.action_invocations,
-        message=(prompts.render("conversation.goal.rejected", reason_code=error.reason_code,
-            details_json=json.dumps({"field_paths": error.field_paths, "error_types": error.error_types}))
-            if goal_error else prompts.get("conversation.action_protocol_rejected").template),
+        message=message,
         repairable_fields=("action_calls",),
         immutable_fields=("messages", "inputs"),
-        required_repair=prompts.get("conversation.goal.read_repair" if read_error else
-            "conversation.goal.retain_repair" if retain_error else
-            "conversation.goal.repair" if goal_error else "conversation.action_protocol_repair").template,
+        required_repair=repair,
     )

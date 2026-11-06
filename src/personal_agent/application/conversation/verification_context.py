@@ -6,9 +6,11 @@ from pydantic import ValidationError
 
 from personal_agent.capabilities.contracts.verification import (
     VerificationTurn, VerificationContext, VerificationEvent, VerificationKind,
+    SemanticVerificationReceipt,
+    UnverifiedGoalSnapshot,
 )
 from .errors import ConversationOperationConflict
-from .goal_models import AnalysisGoal, goal_verification_action_id
+from .goal_models import AnalysisGoal, GoalOperationRecord, goal_verification_action_id
 from .history_models import VerificationHistoryCheckpoint
 from .model_history import prior_analysis_turns
 from .models import ActionObservation, InteractionInput, InteractionTrace, SubmittedFinal
@@ -43,6 +45,8 @@ def verification_events(trace: InteractionTrace) -> tuple[VerificationEvent, ...
     events: list[VerificationEvent] = []
     decisions = tuple(item for item in trace.model_decisions if item.turn_index is not None)
     active = None
+    verified_goal = None
+    unverified_goal = None
     for index, record in enumerate(decisions):
         end = decisions[index + 1].input_start if index + 1 < len(decisions) else len(trace.inputs)
         items = trace.inputs[record.input_start:end]
@@ -68,10 +72,16 @@ def verification_events(trace: InteractionTrace) -> tuple[VerificationEvent, ...
                         content=content, verdict=verdict))
                 if accepted is not None:
                     active = accepted.goal.objective
+                    if trace.feature_flags_binding.goal_verification:
+                        verified_goal = _accepted_goal_receipt(accepted, items)
+                    else:
+                        unverified_goal = UnverifiedGoalSnapshot(
+                            submission_id=submission_id, content=accepted.goal.objective)
         for item in items:
             if isinstance(item, SubmittedFinal):
                 events.append(VerificationEvent(kind="answer", submission_id=f"{trace.interaction_run_ref}:{item.action_id}",
-                    content=item.final.message, disposition=item.final.disposition))
+                    content=item.final.message, disposition=item.final.disposition,
+                    verified_goal=verified_goal, unverified_goal=unverified_goal))
             elif isinstance(item, ActionObservation):
                 for receipt in observed_receipts((item,), capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY})):
                     if receipt.checked_kind == "goal":
@@ -81,8 +91,22 @@ def verification_events(trace: InteractionTrace) -> tuple[VerificationEvent, ...
                     events[-1] = events[-1].model_copy(update={"verdict": receipt})
     if trace.final_message is not None and (not events or events[-1].content != trace.final_message.message):
         events.append(VerificationEvent(kind="answer", submission_id=f"{trace.interaction_run_ref}:delivered",
-            content=trace.final_message.message, disposition=trace.final_message.disposition))
+            content=trace.final_message.message, disposition=trace.final_message.disposition,
+            verified_goal=verified_goal, unverified_goal=unverified_goal))
     return tuple(events)
+
+
+def _accepted_goal_receipt(operation: GoalOperationRecord, inputs: tuple[InteractionInput, ...]) -> SemanticVerificationReceipt:
+    """Resolve the exact accepted operation, never a later goal or an unaccepted proposal."""
+    if operation.verification_ref is None:
+        raise ConversationOperationConflict("accepted goal has no verification reference")
+    observations = tuple(item for item in inputs if isinstance(item, ActionObservation)
+                         and item.action_id == operation.verification_ref.action_id)
+    receipts = observed_receipts(observations, capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY}))
+    if (len(receipts) != 1 or receipts[0].checked_kind != "goal" or receipts[0].verdict != "passed"
+            or receipts[0].verified_draft != operation.goal.objective):
+        raise ConversationOperationConflict("accepted goal differs from its verified snapshot")
+    return receipts[0]
 
 
 def build_verification_context(*, trace: InteractionTrace, history: tuple[InteractionTrace, ...],
@@ -118,4 +142,6 @@ def build_verification_context(*, trace: InteractionTrace, history: tuple[Intera
         "goal_refs": [operation.goal_ref.model_dump(mode="json") for source in sources
                       for operation in source.goal_operations if operation.operation != "read"]},
         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    return VerificationContext(kind=kind, turns=tuple(turns), active_goal=active_goal, binding=binding)
+    return VerificationContext(kind=kind, turns=tuple(turns),
+        active_goal=active_goal if kind == "goal" else None, binding=binding,
+        goal_verification_enabled=trace.feature_flags_binding.goal_verification)

@@ -1,5 +1,6 @@
 """Render each verifier's own task and history for invocation and budgeting."""
 import json
+from difflib import unified_diff
 from typing import Literal
 from pydantic import Field, create_model
 from personal_agent.kernel.llm_schemas import native_output_parameters
@@ -7,7 +8,7 @@ from personal_agent.kernel.llm_schemas import native_output_parameters
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from .verification import (
     VerificationContext, VerificationCriterion, VerificationCriterionResult,
-    SemanticVerificationReport, UserRequirementAssessment, VerificationKind,
+    SemanticVerificationReceipt, SemanticVerificationReport, UserRequirementAssessment, VerificationKind,
 )
 
 
@@ -26,24 +27,58 @@ def verification_messages(
     messages = [{"role": "system", "content": prompts.render(f"interaction_verification.{context.kind}",
         criteria_json=json.dumps([item.criterion for item in criteria], ensure_ascii=False))}]
     for turn in context.turns:
-        records = []
+        messages.append({"role": "user", "content": prompts.render("interaction_verification.history.user_turn",
+            number=turn.user_turn, question=turn.question)})
+        if context.kind == "goal" and turn is context.turns[-1]:
+            messages.append({"role": "system", "content": prompts.render("interaction_verification.history.request",
+                active_goal=context.active_goal or prompts.get("interaction_verification.history.no_goal").template)})
+        if turn.summary is not None:
+            messages.append({"role": "system", "content": prompts.render(
+                "interaction_verification.history.compacted", summary=turn.summary)})
+        shown_goal = None
         for number, item in enumerate(turn.events, 1):
-            values = {"number": number, "draft": item.content,
-                "judgment_json": (item.verdict.model_dump_json(include={"verdict", "criterion_results", "revision_feedback"})
-                    if item.verdict is not None else prompts.get("interaction_verification.history.pending").template)}
+            values = {"number": number, "draft": item.content, "submission_id": item.submission_id}
+            if (context.kind == "goal" and turn is context.turns[-1] and item is turn.events[-1]
+                    and item.verdict is None and context.active_goal is not None):
+                delta = "\n".join(unified_diff(context.active_goal.splitlines(), item.content.splitlines(),
+                                               fromfile="active", tofile="candidate", n=0, lineterm=""))
+                if delta:
+                    messages.append({"role": "system", "content": prompts.render(
+                        "interaction_verification.history.goal_delta", delta=delta)})
             if context.kind == "answer":
                 values["disposition"] = item.disposition
-            records.append(prompts.render(f"interaction_verification.{context.kind}.history_item", **values))
-        records = "\n\n".join(records)
-        if turn.summary is not None:
-            records = prompts.render("interaction_verification.history.compacted", summary=turn.summary) + "\n\n" + records
-        content = prompts.render("interaction_verification.history.user_turn", number=turn.user_turn,
-            question=turn.question, rounds=records)
-        if turn is context.turns[-1]:
-            content = prompts.render("interaction_verification.history.request",
-                active_goal=context.active_goal or prompts.get("interaction_verification.history.no_goal").template) + "\n\n" + content
-        messages.append({"role": "user", "content": content})
+                goal = item.verified_goal
+                values["goal_receipt_id"] = (goal.receipt_id if goal is not None else
+                    prompts.get("interaction_verification.answer.goal_unavailable").template)
+                if goal is not None and goal.receipt_id != shown_goal:
+                    messages.append({"role": "system", "content": prompts.render(
+                        "interaction_verification.answer.verified_goal", draft=goal.verified_draft,
+                        judgment=verification_judgment_text(goal, prompts=prompts))})
+                    shown_goal = goal.receipt_id
+                unverified = item.unverified_goal
+                if unverified is not None:
+                    values["goal_receipt_id"] = prompts.render(
+                        "interaction_verification.answer.unverified_goal_reference", submission_id=unverified.submission_id)
+                    if unverified.submission_id != shown_goal:
+                        messages.append({"role": "system", "content": prompts.render(
+                            "interaction_verification.answer.unverified_goal",
+                            draft=unverified.content, submission_id=unverified.submission_id)})
+                        shown_goal = unverified.submission_id
+            messages.append({"role": "user", "content": prompts.render(
+                f"interaction_verification.{context.kind}.history_item", **values)})
+            if item.verdict is not None:
+                messages.append({"role": "system", "content": prompts.render(
+                    "interaction_verification.history.judgment", submission_id=item.submission_id,
+                    judgment=verification_judgment_text(item.verdict, prompts=prompts))})
     return messages
+
+
+def verification_judgment_text(receipt: SemanticVerificationReceipt, *, prompts: PromptCatalog) -> str:
+    """Project a bound verdict without changing its canonical report or acceptance."""
+    if receipt.verdict == "passed":
+        return prompts.render(f"interaction_verification.{receipt.checked_kind}.passed",
+            receipt_id=receipt.receipt_id, draft_digest=receipt.draft_digest)
+    return receipt.model_dump_json(include={"verdict", "criterion_results", "revision_feedback"})
 
 
 def bound_verification_report(

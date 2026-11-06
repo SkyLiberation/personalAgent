@@ -38,6 +38,8 @@
 | 来源核验输入未变却随集合版本重复核验 | [按实际输入复用来源报告](claim-source-review-reuse.md) |
 | 独立评分扩大必答项、误读范围或缺少实际引用页面与版本 | [评分目标映射、依据归属及参考资格](research-grader-qualification.md) |
 | 研究独立评分器在开启思考时耗尽短输出额度 | [评分输出预算](research-grader-output-budget.md) |
+| 历史回答缺少当时已通过目标，核验交互整轮打包且通过报告重复展开 | [回答绑定当时目标与核验历史逐条呈现](verification-context-goal-binding.md) |
+| Runtime 拒绝反馈使用内部工具名、错误调用身份或过期修复条件 | [拦截反馈按当前声明给出修复](runtime-feedback-repair.md) |
 
 本目录之外的 optimization 文档只保留完成文档的引用，不继续跟踪成功问题。
 

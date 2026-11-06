@@ -7,6 +7,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.feature_flags import load_feature_flags
 from personal_agent.kernel.model_provider import ModelProvider, resolve_model_provider
 
 from personal_agent.kernel.config_models import (
@@ -107,6 +108,8 @@ def settings_from_env(settings_cls: type):
         "PERSONAL_AGENT_EXTRACT_PROVIDER", "PERSONAL_AGENT_EXTRACT_EXTRA_BODY",
         extract_base_url, extract_model)
     return settings_cls(
+        feature_flags=load_feature_flags(Path(os.getenv(
+            "PERSONAL_AGENT_FEATURE_FLAGS_CONFIG", "config/feature_flags.toml"))),
         answer_result=AnswerResultConfig.model_validate_json(
             os.getenv("PERSONAL_AGENT_ANSWER_RESULT", '{}')
         ),

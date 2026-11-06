@@ -2,7 +2,9 @@
 from collections.abc import Sequence
 import json
 
-from personal_agent.capabilities.contracts.model import ModelToolExchange, ModelToolResult, StructuredModelResponse
+from personal_agent.capabilities.contracts.model import (
+    ModelHistoryEntry, ModelRuntimeFeedback, ModelToolExchange, ModelToolResult, StructuredModelResponse,
+)
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
@@ -10,6 +12,7 @@ from .citations import CitableInput, render_citable_input
 from .errors import ConversationOperationConflict
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
 from .goal_maintenance import goal_tool_result
+from .goal_models import GOAL_PENDING_ACTION_REJECTED
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY
 from .models import (
     ActionObservation, DecisionFeedback, InteractionTrace, ModelCallDisposition, ModelDecisionRecord,
@@ -21,6 +24,14 @@ def input_identity(item) -> HistoryItemKey | None:
         return HistoryItemKey(kind=item.kind, action_id=item.action_id,
                               decision_turn=getattr(item, "decision_turn", None))
     return None
+
+
+def goal_pending_rejection(trace: InteractionTrace, record: ModelDecisionRecord) -> DecisionFeedback | None:
+    if record.blocked_by is None:
+        return None
+    return next((item for item in trace.inputs
+                 if isinstance(item, DecisionFeedback) and item.reason_code == GOAL_PENDING_ACTION_REJECTED
+                 and input_identity(item) == record.blocked_by), None)
 
 
 def decision_input_indices(trace: InteractionTrace, record: ModelDecisionRecord) -> tuple[int, ...]:
@@ -126,15 +137,34 @@ def _disposition_content(disposition: ModelCallDisposition, prompts: PromptCatal
                       ensure_ascii=False)
 
 
+def _paired_rejection_content(
+    feedback: CitableInput, call_ids: tuple[str, ...], prompts: PromptCatalog,
+) -> str:
+    rejection = feedback.observation
+    if isinstance(rejection, DecisionFeedback) and rejection.rejected_action_invocations:
+        unpaired = tuple(call for call in rejection.rejected_action_invocations if call.call_id not in call_ids)
+        repair = rejection.required_repair
+        # Older feedback can have field diagnostics and only a generic retry instruction.
+        if not unpaired and rejection.action_diagnostics and all(
+            diagnostic.error_type == "schema_type" and f"`{diagnostic.field_path}`" in repair
+            for diagnostic in rejection.action_diagnostics
+        ):
+            return repair
+        # The paired assistant message already contains the other original arguments.
+        feedback = feedback.model_copy(update={"observation": rejection.model_copy(
+            update={"rejected_action_invocations": unpaired})})
+    return render_citable_input(feedback, prompts=prompts)
+
+
 def project_model_history(
     trace: InteractionTrace, visible: Sequence[CitableInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, covered_through: int = 0,
-) -> tuple[tuple[ModelToolExchange, ...], tuple[CitableInput, ...]]:
+) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...]]:
     """Use only already materialized/visible facts, never raw tool payloads."""
     keyed = {input_identity(item.observation): item for item in visible
              if input_identity(item.observation) is not None}
     consumed: set[HistoryItemKey] = set()
-    exchanges = []
+    exchanges: list[ModelHistoryEntry] = []
     for record in trace.model_decisions:
         if record.turn_index is None or not record.consumed or record.turn_index <= covered_through:
             continue
@@ -147,6 +177,13 @@ def project_model_history(
             # A visibility/selection boundary removes the whole exchange, never
             # recovers its hidden result from the raw Journal.
             continue
+        if goal_pending_rejection(trace, record) is not None:
+            rejected_key = record.blocked_by
+            if rejected_key is not None and rejected_key in keyed:
+                exchanges.append(ModelRuntimeFeedback(
+                    feedback=render_citable_input(keyed[rejected_key], prompts=prompts)))
+                consumed.add(rejected_key)
+                continue
         dispositions = {item.call_id: item for item in record.dispositions}
         results = []
         for call_id in record.assistant.call_ids:
@@ -166,7 +203,7 @@ def project_model_history(
             elif record.blocked_by is not None and record.blocked_by in keyed:
                 feedback = keyed[record.blocked_by]
                 results.append(ModelToolResult(call_id=call_id,
-                    content=render_citable_input(feedback, prompts=prompts)))
+                    content=_paired_rejection_content(feedback, record.assistant.call_ids, prompts)))
                 consumed.add(record.blocked_by)
             else:
                 raise ConversationOperationConflict("原生工具调用缺少真实结果或拒绝，不能续接")
@@ -205,9 +242,9 @@ def prior_analysis_turns(
 def project_conversation_history(
     trace: InteractionTrace, previous: Sequence[InteractionTrace], visible: Sequence[CitableInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, candidate: HistoryCompactionCheckpoint | None = None,
-) -> tuple[tuple[ModelToolExchange, ...], tuple[CitableInput, ...]]:
+) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...]]:
     """Place prior complete exchanges before their displayed final answer."""
-    exchanges: list[ModelToolExchange] = []
+    exchanges: list[ModelHistoryEntry] = []
     remaining = tuple(visible)
     checkpoint = candidate or active_history_checkpoint(trace, previous)
     coverage = {item.run_ref: item.through_turn for item in checkpoint.sources} if checkpoint else {}

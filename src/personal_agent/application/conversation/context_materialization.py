@@ -12,8 +12,10 @@ from personal_agent.application.capture.web_source import (
 from personal_agent.application.conversation.models import (
     ActionObservation,
     ConversationMessage,
+    DecisionFeedback,
     InteractionInput,
 )
+from personal_agent.capabilities.contracts.model import ModelActionDefinition
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
@@ -21,6 +23,32 @@ READ_ACTION_OUTPUT_CAPABILITY = "read_action_output"
 READ_ARTIFACT_CAPABILITY = "read_artifact"
 SEARCH_ACTION_OUTPUT_CAPABILITY = "search_action_output"
 ARTIFACT_OUTPUT_CAPABILITIES = frozenset({READ_ACTION_OUTPUT_CAPABILITY, READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY})
+
+
+def _materialize_artifact_repair(
+    feedback: DecisionFeedback,
+    actions: Sequence[ModelActionDefinition],
+    *,
+    prompts: PromptCatalog,
+) -> DecisionFeedback:
+    ref = feedback.artifact_recovery_ref
+    if ref is None:
+        return feedback
+    guidance = []
+    for action in actions:
+        if action.kind != "tool" or action.target_name not in {
+            READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY,
+        }:
+            continue
+        resource = action.input_schema["properties"]["resource_id"]
+        if ref.resource_id not in resource.get("enum", ()):
+            continue
+        template = ("conversation.service.artifact_repair_read" if action.target_name == READ_ARTIFACT_CAPABILITY
+                    else "conversation.service.artifact_repair_search")
+        guidance.append(prompts.render(template, tool=action.name, resource_id=ref.resource_id))
+    repair = " ".join(guidance) or prompts.render(
+        "conversation.service.artifact_repair_unavailable", resource_id=ref.resource_id)
+    return feedback.model_copy(update={"required_repair": repair, "artifact_recovery_ref": None})
 
 
 def materialize_analysis_user_requirements(
@@ -45,6 +73,9 @@ def materialize_analysis_user_requirements(
 
 def materialize_interaction_inputs(
     inputs: Iterable[InteractionInput],
+    *,
+    actions: Sequence[ModelActionDefinition] | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[InteractionInput, ...]:
     """Project committed observations into the smallest lossless model view.
 
@@ -64,6 +95,12 @@ def materialize_interaction_inputs(
 
     materialized: list[InteractionInput] = []
     for item in inputs:
+        if isinstance(item, DecisionFeedback) and item.artifact_recovery_ref is not None:
+            materialized.append(
+                _materialize_artifact_repair(item, actions, prompts=prompts) if actions is not None
+                else item.model_copy(update={"artifact_recovery_ref": None})
+            )
+            continue
         if not isinstance(item, ActionObservation):
             materialized.append(item)
             continue

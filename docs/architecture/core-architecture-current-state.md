@@ -6,6 +6,8 @@
 
 personalAgent 是一个受治理的知识智能体。模型负责开放世界语义判断，确定性系统负责权限、准入、状态迁移和不变量；执行系统产生事实，Verifier 判断目标是否语义满足，Completion 门禁检查必需结果契约是否齐全。
 
+目标与结果核验默认开启，由 Settings 读取 typed feature flags，经 AgentRuntime 注入原回答模块和 Conversation，在 Journal 的运行及对话边界固定。关闭仅用于已登记的机制消融装配，接纳事实和未核验目标不会伪装为语义通过；具体契约由[实验组 1](../ablation/experiment.md)与 [ADR 0050](../adr/0050-verification-feature-flags.md)拥有。
+
 ```text
 用户目标 + 可见 Context + 已提交 Observation
   -> 模型产生 typed Proposal
@@ -59,7 +61,7 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 
 ### 3.1 当前主循环的职责混合
 
-独立Python分析的direct路径在目标写入前核验任务定义，required路径在交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；回答核验另接收当前目标快照。原Journal为唯一事实来源，主循环完整原生历史保持。摘要按职责独立绑定，普通工具材料不交给核验，原claims与来源核验路径保持；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)。
+独立Python分析的direct路径在目标写入前核验任务定义，required路径在交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；每个回答事件从当时已接受目标操作恢复确切 passed 回执作为 `verified_goal`，跨轮及同轮目标修订不会覆盖旧回答。核验请求逐条呈现原话、提交及判决，通过报告在主循环与核验发送投影中精简，失败反馈完整。原Journal为唯一事实来源，准入和完成消费原报告，主循环原生调用配对保持。摘要按职责独立绑定，普通工具材料不交给核验，原claims与来源核验路径保持；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)，机制与限定证据见[固化方案](../optimization/completed/verification-context-goal-binding.md)。
 
 上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。原生协议已接入，直接回答装配的实际生成、连续交付及恢复范围见 [Loop 运行结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)；研究子流程的职责拆分仍是候选。
 

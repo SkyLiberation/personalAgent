@@ -149,6 +149,18 @@ class ModelToolExchange(BaseModel):
         return self
 
 
+class ModelRuntimeFeedback(BaseModel):
+    """A positioned Runtime message without a provider tool exchange."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    feedback: str = Field(min_length=1)
+    context_before: tuple[str, ...] = ()
+    before_message_index: int | None = Field(default=None, ge=0)
+
+
+ModelHistoryEntry = ModelToolExchange | ModelRuntimeFeedback
+
+
 class ProviderExceptionFrame(BaseModel):
     """One bounded cause/context frame; messages exclude HTTP error bodies."""
 
@@ -257,6 +269,7 @@ class StructuredOutputFailure(ValueError):
         action_kind: ModelActionKind | None = None,
         field_paths: tuple[str, ...] = (),
         error_types: tuple[str, ...] = (),
+        repair_hints: tuple[str, ...] = (),
     ) -> None:
         if len(field_paths) != len(error_types):
             raise ValueError("structured output diagnostic fields must align")
@@ -267,6 +280,7 @@ class StructuredOutputFailure(ValueError):
         self.action_kind = action_kind
         self.field_paths = field_paths
         self.error_types = error_types
+        self.repair_hints = repair_hints
         # A rejected provider response remains an observed, billable call.
         # Only the adapter attaches this; it contains no admitted actions.
         self.response: "StructuredModelResponse[Any] | None" = None
@@ -338,7 +352,7 @@ class StructuredModelRequest(Generic[StructuredOutputT]):
     extra_body: dict[str, object] | None = None
     metadata: dict[str, object] = field(default_factory=dict)
     max_output_repairs: int = 1
-    model_history: tuple[ModelToolExchange, ...] = ()
+    model_history: tuple[ModelHistoryEntry, ...] = ()
 
     def __post_init__(self) -> None:
         positions = [len(self.messages) if item.before_message_index is None else item.before_message_index
@@ -640,7 +654,7 @@ def sealed_context_projection_ref(
     *,
     purpose: str,
     messages: list[dict[str, Any]],
-    model_history: tuple[ModelToolExchange, ...] = (),
+    model_history: tuple[ModelHistoryEntry, ...] = (),
 ) -> str:
     """Create a content-addressed ref for an already bounded service context.
 
@@ -768,6 +782,8 @@ __all__ = [
     "ModelAssistantMessage",
     "ModelToolResult",
     "ModelToolExchange",
+    "ModelRuntimeFeedback",
+    "ModelHistoryEntry",
     "ModelActionDefinition",
     "ModelActionInvocation",
     "ModelActionKind",

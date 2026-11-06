@@ -27,6 +27,7 @@ from personal_agent.capabilities.contracts.grants import (
 from personal_agent.capabilities.contracts.model import (
     ModelInvocationUnavailable,
     ModelCapacityRefused,
+    ModelRuntimeFeedback,
     StructuredOutputFailure,
     StructuredModelResponse,
     StructuredModelClient,
@@ -46,9 +47,10 @@ from .research_delivery import (
     ResearchExperimentCompletionUseCase, experiment_submission, pending_experiment_submission,
 )
 from .tool_requests import WriteArtifactArgs
-from .artifact_sources import input_resource_refs
+from .artifact_sources import input_resource_refs, trace_goal_draft_refs
 from .history_compaction import HistoryCompactor, checkpoint_refs
 from .model_history import (
+    goal_pending_rejection,
     prior_analysis_turns, project_conversation_history, update_decisions,
 )
 from personal_agent.kernel.contracts.resource import OperationScope, ResourceRef, ResourceSelector
@@ -106,10 +108,13 @@ from .model_actions import (
     decode_model_action_invocations,
     model_visible_capability_policy_json,
 )
-from .goal_models import GoalOperationRecord, GoalMaintenanceInvocation
+from .goal_models import GOAL_PENDING_ACTION_REJECTED, GoalOperationRecord, GoalMaintenanceInvocation
+from .goal_drafts import (
+    goal_draft_refs, goal_draft_action_definitions, prepare_goal_draft, resolve_goal_submission,
+)
 from .goal_maintenance import (
     current_analysis_goal, goal_prepared, goal_context, goal_decision_outcome,
-    admit_goal_maintenance, goal_feedback, goal_input_digest,
+    admit_goal_maintenance, goal_feedback, goal_input_digest, project_goal_feedback,
 )
 from .errors import (
     ConversationFailureStage,
@@ -376,6 +381,7 @@ class ConversationService:
         if prior is None:
             if any(
                 item.answer_result_binding != self._answer_result.config
+                or item.feature_flags_binding != self._answer_result.feature_flags
                 for item in self._journal.conversation_traces(conversation_id, principal)
             ):
                 raise ConversationOperationConflict("同一对话不能更换回答模块或核验装配，请使用独立对话。")
@@ -403,6 +409,7 @@ class ConversationService:
             now = datetime.now(UTC)
             prior = InteractionTrace(
                 answer_result_binding=self._answer_result.config,
+                feature_flags_binding=self._answer_result.feature_flags,
                 interaction_run_ref=run_ref, conversation_id=conversation_id, principal=principal,
                 messages=tuple(messages), input_artifact_refs=tuple(input_artifact_refs), inputs=tuple(sources),
                 usage=CommittedUsage(provider_usage_complete=True, model_calls=0, input_tokens=0, output_tokens=0),
@@ -422,6 +429,8 @@ class ConversationService:
             self._require_python_authorization(prior)
         if prior.answer_result_binding != self._answer_result.config:
             raise ConversationOperationConflict("原运行的回答模块绑定缺失或与本次装配不同，请使用新对话进行独立运行。")
+        if prior.feature_flags_binding != self._answer_result.feature_flags:
+            raise ConversationOperationConflict("原运行的 feature flags 与本次装配不同，请使用新对话。")
         if prior.deployment_digest is not None and current_claims(prior.inputs) is not None:
             raise ValueError("旧 claim 研究记录不能作为初步实验交付的提交；请使用新的准备身份。")
         working_plan = (
@@ -701,7 +710,9 @@ class ConversationService:
                 )
                 continue
             assert decision is not None
-            if self._uses_inline_task_understanding(self._journal.get(run_ref)):
+            goal_trace = self._journal.get(run_ref)
+            committed_call_ids = self._committed_call_ids(goal_trace)
+            if self._uses_inline_task_understanding(goal_trace):
                 # Retain every actual answer proposal, including revisions rejected
                 # by the goal prerequisite. Recording does not admit or publish it.
                 if (isinstance(decision, FinalMessage)
@@ -711,20 +722,26 @@ class ConversationService:
                     self._commit(run_ref, principal, messages, inputs, usage, execution_order,
                         concurrent_batches, context_composition,
                         review_criteria=review_criteria, working_plan=working_plan)
-                goal_trace = self._journal.get(run_ref)
+                    goal_trace = self._journal.get(run_ref)
                 predecessors = prior_analysis_turns(goal_trace, self._journal.analysis_traces(goal_trace))
                 outcome = goal_decision_outcome(decision, trace=goal_trace, previous=predecessors,
                     prompts=self._prompts)
+                if (isinstance(outcome, (GoalMaintenanceInvocation, GoalOperationRecord))
+                        and outcome.call_id in committed_call_ids):
+                    operation = ("read_current_goal" if isinstance(outcome, GoalOperationRecord) else
+                                 "retain_goal" if outcome.arguments is None else "maintain_goal")
+                    outcome = self._duplicate_call_feedback(outcome.call_id, action_name=operation)
                 if outcome is not None:
                     if isinstance(outcome, GoalMaintenanceInvocation):
                         outcome, result, usage = self._verify_goal_maintenance(outcome, run_ref=run_ref,
                             owner=owner, source_platform=source_platform)
-                        if result.interaction_input not in inputs:
+                        if result is not None and result.interaction_input not in inputs:
                             inputs.append(result.interaction_input)
-                        if result.action_id not in execution_order:
+                        if result is not None and result.action_id not in execution_order:
                             execution_order.append(result.action_id)
                         usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
                     elif isinstance(outcome, GoalOperationRecord):
+                        outcome = prepare_goal_draft(outcome, goal_trace, self._artifact_port, prompts=self._prompts)
                         usage = usage.model_copy(update={"tool_calls": usage.tool_calls + 1})
                     accepted_goal = outcome if isinstance(outcome, GoalOperationRecord) else None
                     if accepted_goal is None:
@@ -911,7 +928,8 @@ class ConversationService:
                             and prior.python_authorization_digest is not None
                             and current_claims(inputs) is None))
                         and decision.disposition == "answer"
-                        or (prior.python_authorization_digest is not None and decision.disposition != "answer")):
+                        or (self._answer_result.verification_enabled
+                            and prior.python_authorization_digest is not None and decision.disposition != "answer")):
                     verified, result, usage = (
                         self._verify_before_send(
                             decision,
@@ -1295,7 +1313,7 @@ class ConversationService:
                 owner=owner,
                 source_platform=source_platform,
                 usage=usage,
-                committed_action_ids=frozenset(execution_order),
+                committed_action_ids=committed_call_ids,
                 committed_inputs=tuple(inputs),
                 plan_step_id=active_working_plan_step_id(working_plan),
             )
@@ -1408,8 +1426,9 @@ class ConversationService:
                           published.queries.resource_ref,
                     )
                 )
+        control_refs = set((*self._history_snapshot_refs(trace), *trace_goal_draft_refs(trace)))
         for ref in dict.fromkeys(refs):
-            if ref in self._history_snapshot_refs(trace):
+            if ref in control_refs:
                 continue
             if ref not in existing:
                 try:
@@ -1603,20 +1622,18 @@ class ConversationService:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="knowledge_delete_requires_independent_confirmation",
-                message="A knowledge delete proposal must be the only action in its turn.",
+                message=self._prompts.render("conversation.knowledge.exclusive", count=len(all_actions)),
                 repairable_fields=("actions",),
                 immutable_fields=("action_id",),
-                required_repair=(
-                    "Propose only prepare_knowledge_delete so its canonical command can be confirmed."
-                ),
+                required_repair=self._prompts.get("conversation.knowledge.exclusive_repair").template,
             ), None
         if self._knowledge_reader is None or self._knowledge_lifecycle is None:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="capability_missing",
-                message="The governed knowledge delete capability is unavailable.",
+                message=self._prompts.get("conversation.knowledge.delete_unavailable").template,
                 immutable_fields=("action_id",),
-                required_repair="Explain the limitation and do not claim deletion was prepared.",
+                required_repair=self._prompts.get("conversation.knowledge.delete_unavailable_repair").template,
                 disposition="fail_closed",
             ), None
         try:
@@ -1634,38 +1651,45 @@ class ConversationService:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="target_not_observed_in_scope",
-                message="The target knowledge item was not observed in the caller's personal knowledge.",
+                message=self._prompts.render("conversation.knowledge.delete_target_missing",
+                    target_id=arguments.target_knowledge_item_id),
                 repairable_fields=("target_knowledge_item_id",),
                 immutable_fields=("action_id", "reason"),
-                required_repair=(
-                    "Call list_personal_knowledge, select one returned knowledge_item_id, "
-                    "then prepare the delete as a separate action."
-                ),
+                required_repair=self._prompts.get("conversation.knowledge.delete_target_stop").template,
             ), None
         return None, arguments
 
-    @staticmethod
-    def _invalid_special_arguments(action, error):
+    def _project_action_feedback(self, feedback, actions, *, inline_understanding,
+                                 knowledge_inventory_observed=False):
+        if feedback.reason_code == "target_not_observed_in_scope":
+            declared = {action.target_name: action.name for action in actions if action.kind == "tool"}
+            inventory = declared.get(_LIST_PERSONAL_KNOWLEDGE_CAPABILITY)
+            delete = declared.get(_PREPARE_KNOWLEDGE_DELETE_CAPABILITY)
+            if delete is not None and knowledge_inventory_observed:
+                return feedback.model_copy(update={"required_repair": self._prompts.render(
+                    "conversation.knowledge.delete_target_reuse", delete_tool=delete)})
+            if inventory is not None and delete is not None:
+                return feedback.model_copy(update={"required_repair": self._prompts.render(
+                    "conversation.knowledge.delete_target_retry", inventory_tool=inventory, delete_tool=delete)})
+        return project_goal_feedback(feedback, actions, prompts=self._prompts) if inline_understanding else feedback
+
+    def _invalid_special_arguments(self, action, error):
         return DecisionFeedback(
             action_id=action.action_id,
             reason_code="invalid_arguments",
             message=str(error),
             repairable_fields=("arguments",),
             immutable_fields=("action_id", "tool_name"),
-            required_repair="Revise only the arguments to satisfy the declared capability schema.",
+            required_repair=self._prompts.get("conversation.knowledge.arguments_repair").template,
         )
 
-    @staticmethod
-    def _application_operation_feedback(action, error):
+    def _application_operation_feedback(self, action, error):
         return DecisionFeedback(
             action_id=action.action_id,
             reason_code="application_operation_rejected",
             message=str(error),
             immutable_fields=("action_id", "tool_name"),
-            required_repair=(
-                "Do not claim the operation started. Explain the rejection or ask for "
-                "the missing business input without changing the user's goal."
-            ),
+            required_repair=self._prompts.get("conversation.knowledge.operation_repair").template,
             disposition="fail_closed",
         )
 
@@ -1891,8 +1915,7 @@ class ConversationService:
             for item in inputs
         )
 
-    @staticmethod
-    def _unread_output_feedback(decision, resource_id: str) -> DecisionFeedback:
+    def _unread_output_feedback(self, decision: FinalMessage, resource: ResourceRef) -> DecisionFeedback:
         """Reject the exit, not the conclusion.
 
         What the omitted part says is the model's call, including that it does not
@@ -1903,22 +1926,14 @@ class ConversationService:
         return DecisionFeedback(
             action_id="interaction_turn",
             reason_code="offloaded_output_unread",
-            message=(
-                f"This turn cannot end as {decision.disposition!r} while the output of "
-                "an earlier call is still unread. Its excerpt omitted part of the "
-                "output, and the omitted part is held by this run, not by the user."
-            ),
+            message=self._prompts.render("conversation.service.artifact_unread",
+                disposition=decision.disposition, resource_id=resource.resource_id),
             repairable_fields=("disposition", "message"),
-            required_repair=(
-                "Call search_action_output or read_artifact for resource_id "
-                f"{resource_id!r} with the selected tool's keyword or start_line to locate what "
-                "is missing. If the omitted part turns out not to contain it, say so "
-                "from what the windows showed."
-            ),
+            artifact_recovery_ref=resource,
         )
 
     @staticmethod
-    def _unread_offloaded_resource(inputs) -> str | None:
+    def _unread_offloaded_resource(inputs) -> ResourceRef | None:
         """The output this turn fetched, offloaded, and never came back for.
 
         A turn that fetched an oversized output holds evidence the user does not
@@ -1930,7 +1945,8 @@ class ConversationService:
         """
 
         offloaded = ConversationService._unread_offloaded_resources(inputs)
-        return next(iter(offloaded), None)
+        binding = next(iter(offloaded.values()), None)
+        return ResourceRef.model_validate(binding[2]) if binding is not None else None
 
     @staticmethod
     def _unread_offloaded_resources(
@@ -2014,7 +2030,16 @@ class ConversationService:
         trace = self._journal.get(run_ref)
         previous = prior_analysis_turns(trace, self._journal.analysis_traces(trace))
         current = current_analysis_goal(trace, previous)
-        proposal = invocation.arguments if invocation.arguments is not None else current.goal
+        action_name = "retain_goal" if invocation.arguments is None else "maintain_goal"
+        try:
+            proposal, draft_ref = resolve_goal_submission(invocation, trace, current, self._artifact_port, prompts=self._prompts)
+        except (ValueError, OSError) as error:
+            return goal_feedback(invocation.call_id, "goal_draft_invalid", {"detail": str(error)},
+                                 action_name=action_name, prompts=self._prompts), None, trace.usage
+        if not trace.feature_flags_binding.goal_verification:
+            operation = admit_goal_maintenance(invocation, trace=trace, current=current,
+                prompts=self._prompts, verification_ref=None, candidate=proposal, draft_ref=draft_ref)
+            return operation, None, trace.usage
         context = self._task_verification_context(run_ref, draft=proposal.objective,
             kind="goal", goal_call_id=invocation.call_id)
         arguments = {"draft": proposal.objective,
@@ -2034,11 +2059,13 @@ class ConversationService:
             raise ConversationOperationConflict("goal source changed during verification")
         if receipt.verdict != "passed":
             feedback = goal_feedback(invocation.call_id, "goal_verification_failed", {
+                "draft_ref": draft_ref.model_dump(mode="json") if draft_ref is not None else None,
                 "verdict": receipt.verdict, "criterion_results": [item.model_dump(mode="json") for item in receipt.criterion_results],
-                "revision_feedback": receipt.revision_feedback}, prompts=self._prompts)
+                "revision_feedback": receipt.revision_feedback}, action_name=action_name, prompts=self._prompts)
             return feedback, result, usage
         operation = admit_goal_maintenance(invocation, trace=latest, current=current, prompts=self._prompts,
-            verification_ref=HistoryItemKey(kind="tool_result", action_id=action_id))
+            verification_ref=HistoryItemKey(kind="tool_result", action_id=action_id),
+            candidate=proposal, draft_ref=draft_ref)
         return operation, result, usage
 
     def _verify_before_send(
@@ -2340,9 +2367,16 @@ class ConversationService:
             experiment_run=decision_trace.deployment_digest is not None, answer_actions=answer_actions,
             prompts=self._prompts)
         if inline_understanding:
-            goal_actions = (goal_action_definition(self._prompts),)
-            if current_analysis_goal(decision_trace, previous_turns) is not None:
-                goal_actions += (goal_retain_action_definition(self._prompts),)
+            goal_verification = decision_trace.feature_flags_binding.goal_verification
+            current_goal = current_analysis_goal(decision_trace, previous_turns)
+            drafts = goal_draft_refs(decision_trace, current_goal)
+            goal_actions = ((goal_action_definition(self._prompts, verification_enabled=goal_verification,
+                             has_goal=current_goal is not None, draft_refs=drafts),)
+                            if current_goal is None or drafts else ())
+            if current_goal is not None:
+                goal_actions += (goal_retain_action_definition(self._prompts, verification_enabled=goal_verification),)
+                if self._artifact_port is not None and decision_trace.principal is not None:
+                    goal_actions += (goal_read_action_definition(self._prompts),)
             non_business = []
             if goal_required:
                 for action in answer_actions:
@@ -2350,11 +2384,15 @@ class ConversationService:
                         schema = deepcopy(action.input_schema)
                         schema["properties"]["disposition"]["enum"] = ["clarification_required", "limitation", "failed"]
                         non_business.append(action.model_copy(update={"input_schema": schema}))
-            action_definitions = (*goal_actions, *non_business) if goal_required else (
-                *action_definitions, *goal_actions, goal_read_action_definition(self._prompts))
-        capability_projection = model_visible_capability_policy_json(capabilities, definitions=action_definitions,
-            prompts=self._prompts) if not goal_required else model_visible_capability_policy_json(
-                EffectiveCapabilities(), definitions=action_definitions, prompts=self._prompts)
+            action_definitions = (*goal_actions, *goal_draft_action_definitions(action_definitions, drafts),
+                                  *non_business) if goal_required else (*action_definitions, *goal_actions)
+        visible_capabilities = capabilities
+        if goal_required:
+            draft_tools = {item.target_name for item in action_definitions if item.kind == "tool"}
+            visible_capabilities = EffectiveCapabilities(tools=tuple(
+                tool for tool in capabilities.tools if tool.name in draft_tools))
+        capability_projection = model_visible_capability_policy_json(visible_capabilities,
+            definitions=action_definitions, prompts=self._prompts)
         claims = current_claims(inputs)
         prompt_name = "conversation.action"
         prompt_version = self._prompts.get(prompt_name).version
@@ -2404,8 +2442,11 @@ class ConversationService:
                 prompts=self._prompts)
             latest_submission_index = next((index for index in range(len(inputs) - 1, -1, -1)
                                             if isinstance(inputs[index], SubmittedFinal)), None)
+            knowledge_inventory_observed = self._has_knowledge_inventory(inputs)
             decision_inputs = tuple(
-                item
+                self._project_action_feedback(item, action_definitions, inline_understanding=inline_understanding,
+                    knowledge_inventory_observed=knowledge_inventory_observed)
+                if isinstance(item, DecisionFeedback) else item
                 for index, item in enumerate(inputs)
                 if not (
                     (research_mode and isinstance(item, DecisionFeedback)
@@ -2416,7 +2457,8 @@ class ConversationService:
                     or (isinstance(item, ResearchReview) and item is not review)
                 )
             )
-            visible_inputs = materialize_interaction_inputs(decision_inputs)
+            visible_inputs = materialize_interaction_inputs(
+                decision_inputs, actions=action_definitions, prompts=self._prompts)
             final_inputs = materialize_citation_context(visible_inputs)
             if research_mode and evidence_selection is not None and evidence_selection.next_step == "write":
                 inherited_ids = selected_citation_ids(
@@ -2466,7 +2508,9 @@ class ConversationService:
         last_main = next((record for record in reversed(decision_trace.model_decisions)
                           if record.turn_index is not None), None)
         if (last_main is not None and last_main.blocked_by is not None and last_main.response_refs
-                and not any(exchange.assistant == last_main.assistant for exchange in model_history)):
+                and goal_pending_rejection(decision_trace, last_main) is None
+                and not any(not isinstance(exchange, ModelRuntimeFeedback)
+                            and exchange.assistant == last_main.assistant for exchange in model_history)):
             visible_messages.append({"role": "system", "content": self._prompts.get("conversation.rejected_output_preface").template
                 + self._journal.model_response_records(run_ref, last_main)[-1].payload_json})
         if inline_understanding:
@@ -2517,11 +2561,13 @@ class ConversationService:
                 len(item["content"]) for item in conversation_content
             ),
             typed_inputs_chars=len(typed_inputs_content),
-            native_history_chars=sum(len(json.dumps(exchange.assistant.payload, ensure_ascii=False))
-                                     + sum(len(result.content) for result in exchange.results)
-                                     + sum(len(content) for content in exchange.runtime_feedback)
-                                     + sum(len(content) for content in exchange.context_before)
-                                     for exchange in model_history),
+            native_history_chars=sum(
+                sum(map(len, exchange.context_before)) +
+                (len(exchange.feedback) if isinstance(exchange, ModelRuntimeFeedback) else
+                 len(json.dumps(exchange.assistant.payload, ensure_ascii=False))
+                 + sum(len(result.content) for result in exchange.results)
+                 + sum(map(len, exchange.runtime_feedback)))
+                for exchange in model_history),
             prompt_version=self._prompts.get(prompt_name).version,
             input_tokens=None,
         )
@@ -2529,7 +2575,6 @@ class ConversationService:
 
     def _decide_once(self, request, composition, *, run_ref, inputs, usage, review_criteria):
         decision_trace = self._journal.get(run_ref)
-        action_definitions = request.action_definitions
         provider_protocol_error = None
         try:
             response = self._generate_model(request, run_ref=run_ref, usage=usage)
@@ -2545,14 +2590,15 @@ class ConversationService:
             "turn_index": response_record.turn_index - 1 if response_record is not None
                 and response_record.turn_index is not None else composition.turn_index,
             "input_tokens": response.input_tokens})
+        bound_request = self._journal.model_request(run_ref, response_record) if response_record is not None else request
         try:
             if provider_protocol_error is not None:
                 raise provider_protocol_error
-            bound_definitions = self._journal.model_request(run_ref, response_record).action_definitions if response_record is not None else action_definitions
             assistant = response.assistant_message
             has_calls = bool(response.action_invocations or (assistant is not None and assistant.call_ids))
             if has_calls:
-                decision = decode_model_action_invocations(response.action_invocations, bound_definitions,
+                decision = decode_model_action_invocations(response.action_invocations, bound_request.action_definitions,
+                    prompts=self._prompts,
                     reveal_invalid_action_field_names=self._action_diagnostics_reveal_field_names)
             else:
                 try:
@@ -2586,7 +2632,12 @@ class ConversationService:
                 action_field_paths=exc.field_paths or None,
                 action_error_types=exc.error_types or None,
             )
-            return None, response, composition, provider_action_feedback(exc, response, prompts=self._prompts)
+            return None, response, composition, provider_action_feedback(
+                exc, response, prompts=self._prompts,
+                goal_maintenance_actions=tuple(
+                    action.name for action in bound_request.action_definitions
+                    if action.kind in {"maintain_goal", "read_current_goal", "tool"}
+                ) if bound_request.action_choice == "required" else None)
         return decision, response, composition, None
 
     def _require_python_authorization(self, trace):
@@ -2767,6 +2818,7 @@ class ConversationService:
                 action_kind=error.action_kind,
                 field_paths=error.field_paths,
                 error_types=error.error_types,
+                repair_hints=error.repair_hints,
                 provider_response_complete=bool(error.response is not None or error.prior_responses),
                 response=error.response,
                 prior_responses=error.prior_responses,
@@ -2950,7 +3002,15 @@ class ConversationService:
             for item in inputs
         )
         readable_refs = input_resource_refs(inputs)
-        inspectable_refs = readable_refs
+        goal_drafts = ()
+        if run_ref is not None:
+            goal_trace = self._journal.get(run_ref)
+            goal_previous = prior_analysis_turns(goal_trace, self._journal.analysis_traces(goal_trace))
+            goal_drafts = trace_goal_draft_refs(goal_trace)
+            readable_refs = tuple(dict.fromkeys((*readable_refs, *goal_draft_refs(
+                goal_trace, current_analysis_goal(goal_trace, goal_previous)))))
+        inspectable_refs = tuple(ref for ref in readable_refs if ref not in goal_drafts)
+        action_resource_refs = readable_refs
         if run_ref is not None and self._history is not None:
             self._history.validate(self._journal.get(run_ref))
             readable_refs = tuple(dict.fromkeys((*readable_refs, *self._history_snapshot_refs(self._journal.get(run_ref)))))
@@ -2967,12 +3027,12 @@ class ConversationService:
                 allowed_refs = inspectable_refs if tool.name == "inspect_artifact" else readable_refs
                 schema["properties"]["resource_id"]["enum"] = list(dict.fromkeys(ref.resource_id for ref in allowed_refs))
                 tool = tool.model_copy(update={"input_schema": schema})
-            if tool.name in {"execute_python", "write_artifact"} and inspectable_refs:
+            if tool.name in {"execute_python", "write_artifact"} and action_resource_refs:
                 schema = deepcopy(tool.input_schema)
                 definition, field = (("PythonInputBinding", "resource_id") if tool.name == "execute_python"
                                      else ("PatchArtifact", "base_resource_id"))
                 schema["$defs"][definition]["properties"][field]["enum"] = list(dict.fromkeys(
-                    ref.resource_id for ref in inspectable_refs if ref.resource_type == "artifact"
+                    ref.resource_id for ref in action_resource_refs if ref.resource_type == "artifact"
                 ))
                 tool = tool.model_copy(update={"input_schema": schema})
             projected_tools.append(tool)
@@ -3068,12 +3128,14 @@ class ConversationService:
         for item in inputs[last_progress + 1 :]:
             if not isinstance(item, DecisionFeedback) or item.decision_turn is None:
                 continue
+            reason_code = ("provider_action_unknown" if item.reason_code == GOAL_PENDING_ACTION_REJECTED
+                           else item.reason_code)
             key = (
                 # Unknown names share the existing protocol repair allowance.
                 "provider_action_protocol"
-                if item.reason_code == "provider_action_unknown"
+                if reason_code == "provider_action_unknown"
                 else item.action_name or item.action_id,
-                item.reason_code,
+                reason_code,
                 item.working_plan_revision,
             )
             attempts.setdefault(key, set()).add(item.decision_turn)
@@ -3248,14 +3310,36 @@ class ConversationService:
             concurrent,
         )
 
+    @staticmethod
+    def _committed_call_ids(trace: InteractionTrace) -> frozenset[str]:
+        return frozenset((*trace.execution_order, *(item.action_id for item in trace.accepted_tool_requests),
+            *(item.call_id for item in trace.goal_operations if item.decision_turn < trace.usage.model_turns)))
+
+    def _duplicate_call_feedback(self, call_id: str, *, action_name: str = "") -> DecisionFeedback:
+        return DecisionFeedback(action_id=call_id, action_name=action_name, reason_code="duplicate_action_id",
+            message=self._prompts.render("conversation.service.duplicate_call_id", call_id=call_id),
+            immutable_fields=("action_id", "kind"),
+            required_repair=self._prompts.get("conversation.service.duplicate_call_repair").template)
+
+    @staticmethod
+    def _has_knowledge_inventory(inputs) -> bool:
+        return any(isinstance(item, ActionObservation) and item.capability_id == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY
+                   and item.status == "succeeded" for item in inputs)
+
     def _admit(self, action, *, run_ref, committed_action_ids, committed_inputs):
-        if (isinstance(action, ToolCallProposal) and action.tool_name == "inspect_artifact"
-                and action.arguments.get("resource_id") in [ref.resource_id
-                    for ref in self._history_snapshot_refs(self._journal.get(run_ref))]):
-            return DecisionFeedback(action_id=action.action_id, reason_code="artifact_reference_invalid",
-                message=self._prompts.render('conversation.service.historical_source_rejected'),
-                immutable_fields=("action_id",), repairable_fields=("tool_name", "arguments"),
-                required_repair=self._prompts.render('conversation.service.historical_source_repair'))
+        if isinstance(action, ToolCallProposal) and action.tool_name == "inspect_artifact":
+            resource_id = action.arguments.get("resource_id")
+            trace = self._journal.get(run_ref)
+            for resources, template in (
+                (self._history_snapshot_refs(trace), "conversation.service.historical_source_rejected"),
+                (trace_goal_draft_refs(trace), "conversation.goal.draft_source_rejected"),
+            ):
+                control_ref = next((ref for ref in resources if ref.resource_id == resource_id), None)
+                if control_ref is not None:
+                    return DecisionFeedback(action_id=action.action_id, reason_code="artifact_reference_invalid",
+                        message=self._prompts.render(template, resource_id=control_ref.resource_id),
+                        immutable_fields=("action_id",), repairable_fields=("tool_name", "arguments"),
+                        artifact_recovery_ref=control_ref)
         if isinstance(action, ToolCallProposal) and action.tool_name in {"retrieval_experiment", "execute_python"}:
             trace = self._journal.get(run_ref)
             binding = (trace.python_profile_digest if action.tool_name == "execute_python"
@@ -3265,14 +3349,7 @@ class ConversationService:
                     message=self._prompts.render('conversation.service.execution_permission_missing'), immutable_fields=("action_id",),
                     required_repair=self._prompts.render('conversation.service.execution_permission_repair'), disposition="fail_closed")
         if action.action_id in committed_action_ids:
-            return DecisionFeedback(
-                action_id=action.action_id,
-                reason_code="duplicate_action_id",
-                message="The action_id is already bound to a committed interaction action.",
-                repairable_fields=("action_id",),
-                immutable_fields=("kind",),
-                required_repair="Create a new proposal with a fresh action_id; do not replay the prior action.",
-            )
+            return self._duplicate_call_feedback(action.action_id)
         if (
             isinstance(action, ToolCallProposal)
             and action.tool_name in ARTIFACT_OUTPUT_CAPABILITIES
@@ -3301,10 +3378,11 @@ class ConversationService:
                     required_repair="Revise only the arguments to satisfy the declared tool schema.",
                 )
             try:
+                trace = self._journal.get(run_ref)
                 resource_ref = resolve_artifact_ref(
                     arguments.resource_id,
-                    (*input_resource_refs(committed_inputs), *self._history_snapshot_refs(self._journal.get(run_ref))),
-                    principal=self._journal.get(run_ref).principal,
+                    self._journal.readable_resource_refs(trace),
+                    principal=trace.principal,
                     prompts=self._prompts,
                 )
             except PermissionError:
@@ -3320,8 +3398,8 @@ class ConversationService:
                         self._prompts.render('conversation.service.resource_reference_repair')
                     ),
                 )
-            if resource_ref in self._history_snapshot_refs(self._journal.get(run_ref)) and self._history is not None:
-                self._history.validate(self._journal.get(run_ref))
+            if resource_ref in self._history_snapshot_refs(trace) and self._history is not None:
+                self._history.validate(trace)
             return None
         if isinstance(action, ToolCallProposal):
             offloaded = self._offloaded_resources(committed_inputs)
@@ -3329,33 +3407,29 @@ class ConversationService:
                 "tool_name": action.tool_name,
                 "arguments": action.arguments,
             })
-            unread_resource = next(
+            offloaded_ref = next(
                 (
-                    resource_id
-                    for resource_id, (
+                    resource_ref
+                    for (
                         capability_id,
                         prior_digest,
-                        _resource_ref,
-                    ) in offloaded.items()
+                        resource_ref,
+                    ) in offloaded.values()
                     if capability_id == action.tool_name
                     and prior_digest == request_digest
                 ),
                 None,
             )
-            if unread_resource is not None:
+            if offloaded_ref is not None:
+                resource = ResourceRef.model_validate(offloaded_ref)
                 return DecisionFeedback(
                     action_id=action.action_id,
                     reason_code="offloaded_output_refetch",
-                    message=(
-                        f"Tool {action.tool_name!r} already produced an offloaded output "
-                        "for this exact request. Calling it again cannot expose the omitted middle."
-                    ),
+                    message=self._prompts.render("conversation.service.artifact_refetch",
+                        resource_id=resource.resource_id),
                     repairable_fields=("tool_name", "arguments"),
                     immutable_fields=("action_id",),
-                    required_repair=(
-                        "Use search_action_output or read_artifact with the previously supplied resource_id "
-                        f"for resource_id {unread_resource!r} and the corresponding search or read parameters."
-                    ),
+                    artifact_recovery_ref=resource,
                 )
         if (
             isinstance(action, ToolCallProposal)
@@ -3411,24 +3485,13 @@ class ConversationService:
                 ListPersonalKnowledgeArguments.model_validate(action.arguments)
             except ValidationError as error:
                 return self._invalid_special_arguments(action, error)
-            if any(
-                isinstance(item, ActionObservation)
-                and item.capability_id == _LIST_PERSONAL_KNOWLEDGE_CAPABILITY
-                and item.status == "succeeded"
-                for item in committed_inputs
-            ):
+            if self._has_knowledge_inventory(committed_inputs):
                 return DecisionFeedback(
                     action_id=action.action_id,
                     reason_code="knowledge_list_already_observed",
-                    message=(
-                        "The current interaction already has a successful authoritative "
-                        "personal-knowledge list Observation."
-                    ),
+                    message=self._prompts.get("conversation.knowledge.inventory_already_returned").template,
                     immutable_fields=("action_id", "tool_name"),
-                    required_repair=(
-                        "Use the committed list Observation to continue or answer; do not "
-                        "repeat the same read in this interaction."
-                    ),
+                    required_repair=self._prompts.get("conversation.knowledge.inventory_reuse").template,
                 )
             return None
         if isinstance(action, ToolCallProposal):
@@ -3642,13 +3705,14 @@ class ConversationService:
     def _search_action_output(self, action, *, principal, owner, inputs, run_ref):
         try:
             arguments = SearchActionOutputArguments.model_validate(action.arguments)
+            trace = self._journal.get(run_ref)
             ref = resolve_artifact_ref(arguments.resource_id,
-                self._journal.readable_resource_refs(self._journal.get(run_ref)), principal=principal, prompts=self._prompts)
+                self._journal.readable_resource_refs(trace), principal=principal, prompts=self._prompts)
             snapshot = self._artifact_port.read_snapshot(ref, principal=principal, owner=owner)
             result = search_artifact_text(snapshot, arguments=arguments, matcher=self._artifact_search, prompts=self._prompts)
             return _ActionResult(action.action_id, ActionObservation(
                 kind="tool_result", action_id=action.action_id, capability_id=SEARCH_ACTION_OUTPUT_CAPABILITY,
-                evidence_eligible=ref not in self._history_snapshot_refs(self._journal.get(run_ref)),
+                evidence_eligible=ref not in (*self._history_snapshot_refs(trace), *trace_goal_draft_refs(trace)),
                 status="succeeded", payload={"ok": True, **result.model_dump(mode="json")}))
         except (ValidationError, ValueError) as error:
             error_kind = "invalid_param"
@@ -3663,13 +3727,14 @@ class ConversationService:
     def _read_artifact(self, action, *, principal, owner, run_ref):
         try:
             arguments = ReadArtifactArguments.model_validate(action.arguments)
+            trace = self._journal.get(run_ref)
             ref = resolve_artifact_ref(arguments.resource_id,
-                self._journal.readable_resource_refs(self._journal.get(run_ref)), principal=principal, prompts=self._prompts)
+                self._journal.readable_resource_refs(trace), principal=principal, prompts=self._prompts)
             snapshot = self._artifact_port.read_snapshot(ref, principal=principal, owner=owner)
             result = read_artifact_text(snapshot, arguments=arguments, prompts=self._prompts)
             return _ActionResult(action.action_id, ActionObservation(
                 kind="tool_result", action_id=action.action_id, capability_id=READ_ARTIFACT_CAPABILITY,
-                evidence_eligible=ref not in self._history_snapshot_refs(self._journal.get(run_ref)),
+                evidence_eligible=ref not in (*self._history_snapshot_refs(trace), *trace_goal_draft_refs(trace)),
                 status="succeeded", payload={"ok": True, **result.model_dump(mode="json")}))
         except (ValidationError, ValueError) as error:
             error_kind, message = "invalid_param", str(error)
@@ -4210,6 +4275,7 @@ class ConversationService:
                 deployment_digest=prior.deployment_digest if prior else None,
                 python_authorization_digest=prior.python_authorization_digest if prior else None,
                 answer_result_binding=prior.answer_result_binding if prior else self._answer_result.config,
+                feature_flags_binding=prior.feature_flags_binding if prior else self._answer_result.feature_flags,
                 run_deadline_at=prior.run_deadline_at if prior else None,
                 max_execution_seconds=prior.max_execution_seconds if prior else None,
                 inputs=tuple(inputs),

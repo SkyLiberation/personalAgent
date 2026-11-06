@@ -5,6 +5,7 @@ from __future__ import annotations
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
+import re
 from typing import Annotated, Literal
 import unicodedata
 
@@ -16,7 +17,15 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, Execut
 DRAFT_MAX_BYTES = 65_536
 DRAFT_MAX_EDITS = 32
 ArtifactPurpose = Literal["upload", "draft", "machine", "generated"]
+DraftContentType = Literal["text/x-python", "application/json", "text/markdown"]
+DRAFT_SUFFIXES = {"text/x-python": ".py", "application/json": ".json", "text/markdown": ".md"}
 ContentDigest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+_POSITIVE_DECIMAL = r"[1-9][0-9]*"
+TextPositionInput = (
+    Annotated[int, Field(ge=1)]
+    | Annotated[str, Field(pattern=rf"^{_POSITIVE_DECIMAL}$")]
+)
 
 
 class _ArtifactModel(BaseModel):
@@ -71,13 +80,20 @@ def validate_content_type(content_type: str | None) -> str | None:
 
 
 class TextPosition(_ArtifactModel):
-    line: int = Field(ge=1, strict=True)
-    column: int = Field(ge=1, strict=True)
+    line: int = Field(ge=1, strict=True, description="一基行号。从工具返回的范围取值，优先传正整数，也可传不带前导零的十进制数字字符串。")
+    column: int = Field(ge=1, strict=True, description="一基 Unicode 字符列。从工具返回的范围取值，优先传正整数，也可传不带前导零的十进制数字字符串。")
+
+    @field_validator("line", "column", mode="before", json_schema_input_type=TextPositionInput)
+    @classmethod
+    def parse_position_input(cls, value: object) -> object:
+        if isinstance(value, str) and re.fullmatch(_POSITIVE_DECIMAL, value):
+            return int(value)
+        return value
 
 
 class TextRange(_ArtifactModel):
-    start: TextPosition
-    end: TextPosition
+    start: TextPosition = Field(description="范围的起点，包含该位置。")
+    end: TextPosition = Field(description="范围的终点，不包含该位置。补丁中与 start 相同表示在该处插入。")
 
 
 class TextEdit(_ArtifactModel):
@@ -87,9 +103,9 @@ class TextEdit(_ArtifactModel):
 
 class CreateArtifact(_ArtifactModel):
     operation: Literal["create"]
-    filename: str
-    content_type: Literal["text/x-python", "application/json"]
-    content: str
+    filename: str = Field(description="新草稿的显示文件名。后缀须与 content_type 对应。")
+    content_type: DraftContentType = Field(description="草稿正文的媒体类型，选择 Python、JSON 或 Markdown 对应的值。")
+    content: str = Field(description="新草稿的完整正文。")
 
     _filename = field_validator("filename")(validate_display_filename)
 
@@ -97,17 +113,17 @@ class CreateArtifact(_ArtifactModel):
 
     @model_validator(mode="after")
     def validate_draft(self) -> CreateArtifact:
-        suffix = ".py" if self.content_type == "text/x-python" else ".json"
+        suffix = DRAFT_SUFFIXES[self.content_type]
         if not self.filename.endswith(suffix):
             raise ValueError("draft filename does not match its media type")
         if len(self.content.encode("utf-8")) > DRAFT_MAX_BYTES:
-            raise ValueError("draft exceeds the 65536-byte UTF-8 limit")
+            raise ValueError(f"draft exceeds the {DRAFT_MAX_BYTES}-byte UTF-8 limit")
         return self
 
 
 class PatchArtifact(_ArtifactModel):
     operation: Literal["patch"]
-    base_resource_id: str = Field(min_length=1, description="当前可读草稿的resource_id；按该确切快照的行列范围修改。")
+    base_resource_id: str = Field(min_length=1)
     edits: tuple[TextEdit, ...] = Field(min_length=1, max_length=DRAFT_MAX_EDITS)
 
     @model_validator(mode="after")
@@ -116,7 +132,7 @@ class PatchArtifact(_ArtifactModel):
             sum(len(edit.new_text.encode("utf-8")) for edit in self.edits)
             > DRAFT_MAX_BYTES
         ):
-            raise ValueError("patch additions exceed the 65536-byte UTF-8 limit")
+            raise ValueError(f"patch additions exceed the {DRAFT_MAX_BYTES}-byte UTF-8 limit")
         return self
 
 

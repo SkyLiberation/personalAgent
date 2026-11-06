@@ -215,6 +215,14 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class UnverifiedGoalSnapshot(BaseModel):
+    """Accepted goal projection when its deployment explicitly disables review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    submission_id: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=20_000)
+
+
 class VerificationEvent(BaseModel):
     """One actual submission and its verdict, projected from the Journal."""
 
@@ -224,6 +232,8 @@ class VerificationEvent(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
     disposition: Literal["answer", "clarification_required", "limitation", "failed"] | None = None
     verdict: SemanticVerificationReceipt | None = None
+    verified_goal: SemanticVerificationReceipt | None = None
+    unverified_goal: UnverifiedGoalSnapshot | None = None
 
     @model_validator(mode="after")
     def _paired_verdict(self):
@@ -232,6 +242,12 @@ class VerificationEvent(BaseModel):
         if self.verdict is not None and (self.verdict.checked_kind != self.kind
                 or self.verdict.verified_draft != self.content):
             raise ValueError("verification verdict belongs to another submission")
+        if self.verified_goal is not None and (
+                self.kind != "answer" or self.verified_goal.checked_kind != "goal"
+                or self.verified_goal.verdict != "passed"):
+            raise ValueError("answer goal snapshot requires a passed goal-verification receipt")
+        if self.unverified_goal is not None and (self.kind != "answer" or self.verified_goal is not None):
+            raise ValueError("unverified goals belong only to answers without a passed goal snapshot")
         return self
 
 
@@ -253,6 +269,7 @@ class VerificationContext(BaseModel):
     turns: tuple[VerificationTurn, ...] = Field(min_length=1)
     active_goal: str | None = None
     binding: str = Field(pattern=r"^[0-9a-f]{64}$")
+    goal_verification_enabled: bool = True
 
     @model_validator(mode="after")
     def _turn_order(self):
@@ -262,6 +279,15 @@ class VerificationContext(BaseModel):
             raise ValueError("verification history contains another responsibility's events")
         if not self.turns[-1].events or self.turns[-1].events[-1].verdict is not None:
             raise ValueError("the current submission must await this verification")
+        current = self.turns[-1].events[-1]
+        if self.goal_verification_enabled and any(event.unverified_goal is not None
+                for turn in self.turns for event in turn.events):
+            raise ValueError("enabled goal verification cannot consume an unverified goal")
+        if self.kind == "answer" and current.disposition == "answer":
+            if self.goal_verification_enabled and current.verified_goal is None:
+                raise ValueError("normal answer verification requires its actual verified goal")
+            if not self.goal_verification_enabled and current.unverified_goal is None:
+                raise ValueError("answer verification requires its actual accepted unverified goal")
         return self
 
 

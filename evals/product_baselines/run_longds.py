@@ -116,6 +116,7 @@ def _write(path: Path, value: object) -> None:
 
 def _configuration(settings: Settings) -> dict[str, object]:
     return {**configuration(settings), "answer_result": settings.answer_result.model_dump(mode="json"),
+            "feature_flags": settings.feature_flags.model_dump(mode="json"),
             "prompt_language": settings.prompt_language,
             "web_search_available": settings.web_search_available}
 
@@ -182,6 +183,7 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
         "RETRIEVAL_E2E_HTTP_PORT": str(port),
         "RETRIEVAL_E2E_PROCESS_FILE": str(directory / "server-process.json"),
         "PERSONAL_AGENT_ANSWER_RESULT": settings.answer_result.model_dump_json(),
+        "PERSONAL_AGENT_FEATURE_FLAGS_CONFIG": str((directory / "feature_flags.toml").resolve()),
     })
     for name in ("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG", "PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG", "PERSONAL_AGENT_ADMIN_API_KEYS",
                  "RETRIEVAL_E2E_WRITE_AUDIT_CONFIGURATION", "RETRIEVAL_E2E_FAULT_CONFIGURATION",
@@ -189,6 +191,10 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
         env.pop(name, None)
     if authorization_file is not None:
         env["PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG"] = str(authorization_file)
+    flags = settings.feature_flags
+    (directory / "feature_flags.toml").write_text(
+        f"[features]\ngoal_verification = {str(flags.goal_verification).lower()}\n"
+        f"answer_verification = {str(flags.answer_verification).lower()}\n", encoding="utf-8")
     return env
 
 
@@ -245,10 +251,11 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
             raise ValueError("恢复必须使用原完整任务的相同代码版本")
         shutil.copytree(recovery_checkpoint / "server-data", directory / "server-data")
         shutil.copyfile(recovery_checkpoint / "python-deployment.json", directory / "python-deployment.json")
-    unverified = settings.answer_result.verification == "none"
+    unverified = not (settings.feature_flags.answer_verification and settings.feature_flags.goal_verification)
     _write(directory / "outcome-contract.json", (
         {"evidence_class": "unverified_flow_capture", "release_eligible": False,
          "answer_result": settings.answer_result.model_dump(mode="json"),
+         "feature_flags": settings.feature_flags.model_dump(mode="json"),
          "planned_user_turns": user_turns, "semantic_score": "separate_official_judge"}
         if unverified else asdict(LONGDS_OUTCOME)
     ))

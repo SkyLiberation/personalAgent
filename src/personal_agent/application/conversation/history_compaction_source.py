@@ -4,7 +4,7 @@ from hashlib import sha256
 import json
 
 from .history_models import HistoryCompactionCheckpoint, HistoryRunCoverage
-from .model_history import decision_input_indices
+from .model_history import decision_input_indices, goal_pending_rejection
 from .models import AcceptedArtifactToolRequest, AcceptedPythonToolRequest, InteractionTrace, ModelDecisionRecord
 
 
@@ -19,6 +19,11 @@ def main_decisions(trace: InteractionTrace) -> tuple[ModelDecisionRecord, ...]:
 
 
 def decision_source(trace: InteractionTrace, record: ModelDecisionRecord) -> dict:
+    rejected = goal_pending_rejection(trace, record)
+    if rejected is not None:
+        return {"decision_turn": record.turn_index, "results_and_feedback": [
+            rejected.model_dump(mode="json", exclude={"rejected_action_invocations"})
+        ]}
     # Summaries need observable choices and results, not provider-private reasoning.
     assistant = {key: value for key, value in record.assistant.payload.items()
                  if key in {"role", "content", "tool_calls"}}
