@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 
-from evals.toolathlon.time_case import ANSWER, MAPPING, QUESTION, SERVER_ID, TOOL, UPSTREAM_REVISION
+from evals.Toolathlon.time_case import ANSWER, MAPPING, QUESTION, SERVER_ID, TOOL, UPSTREAM_REVISION
 
 
 _UVICORN = """

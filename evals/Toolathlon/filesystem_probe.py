@@ -13,8 +13,8 @@ from uuid import uuid4
 from personal_agent.infra.mcp import MCPError, MCPJsonRpcClient
 from personal_agent.kernel.config_models import MCPServerConfig
 
-from evals.toolathlon.runner import container, docker
-from evals.toolathlon.time_case import UPSTREAM_REVISION
+from evals.Toolathlon.runner import container, docker
+from evals.Toolathlon.time_case import UPSTREAM_REVISION
 
 
 class FilesystemSample(TypedDict, total=False):

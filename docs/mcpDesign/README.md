@@ -66,7 +66,7 @@ src/personal_agent/
 
 deploy/mcp/                     有实际生产部署时存放对应配置
 evals/
-  toolathlon/
+  Toolathlon/
     runner.py                   新增用例环境、产品 HTTP 交互和评分适配
     cases/                      固定任务、上游版本、映射及评分入口
 toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
@@ -77,7 +77,7 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 | 同协议新增 Server | 对应部署或用例的连接配置与映射 |
 | Server 新增写工具 | 对应工具映射、授权及副作用契约，增加有实际意义的结果和拒绝判据 |
 | 新增传输 | `infra/mcp.py` 与连接配置类型，按实际复杂度决定是否拆文件 |
-| 上游任务包或评分格式变化 | `evals/toolathlon/` |
+| 上游任务包或评分格式变化 | `evals/Toolathlon/` |
 | 新评测套件 | `evals/<suite>/`。已有两个实际消费者时可抽取共用进程与 HTTP 辅助，保留各自环境构造和评分 |
 
 生产部署沿用 `PERSONAL_AGENT_MCP_SERVERS` 解析入口。若使用独立部署文件，由启动侧读入并传给该入口。评测生成的配置属于本次运行，生产默认装配从自己的部署输入构造。上游 checkout 以提交固定，第三方 Python 或 Node 依赖和镜像留在独立评测环境。生产镜像只装配生产源码与依赖，构建上下文排除上游 checkout。
