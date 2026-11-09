@@ -18,7 +18,8 @@ ModelRequestKind = Literal[
 ]
 ModelReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 ModelOutputTransport = Literal["native_tool", "prompted_json"]
-ModelActionKind = Literal["tool", "agent", "working_plan", "answer_result", "maintain_goal", "read_current_goal"]
+ModelActionKind = Literal["tool", "agent", "working_plan", "answer_result", "maintain_goal", "read_current_goal",
+                          "request_clarification"]
 ModelInvocationFailureCategory = Literal[
     "provider_rejected",
     "provider_timeout",
@@ -38,6 +39,7 @@ StructuredOutputFailureCode = Literal[
     "provider_action_tool_payload_invalid",
     "provider_action_agent_payload_invalid",
     "provider_action_answer_result_payload_invalid",
+    "provider_action_clarification_payload_invalid",
     "provider_action_goal_payload_invalid",
     "provider_action_multiple_working_plans",
     "provider_action_definition_invalid",

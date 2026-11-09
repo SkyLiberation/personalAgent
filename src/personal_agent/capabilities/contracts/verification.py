@@ -23,6 +23,27 @@ VerificationVerdict = Literal["passed", "failed"]
 VerificationKind = Literal["goal", "answer"]
 
 
+class ActionGoalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: Literal["conflict", "no_conflict", "undetermined"]
+    feedback: str = Field(max_length=1600)
+
+    @model_validator(mode="after")
+    def feedback_matches_verdict(self) -> ActionGoalDecision:
+        if self.verdict != "no_conflict" and not self.feedback.strip():
+            raise ValueError("conflict and undetermined require feedback")
+        return self
+
+
+class ActionGoalJudgment(ActionGoalDecision):
+    action_id: str = Field(min_length=1)
+
+
+class ActionGoalAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class ConversationEvidenceReference(BaseModel):
     """A writer's reference to an exact returned document coordinate."""
 
@@ -184,6 +205,22 @@ class UserRequirementAssessment(BaseModel):
     )
 
 
+class AnswerGoalCheck(UserRequirementCheck):
+    requirement: str = Field(
+        min_length=1, pattern=r"\S",
+        description="当前回答绑定目标中适用的交付或约束。核验未完成说明时，写明所检查的说明事项。",
+    )
+
+
+class AnswerGoalAssessment(UserRequirementAssessment):
+    """Check the delivery against its bound goal with the existing result shape."""
+
+    checks: tuple[AnswerGoalCheck, ...] = Field(
+        min_length=1,
+        description="非空对象数组，每项包含 requirement、status 和 feedback，覆盖当前绑定目标的适用要求。",
+    )
+
+
 class SemanticVerificationReceipt(SemanticVerificationReport):
     """A report plus the tool-computed facts an admission may rely on.
 
@@ -209,7 +246,7 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     checked_kind: VerificationKind
     verdict: VerificationVerdict
     receipt_id: str = Field(pattern=r"^svr_[0-9a-f]{20}$")
-    verified_draft: str = Field(min_length=1, max_length=20_000)
+    verified_draft: str = Field(min_length=1)
     draft_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     success_criteria: tuple[str, ...] = Field(min_length=1)
     criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -229,7 +266,7 @@ class VerificationEvent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: VerificationKind
     submission_id: str = Field(min_length=1)
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(min_length=1)
     disposition: Literal["answer", "clarification_required", "limitation", "failed"] | None = None
     verdict: SemanticVerificationReceipt | None = None
     verified_goal: SemanticVerificationReceipt | None = None
@@ -252,13 +289,23 @@ class VerificationEvent(BaseModel):
 
 
 class VerificationTurn(BaseModel):
-    """A user's original question and its time-ordered verification history."""
+    """Time-ordered verification history for one user turn."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     user_turn: int = Field(ge=1)
-    question: str = Field(min_length=1)
+    question: str | None = Field(default=None, min_length=1)
     events: tuple[VerificationEvent, ...]
     summary: str | None = None
+
+
+class GoalComplianceAnswerContext(BaseModel):
+    """Runtime projection shared with pre-execution checks, ending at the pending draft."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["answer"] = "answer"
+    rounds: tuple[str, ...] = Field(min_length=1)
+    submission_id: str = Field(min_length=1)
+    disposition: Literal["answer", "clarification_required", "limitation", "failed"]
 
 
 class VerificationContext(BaseModel):
@@ -275,6 +322,8 @@ class VerificationContext(BaseModel):
     def _turn_order(self):
         if tuple(item.user_turn for item in self.turns) != tuple(range(1, len(self.turns) + 1)):
             raise ValueError("verification history must follow user-question order")
+        if any((turn.question is not None) != (self.kind == "goal") for turn in self.turns):
+            raise ValueError("only goal verification receives the original user input")
         if any(event.kind != self.kind for turn in self.turns for event in turn.events):
             raise ValueError("verification history contains another responsibility's events")
         if not self.turns[-1].events or self.turns[-1].events[-1].verdict is not None:

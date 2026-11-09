@@ -17,6 +17,7 @@ from personal_agent.capabilities.contracts.verification import (
     BoundVerificationCriterionResult,
     CitedDraftUnit,
     CitedSupportRejection,
+    GoalComplianceAnswerContext,
     OverreachReport,
     SemanticVerificationReceipt,
     SemanticVerificationReport,
@@ -25,9 +26,11 @@ from personal_agent.capabilities.contracts.verification import (
     VerificationCriterion,
     VerificationCriterionResult,
     VerificationContext,
+    VerificationKind,
 )
 from personal_agent.capabilities.contracts.verification_prompt import (
-    verification_messages, bound_verification_report, task_verification_criteria,
+    goal_compliance_answer_request, verification_messages, bound_verification_report,
+    task_verification_criteria, task_verification_output,
 )
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
@@ -44,11 +47,11 @@ from personal_agent.tools.base import (
 
 class VerifyInteractionDraftArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    draft: str = Field(min_length=1, max_length=20_000)
+    draft: str = Field(min_length=1)
     success_criteria: tuple[str, ...] = Field(min_length=1)
     cited_units: tuple[CitedDraftUnit, ...] = ()
     source_reading_state: tuple[SourceReadingState, ...] = ()
-    task_context: VerificationContext | None = None
+    task_context: GoalComplianceAnswerContext | VerificationContext | None = None
 
     @model_validator(mode="after")
     def check_draft_coverage(self):
@@ -59,8 +62,9 @@ class VerifyInteractionDraftArgs(BaseModel):
             raise ValueError(
                 "cited units must preserve the entire exact draft in order"
             )
-        if self.task_context is not None and self.task_context.turns[-1].events[-1].content != self.draft:
-            raise ValueError("verification history must end with the exact current submission")
+        if isinstance(self.task_context, VerificationContext):
+            if self.task_context.kind != "goal" or self.task_context.turns[-1].events[-1].content != self.draft:
+                raise ValueError("goal verification history must end with the exact goal submission")
         for unit in self.cited_units:
             ids = [evidence.id for evidence in unit.execution_evidence]
             if len(ids) != len(set(ids)):
@@ -69,14 +73,17 @@ class VerifyInteractionDraftArgs(BaseModel):
 
 
 def _user_requirement_report(
-    assessment: UserRequirementAssessment, criterion: VerificationCriterion, *, prompts: PromptCatalog,
+    assessment: UserRequirementAssessment, criterion: VerificationCriterion, *,
+    kind: VerificationKind, prompts: PromptCatalog,
 ) -> SemanticVerificationReport:
     """Project actual requirement judgments into the existing receipt contract."""
     statuses = tuple(check.status for check in assessment.checks)
     status = ("not_satisfied" if "not_satisfied" in statuses else
               "insufficient_evidence" if "insufficient_evidence" in statuses else "satisfied")
+    feedback_prompt = ("interaction_verification.answer.requirement_feedback" if kind == "answer"
+                       else "interaction_verification.requirement_feedback")
     feedback = tuple(prompts.render(
-        "interaction_verification.requirement_feedback",
+        feedback_prompt,
         requirement=check.requirement, status=check.status, feedback=check.feedback,
     ) for check in assessment.checks)
     return SemanticVerificationReport(
@@ -122,7 +129,7 @@ def build_verify_interaction_draft_tool(
         config: RunnableConfig,
         cited_units: tuple[CitedDraftUnit, ...] = (),
         source_reading_state: tuple[SourceReadingState, ...] = (),
-        task_context: VerificationContext | None = None,
+        task_context: GoalComplianceAnswerContext | VerificationContext | None = None,
     ):
         scope = require_gateway_context(config, prompts=prompts).execution_scope
         prompt = prompts.get(f"interaction_verification.{task_context.kind}" if task_context is not None
@@ -210,21 +217,21 @@ def build_verify_interaction_draft_tool(
                         error_kind="unrecoverable",
                     )
                 )
-        messages = (verification_messages(task_context, criteria, prompts=prompts)
-                    if task_context is not None else [
-            {"role": "system", "content": prompt.template},
-            {"role": "user", "content": json.dumps(verification_payload, ensure_ascii=False)},
-        ])
-        operation = (f"interaction_{task_context.kind}_verification" if task_context is not None
-            else "interaction_semantic_verification")
-        response = generate(
-            scope,
-            StructuredModelRequest(
+        if isinstance(task_context, GoalComplianceAnswerContext):
+            request = goal_compliance_answer_request(task_context, draft, prompts=prompts)
+        else:
+            messages = (verification_messages(task_context, criteria, prompts=prompts)
+                        if task_context is not None else [
+                {"role": "system", "content": prompt.template},
+                {"role": "user", "content": json.dumps(verification_payload, ensure_ascii=False)},
+            ])
+            operation = "interaction_goal_verification" if task_context is not None else "interaction_semantic_verification"
+            request = StructuredModelRequest(
                 operation=operation,
                 consumer_key="semantic:" + sha256(json.dumps(verification_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest(),
                 version=prompt.version,
                 messages=messages,
-                output_type=(UserRequirementAssessment if task_context is not None else
+                output_type=(task_verification_output(task_context.kind) if task_context is not None else
                              bound_verification_report(SemanticVerificationReport, criteria)),
                 output_transport="native_tool",
                 context_projection_ref=sealed_context_projection_ref(
@@ -238,8 +245,8 @@ def build_verify_interaction_draft_tool(
                     **({"source_support_prompt_version": support_prompt.version} if task_context is None else {}),
                 },
             )
-        )
-        report = (_user_requirement_report(response.value, criteria[0], prompts=prompts)
+        response = generate(scope, request)
+        report = (_user_requirement_report(response.value, criteria[0], kind=task_context.kind, prompts=prompts)
                   if task_context is not None else response.value)
         reported_ids = tuple(result.criterion_id for result in report.criterion_results)
         criteria_by_id = {item.criterion_id: item.criterion for item in criteria}

@@ -4,13 +4,17 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator, model_serializer
+from pydantic import (
+    AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationInfo,
+    field_validator, model_serializer, model_validator,
+)
 from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelHistoryEntry, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
 from personal_agent.capabilities.contracts.research import (
     ResearchClaims,
     ResearchReview,
 )
 from personal_agent.capabilities.contracts.verification import (
+    ActionGoalJudgment,
     ConversationAnswerSegment,
     ConversationEvidenceReference,
 )
@@ -40,7 +44,7 @@ from personal_agent.application.python_execution.models import (
 )
 from .tool_requests import WriteArtifactArgs
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey, VerificationHistoryCheckpoint
-from .goal_models import GoalMaintenanceInvocation, GoalOperationRecord, GoalReadInvocation
+from .goal_models import AnalysisGoalRef, GoalMaintenanceInvocation, GoalOperationRecord, GoalReadInvocation
 
 
 ConversationInteractionMode = Literal["default", "auto"]
@@ -53,11 +57,28 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+_USER_MESSAGE_CONTENT = TypeAdapter(Annotated[str, Field(max_length=20_000)])
+
+
 class ConversationMessage(_StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        json_schema_extra={
+            "if": {"properties": {"role": {"const": "user"}}},
+            "then": {"properties": {"content": _USER_MESSAGE_CONTENT.json_schema()}},
+        },
+    )
 
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(min_length=1)
+
+    @field_validator("content")
+    @classmethod
+    def validate_user_content(cls, content: str, info: ValidationInfo) -> str:
+        if info.data.get("role") == "user":
+            return _USER_MESSAGE_CONTENT.validate_python(content)
+        return content
 
 
 class WorkingPlanStepProposal(_StrictModel):
@@ -228,8 +249,16 @@ class FinalMessage(_StrictModel):
 
 class SubmitFinalArguments(_StrictModel):
     message: str = Field(min_length=1)
-    disposition: Literal["answer", "clarification_required", "limitation", "failed"]
+    disposition: Literal["answer", "limitation", "failed"]
     references: tuple[str, ...] = ()
+
+
+class RequestClarificationArguments(_StrictModel):
+    question: str = Field(min_length=1, max_length=2_000, pattern=r"\S")
+
+
+class ClarificationInvocation(RequestClarificationArguments):
+    call_id: str = Field(min_length=1)
 
 
 class AnswerResultInvocation(_StrictModel):
@@ -621,7 +650,8 @@ class ResearchExperimentDelivery(_StrictModel):
 class ModelCallDisposition(_StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     call_id: str = Field(min_length=1)
-    operation: Literal["working_plan", "answer_result", "knowledge_save", "knowledge_delete", "maintain_goal", "read_current_goal"]
+    operation: Literal["working_plan", "answer_result", "knowledge_save", "knowledge_delete", "maintain_goal",
+                       "read_current_goal", "request_clarification"]
     status: Literal["accepted", "deferred", "prepared"]
     plan_id: str | None = None
     plan_revision: int | None = Field(default=None, ge=1)
@@ -800,7 +830,31 @@ class ModelDecisionRecord(_StrictModel):
         return self
 
 
+class ActionGoalBinding(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    action_id: str
+    goal_ref: AnalysisGoalRef
+    request_digest: ContentDigest
+    input_refs: tuple[ResourceRef, ...]
+    prompt_version: str
+
+
+class ActionGoalReview(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    binding: ActionGoalBinding
+    judgment: ActionGoalJudgment
+
+    @model_validator(mode="after")
+    def judgment_matches_action(self) -> ActionGoalReview:
+        if self.binding.action_id != self.judgment.action_id:
+            raise ValueError("action goal judgment does not match its action")
+        return self
+
+
 class InteractionTrace(_StrictModel):
+    action_goal_reviews: tuple[ActionGoalReview, ...] = ()
+    goal_compliance_history_compacted_through: int = Field(default=0, ge=0, validation_alias=AliasChoices(
+        "goal_compliance_history_compacted_through", "action_goal_history_compacted_through"))
     goal_operations: tuple[GoalOperationRecord, ...] = ()
     answer_result_binding: AnswerResultConfig | None = None
     feature_flags_binding: FeatureFlags = Field(default_factory=FeatureFlags)

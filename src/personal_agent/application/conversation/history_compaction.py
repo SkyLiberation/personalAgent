@@ -124,10 +124,14 @@ class HistoryCompactor:
             source_artifact_refs=(), evidence_refs=(),
             limitations=(self._prompts.get("conversation.history.snapshot_limitation").template,))
         prompt = self._prompts.get(f"conversation.{context.kind}_verification_history_compaction")
-        messages = [{"role": "system", "content": prompt.template}, {"role": "user", "content": json.dumps({
-            "user_question": turn.question, "previous_summary": old.working_summary if old else None,
+        payload = {
+            "previous_summary": old.working_summary if old else None,
             "new_events": [item.model_dump(mode="json") for item in turn.events[old.covered_events if old else 0:end]],
-        }, ensure_ascii=False)}]
+        }
+        if turn.question is not None:
+            payload = {"user_question": turn.question, **payload}
+        messages = [{"role": "system", "content": prompt.template},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
         request = StructuredModelRequest(operation=f"conversation_{context.kind}_verification_history_compaction",
             version=prompt.version, consumer_key=f"verification-summary:{run_ref}:{digest}",
             messages=messages, output_type=HistorySummary, output_transport="native_tool", max_tokens=8192,
@@ -147,7 +151,7 @@ class HistoryCompactor:
             source_digest=digest, snapshot_ref=reference, working_summary=summary,
             model_invocation_id=response.response_records[-1].invocation_id, summary_run_ref=run_ref)
         existing[turn.user_turn] = item
-        checkpoint = VerificationHistoryCheckpoint(kind=context.kind,
+        checkpoint = VerificationHistoryCheckpoint(kind=context.kind, prompt_version=prompt.version,
             turns=tuple(existing[key] for key in sorted(existing)))
         self.journal.update(scope, lambda current: current.model_copy(update={
             "revision": current.revision + 1,

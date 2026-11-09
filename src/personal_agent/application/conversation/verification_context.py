@@ -29,16 +29,18 @@ def goal_submission_id(trace: InteractionTrace, call_id: str, turn: int) -> str:
 
 
 def verification_checkpoint(trace: InteractionTrace, history: tuple[InteractionTrace, ...],
-                            *, kind: VerificationKind) -> VerificationHistoryCheckpoint | None:
+                            *, kind: VerificationKind, prompt_version: str) -> VerificationHistoryCheckpoint | None:
     return next((checkpoint
         for source in reversed((*prior_analysis_turns(trace, history), trace))
-        for checkpoint in source.verification_history_compactions if checkpoint.kind == kind), None)
+        for checkpoint in source.verification_history_compactions
+        if checkpoint.kind == kind and (kind == "goal" or checkpoint.prompt_version == prompt_version)), None)
 
 
 def verification_prefix(turn: VerificationTurn, end: int, *, kind: VerificationKind) -> str:
-    return json.dumps({"kind": kind, "question": turn.question,
-        "events": [event.model_dump(mode="json") for event in turn.events[:end]]},
-        ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    prefix = {"kind": kind, "events": [event.model_dump(mode="json") for event in turn.events[:end]]}
+    if turn.question is not None:
+        prefix["question"] = turn.question
+    return json.dumps(prefix, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def verification_events(trace: InteractionTrace) -> tuple[VerificationEvent, ...]:
@@ -118,9 +120,11 @@ def build_verification_context(*, trace: InteractionTrace, history: tuple[Intera
     turns = []
     active_goal = None
     for source in sources:
-        question = next((message.content for message in reversed(source.messages) if message.role == "user"), None)
-        if question is None:
-            raise ConversationOperationConflict("verification requires the original user question")
+        question = None
+        if kind == "goal":
+            question = next((message.content for message in reversed(source.messages) if message.role == "user"), None)
+            if question is None:
+                raise ConversationOperationConflict("goal verification requires the original user input")
         events = verification_events(source)
         if source is trace:
             if goal_call_id is not None:

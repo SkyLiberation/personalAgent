@@ -45,7 +45,7 @@ from .verification_admission import observed_receipts, INTERACTION_VERIFICATION_
 from .journal_lock import exclusive_run_lock
 from .model_history import validate_decision_extension, prior_analysis_turns
 from .models import (
-    ActionObservation,
+    ActionGoalBinding, ActionGoalReview, ActionObservation,
     CommittedUsage,
     ConversationWorkingPlan,
     InteractionTrace,
@@ -293,6 +293,8 @@ class InMemoryInteractionJournal:
             )
         if previous is not None:
             validate_decision_extension(previous, trace)
+            if trace.action_goal_reviews[:len(previous.action_goal_reviews)] != previous.action_goal_reviews:
+                raise ConversationOperationConflict("action goal reviews are immutable")
             if trace.goal_operations[:len(previous.goal_operations)] != previous.goal_operations:
                 raise ConversationOperationConflict("accepted goal operations are immutable")
             for operation in trace.goal_operations[len(previous.goal_operations):]:
@@ -365,6 +367,17 @@ class InMemoryInteractionJournal:
         with self._lock:
             return self._traces.get(interaction_run_ref)
 
+    def record_action_goal_reviews(self, scope: ExecutionScope, reviews: tuple[ActionGoalReview, ...]) -> None:
+        def record(latest):
+            known = {item.binding.action_id for item in latest.action_goal_reviews}
+            if known.intersection(item.binding.action_id for item in reviews):
+                raise ConversationOperationConflict("action goal review already exists")
+            return latest.model_copy(update={
+                "revision": latest.revision + 1,
+                "action_goal_reviews": (*latest.action_goal_reviews, *reviews),
+            })
+        self.update(scope, record)
+
     def accept_tool_request(
         self,
         *,
@@ -372,6 +385,7 @@ class InMemoryInteractionJournal:
         action_id: str,
         arguments: WriteArtifactArgs | ExperimentToolArgs | ExecutePythonArgs,
         plan_step_id: str | None,
+        action_goal_binding: ActionGoalBinding | None = None,
     ):
         if isinstance(arguments, WriteArtifactArgs):
             tool_name, request_type = "write_artifact", AcceptedArtifactToolRequest
@@ -397,6 +411,12 @@ class InMemoryInteractionJournal:
             raise PermissionError("accepted action identity does not match its scope")
 
         def accept(latest):
+            review = next((item for item in latest.action_goal_reviews if item.binding.action_id == action_id), None)
+            if review is not None or action_goal_binding is not None:
+                if (review is None or review.binding != action_goal_binding
+                        or review.binding.request_digest != request.request_digest
+                        or review.judgment.verdict == "conflict"):
+                    raise ConversationOperationConflict("tool acceptance differs from its action goal review")
             previous = next(
                 (
                     item
@@ -685,6 +705,9 @@ class InMemoryInteractionJournal:
                         item.resource_id, self.readable_resource_refs(trace), principal=trace.principal
                     )) for item in accepted.arguments.input_files):
                 raise PermissionError("Python command changed accepted input bindings")
+            review = next((item for item in trace.action_goal_reviews if item.binding.action_id == action_id), None)
+            if review is not None and tuple(item.resource_ref for item in command.inputs) != review.binding.input_refs:
+                raise ConversationOperationConflict("Python command changed its reviewed input versions")
             code = accepted.arguments.code.encode("utf-8")
             if (command.program.content_digest != sha256(code).hexdigest()
                     or command.program.size_bytes != len(code)):

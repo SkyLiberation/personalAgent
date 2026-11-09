@@ -11,7 +11,7 @@
 
 配置文件唯一拥有当前布尔值。本文的两臂取值定义实验方案，不是第二份可写配置。关闭核验不产生 passed 回执，也不等于核验无问题。目标关闭但回答开启时，回答输入使用当时已接纳、明确标为未核验的目标快照；默认开启时仍要求真实通过回执。开关在新进程启动时读取，并在同一对话及运行中固定。
 
-现行目标、回答核验分别见[目标核验上下文](../context/goal-verifier.md)、[回答核验上下文](../context/answer-verifier.md)，主循环见 [Agent loop 上下文](../context/agent-loop.md)。配置读取入口为 [feature_flags.py](../../src/personal_agent/kernel/feature_flags.py)，经 Runtime 注入[回答模块](../../src/personal_agent/application/conversation/answer_results.py)，由 [Conversation Service](../../src/personal_agent/application/conversation/service.py) 的 `_verify_goal_maintenance`、`_verify_before_send` 及原研究写作链实际消费。
+现行目标、回答核验分别见[目标核验上下文](../context/goal-verifier.md)、[回答核验上下文](../context/goal-compliance-verifier.md)，主循环见 [Agent loop 上下文](../context/agent-loop.md)。配置读取入口为 [feature_flags.py](../../src/personal_agent/kernel/feature_flags.py)，经 Runtime 注入[回答模块](../../src/personal_agent/application/conversation/answer_results.py)，由 [Conversation Service](../../src/personal_agent/application/conversation/service.py) 的 `_verify_goal_maintenance`、`_verify_before_send` 及原研究写作链实际消费。
 
 ## 2. 实验组 1：目标核验和回答核验同时接入的组合消融
 

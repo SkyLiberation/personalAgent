@@ -94,16 +94,20 @@ from .research import (
 )
 from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
 from .source_reading import materialize_source_reading_state
+from .goal_compliance import (
+    ACTION_GOAL_PROMPT, PendingPythonReview, action_goal_request, answer_goal_context, bind_action_goal_assessment,
+)
 from .verification_context import build_verification_context, current_question_inputs, verification_checkpoint, goal_submission_id
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
 from personal_agent.capabilities.contracts.verification_prompt import (
-    verification_input_size, task_verification_criteria,
+    GOAL_COMPLIANCE_OPERATION, verification_input_size, task_verification_criteria,
 )
 from .model_actions import (
     build_model_action_definitions,
     goal_action_definition,
     goal_read_action_definition,
     goal_retain_action_definition,
+    project_test_mode_tools,
     provider_action_feedback,
     decode_model_action_invocations,
     model_visible_capability_policy_json,
@@ -136,6 +140,7 @@ from .models import (
     AcceptedExperimentToolRequest,
     AcceptedPythonToolRequest,
     AgentDelegationProposal,
+    ClarificationInvocation,
     CommittedUsage,
     ConversationInteractionMode,
     ConversationKnowledgeSaveOperation,
@@ -641,7 +646,7 @@ class ConversationService:
                         concurrent_batches, context_composition, review_criteria=review_criteria,
                         working_plan=working_plan, message=self._prompts.render('conversation.service.run_deadline_limitation'),
                     )
-                repeated_feedback = self._repeated_action_feedback(tuple(inputs))
+                repeated_feedback = self._repeated_action_feedback(tuple(inputs), trace=trace)
                 if repeated_feedback is not None:
                     return self._fail_closed_limitation(
                         conversation_id,
@@ -710,6 +715,17 @@ class ConversationService:
                 )
                 continue
             assert decision is not None
+            if isinstance(decision, ClarificationInvocation):
+                question = FinalMessage(disposition="clarification_required", segments=(
+                    ConversationAnswerSegment(text=decision.question),))
+                self._commit(run_ref, principal, messages, inputs, usage, execution_order,
+                    concurrent_batches, context_composition, review_criteria=review_criteria,
+                    working_plan=working_plan, final_message=question,
+                    call_dispositions=(ModelCallDisposition(call_id=decision.call_id,
+                        operation="request_clarification", status="accepted"),))
+                return ConversationTurnView(interaction_run_ref=run_ref, conversation_id=conversation_id,
+                    disposition=question.disposition, message=ConversationMessage(role="assistant", content=question.message),
+                    working_plan=working_plan)
             goal_trace = self._journal.get(run_ref)
             committed_call_ids = self._committed_call_ids(goal_trace)
             if self._uses_inline_task_understanding(goal_trace):
@@ -2004,17 +2020,16 @@ class ConversationService:
                     )
         return offloaded
 
-    def _task_verification_context(self, run_ref, *, draft, kind, goal_call_id=None):
+    def _goal_verification_context(self, run_ref, *, draft, goal_call_id):
         trace = self._journal.get(run_ref)
-        if trace.python_authorization_digest is None:
-            return None
         history = self._journal.analysis_traces(trace)
         context = build_verification_context(trace=trace, history=history, draft=draft,
-            kind=kind, goal_call_id=goal_call_id)
+            kind="goal", goal_call_id=goal_call_id)
         if self._history is None:
             return context
-        checkpoint = verification_checkpoint(trace, history, kind=kind)
-        criteria = task_verification_criteria(kind, prompts=self._prompts)
+        summary_prompt = self._prompts.get("conversation.goal_verification_history_compaction")
+        checkpoint = verification_checkpoint(trace, history, kind="goal", prompt_version=summary_prompt.version)
+        criteria = task_verification_criteria("goal", prompts=self._prompts)
         while True:
             projected = self._history.project_verification(run_ref, context, checkpoint)
             size = verification_input_size(projected, criteria, prompts=self._prompts)
@@ -2040,8 +2055,7 @@ class ConversationService:
             operation = admit_goal_maintenance(invocation, trace=trace, current=current,
                 prompts=self._prompts, verification_ref=None, candidate=proposal, draft_ref=draft_ref)
             return operation, None, trace.usage
-        context = self._task_verification_context(run_ref, draft=proposal.objective,
-            kind="goal", goal_call_id=invocation.call_id)
+        context = self._goal_verification_context(run_ref, draft=proposal.objective, goal_call_id=invocation.call_id)
         arguments = {"draft": proposal.objective,
             "success_criteria": [item.criterion for item in task_verification_criteria("goal", prompts=self._prompts)],
             "task_context": context.model_dump(mode="json")}
@@ -2095,12 +2109,23 @@ class ConversationService:
         but it does not choose that turn's action availability.
         """
         action_id = f"runtime-verify-{attempt}"
-        task_context = self._task_verification_context(run_ref, draft=decision.message, kind="answer")
+        trace = self._journal.get(run_ref)
+        task_context = None
+        if trace.python_authorization_digest is not None:
+            history = prior_analysis_turns(trace, self._journal.analysis_traces(trace))
+            goal = current_analysis_goal(trace, history)
+            try:
+                task_context, through = answer_goal_context(goal, decision.message, (*history, trace),
+                    prompts=self._prompts, measure_capacity=self._model_client.measure_capacity)
+            except ModelCapacityRefused as error:
+                raise self._capacity_failure(error) from error
+            scope = ExecutionScope(principal=trace.principal, execution_id=run_ref, thread_id=trace.conversation_id)
+            self._advance_goal_compliance_history(scope, trace, through)
         if task_context is not None:
             arguments = {
                 "draft": decision.message,
                 "success_criteria": [item.criterion for item in task_verification_criteria("answer", prompts=self._prompts)],
-                "task_context": task_context.model_dump(mode="json"),
+                "task_context": task_context.model_dump(mode="json", exclude_none=True),
             }
         else:
             try:
@@ -2164,8 +2189,12 @@ class ConversationService:
         result = self._tool_port.invoke_workflow(_VERIFICATION_CAPABILITY, arguments,
             execution_scope=scope, tool_call_id=action_id, source_platform=source_platform)
         # Canonical verification receipts stay complete; context projection owns display budgeting.
-        payload = result if arguments.get("task_context") is not None else self._fit_observation_payload(result,
-            action_id=action_id, capability_id=_VERIFICATION_CAPABILITY, run_ref=run_ref, owner=owner, execution_scope=scope)
+        payload = result
+        if not result.get("ok") and arguments.get("task_context") is None:
+            payload = self._fit_observation_payload(
+                result, action_id=action_id, capability_id=_VERIFICATION_CAPABILITY,
+                run_ref=run_ref, owner=owner, execution_scope=scope,
+            )
         observation = ActionObservation(kind="tool_result", action_id=action_id,
             capability_id=_VERIFICATION_CAPABILITY, status="succeeded" if result.get("ok") else "failed",
             execution_request_digest=expected, payload=payload)
@@ -2377,15 +2406,16 @@ class ConversationService:
                 goal_actions += (goal_retain_action_definition(self._prompts, verification_enabled=goal_verification),)
                 if self._artifact_port is not None and decision_trace.principal is not None:
                     goal_actions += (goal_read_action_definition(self._prompts),)
-            non_business = []
             if goal_required:
-                for action in answer_actions:
-                    if action.target_name == "submit_final":
-                        schema = deepcopy(action.input_schema)
-                        schema["properties"]["disposition"]["enum"] = ["clarification_required", "limitation", "failed"]
-                        non_business.append(action.model_copy(update={"input_schema": schema}))
-            action_definitions = (*goal_actions, *goal_draft_action_definitions(action_definitions, drafts),
-                                  *non_business) if goal_required else (*action_definitions, *goal_actions)
+                non_business = tuple(
+                    self._answer_result.without_normal_answer(action) if action.target_name == "submit_final" else action
+                    for action in action_definitions if action.target_name == "submit_final" or action.kind == "request_clarification"
+                )
+                action_definitions = (*goal_actions, *goal_draft_action_definitions(action_definitions, drafts), *non_business)
+            else:
+                action_definitions = (*action_definitions, *goal_actions)
+        test_mode = self._answer_result.config.test_mode
+        action_definitions = project_test_mode_tools(action_definitions, enabled=test_mode)
         visible_capabilities = capabilities
         if goal_required:
             draft_tools = {item.target_name for item in action_definitions if item.kind == "tool"}
@@ -2419,6 +2449,10 @@ class ConversationService:
             system_content += self._prompts.get("conversation.research.evidence_selection").template
             if evidence_selection is not None and evidence_selection.next_step == "write":
                 system_content += self._prompts.get("conversation.research.writer").template
+        if test_mode:
+            note = self._prompts.get("conversation.test_mode")
+            system_content += "\n\n" + note.template
+            prompt_version += "+" + note.version
         visible_messages = [{"role": "system", "content": system_content}]
         if not inline_understanding:
             visible_messages.extend(materialize_previous_criteria(
@@ -2818,7 +2852,6 @@ class ConversationService:
                 action_kind=error.action_kind,
                 field_paths=error.field_paths,
                 error_types=error.error_types,
-                repair_hints=error.repair_hints,
                 provider_response_complete=bool(error.response is not None or error.prior_responses),
                 response=error.response,
                 prior_responses=error.prior_responses,
@@ -3110,9 +3143,8 @@ class ConversationService:
             return feedback
         return feedback.model_copy(update={"action_name": cls._action_name(action)})
 
-    @staticmethod
     def _repeated_action_feedback(
-        inputs: tuple[InteractionInput, ...],
+        self, inputs: tuple[InteractionInput, ...], *, trace: InteractionTrace,
     ) -> DecisionFeedback | None:
         """Stop after one bounded repair of the same rejected model action."""
         last_progress = next(
@@ -3130,18 +3162,89 @@ class ConversationService:
                 continue
             reason_code = ("provider_action_unknown" if item.reason_code == GOAL_PENDING_ACTION_REJECTED
                            else item.reason_code)
-            key = (
-                # Unknown names share the existing protocol repair allowance.
-                "provider_action_protocol"
-                if reason_code == "provider_action_unknown"
-                else item.action_name or item.action_id,
-                reason_code,
-                item.working_plan_revision,
-            )
+            action_key = item.action_name or item.action_id
+            if reason_code == "provider_action_unknown":
+                action_key = "provider_action_protocol"
+            elif reason_code == "action_goal_conflict":
+                review = next(review for review in trace.action_goal_reviews
+                              if review.binding.action_id == item.action_id)
+                record = next(record for record in trace.model_decisions
+                              if record.turn_index == item.decision_turn and record.assistant is not None)
+                call = next(call for call in record.assistant.payload["tool_calls"] if call["id"] == item.action_id)
+                arguments = ExecutePythonArgs.model_validate_json(call["function"]["arguments"], context=self._prompts)
+                action_key = canonical_digest({
+                    "goal": review.binding.goal_ref.model_dump(mode="json"),
+                    "arguments": arguments.model_dump(mode="json"),
+                    "input_refs": [ref.model_dump(mode="json") for ref in review.binding.input_refs],
+                })
+            key = (action_key, reason_code, item.working_plan_revision)
             attempts.setdefault(key, set()).add(item.decision_turn)
             if len(attempts[key]) >= 2:
                 return item
         return None
+
+    def _review_python_actions(self, actions, *, run_ref):
+        trace = self._journal.get(run_ref)
+        if (not trace.feature_flags_binding.answer_verification or not self._uses_inline_task_understanding(trace)
+                or not any(isinstance(action, ToolCallProposal) and action.tool_name == "execute_python" for action in actions)):
+            return {}, {}, trace.usage
+        history = prior_analysis_turns(trace, self._journal.analysis_traces(trace))
+        goal = current_analysis_goal(trace, history)
+        if goal is None:
+            return {}, {}, trace.usage
+        allowed = self._journal.readable_resource_refs(trace)
+        batch = []
+        denied = {}
+        for action in actions:
+            if not isinstance(action, ToolCallProposal) or action.tool_name != "execute_python":
+                continue
+            arguments = ExecutePythonArgs.model_validate(action.arguments, context=self._prompts)
+            scope = ExecutionScope(principal=trace.principal, execution_id=run_ref,
+                                   thread_id=trace.conversation_id, task_id=action.action_id)
+            try:
+                batch.append(PendingPythonReview.create(scope, arguments, allowed, goal, prompts=self._prompts))
+            except PermissionError as error:
+                denied[action.action_id] = DecisionFeedback(
+                    action_id=action.action_id, action_name=action.tool_name, reason_code="artifact_reference_invalid",
+                    message=str(error), repairable_fields=("arguments.input_files",), immutable_fields=("action_id", "tool_name"),
+                    required_repair=self._prompts.get("python_execution.parameter.input_files").template,
+                )
+        reviews = {item.binding.action_id: item for item in trace.action_goal_reviews}
+        for item in batch:
+            previous = reviews.get(item.binding.action_id)
+            if previous is not None and previous.binding != item.binding:
+                raise ConversationOperationConflict("cannot reuse an action goal judgment with a different binding")
+        pending = tuple(item for item in batch if item.binding.action_id not in reviews)
+        if pending:
+            try:
+                prepared = action_goal_request(goal, pending, (*history, trace), prompts=self._prompts,
+                    artifacts=self._artifact_port, measure_capacity=self._model_client.measure_capacity)
+            except ModelCapacityRefused as error:
+                raise self._capacity_failure(error) from error
+            scope = ExecutionScope(principal=trace.principal, execution_id=run_ref, thread_id=trace.conversation_id)
+            self._advance_goal_compliance_history(scope, trace, prepared.compacted_through)
+            response = self.generate_verification(scope, prepared.request)
+            results = bind_action_goal_assessment(pending, response.value)
+            self._journal.record_action_goal_reviews(scope, results)
+            reviews.update((item.binding.action_id, item) for item in results)
+        for item in batch:
+            action_id = item.binding.action_id
+            judgment = reviews[action_id].judgment
+            if judgment.verdict == "conflict":
+                denied[action_id] = DecisionFeedback(
+                    action_id=action_id, action_name="execute_python", reason_code="action_goal_conflict",
+                    message=self._prompts.render(f"{ACTION_GOAL_PROMPT}.rejection", tool_name="execute_python"),
+                    repairable_fields=("arguments",), immutable_fields=("action_id", "tool_name"),
+                    required_repair=judgment.feedback,
+                )
+        return {item.binding.action_id: item for item in batch}, denied, self._journal.get(run_ref).usage
+
+    def _advance_goal_compliance_history(self, scope, trace, through):
+        if through > trace.goal_compliance_history_compacted_through:
+            self._journal.update(scope, lambda latest: latest.model_copy(update={
+                "revision": latest.revision + 1,
+                "goal_compliance_history_compacted_through": max(through, latest.goal_compliance_history_compacted_through),
+            }))
 
     def _execute_actions(
         self,
@@ -3255,6 +3358,12 @@ class ConversationService:
             else:
                 remaining_agent_calls -= 1
                 runnable.append(action)
+        reviewed, action_feedback, usage = self._review_python_actions(runnable, run_ref=run_ref)
+        if action_feedback:
+            denied.extend(_ActionResult(action_id, feedback) for action_id, feedback in action_feedback.items())
+            runnable = [item for item in runnable if item.action_id not in action_feedback]
+        if reviewed and runnable:
+            self._admit_research_model_call(run_ref, usage)
         concurrent = len(runnable) > 1 and all(
             self._safe_for_concurrency(item) for item in runnable
         )
@@ -3274,8 +3383,11 @@ class ConversationService:
             self._journal.accept_tool_request(
                 execution_scope=ExecutionScope(principal=principal, execution_id=run_ref,
                                                 thread_id=conversation_id, task_id=action.action_id),
-                action_id=action.action_id, arguments=argument_type.model_validate(action.arguments, context=self._prompts),
+                action_id=action.action_id,
+                arguments=(reviewed[action.action_id].arguments if action.action_id in reviewed else
+                           argument_type.model_validate(action.arguments, context=self._prompts)),
                 plan_step_id=plan_step_id,
+                action_goal_binding=reviewed[action.action_id].binding if action.action_id in reviewed else None,
             )
         if concurrent:
             with ThreadPoolExecutor(
@@ -4248,7 +4360,11 @@ class ConversationService:
         if any(isinstance(item, ActionObservation) and item.capability_id == _VERIFICATION_CAPABILITY
                for item in new_inputs):
             consumed_inner_operations.update({"interaction_cited_support", "interaction_semantic_verification",
-                "interaction_goal_verification", "interaction_answer_verification"})
+                "interaction_goal_verification", GOAL_COMPLIANCE_OPERATION})
+        if any((isinstance(item, ActionObservation) and item.capability_id == "execute_python")
+               or (isinstance(item, DecisionFeedback) and item.reason_code == "action_goal_conflict")
+               for item in new_inputs):
+            consumed_inner_operations.add(GOAL_COMPLIANCE_OPERATION)
         # Admission creates per-action feedback; only this loop owns the decision
         # boundary. A batch of rejected siblings is one attempt, including on resume.
         for index in range(len(prior.inputs) if prior is not None else 0, len(inputs)):
@@ -4259,6 +4375,8 @@ class ConversationService:
                 )
         self._journal.put(
             InteractionTrace(
+                action_goal_reviews=prior.action_goal_reviews if prior else (),
+                goal_compliance_history_compacted_through=prior.goal_compliance_history_compacted_through if prior else 0,
                 goal_operations=(*(prior.goal_operations if prior is not None else ()),
                                  *((goal_operation,) if goal_operation is not None else ())),
                 revision=(prior.revision + 1 if prior is not None else 1),

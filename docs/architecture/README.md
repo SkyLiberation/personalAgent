@@ -12,6 +12,7 @@
 | 定位修改位置、Port 和装配点 | [代码地图与依赖](code-map.md) | 实际包职责、功能入口、物理布局与架构约束的差异 |
 | 隔离日志、计量、重试等横切关注点 | [横切机制与 AOP](cross-cutting.md)、[编码质量 skill](../../.agents/skills/write-quality-code/SKILL.md#2-隔离切面保持业务主流程清楚)、[COD 横切约束](../devSpec/code-structure.md#51-横切关注点与显式组合) | 架构正文维护现有实现与装配，skill 拥有机制选择方法，COD 拥有强制边界 |
 | 切换或扩展模型 Provider | [模型调用组合](cross-cutting.md#2-模型调用的实际组合)、[配置绑定](../env.md#provider-选择与参数绑定) | 独立 provider 策略、显式工厂注入及实际模型绑定 |
+| 设计 MCP Server 或 Toolathlon 接入 | [MCP 客户端与 Toolathlon 评测接入 Spec](../mcpDesign/README.md) | 候选设计，负责连接生命周期、工具映射和评测隔离 |
 | 设计插件、middleware 与 hook 的扩展位置 | [主循环扩展设计](../optimization/to_verify/conversation-loop-boundaries.md#35-扩展架构能力模块middleware-与-hook) | 待验证的能力装配、调用包装和生命周期通知；实际组合仍以横切机制正文为准 |
 | 确定某个能力的详细行为 | [权威专题索引](../README.md#按主题找权威文档)、[业务链路](../workflow/README.md) | 专题拥有契约，workflow 解释具体用例；本目录只链接详细正文 |
 

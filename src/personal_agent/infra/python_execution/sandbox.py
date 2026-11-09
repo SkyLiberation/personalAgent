@@ -39,6 +39,7 @@ _API_TIMEOUT = 5
 _API_VERSION = "1.44"
 _POLL_SECONDS = 0.1
 _READ_CHUNK = 64 * 1024
+_WINDOWS_REPLACE_RETRY_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.32)
 _COMMAND = ["python", "-I", "/inputs/program.py", "/inputs"]
 
 
@@ -147,6 +148,14 @@ def _write_json(path: Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    for delay in _WINDOWS_REPLACE_RETRY_SECONDS:
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError as exc:
+            if getattr(exc, "winerror", None) not in {5, 32}:
+                raise
+        time.sleep(delay)
     temporary.replace(path)
 
 
@@ -348,7 +357,7 @@ class _OutputCapture:
 
 
 def _persist_result(
-    output_dir: Path, result: SandboxResult, stderr: bytes, job: _JobRecord
+    output_dir: Path, result: SandboxResult, stderr: bytes, job: _JobRecord, *, update_job: bool,
 ) -> None:
     (output_dir / "stdout.json").write_bytes(result.stdout)
     (output_dir / "stderr.log").write_bytes(stderr)
@@ -372,7 +381,8 @@ def _persist_result(
         result.output_available,
     )
     _write_json(output_dir / "result.json", asdict(saved))
-    _write_json(output_dir / "job.json", asdict(job))
+    if update_job:
+        _write_json(output_dir / "job.json", asdict(job))
 
 
 def run_program(
@@ -470,9 +480,9 @@ def run_program(
         if local_image.attrs.get("Config", {}).get("Volumes"):
             raise ValueError("candidate image must not declare writable volumes")
         _write_json(output_dir / "job.json", asdict(job))
-        create_requested = True
         job.phase = "create_requested"
         _write_json(output_dir / "job.json", asdict(job))
+        create_requested = True
         container = client.containers.create(
             image=job.image_id,
             command=_COMMAND,
@@ -587,6 +597,9 @@ def run_program(
                 )
         status = "unknown" if create_requested and container is None else "failed"
     finally:
+        # A failed create-intent write leaves the prepared identity on disk.
+        # Record the outcome without requiring another write to the blocked file.
+        update_job = create_requested or job.phase != "create_requested"
         if container is not None and not terminal_confirmed:
             if start_requested:
                 state = _stop_and_confirm(
@@ -628,7 +641,7 @@ def run_program(
             stderr_truncated=capture.stderr_truncated if capture is not None else False,
         )
         # If persistence fails, leave the backend identity and files for review.
-        _persist_result(output_dir, result, stderr, job)
+        _persist_result(output_dir, result, stderr, job, update_job=update_job)
         if container is not None and terminal_confirmed and not retain_jobs:
             try:
                 container.remove()
@@ -640,7 +653,7 @@ def run_program(
                 _remove_staging(staging)
             except Exception as exc:
                 job.errors.append("input cleanup: " + _error_text(exc))
-        _persist_result(output_dir, result, stderr, job)
+        _persist_result(output_dir, result, stderr, job, update_job=update_job)
         if client is not None:
             client.close()
     if interrupted is not None:

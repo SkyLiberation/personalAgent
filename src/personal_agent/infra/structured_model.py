@@ -382,9 +382,13 @@ class OpenAIModelClient:
         if self._config.capacity is None:
             return None
         if request.kind == "structured":
-            raise ValueError("capacity measurement requires the final text or native-action request")
+            if request.output_transport != "native_tool":
+                raise ValueError("capacity measurement requires text or native-tool output")
+            kwargs = self._chat_kwargs(self._native_output_request(request), stream=True)
+        else:
+            kwargs = self._chat_kwargs(request)
         return check_model_capacity(operation=request.operation, provider_host=self._provider_host,
-            model=self._resolved_model, kwargs=self._chat_kwargs(request), capacity=self._config.capacity)
+            model=self._resolved_model, kwargs=kwargs, capacity=self._config.capacity)
 
     def _provider_unavailable(
         self,
@@ -672,6 +676,15 @@ class OpenAIModelClient:
                 request.operation, "provider response requires the original assistant role"
             )
 
+    def _native_output_request(self, request: StructuredModelRequest[Any]) -> StructuredModelRequest[Any]:
+        output = ModelActionDefinition(
+            name="structured_output", kind="tool", target_name=request.operation,
+            description=self._prompts.get("structured.native_output.description").template,
+            input_schema=native_output_parameters(request.output_type), strict=False,
+        )
+        return replace(request, kind="tool_calling", output_transport=None,
+                       action_choice="required", action_definitions=(output,))
+
     def _generate_structured(
         self,
         request: StructuredModelRequest[StructuredOutputT],
@@ -686,18 +699,8 @@ class OpenAIModelClient:
         native = request.output_transport == "native_tool"
         output_definition: ModelActionDefinition | None = None
         if native:
-            output_definition = ModelActionDefinition(
-                name="structured_output", kind="tool",
-                target_name=request.operation,
-                description=self._prompts.get("structured.native_output.description").template,
-                input_schema=native_output_parameters(request.output_type),
-                strict=False,
-            )
-            chat_request = replace(
-                request, kind="tool_calling", output_transport=None,
-                action_choice="required",
-                action_definitions=(output_definition,),
-            )
+            chat_request = self._native_output_request(request)
+            output_definition = chat_request.action_definitions[0]
         elif request.output_transport == "prompted_json":
             instruction, prompt_metadata = _schema_instruction(schema, parse_error=None, prompts=self._prompts)
             chat_request = replace(

@@ -46,4 +46,4 @@
 
 四类手段在任务中配合使用：请求构造时持续裁剪，大结果产生后外置并卸载，历史形成容量压力时摘要，决策需要细节时再按需加载。它们已经接入现行会话链路，但各任务触发的分支和验证程度不同；请求变短本身不能证明答案正确或净成本下降。
 
-进一步阅读：[主循环的历史与压缩边界](agent-loop.md#3-角色历史与压缩边界)、[目标核验历史](goal-verifier.md#3-历史范围与压缩)、[回答核验历史](answer-verifier.md#3-历史范围与压缩)、[大结果外置契约](../topics/context-engineering.md#单次-observation-的体积边界)、[请求级物化](../topics/context-engineering.md#artifact-backed-observation-的请求级物化)。完整交互摘要的采用与验证见[结果卸载与完整交互压缩](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，通过记录精简的证据见[核验上下文固化记录](../optimization/completed/verification-context-goal-binding.md#决定性证据与边界)。
+进一步阅读：[主循环的历史与压缩边界](agent-loop.md#3-角色历史与压缩边界)、[目标核验历史](goal-verifier.md#3-历史范围与压缩)、[回答核验历史](goal-compliance-verifier.md#3-历史范围与压缩)、[大结果外置契约](../topics/context-engineering.md#单次-observation-的体积边界)、[请求级物化](../topics/context-engineering.md#artifact-backed-observation-的请求级物化)。完整交互摘要的采用与验证见[结果卸载与完整交互压缩](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，通过记录精简的证据见[核验上下文固化记录](../optimization/completed/verification-context-goal-binding.md#决定性证据与边界)。

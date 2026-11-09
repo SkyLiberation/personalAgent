@@ -301,6 +301,18 @@ execute_python
 
 该操作会消耗运行额度、启动进程和生成不可变产物，不能作为可任意重试的普通读取。网关元数据采用 `permission_scope=python:execute`、`side_effects=write_local`、`max_retries=0`、`timeout_seconds=None`；绝对截止与停止由执行器拥有，避免外层默认超时遗留活跃作业。受既有权限准入，不为每次已授权调用新增人工审批。冻结／持久化实施决定由[ADR0039](../../adr/0039-model-directed-python-execution.md)拥有，接受实施不代表验证通过。
 
+### 4.1 容器创建意图写入失败的分类与恢复
+
+Task2 第 5 轮在替换 `job.json` 时遇到 Windows `WinError 5`。内存中的创建标记先于写入，异常触发同名容器查询并错误记为 `unknown`，使原会话进入未决执行。此前第 21 轮有相同证据，见 [ADR 0046](../../adr/0046-sealed-pre-dispatch-incident-recovery.md)。本次原 [作业记录](../../../.tmp/av20v5/c-recovery/server-data/python_execution_jobs/a1fa70f5e8a277bd5026ce075636499170f94a06707edbdec1bf71689ae49c96/execution/job.json) 仍保持原判决。
+
+Docker 沙箱在创建意图成功落盘后，进入 SDK 创建调用前才设置用于处理异常的内存标记。Windows 拒绝替换或共享冲突时，沿用同目录临时文件，仅对替换做有界退避，做法参考 [Git 的 Windows 重命名](https://github.com/git/git/blob/v2.52.0/compat/mingw.c#L2192-L2209) 和 [uv 同步持久化](https://github.com/astral-sh/uv/blob/0.9.21/crates/uv-fs/src/lib.rs#L449-L503)。创建意图持续无法写入时，沿用已保存的准备阶段作业身份，在独立结果文件保存确证未派发的失败及原始异常。清理无容器作业时只回收暂存输入。进入创建调用后无法核实结果时，仍按既有身份核对并保留未决执行。Journal 和原执行服务继续拥有执行事实与回执。
+
+边界验收复用第 5 轮封存程序和输入，在独立沙箱检查短暂拒绝恢复后只创建一次，持续拒绝时零创建并能恢复已保存的失败，创建响应丢失且无法核对时保留未决且只创建一次。原会话使用 [ADR 0046](../../adr/0046-sealed-pre-dispatch-incident-recovery.md) 已验证的方法，在副本内按实际事故身份经原执行服务追加失败结论。校验封存、确切命令、字节及 Docker 同名查询后，从前四轮实际交付继续第 5 至 20 轮，原失败和已用预算保留。续跑证据与原跑独立封存。
+
+真实 Docker 边界注入验证 3/3 通过。短暂拒绝后创建 1 次且 Python 退出码为 0。持续拒绝在六次退避后结算为失败，创建 0 次，重新读取仍为同一失败。创建成功后注入响应丢失与查询不可达，创建 1 次，执行保持未决。原代码未通过前两个用例。见[修复前结果](../../../.tmp/py5r/probe-before.json)和[修复后结果](../../../.tmp/py5r/probe-after.json)。
+
+原作业已在隔离副本内结清，一次核对、零次重执行。原会话已使用 3,590,598 生成 tokens，剩余 32,409,402。前四轮评分保留，独立评分余额 984,113 tokens。续跑从第 5 轮原题进入正式 HTTP，使用新交互身份与原对话、真实交付历史、许可和材料。归档评测入口复用既有检查点逻辑，适配第 5 轮接续和第 20 轮截止。见[恢复校验](../../../.tmp/py5r/recovery-readiness.json)。
+
 ## 5. 环境、预算与Context
 
 检索研究装配复用部署的 candidate_image_id、Engine端点和 candidate 沙箱限额；通用许可的装配由 §3.5 拥有。默认单次60秒、512 MiB、1 CPU、64进程、32 MiB临时空间；stdout最多16 MiB、stderr捕获最多64 KiB。Composition Root 将获准执行字段映射为 typed `PythonExecutionProfile` 只读配置；Python请求、Command、Service及执行Port不依赖 `RetrievalDeployment`、评分模型或数据集类型，不另设可写配置来源。部署摘要只绑定本次授权身份，不把检索业务配置带入程序。所有实际值来自显式配置，写入Command，不让模型覆盖。stderr或失败stdout发生捕获截断时保存已捕获字节及明确限制，不声称完整原始流。

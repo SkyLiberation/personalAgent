@@ -36,10 +36,12 @@ from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_sc
 from .models import (
     AgentDelegationProposal,
     ActionProtocolDiagnostic,
+    ClarificationInvocation,
     DecisionFeedback,
     ContinueTurnProposal,
     AnswerResultInvocation,
     EffectiveCapabilities,
+    RequestClarificationArguments,
     ToolCallProposal,
     WorkingPlanProposal,
 )
@@ -55,6 +57,8 @@ from .tool_requests import (
 )
 
 _WORKING_PLAN_TARGET = "working_plan"
+CLARIFICATION_TOOL = "control_request_clarification"
+TEST_MODE_DISABLED_TOOLS = frozenset({CLARIFICATION_TOOL})
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _RUNTIME_FIELD_NAMES = frozenset(
     {
@@ -89,6 +93,13 @@ def goal_read_action_definition(prompts: PromptCatalog) -> ModelActionDefinition
     return ModelActionDefinition(name="read_current_goal", kind="read_current_goal", target_name="read_current_goal",
         description=prompts.get("conversation.goal.read_description").template,
         input_schema=ReadCurrentGoalArguments.model_json_schema(), strict=False)
+
+
+def project_test_mode_tools(definitions: tuple[ModelActionDefinition, ...], *,
+                            enabled: bool) -> tuple[ModelActionDefinition, ...]:
+    if not enabled:
+        return definitions
+    return tuple(action for action in definitions if action.name not in TEST_MODE_DISABLED_TOOLS)
 
 
 def _wire_name(prefix: str, target_name: str) -> str:
@@ -189,6 +200,9 @@ def build_model_action_definitions(
             strict=False,
         )
     )
+    definitions.append(ModelActionDefinition(name=CLARIFICATION_TOOL, kind="request_clarification",
+        target_name="request_clarification", description=prompts.get("conversation.clarification.description").template,
+        input_schema=RequestClarificationArguments.model_json_schema(), strict=False))
     definitions.extend(answer_actions)
     names = [definition.name for definition in definitions]
     if len(names) != len(set(names)):
@@ -272,6 +286,7 @@ def _payload_failure_code(
         "tool": "provider_action_tool_payload_invalid",
         "agent": "provider_action_agent_payload_invalid",
         "answer_result": "provider_action_answer_result_payload_invalid",
+        "request_clarification": "provider_action_clarification_payload_invalid",
         "maintain_goal": "provider_action_goal_payload_invalid",
         "read_current_goal": "provider_action_goal_payload_invalid",
     }[action_kind]
@@ -472,7 +487,7 @@ def decode_model_action_invocations(
     *,
     prompts: PromptCatalog = DEFAULT_PROMPTS,
     reveal_invalid_action_field_names: bool = False,
-) -> ContinueTurnProposal | AnswerResultInvocation:
+) -> ContinueTurnProposal | AnswerResultInvocation | ClarificationInvocation:
     """Decode provider actions without authorizing, repairing, or executing them."""
     if not invocations:
         raise StructuredOutputFailure(
@@ -496,6 +511,11 @@ def decode_model_action_invocations(
             reason_code="provider_action_unknown",
             action_name=unknown_names[0],
         )
+    clarification = next((item for item in invocations if by_name[item.name].kind == "request_clarification"), None)
+    if clarification is not None and len(invocations) != 1:
+        raise _payload_failure(action_name=clarification.name, action_kind="request_clarification",
+            reason="clarification must be submitted alone; the batch was not executed",
+            field_paths=(), error_types=())
     answer_calls = [item for item in invocations if by_name[item.name].kind == "answer_result"]
     goal_calls = [item for item in invocations if by_name[item.name].kind in ("maintain_goal", "read_current_goal")]
     if goal_calls and len(invocations) != 1:
@@ -521,6 +541,8 @@ def decode_model_action_invocations(
             reveal_invalid_action_field_names=reveal_invalid_action_field_names,
         )
         try:
+            if definition.kind == "request_clarification":
+                return ClarificationInvocation(call_id=invocation.call_id, **payload)
             if definition.kind == "maintain_goal":
                 if definition.target_name == "retain_goal":
                     RetainGoalArguments.model_validate(payload)
@@ -633,6 +655,8 @@ def provider_action_feedback(
             details_json=json.dumps({"field_paths": error.field_paths, "error_types": error.error_types}))
         repair = prompts.get("conversation.goal.read_repair" if read_error else
                              "conversation.goal.retain_repair" if retain_error else "conversation.goal.repair").template
+    elif error.action_kind == "request_clarification":
+        repair = prompts.get("conversation.clarification.repair").template
     if error.repair_hints:
         remaining_repair = (repair,) if goal_error or len(error.repair_hints) < len(error.field_paths) else ()
         repair = "\n".join((*error.repair_hints, *remaining_repair))

@@ -70,11 +70,15 @@ def verification_stage(trace, index, previous, prompts, *, historical: bool):
             goal_call_id=call_id)
         criteria = task_verification_criteria(receipt.checked_kind, prompts=prompts)
         arguments = {'draft': receipt.verified_draft,
-            'success_criteria': [item.criterion for item in criteria], 'task_context': context.model_dump(mode='json')}
+            'success_criteria': [item.criterion for item in criteria],
+            'task_context': context.model_dump(mode='json', exclude_none=not goal and not historical)}
         if historical:
             # Reconstruct only the old serialized shape to bind the immutable source call.
             # The new model input still uses the complete current typed context below.
-            for turn in arguments['task_context']['turns']:
+            arguments['success_criteria'] = list(receipt.success_criteria)
+            sources = (*prior_analysis_turns(prefix, previous), prefix)
+            for turn, source in zip(arguments['task_context']['turns'], sources, strict=True):
+                turn['question'] = next(message.content for message in reversed(source.messages) if message.role == 'user')
                 for event in turn['events']:
                     event.pop('verified_goal', None)
             old_goal = current_analysis_goal(prefix, previous)
@@ -92,8 +96,13 @@ def check_verification(context, prompts):
     messages = verification_messages(context, task_verification_criteria(context.kind, prompts=prompts), prompts=prompts)
     position, passed, failed = 1, 0, 0
     for turn in context.turns:
-        assert messages[position] == {'role': 'user', 'content': prompts.render(
-            'interaction_verification.history.user_turn', number=turn.user_turn, question=turn.question)}
+        if context.kind == 'goal':
+            assert messages[position] == {'role': 'user', 'content': prompts.render(
+                'interaction_verification.history.user_turn', number=turn.user_turn, question=turn.question)}
+        else:
+            assert turn.question is None
+            assert messages[position] == {'role': 'system', 'content': prompts.render(
+                'interaction_verification.answer.history_turn', number=turn.user_turn)}
         position += 1
         if context.kind == 'goal' and turn is context.turns[-1]:
             assert messages[position]['role'] == 'system'

@@ -81,6 +81,16 @@ Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answe
 
 验收条件约束结果，不表示已有待改正文或充分资料。模型根据任务选择合法 `disposition`；普通交互有冻结标准并提交 `answer` 时，运行系统执行适用语义核验。`clarification_required`、`limitation` 和 `failed` 不因标准存在而改成成功答案。该边界修复的实际用户结果见[评测记录](../evals/02-current-case-inventory.md#验收条件不再推导改稿任务的边界修复)。
 
+### 回答测试模式
+
+使用 `PERSONAL_AGENT_ANSWER_RESULT={"writer":"direct","test_mode":true}` 启动测试部署。`test_mode` 默认 `false`，可与直接回答或论断写作搭配。Runtime 在创建对话运行时绑定这项配置。
+
+普通模式通过独立的 `control_request_clarification` 提交需要用户回答的问题。它独占当次模型调用。Runtime 保存调用身份和实际问题，并以 `clarification_required` 向客户端返回。客户端在同一会话继续发送用户回复，主循环按原时间顺序消费问题和回复。正常答案、限制和失败由 `control_submit_final` 接收。
+
+测试模式使用 Runtime 的专用模型工具禁用名单。当前唯一一项是 `control_request_clarification`。各阶段先组装可用动作，再应用该名单。请求构造和运行时参数校验消费同一份过滤后的声明。配置随原回答配置绑定到运行及会话。
+
+离线回放已核对 Task2 第 24 轮的原调用在两种模式下均被拒绝。独立澄清在普通模式可提交并接续用户回复，测试模式拒绝该调用并保留目标读取。回放覆盖中英文和目标待维护、普通答复两个阶段。[原实发请求](../../.tmp/gc34/c-recovery/sdk/9dfd11b4d60544d1b1dcea3ff65f461c.http.request.json) · [原第 24 轮轨迹](../../.tmp/gc34/c-recovery/turn-24.trace.json)
+
 普通整稿 verifier 注册为 `workflow_activity`，由运行系统调用并生成 `SemanticVerificationReceipt`，不进入模型可见能力。研究统一核验沿 Model Port 返回绑定当前版本的 `ResearchReview`，Completion 不再追加语义调用。Verifier 只聚合 `passed|failed`；运行系统不解读逐判据的失败类别来选择工具相位。预算内的失败把完整 feedback 交还智能体决定修订或继续取证；下一轮已耗尽预算则直接停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和最终交付入口保持可用。
 
 新增请求前检查预算和截止；额度耗尽后仍可解码已付费原件，或完成无需新模型的同稿交付，新的核验和执行继续受预算约束。`max_tool_calls=0` 允许正常无工具回答，预算耗尽不生成替代答案或额外 Final 宽限。阈值按已知消费检查，未知不填零也不单独停止；在途请求可超出阈值。实际用户结果见[评测盘点](../evals/02-current-case-inventory.md)。

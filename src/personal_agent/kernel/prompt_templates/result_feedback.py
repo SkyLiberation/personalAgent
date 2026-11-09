@@ -4,6 +4,24 @@ from personal_agent.kernel.prompt_registry import PromptSpec
 
 
 PROMPTS = {
+    "conversation.test_mode": PromptSpec(
+        name="conversation.test_mode",
+        version="v1-conversation-test-mode",
+        template="本次是无人值守测试。缺少可由当前工具取得的材料时，调用对应工具继续。确实无法继续时，按当前工具声明提交限制或失败，并说明具体缺口。",
+        owner="conversation",
+    ),
+    "conversation.clarification.description": PromptSpec(
+        name="conversation.clarification.description",
+        version="v1-clarification",
+        template="向用户提出一个具体问题，等待其回复后继续。仅在现有信息和可用工具都无法取得关键输入，且必须由用户提供或决定时使用。question 是直接显示给用户的问题。单独调用本操作。",
+        owner="conversation",
+    ),
+    "conversation.clarification.repair": PromptSpec(
+        name="conversation.clarification.repair",
+        version="v1-clarification",
+        template="若确实需要用户补充信息，请单独调用 control_request_clarification，仅在 question 中填写一个非空问题。若现有工具能取得所需信息，请提交相应的工具调用。",
+        owner="conversation",
+    ),
     "conversation.answer.operation_unavailable": PromptSpec(
         name="conversation.answer.operation_unavailable",
         version="2026-10-27.v1",

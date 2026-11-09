@@ -72,6 +72,13 @@ class DirectAnswerResult:
             self.prompts.get("conversation.answer.submit_description").template),)
 
     @staticmethod
+    def without_normal_answer(action: ModelActionDefinition) -> ModelActionDefinition:
+        schema = deepcopy(action.input_schema)
+        disposition = schema["properties"]["disposition"]
+        disposition["enum"] = [state for state in disposition["enum"] if state != "answer"]
+        return action.model_copy(update={"input_schema": schema})
+
+    @staticmethod
     def _action(name, schema, description):
         schema = deepcopy(schema)
         definitions = schema.pop("$defs", {})
@@ -162,9 +169,7 @@ class ClaimAnswerResult(DirectAnswerResult):
         # Ordinary answer/revision cannot become a second entrance to this writer.
         for index, action in enumerate(actions):
             if action.target_name == "submit_final":
-                schema = deepcopy(action.input_schema)
-                schema["properties"]["disposition"]["enum"] = ["clarification_required", "limitation", "failed"]
-                actions[index] = action.model_copy(update={"input_schema": schema})
+                actions[index] = self.without_normal_answer(action)
         current = current_claims(inputs)
         selection_type = InitialResearchEvidenceSelection if current is None else ResearchEvidenceSelection
         actions.append(self._action("select_research_evidence", selection_type.model_json_schema(),

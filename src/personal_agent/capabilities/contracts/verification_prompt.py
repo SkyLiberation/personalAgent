@@ -4,12 +4,41 @@ from difflib import unified_diff
 from typing import Literal
 from pydantic import Field, create_model
 from personal_agent.kernel.llm_schemas import native_output_parameters
+from .model import StructuredModelRequest, sealed_context_projection_ref
 
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from .verification import (
-    VerificationContext, VerificationCriterion, VerificationCriterionResult,
+    AnswerGoalAssessment, GoalComplianceAnswerContext, VerificationContext, VerificationCriterion, VerificationCriterionResult,
     SemanticVerificationReceipt, SemanticVerificationReport, UserRequirementAssessment, VerificationKind,
 )
+
+GOAL_COMPLIANCE_OPERATION = "interaction_goal_compliance_verification"
+
+
+def goal_compliance_messages(stage: str, rounds: tuple[str, ...], *, prompts: PromptCatalog) -> list[dict[str, str]]:
+    system = prompts.render("interaction_verification.compliance", stage=stage)
+    return [{"role": "system", "content": system},
+            *({"role": "user", "content": content} for content in rounds)]
+
+
+def goal_compliance_answer_request(context: GoalComplianceAnswerContext, draft: str,
+                                   *, prompts: PromptCatalog) -> StructuredModelRequest[AnswerGoalAssessment]:
+    prompt = prompts.get("interaction_verification.answer")
+    criteria = task_verification_criteria("answer", prompts=prompts)
+    system = prompts.render(prompt.name, criteria_json=json.dumps([item.criterion for item in criteria], ensure_ascii=False))
+    pending = prompts.render("interaction_verification.compliance.pending_answer",
+        submission_id=context.submission_id, disposition=context.disposition, draft=draft)
+    rounds = (*context.rounds[:-1], context.rounds[-1] + "\n\n" + pending)
+    messages = goal_compliance_messages(system, rounds, prompts=prompts)
+    projection = sealed_context_projection_ref(purpose=GOAL_COMPLIANCE_OPERATION, messages=messages)
+    return StructuredModelRequest(operation=GOAL_COMPLIANCE_OPERATION, version=prompt.version,
+        messages=messages, output_type=AnswerGoalAssessment, output_transport="native_tool",
+        max_tokens=32_768, temperature=0, context_projection_ref=projection,
+        consumer_key=f"answer:{prompt.version}:{projection}", metadata={"component": "interaction_verifier"})
+
+
+def task_verification_output(kind: VerificationKind) -> type[UserRequirementAssessment]:
+    return AnswerGoalAssessment if kind == "answer" else UserRequirementAssessment
 
 
 def task_verification_criteria(
@@ -27,8 +56,12 @@ def verification_messages(
     messages = [{"role": "system", "content": prompts.render(f"interaction_verification.{context.kind}",
         criteria_json=json.dumps([item.criterion for item in criteria], ensure_ascii=False))}]
     for turn in context.turns:
-        messages.append({"role": "user", "content": prompts.render("interaction_verification.history.user_turn",
-            number=turn.user_turn, question=turn.question)})
+        if context.kind == "goal":
+            messages.append({"role": "user", "content": prompts.render("interaction_verification.history.user_turn",
+                number=turn.user_turn, question=turn.question)})
+        else:
+            messages.append({"role": "system", "content": prompts.render(
+                "interaction_verification.answer.history_turn", number=turn.user_turn)})
         if context.kind == "goal" and turn is context.turns[-1]:
             messages.append({"role": "system", "content": prompts.render("interaction_verification.history.request",
                 active_goal=context.active_goal or prompts.get("interaction_verification.history.no_goal").template)})
@@ -108,7 +141,7 @@ def bound_verification_report(
 def verification_input_size(context: VerificationContext, criteria: tuple[VerificationCriterion, ...],
                             *, prompts: PromptCatalog) -> int:
     """ASCII wire estimate with the actual bound native-output schema and wrapper."""
-    output = UserRequirementAssessment
+    output = task_verification_output(context.kind)
     body = {"messages": verification_messages(context, criteria, prompts=prompts),
         "tools": [{"type": "function", "function": {"name": "structured_output",
             "description": prompts.get("structured.native_output.description").template,

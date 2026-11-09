@@ -4,6 +4,21 @@ from personal_agent.kernel.prompt_registry import PromptTranslation
 
 
 TRANSLATIONS = {
+    "conversation.test_mode": PromptTranslation(
+        source_version="v1-conversation-test-mode",
+        version="v1-conversation-test-mode-en.1",
+        template="This is an unattended test. When the available tools can obtain missing information, use them and continue. When further progress is impossible, use an allowed limitation or failure state and identify the exact gap.",
+    ),
+    "conversation.clarification.description": PromptTranslation(
+        source_version="v1-clarification",
+        version="v1-clarification-en.1",
+        template="Ask the user one specific question and wait for a reply before continuing. Use this only when essential input cannot be obtained from existing information or available tools and requires the user to supply or decide it. The question is displayed directly to the user. Invoke this action alone.",
+    ),
+    "conversation.clarification.repair": PromptTranslation(
+        source_version="v1-clarification",
+        version="v1-clarification-en.1",
+        template="If you need the user to supply information, invoke control_request_clarification alone with one nonempty question. If an available tool can obtain the information, invoke that tool.",
+    ),
     "conversation.answer.operation_unavailable": PromptTranslation(
         source_version="2026-10-27.v1",
         version="2026-10-27.en.v1",

@@ -240,6 +240,7 @@ class DockerPythonExecutionBackend:
             staging = Path(record.staging_directory)
             if staging.exists():
                 _remove_staging(staging)
+        if record.container_removed:
             _write_json(record_path, asdict(record))
 
     def _record(self, root: Path, command: PythonExecutionCommand) -> _JobRecord:

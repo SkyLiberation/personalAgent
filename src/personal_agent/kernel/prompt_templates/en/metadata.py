@@ -42,6 +42,8 @@ METADATA_TRANSLATIONS: dict[str, str] = {
     '本项要求的判决：满足为 satisfied，明确遗漏或冲突为 not_satisfied，缺少不可替代前提而无法判断为 insufficient_evidence。': 'Judgment for this requirement: satisfied when met, not_satisfied for a clear omission or conflict, and insufficient_evidence when an indispensable premise prevents judgment.',
     '本次待验内容怎样对应这一要求；有差异时指出实际偏离及需要修订的部分，不代写替代内容。': 'How the current submission corresponds to this requirement. Identify actual differences and the parts needing revision without writing replacement content.',
     'JSON 对象数组，每项包含 requirement、status、feedback；逐项覆盖影响本轮交付的用户要求，至少一项，不能用字符串数组、单对象、null 或空数组替代。': 'A nonempty JSON array of objects containing requirement, status, and feedback. Check each user requirement affecting this delivery. A string array, a single object, null, or an empty array is invalid.',
+    '当前回答绑定目标中适用的交付或约束。核验未完成说明时，写明所检查的说明事项。': 'A deliverable or constraint from the goal bound to the current answer. For a statement of non-completion, identify the point being checked.',
+    '非空对象数组，每项包含 requirement、status 和 feedback，覆盖当前绑定目标的适用要求。': 'A nonempty array of objects with requirement, status, and feedback, covering the applicable requirements in the current bound goal.',
 
     '按当前会话有效分支顺序派生的用户问题轮次，从1开始。': 'User-question turn derived from the current conversation branch in order, starting at 1.',
     '该用户轮次提交的完整问题原文，由Runtime恢复。': 'The complete original user question for this turn, restored by Runtime.',
