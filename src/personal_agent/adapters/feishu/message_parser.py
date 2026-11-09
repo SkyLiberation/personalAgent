@@ -40,14 +40,12 @@ def parse_p2_message_event(
     user_id = resolve_user_id(open_id, sender_user_id)
     metadata["chat_id"] = chat_id
     metadata["open_id"] = open_id
-    if sender_user_id:
-        metadata["feishu_user_id"] = sender_user_id
-
     return FeishuIncomingMessage(
         event_id=str(header.event_id or "") if header is not None else "",
         event_type=str(header.event_type or "") if header is not None else "im.message.receive_v1",
         chat_id=chat_id or None,
         open_id=open_id or None,
+        sender_user_id=sender_user_id or None,
         user_id=user_id,
         session_id=chat_id or open_id or "default",
         message_id=str(message.message_id or ""),

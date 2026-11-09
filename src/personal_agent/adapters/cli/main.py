@@ -58,17 +58,23 @@ def _format_conversation_result(result: ConversationTurnView) -> str:
 @app.command()
 def entry(
     text: str = typer.Argument(..., help="入口文本（问题、指令或待采集内容）"),
-    user_id: str = "default",
+    user_id: str | None = None,
     session_id: str = "default",
 ) -> None:
     """通过 canonical interaction loop 处理一轮用户消息。"""
     with _build_service() as service:
-        logger.info("CLI entry invoked user=%s session=%s", user_id, session_id)
         try:
+            if service.settings.policy.restricts_principals:
+                assigned_user = service.settings.default_user
+                if user_id is not None and user_id != assigned_user:
+                    raise EntryPolicyDenied("启用主体名单时，命令行不能切换部署配置的主体。")
+            else:
+                assigned_user = user_id or "default"
+            logger.info("CLI entry invoked user=%s session=%s", assigned_user, session_id)
             result = service.converse(
                 conversation_id=session_id,
                 messages=[ConversationMessage(role="user", content=text.strip())],
-                principal=AuthenticatedPrincipal(tenant_id="personal-agent", user_id=user_id),
+                principal=AuthenticatedPrincipal(tenant_id="personal-agent", user_id=assigned_user),
                 source_platform="cli",
             )
         except EntryPolicyDenied as exc:

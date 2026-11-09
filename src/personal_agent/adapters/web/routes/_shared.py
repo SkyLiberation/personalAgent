@@ -46,8 +46,7 @@ def auth_is_disabled(settings: Settings) -> bool:
 
 
 def require_entry_identity(request: Request, settings: Settings) -> None:
-    policy = settings.policy
-    if (policy.allow_users or policy.deny_users) and getattr(request.state, "principal", None) is None:
+    if settings.policy.restricts_principals and getattr(request.state, "principal", None) is None:
         raise EntryPolicyDenied("主体允许或拒绝名单要求 Web 请求提供已认证身份。")
 
 

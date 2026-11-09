@@ -183,7 +183,8 @@ class WorkspaceChangeService:
                     continue
                 if operation.receipt is None or operation.receipt.status == "unknown":
                     raise ConversationOperationConflict("已有未完成或结果未知的工作区变更")
-                if operation.command.arguments == arguments:
+                if (previous.interaction_run_ref == trace.interaction_run_ref
+                        and operation.command.arguments == arguments):
                     raise ConversationOperationConflict("相同工作区清单已有决定与回执")
         command = WorkspaceChangeCommand(
             scope=ExecutionScope(principal=trace.principal, execution_id=trace.interaction_run_ref,

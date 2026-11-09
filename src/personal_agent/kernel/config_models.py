@@ -391,6 +391,10 @@ class PolicyConfig(_StrictBase):
     deny_scopes: tuple[str, ...] = ()
     require_confirmation_for_high_risk: bool = True
 
+    @property
+    def restricts_principals(self) -> bool:
+        return bool(self.allow_users or self.deny_users)
+
 
 class ReflectionReplaySettings(_StrictBase):
     """跨 run 反思回注闭环（Reflexion）的开关与把关参数。

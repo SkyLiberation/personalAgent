@@ -8,6 +8,7 @@ class FeishuIncomingMessage(BaseModel):
     event_type: str | None = None
     chat_id: str | None = None
     open_id: str | None = None
+    sender_user_id: str | None = None
     user_id: str = "default"
     session_id: str = "default"
     message_id: str | None = None

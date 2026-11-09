@@ -13,10 +13,9 @@ from personal_agent.adapters.web.routes._shared import (
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.policy import EntryPolicyDenied
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, TenantId, interaction_execution_scope
 from personal_agent.orchestration.service import AgentService
 from personal_agent.tools import tool_governance
-from personal_agent.kernel.contracts.scope import interaction_execution_scope
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ class ToolDescriptionResponse(BaseModel):
 class ToolExecuteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tenant_id: str = Field(min_length=1)
+    tenant_id: TenantId
     user_id: str = Field(min_length=1)
     kwargs: dict[str, object] = Field(default_factory=dict)
 

@@ -152,6 +152,9 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
     report["conflicting_decision"] = _send(base, route, {**decision, "decision": opposite}, key)
     report["resumed_turn"] = _send(base, "/api/conversation/turn", resume, key)
     report["post_resume_decision"] = _send(base, route, decision, key)
+    if args.scenario == "reject":
+        new_request = {**request, "messages": [{"role": "user", "content": f"我现在重新提出这个请求。{question}"}]}
+        report["new_request"] = _send(base, "/api/conversation/turn", new_request, key)
     report["calls"] = _calls(args.output)
     writes = [call for call in report["calls"] if call["name"] in WRITES]
     status, receipt = report["decision"]
@@ -162,6 +165,14 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
     if args.scenario in {"reject", "disconnect"}:
         expected = "rejected" if args.scenario == "reject" else "unknown"
         resume_status, resumed = report["resumed_turn"]
+        if args.scenario == "reject":
+            new_status, new_turn = report["new_request"]
+            new_confirmation = new_turn.get("pending_confirmation") or {}
+            if (new_status != 200 or new_turn.get("disposition") != "confirmation_required"
+                    or new_turn["interaction_run_ref"] == run_ref
+                    or new_confirmation.get("changes") != changes
+                    or new_confirmation.get("command_digest") == confirmation["command_digest"]):
+                return False
         return (receipt["status"] == expected and not writes and snapshot(workspace) == report["initial"]
                 and resume_status == 200 and resumed["disposition"] == "limitation"
                 and "pending_confirmation" not in resumed)

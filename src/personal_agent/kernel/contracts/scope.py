@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+TenantId = Annotated[str, Field(min_length=1, pattern=r"^[^:]+$")]
 
 
 class _ScopeModel(BaseModel):
@@ -10,7 +15,7 @@ class _ScopeModel(BaseModel):
 
 
 class AuthenticatedPrincipal(_ScopeModel):
-    tenant_id: str = Field(min_length=1)
+    tenant_id: TenantId
     user_id: str = Field(min_length=1)
 
     @property
@@ -70,5 +75,6 @@ def interaction_execution_scope(
 __all__ = [
     "AuthenticatedPrincipal",
     "ExecutionScope",
+    "TenantId",
     "interaction_execution_scope",
 ]

@@ -52,6 +52,11 @@ class FeishuService(FeishuClientMixin):
         self._processed_lock = threading.Lock()
 
     def process_incoming_message(self, incoming_message: FeishuIncomingMessage) -> str:
+        if self.settings.policy.restricts_principals:
+            sender_id = incoming_message.open_id or incoming_message.sender_user_id
+            if sender_id is None:
+                return "主体名单要求飞书事件包含发送者身份。"
+            incoming_message = incoming_message.model_copy(update={"user_id": sender_id})
         principal = AuthenticatedPrincipal(tenant_id="feishu", user_id=incoming_message.user_id)
         try:
             self.agent_service.authorize_entry(principal, "feishu", preflight=True)
