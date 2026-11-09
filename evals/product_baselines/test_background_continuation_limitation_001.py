@@ -30,6 +30,8 @@ pytest_plugins = (
     "evals.e2e_quality.test_product_capability_outcomes",
 )
 
+from personal_agent.kernel.prompts import get_prompt
+
 _CASE_ID = "BACKGROUND-CONTINUATION-LIMITATION-001"
 _REPETITIONS = 5
 _GRADER_VERSION = "background-continuation-limitation-001-v2-per-sample"
@@ -151,7 +153,7 @@ def test_background_continuation_fails_closed_without_starting_work(
                 "extra_body": settings.structured.extra_body,
                 "timeout_seconds": settings.structured.timeout_seconds,
                 "max_retries": settings.structured.max_retries,
-                "intent_contract": "interaction_intent:background_continuation:v1",
+                "intent_contract": f"interaction_intent:{get_prompt('conversation.interaction_intent').version}",
                 "dataset_revision": "background-continuation-4x5-v2-per-sample",
             }),
             grader_version=_GRADER_VERSION,

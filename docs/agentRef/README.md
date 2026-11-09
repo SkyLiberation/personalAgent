@@ -13,6 +13,7 @@
 | 指令层级、Prompt、Context、压缩、卸载、按需加载 | [Context Engineering](context-engineering.md) | 如何只把当前决策需要的信息送入模型 |
 | 跨轮状态、短期记忆、长期记忆、会话、用户画像 | [记忆与会话](memory-and-session.md) | 什么需要保留、由谁写入、何时召回或失效 |
 | Plan、Todo、任务分解、计划审批、计划修订、需求澄清与用户提问 | [计划与任务管理](planning-and-task-management.md) | 如何对齐目标、按需澄清，并把计划、执行和完成分开 |
+| 模型消息、Schema、原生意图、最终答案、结构化输出、错误和结果投影 | [模型交互协议](model-interaction-protocols.md) | 如何区分模型业务参数、用户正文与 Runtime 事实，怎样结束和恢复原生工具循环 |
 | 工具粒度、通用性、工具数量、按需暴露、工具调用、权限、审批、沙箱、Hook、副作用 | [工具执行与安全](tool-execution-and-safety.md) | 如何选择模型可见工具、限制执行边界并生成事实 |
 | Subagent、Handoff、并行、团队、委托 | [多智能体与委托](multi-agent-and-delegation.md) | 如何隔离角色与上下文，并明确最终结果 owner |
 | 长任务、增量进展、跨上下文接续、Checkpoint、resume、replay、durable execution | [运行恢复与长任务](runtime-recovery.md) | 如何保留目标与有效成果并收敛交付；跨恢复边界时如何避免丢失事实或重复副作用 |
@@ -51,6 +52,6 @@
 
 ## 4. 使用方式
 
-框架类设计先从命中的组件条目定位开源源码及正式调用链，再用官方文档补充说明；按 [EVD 外部参考规则](../devSpec/change-evidence.md#6-外部参考的证据分级)完成固定提交复核、独立实现比较与采纳判断。本目录只拥有来源导航与比较记录，不另设准入流程。
+从命中的组件条目定位来源，源码分析与可实施对照使用[参考开源方案 skill](../../.agents/skills/reference-open-source-solutions/SKILL.md)，证据与采用准入按 [EVD](../devSpec/change-evidence.md#6-外部参考的证据分级)。本目录只拥有来源导航与比较记录，不重复维护分析方法或准入流程。
 
 新增参考对象须提供现有样本未覆盖的能力语义，或替换失效来源；只增加品牌数量而没有新机制的资料不收录。

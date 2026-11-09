@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -13,7 +16,7 @@ class ConsolidateKnowledgeArgs(BaseModel):
 
 
 def build_consolidate_knowledge_tool(
-    use_case: KnowledgeConsolidationUseCase,
+    use_case: KnowledgeConsolidationUseCase, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> BaseTool:
     @tool(
         "consolidate_knowledge",
@@ -33,7 +36,7 @@ def build_consolidate_knowledge_tool(
     def consolidate_knowledge(topic: str, user_id: str = "default"):
         result = use_case.execute(topic=topic, user_id=user_id)
         if not result.ok:
-            return tool_response(tool_failure(result.error or "主题整理失败。"))
+            return tool_response(tool_failure(result.error or prompts.render('tools.knowledge.consolidation_failed')))
         return tool_response(tool_success(result.model_dump(mode="json")))
 
     return consolidate_knowledge

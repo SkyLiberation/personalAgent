@@ -30,7 +30,7 @@ from evals.product_baselines.evidence import (
     ProductEvidenceIdentity,
     canonical_evidence_digest,
 )
-from personal_agent.application.conversation import ConversationTurnView
+from personal_agent.adapters.web.routes.conversation import ConversationTurnResponse
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
@@ -335,7 +335,7 @@ def test_aud_001_policy_audit_stays_with_its_runtime(
             )
             if turn.status != 200:
                 pytest.fail(f"自然对话未交付，HTTP {turn.status}")
-            view = ConversationTurnView.model_validate(turn.payload)
+            view = ConversationTurnResponse.model_validate(turn.payload)
             outcome.user_result_met = view.disposition == "answer" and bool(
                 re.search(r"(?<!\d)42(?!\d)|四十二", view.message.content)
             )

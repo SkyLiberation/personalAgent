@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic
+from typing import Any, Callable, Generic
 
 from personal_agent.capabilities.contracts.model import (
     ModelCallIntent,
+    ModelCapacityCheck,
     ModelInvocationDenial,
     ModelInvocationGrant,
+    ModelInvocationContinuation,
+    ModelResponseSink,
     SkillActivationDecision,
     SkillContextGrant,
     StructuredModelClient,
@@ -44,34 +47,41 @@ class ModelInvocationAdmission:
         model: str,
     ) -> ModelInvocationGrant:
         if not intent.context_projection_ref:
-            raise ModelInvocationDenied(ModelInvocationDenial(
-                call_id=intent.call_id,
-                reason_code="context_projection_missing",
-                message="model invocation requires a context projection reference",
-            ))
+            raise ModelInvocationDenied(
+                ModelInvocationDenial(
+                    call_id=intent.call_id,
+                    reason_code="context_projection_missing",
+                    message="model invocation requires a context projection reference",
+                )
+            )
         if (
             intent.max_output_tokens is not None
             and intent.max_output_tokens > self.max_output_tokens
         ):
-            raise ModelInvocationDenied(ModelInvocationDenial(
-                call_id=intent.call_id,
-                reason_code="output_budget_exceeded",
-                message="model invocation exceeds the configured output budget",
-            ))
+            raise ModelInvocationDenied(
+                ModelInvocationDenial(
+                    call_id=intent.call_id,
+                    reason_code="output_budget_exceeded",
+                    message="model invocation exceeds the configured output budget",
+                )
+            )
         if intent.sensitivity == "restricted" and provider != "local":
-            raise ModelInvocationDenied(ModelInvocationDenial(
-                call_id=intent.call_id,
-                reason_code="restricted_egress_denied",
-                message="restricted context cannot be sent to an external model provider",
-            ))
+            raise ModelInvocationDenied(
+                ModelInvocationDenial(
+                    call_id=intent.call_id,
+                    reason_code="restricted_egress_denied",
+                    message="restricted context cannot be sent to an external model provider",
+                )
+            )
         return ModelInvocationGrant(
             call_id=intent.call_id,
             purpose=intent.purpose,
             provider=provider,
             model=model,
-            allowed_egress="sensitive" if intent.sensitivity == "confidential" else "content",
+            allowed_egress="sensitive"
+            if intent.sensitivity == "confidential"
+            else "content",
             context_projection_ref=intent.context_projection_ref,
-            max_input_tokens=intent.max_input_tokens,
             max_output_tokens=intent.max_output_tokens,
         )
 
@@ -98,18 +108,29 @@ class GovernedModelClient(Generic[StructuredOutputT]):
         """Return the admitted provider transport for composition diagnostics."""
         return self._delegate
 
+    def measure_capacity(self, request: StructuredModelRequest[Any]) -> ModelCapacityCheck | None:
+        """Local measurement performs no model invocation and creates no egress grant."""
+        return self._delegate.measure_capacity(request)
+
     def generate(
         self,
         request: StructuredModelRequest[StructuredOutputT],
+        *,
+        response_sink: ModelResponseSink | None = None,
+        continuation: ModelInvocationContinuation | None = None,
+        before_send: Callable[[], None] | None = None,
     ) -> StructuredModelResponse[StructuredOutputT]:
         projection_ref = str(request.context_projection_ref or "")
         intent = ModelCallIntent(
+            **({"call_id": continuation.invocation_id} if continuation else {}),
             purpose=request.operation,
             operation=request.operation,
             context_projection_ref=projection_ref,
             sensitivity=request.sensitivity,
-            structured_output_contract=request.output_type.__name__,
-            max_input_tokens=max(1, int(request.metadata.get("max_input_tokens", 128_000))),
+            structured_output_contract=(
+                request.output_type.__name__
+                if request.kind == "structured" else request.kind
+            ),
             max_output_tokens=request.max_tokens,
         )
         skill_decision = SkillActivationDecision(
@@ -118,14 +139,21 @@ class GovernedModelClient(Generic[StructuredOutputT]):
         )
         skill_grant = SkillContextGrant(call_id=intent.call_id)
         grant = self._admission.grant(intent, provider=self.provider, model=self.model)
-        self.last_audit = ModelInvocationAudit(intent, skill_decision, skill_grant, grant)
-        response = self._delegate.generate(request)
+        self.last_audit = ModelInvocationAudit(
+            intent, skill_decision, skill_grant, grant
+        )
+        response = self._delegate.generate(
+            request, response_sink=response_sink, continuation=continuation,
+            before_send=before_send,
+        )
         if grant.call_id != intent.call_id or grant.purpose != request.operation:
             raise RuntimeError("model invocation grant scope mismatch")
         return response
 
 
 __all__ = [
-    "GovernedModelClient", "ModelInvocationAdmission", "ModelInvocationAudit",
+    "GovernedModelClient",
+    "ModelInvocationAdmission",
+    "ModelInvocationAudit",
     "ModelInvocationDenied",
 ]

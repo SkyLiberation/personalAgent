@@ -12,6 +12,9 @@ file or env parsing.
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import logging
 from dataclasses import dataclass, field
 
@@ -67,7 +70,8 @@ class PolicyEngine:
     5. Default allow.
     """
 
-    def __init__(self, rules: PolicyRules | None = None) -> None:
+    def __init__(self, rules: PolicyRules | None = None, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
+        self._prompts = prompts
         self._rules = rules or PolicyRules()
 
     @property
@@ -95,22 +99,22 @@ class PolicyEngine:
         rules = self._rules
         if request.user_id and request.user_id in rules.deny_users:
             return PolicyDecision.deny(
-                f"用户 {request.user_id} 被策略禁止执行该动作。",
+                self._prompts.render('policy.deny_user', user_id=request.user_id),
                 rule="override.deny_user",
             )
         if request.source_platform and request.source_platform in rules.deny_sources:
             return PolicyDecision.deny(
-                f"入口来源 {request.source_platform} 被策略禁止。",
+                self._prompts.render('policy.deny_source', source=request.source_platform),
                 rule="override.deny_source",
             )
         if request.tool_name and request.tool_name in rules.deny_tools:
             return PolicyDecision.deny(
-                f"工具 {request.tool_name} 被策略禁止调用。",
+                self._prompts.render('policy.deny_tool', tool_name=request.tool_name),
                 rule="override.deny_tool",
             )
         if request.permission_scope and request.permission_scope in rules.deny_scopes:
             return PolicyDecision.deny(
-                f"权限域 {request.permission_scope} 被策略禁止。",
+                self._prompts.render('policy.deny_scope', scope=request.permission_scope),
                 rule="override.deny_scope",
             )
         return None
@@ -127,7 +131,7 @@ class PolicyEngine:
         if self._is_high_risk_side_effect(request):
             if not request.confirmed:
                 return PolicyDecision.confirm(
-                    f"工具 {request.tool_name} 为高风险操作，需用户确认后执行。",
+                    self._prompts.render('policy.tool_confirmation', tool_name=request.tool_name),
                     rule="tool.high_risk_confirmation",
                 )
             return PolicyDecision.allow(rule="tool.high_risk_confirmed")
@@ -138,7 +142,7 @@ class PolicyEngine:
         if self._is_high_risk_side_effect(request):
             if not request.confirmed:
                 return PolicyDecision.confirm(
-                    f"Agent {request.tool_name} 为高风险委托，需用户确认后执行。",
+                    self._prompts.render('policy.agent_confirmation', agent_id=request.tool_name),
                     rule="agent.high_risk_confirmation",
                 )
             return PolicyDecision.allow(rule="agent.high_risk_confirmed")
@@ -147,7 +151,7 @@ class PolicyEngine:
     def _evaluate_react_guard(self, request: PolicyInput) -> PolicyDecision | None:
         if request.tool_name and request.tool_name not in request.react_allowed_tools:
             return PolicyDecision.deny(
-                f"工具 {request.tool_name} 不在当前 ReAct 允许列表中。",
+                self._prompts.render('policy.react_not_allowed', tool_name=request.tool_name),
                 rule="react.not_allowed",
             )
         if react_autonomy_blocked(
@@ -156,7 +160,7 @@ class PolicyEngine:
             side_effects=request.side_effects,
         ):
             return PolicyDecision.deny(
-                f"工具 {request.tool_name} 不允许在 ReAct 自主执行中调用。",
+                self._prompts.render('policy.react_blocked', tool_name=request.tool_name),
                 rule="react.blocked_side_effect",
             )
         return None
@@ -177,12 +181,12 @@ class PolicyEngine:
         subject = request.user_id
         if owner is not None and subject is not None and owner != subject:
             return PolicyDecision.deny(
-                f"资源 {request.resource or ''} 不属于用户 {subject}。",
+                self._prompts.render('policy.owner_mismatch', resource=request.resource or '', user_id=subject),
                 rule="memory.owner_mismatch",
             )
         if request.action == "memory_delete" and not request.confirmed:
             return PolicyDecision.confirm(
-                "删除长期记忆需要确认后执行。",
+                self._prompts.render('policy.memory_delete_confirmation'),
                 rule="memory.delete_confirmation",
             )
         return PolicyDecision.allow(rule=f"memory.{request.action}")
@@ -193,12 +197,12 @@ class PolicyEngine:
         rules = self._rules
         if rules.allow_sources and request.source_platform not in rules.allow_sources:
             return PolicyDecision.deny(
-                f"入口来源 {request.source_platform} 不在允许列表中。",
+                self._prompts.render('policy.source_not_allowed', source=request.source_platform),
                 rule="entry.source_not_allowed",
             )
         if rules.allow_users and request.user_id not in rules.allow_users:
             return PolicyDecision.deny(
-                f"用户 {request.user_id} 不在允许列表中。",
+                self._prompts.render('policy.user_not_allowed', user_id=request.user_id),
                 rule="entry.user_not_allowed",
             )
         return PolicyDecision.allow(rule="entry.default")

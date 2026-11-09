@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from personal_agent.adapters.web.context import WebAppContext
 from personal_agent.adapters.web.routes.audit import register_audit_routes
+from personal_agent.adapters.web.routes.artifacts import register_artifact_routes
 from personal_agent.adapters.web.routes.conversation import register_conversation_routes
 from personal_agent.adapters.web.routes.digest import register_digest_routes
 from personal_agent.adapters.web.routes.entry import register_entry_routes
@@ -19,6 +20,7 @@ from personal_agent.adapters.web.routes.knowledge import register_knowledge_rout
 
 def register_api_routes(app: FastAPI, context: WebAppContext) -> None:
     settings = context.settings
+    register_artifact_routes(app, settings=settings, artifact_service=context.service.artifact_service)
     register_system_routes(app, settings=settings, service=context.service)
     register_note_routes(app, settings=settings, service=context.service)
     register_digest_routes(app, settings=settings, service=context.service)

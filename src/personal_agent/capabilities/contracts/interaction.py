@@ -13,6 +13,7 @@ class InteractionToolDefinition(BaseModel):
     name: str
     description: str
     input_schema: dict[str, object]
+    strict: bool = True
     read_only: bool
     planning_safe: bool
     safely_retryable: bool

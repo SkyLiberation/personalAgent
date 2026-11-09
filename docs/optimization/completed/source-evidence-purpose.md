@@ -30,4 +30,4 @@ Source 曾因草稿没有显式排除补充输入流程而要求澄清用户授�
 
 原始失败、追问和诊断分别封存在[实际c4拒绝](../../../.tmp/source-post-read-c4-repair-20261011/REPORT.json)、[中立依据](../../../.tmp/source-c4-decision-basis-20261011/REPORT.json)、[v18完整失败](../../../.tmp/source-required-relation-20261011/REPORT.json)和[裁剪诊断](../../../.tmp/source-a6-input-role-20261011/REPORT.json)。可见推理辅助定位，不替代完整输入验收或证明隐藏因果。
 
-生产为 Source v19、writer v21，原正式 target 已执行，用户结果 0/1。新 P1 的结构恢复前后分别发现缺证、返回空发现，归入 `insufficient_evidence` 的前提及引用支持；标题的实际决策来源仍待定位。后续 v20 候选和用户指定的 A2 回退结果由[唯一复审](source-proof-boundary-isolation.md#失败尝试与取舍)拥有，本页保留原三项 3/3 的身份，不追加试验流水。
+当轮生产为 Source v19、writer v21，原正式 target 用户结果 0/1。P1 在结构恢复前发现缺证，恢复后返回空发现，重新打开必要前提及引用支持边界。后续定位、v20 与 A2 回退结果，以及统一核验的解决结论由[证据边界记录](source-proof-boundary-isolation.md#失败尝试与取舍)拥有。本页仅保留原三项 3/3 的身份与采用经验。

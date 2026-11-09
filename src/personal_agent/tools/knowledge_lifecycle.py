@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -85,7 +88,7 @@ def build_list_recent_notes_tool(memory) -> BaseTool:
     return list_recent_notes
 
 
-def build_get_note_tool(memory) -> BaseTool:
+def build_get_note_tool(memory, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> BaseTool:
     @tool(
         "get_note",
         description=(
@@ -99,7 +102,7 @@ def build_get_note_tool(memory) -> BaseTool:
     def get_note(note_id: str, user_id: str = "default", include_content: bool = True):
         note = memory.get_note(note_id, user_id=user_id)
         if note is None:
-            return tool_response(tool_failure("未找到该用户可访问的笔记。", error_kind="invalid_param"))
+            return tool_response(tool_failure(prompts.render('tools.knowledge.note_unavailable'), error_kind="invalid_param"))
         payload = _note_summary(note)
         if include_content:
             payload["content"] = note.body.content

@@ -1,5 +1,9 @@
 # 环境变量
 
+回答结果模块由 `PERSONAL_AGENT_ANSWER_RESULT` 的 JSON 配置装配，例如 `{"writer":"direct"}`；合法 writer 为 `direct`、`claims`，默认 `claims`。目标和结果核验统一由 [`config/feature_flags.toml`](../config/feature_flags.toml) 的 `features.goal_verification`、`features.answer_verification` 控制，默认均开启。`PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 可指定另一份 TOML；未指定时从进程工作目录的 `config/feature_flags.toml` 读取。文件缺失、格式错误、未知键、缺项或非布尔值时启动失败。旧 JSON 的 `verification` 字段已移除，继续传入会被拒绝。
+
+开关在进程启动时读取，经 Runtime 注入并在 Journal 的运行及对话边界绑定。修改配置后使用新进程和独立会话；恢复不能切换实验臂。关闭核验不生成通过事实，不提供完整核验或发布资格；两类核验的适用范围、关闭语义和比较条件由[实验组 1](ablation/experiment.md)拥有，决定见 [ADR 0050](adr/0050-verification-feature-flags.md)。
+
 参考 [.env.example](../.env.example)。
 
 ## 基础配置
@@ -47,6 +51,14 @@ PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=2000000
 token 边界按已提交用量检查，最后一次模型请求可能使实际累计量超过上限。
 已有应用进程需要重启以重新加载配置；未配置上述环境变量时，代码默认仍为 8 轮、12 次工具和 32,000 tokens。
 历史评测继续保留原配置身份，新 profile 不等同于答案质量已验收。
+
+## 通用 Python 执行许可
+
+`PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG` 指向显式部署 JSON，包含 `authorization` 与 Docker `endpoint`；其结构由 `PythonExecutionDeploymentConfig` 校验。许可约束主体、专用对话、固定镜像及执行限制、绝对到期和任务总额度，详细字段及失败行为由 [Python Spec §3.5](optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配)拥有。
+
+Runtime 复用现有 `execute_python`，未匹配主体／对话的请求不会获得该工具。与 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 同时配置时拒绝启动；无这两种配置时不装配 Python。重启须提供原授权身份，同一对话的新 run 聚合原实际消费，不因新 run 获赠总额度。普通 per-run 预算继续适用，模型调用前再取任务剩余量；在途调用的实际用量仍如实记录。通用分析保持普通 Final／适用核验，不绑定检索冻结和 test。
+
+固定镜像的构建及版本检查见 [`scripts/python_execution/README.md`](../scripts/python_execution/README.md)。配置和代码已接入，真实 target 结果由[研究 Spec](optimization/to_verify/verify_results/longds-analysis.md#1-本轮执行计划与固定配置)和[评测盘点](evals/02-current-case-inventory.md)分别记录，配置存在不等于通过验收。
 
 ## 飞书配置
 
@@ -134,11 +146,14 @@ PERSONAL_AGENT_KNOWLEDGE_GAP_RECENT_NOTE_LIMIT=30
 ## LLM 配置
 
 ```env
+MIMO_API_KEY=your_token_plan_key
 STRUCTURED_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-STRUCTURED_API_KEY=your_mimo_key
+STRUCTURED_PROVIDER=mimo
+STRUCTURED_API_KEY=${MIMO_API_KEY}
 STRUCTURED_MODEL=mimo-v2.6-flash
 STRUCTURED_OUTPUT_TRANSPORT=json_object
 STRUCTURED_EXTRA_BODY={"thinking":{"type":"enabled"}}
+PERSONAL_AGENT_PROMPT_LANGUAGE=zh
 PERSONAL_AGENT_STRUCTURED_TIMEOUT_SECONDS=480
 PERSONAL_AGENT_STRUCTURED_MAX_RETRIES=2
 
@@ -157,16 +172,57 @@ PERSONAL_AGENT_EXTRACT_MODEL=${STRUCTURED_MODEL}
 
 `STRUCTURED_*` 是生成式模型的 canonical 配置。直接回答、结构化决策、Graphiti 生成、
 LangExtract 在没有显式 Adapter override 时均从这里解析；当前部署统一使用
-`mimo-v2.6-flash`。embedding 和 transcription 不属于生成式模型切换，继续使用
+`MiniMax-M3.1-Flash`，使用既有中国区订阅端点`https://api.minimax.cn/v1`和`adaptive + medium`。本机`MINIMAX_API_KEY`与评分器使用的`MIMO_API_KEY`独立；别名须位于相应凭据定义之后，避免dotenv按文件顺序展开为空。embedding 和 transcription 不属于生成式模型切换，继续使用
 `EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
 
-主 `StructuredModelClient` 链路中的 MiMo 使用[官方 API 契约](https://mimo.mi.com/docs/en-US/api/chat/openai-api)支持的 `json_object`，并通过 `STRUCTURED_EXTRA_BODY`
-开启思考模式。`JsonObjectStructuredAdapter` 将 Pydantic Schema 作为版本化中文 system
+### Prompt 语言与独立 LongDS 评分
+
+`PERSONAL_AGENT_PROMPT_LANGUAGE=zh` 为默认，`en` 选择完整英文资源；Root 显式装配不可变 Catalog，重建 Runtime 后生效。新增语言只扩展资源注册，业务调用方不按语言分支。资源失配或英文缺元数据说明时拒绝，不能静默混回中文。用户题面、历史回答和执行事实不翻译。
+
+LongDS 评分独立使用 `LONGDS_JUDGE_PROVIDER`、`LONGDS_JUDGE_MODEL`、`LONGDS_JUDGE_BASE_URL`、`LONGDS_JUDGE_API_KEY`、`LONGDS_JUDGE_EXTRA_BODY`，当前模型为 `mimo-v2.6-pro`，其余可选额度、超时和容量见 [.env.example](../.env.example)。模型或端点替换后须重新取得官方正反例资格；不能沿用旧资格或混比分数。评分逻辑不再写死品牌，配置身份记录实际Policy参数及端点摘要，不含密钥。
+
+### Provider 选择与参数绑定
+
+`STRUCTURED_PROVIDER` 内置 `minimax`、`mimo`、`deepseek`、`openai_compatible`，也接受已注册策略的 ID（小写字母开头，其后为小写字母、数字、下划线或连字符）。省略时按官方精确 hostname 识别；自定义代理域名应显式声明实际 provider。显式声明与已知官方域名冲突时拒绝加载，未注册 ID 在策略装配时拒绝。扩展入口见[架构组合](architecture/cross-cutting.md#2-模型调用的实际组合)。`PERSONAL_AGENT_LLM_PROVIDER` 是既有回答入口配置，不承担这个协议选择职责。修改配置后重建 Runtime，正在进行的原生工具历史和恢复仍绑定原 host/model。
+
+默认生成消费者继承 canonical 配置。以下可选参数分别属于独立的实际 endpoint/model 绑定；同一绑定下只有未设置的值才继承，`{}` 清空附加参数，非法 JSON 或非对象直接拒绝：
+
+| 消费者 | 显式 provider | 独立附加参数 |
+| --- | --- | --- |
+| 普通文本、工具与图片 | `OPENAI_PROVIDER` | `OPENAI_EXTRA_BODY` |
+| Graphiti | `PERSONAL_AGENT_GRAPHITI_LLM_PROVIDER` | `PERSONAL_AGENT_GRAPHITI_LLM_EXTRA_BODY` |
+| LangExtract | `PERSONAL_AGENT_EXTRACT_PROVIDER` | `PERSONAL_AGENT_EXTRACT_EXTRA_BODY` |
+
+覆盖 endpoint 或主模型后不继承另一绑定的 `STRUCTURED_EXTRA_BODY`。图片的 `OPENAI_VISION_MODEL`、Client 的 `model_override` 若与其配置主模型不同，也不自动继承主模型附加参数，使用该模型自己的服务方默认值。调用方显式 effort 高于当前绑定的部署默认。附加参数不能覆盖 model、messages、tools、输出额度、采样等受管字段。
+
+MiniMax/MiMo 的输出额度投影为 `max_completion_tokens`，DeepSeek 使用 `max_tokens`；数值及省略额度的语义保持。MiniMax 当前 M3.1 Flash 使用 `adaptive` 和 `low/medium/high/xhigh/max`，不支持关闭思考；MiMo Chat Completions 使用 `enabled/disabled`，不接受没有官方契约的 effort 档位；DeepSeek 的档位与思考模式按其独立策略校验。结构化输出方式仍由 `STRUCTURED_OUTPUT_TRANSPORT` 明确配置。实现与验证边界见[策略重构记录](optimization/completed/model-provider-extensibility.md)。
+
+从 MiniMax 切到已内置的 MiMo 时，更新 canonical 的 `STRUCTURED_PROVIDER=mimo`、`STRUCTURED_BASE_URL`、`STRUCTURED_API_KEY`、`STRUCTURED_MODEL`，把 `STRUCTURED_EXTRA_BODY` 改成该模型支持的参数，例如 `{"thinking":{"type":"enabled"}}`，删除 MiniMax 的 effort。核对独立 `OPENAI_*`、Graphiti、LangExtract 覆盖值以及绑定 host/model 的容量声明，再重建 Runtime。策略随配置自动切换，已有消费者不修改代码；正在运行的任务仍使用原身份。
+
+主 `StructuredModelClient` 链路继续显式选择 `json_object`。`JsonObjectStructuredAdapter` 将 Pydantic Schema 作为实例语言的版本化 system
 instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首次校验失败时只允许一次完整重写，
 不会自动降级到 `json_schema` 或 plain text。`json_schema` 仍作为其他明确支持原生 strict Schema
 的 Provider capability profile 保留，必须由部署显式选择。
 
-2026-09-26 按用户要求统一切换到 MiMo v2.6 Flash；当前本地配置使用 MiMo Token Plan 接口并开启 thinking，模型为 `mimo-v2.6-flash`，单请求等待时间为 480 秒。密钥只配置于本地环境，不进入文档或验证归档；历史
+2026-10-27按用户要求切换过MiMo Flash；2026-10-28又按用户要求切回`MiniMax-M3.1-Flash`并重新测试task2，计划由[切回MiniMax](optimization/to_verify/prompt-language-selection.md#12-切回-minimax-后重新执行-task22026-10-28)拥有。沿用现有`STRUCTURED_*`、Provider Policy、OpenAI兼容Adapter及配置装配，不增加生产模块。中国区订阅接口和模型标识按 [MiniMax 官方接入说明](https://platform.minimax.cn/docs/m-plan/other-tools)核对，接口为 `https://api.minimax.cn/v1`。思考沿用2026-10-24已选定的`adaptive + medium`；保留已有请求输出额度、超时和重试策略，容量声明绑定MiniMax host／model；原已核对容量为1,000,000上下文、524,288最大输出，来源为[官方 SDK 文档](https://platform.minimax.cn/docs/api-reference/text-openai-api)和[接口参数](https://platform.minimax.cn/docs/api-reference/text-chat-openai)。独立MiMo Pro评分器及其容量、凭据和有效资格保持。密钥仅放入被Git忽略的本地`.env`，示例和归档不保存密钥。
+
+首次模型切换先核对 `Settings.from_env()` 中主模型、直接回答、Graphiti 和 LangExtract 的解析身份，再用实际 JSON Adapter 做一次真实环境连通性检查：中文输入、最多 4,096 输出 tokens、单次最多 120 秒、零 SDK／服务／结构重试，失败即停止。该检查只验证凭据和结构化调用，不计完整 Product E2E 或长任务成绩。当时发现 `HistoryCompactor` 的关闭思考覆盖与新模型冲突，现按用户后续指令移除该局部政策，统一继承部署参数。
+
+上述连通性检查已通过：一次实际请求返回模型名 `MiniMax-M3.1-Flash`，typed JSON 校验通过、403 tokens、未知零，约 2.23 秒。各生成式 Adapter 的配置身份一致，尚未逐一执行其业务集成；完整长任务没有重跑。配置和响应原件见[切换验证](../.tmp/minimax-switch-20261023/report.json)，当前用例边界由[评测盘点](evals/02-current-case-inventory.md#2026-10-23-minimax-配置切换与真实环境检查)拥有。
+
+### 统一思考参数（2026-10-23）
+
+历史MiniMax档位于2026-10-24按用户要求由 low 调为 medium，thinking.type 保持 adaptive；`.env` 与 `.env.example` 的 canonical STRUCTURED_EXTRA_BODY 同步。同一实际绑定的配置投影继承该档位，独立绑定按上节解析，显式调用参数的既有优先级保持。官方 [SDK 文档](https://platform.minimax.cn/docs/api-reference/text-openai-api)支持 medium；新完整36轮运行的判据、预算、恢复与状态由 [MiniMax medium 的完整36轮验证](optimization/to_verify/verify_results/longds-analysis.md#5-minimax-medium-的完整36轮验证)拥有。下文 low 的接入和2/2实发证据是历史身份，不重标为 medium 验证。
+
+2026-10-23用户要求 MiniMax 部署统一开启思考、深度为 `low`。当时实发请求采用省略深度的默认值，摘要还带 `thinking.type=disabled`；普通回答、Graphiti 和 LangExtract 没有消费 canonical 附加参数，单改 `.env` 不足以实现统一。架构保持现有模型 Port、Adapter、Graphiti 工厂和 LangExtract SDK 包装；`STRUCTURED_EXTRA_BODY` 是唯一部署来源，配置加载器只向现有消费者生成只读配置投影，不新增独立环境变量、路由或服务。
+
+实施顺序：先保存当前源码与既有实际请求；在 `OpenAIConfig`、`LangExtractConfig` 加入外部服务方参数投影并共用原配置解析，Graphiti 工厂直接传同一来源；移除摘要及 Graphiti 的局部关闭思考逻辑；最后更新 SDK 投影和容量检查。主 Adapter 将深度投影到 SDK 原生 `reasoning_effort`，显式请求字段优先于部署默认，MiniMax 沿推荐的 `max_completion_tokens` 传递相同输出额度。独立评审核对到正式图片附件描述仍直调 SDK，也须在现有 `ArtifactService._describe_image` 边界消费 `OpenAIConfig.extra_body`，否则该生成式调用仍使用服务方默认深度；本次只透传同源参数，不改变其输出额度、错误或附件契约。已核对安装的 LangExtract：其 SDK 参数构造只传白名单字段，构造函数收到 `extra_body` 并不会发出。因此只在既有 LangExtract 包装中增加明确的 SDK 子类，沿原参数构造点补入服务方扩展及默认深度，显式运行深度仍优先；不修改依赖包或采用运行时 monkey patch。容量检查只追加已核对的 `thinking.type=adaptive`，不放宽受管字段覆盖和非文本载荷拒绝。当时所有调用统一为 `adaptive + low`；当前按同一来源继承 `adaptive + medium`，配置副本与错误反馈不能清空该值；原重试、计量、Prompt、Schema、权限、摘要原件和激活机制保持。
+
+验证先核对真实配置及各 SDK 构造的实际参数，保留候选前拒绝证据；再执行两个完整真实 SDK 阶段：首次 MiniMax 连通性请求和已封存的真实历史摘要请求。前者最多 4,096、后者沿原 8,192 输出上限，最多两次物理发送、500,000 新 tokens、15 分钟；单请求分别 120／480 秒，SDK／服务／格式重试为零，未知用量、截断或任一校验失败即停止。请求保留实际材料，仅调整本次声明的模型配置和等额输出字段投影，保存实发 HTTP 正文、响应和校验和。该验证只验参数交接及相应 typed 输出；摘要激活、后继消费、语义保真、Graphiti／LangExtract 业务集成及完整 LongDS 不由这两次调用证明。归档为 `.tmp/minimax-thinking-low-20261023/`，结果另登记评测盘点。
+
+已按原计划完成两次实际请求，最终 HTTP 正文均为 `adaptive + low`，typed 输出 2/2 合法；完整历史摘要在原 8,192 上限内返回正文，未发生参数冲突或截断。候选前容量检查拒绝已解除，受管字段覆盖仍被拒绝；Graphiti 工厂、LangExtract 参数构造及直接回答参数已核对，独立评审发现的图片附件描述遗漏已补齐并复核关闭。当前主路径、摘要、Graphiti、LangExtract 和图片描述均消费同一配置，不再有局部关闭思考的生产代码；各业务集成不由构造检查替代。实际成本、时延与边界由[评测盘点](evals/02-current-case-inventory.md#2026-10-23-minimax-统一思考与-low-验证)拥有。
+
+2026-09-26 曾按用户要求统一切换到 MiMo v2.6 Flash，后续使用 MiMo Token Plan 接口，单请求等待时间为 480 秒。相关历史
 [DeepSeek 对照](evals/02-current-case-inventory.md#thinking-与输出额度的隔离诊断)保留原配置身份。
 截至 2026-09-29，当前使用的 [MiMo Chat Completions API](https://mimo.mi.com/docs/en-US/api/chat/openai-api) 对该模型只公布 `thinking.type=enabled|disabled`，没有思考强度档位或 `reasoning_effort` 参数。[MiMo Responses API](https://mimo.mi.com/docs/en-US/api/chat/responses) 虽接受 `reasoning.effort` 的 `none`、`minimal`、`low`、`medium`、`high` 等值，官方明确说明 `none` 关闭思考，其余有效值当前均以相同方式开启思考，不能调节实际强度；`max_completion_tokens` 只限制思考与正文的总输出量。本轮研究验证维持现有 `enabled` 配置。
 诊断输出额度独立声明，不通过 `extra_body` 覆盖调用方的 typed 输出预算。已有应用进程需

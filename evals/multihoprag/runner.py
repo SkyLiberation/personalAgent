@@ -10,6 +10,8 @@ an in-process cache plus an on-disk manifest reused via ``--reuse-graphiti``.
 """
 from __future__ import annotations
 
+from personal_agent.infra.model_providers import build_provider_policy
+
 import argparse
 import json
 import math
@@ -441,7 +443,7 @@ class GraphitiRetrievalStrategy:
                 )
             }
         )
-        graph_store = GraphitiStore(settings)
+        graph_store = GraphitiStore(settings, provider_policy=build_provider_policy(base_url=settings.graphiti.llm_base_url or settings.openai.base_url, provider=settings.graphiti.llm_provider))
         if not graph_store.configured():
             raise RuntimeError("Graphiti is not configured. Check Neo4j, OpenAI, and embedding settings.")
 

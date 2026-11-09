@@ -244,7 +244,7 @@ LangGraph checkpoint。
 
 ```json
 [
-  {"name": "capture_url", "description": "抓取网页正文", "exposure": "public_agent"},
+  {"name": "capture_url", "description": "抓取网页正文", "exposure": "workflow_activity"},
   {"name": "graph_search", "description": "搜索个人知识图谱", "exposure": "public_agent"}
 ]
 ```
@@ -301,11 +301,33 @@ LangGraph checkpoint。
 }
 ```
 
-响应由 `ConversationTurnView` 定义，包含 `interaction_run_ref`、`conversation_id`、
+Web 响应由 `ConversationTurnResponse` 定义，包含 `interaction_run_ref`、`conversation_id`、
 `disposition` 和一条 assistant `message`。保存或删除需要确认时返回 `pending_confirmation`。
 `disposition` 可能为 `answer`、`clarification_required`、`confirmation_required`、`plan_ready`、
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
+
+Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、reason_code、failure_stage、retryable；可得时附 provider_status_code／provider_response_complete。模型输出协议无效投影本地 502，请求超时 504，实际临时过载 503，本地实现或持久化异常 500；明确输入校验、权限和冲突仍沿各自契约。**本地 HTTP 状态不是上游实际状态。** 例如完整模型响应无法按当前输出协议消费时：
+
+```json
+{
+  "detail": {
+    "message": "模型输出不符合当前协议，无法完成本次请求。",
+    "reason_code": "structured_output_invalid",
+    "failure_stage": "provider_structured_decode",
+    "retryable": false,
+    "provider_response_complete": true
+  }
+}
+```
+
+缺少上游状态时省略该字段，不以本地 502 代填。此投影不含模型原文、内部异常栈或密钥，依据见 [ADR 0045](adr/0045-native-intent-loop-and-recorded-model-output.md)。
+
+请求可附 `input_artifact_refs`（默认为空），仅接受当前认证主体拥有的确切 Artifact 引用。首次调用前校验；同 run 恢复要求主体、会话、`messages` 与有序引用全部一致。
+
+响应的 `resources` 每项为 `{resource, download_url}`：`resource` 是原 Artifact 元数据，`download_url` 是正式下载路径，上传响应复用同一包装。内部 `ConversationTurnView` 保持原元数据类型，文件引用不包含宿主路径。鉴权关闭且主体非默认用户时，URL 带编码后的 `user_id`；鉴权开启时由请求凭据确定主体。
+
+研究实验只在许可部署、主体和开发原件绑定后启用，实现及验收状态见[研究 Spec](optimization/to_verify/knowledge-decision-delivery.md)。
 
 知识读取与生命周期能力的部分入口：
 
@@ -316,6 +338,7 @@ LangGraph checkpoint。
 ### `GET /api/entry/stream`
 
 SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，在一次 turn 完成后将最终文本分块发送为 answer delta；当前不是模型 token 原生流。
+失败时 `event: error` 的 data 使用同一安全错误对象；响应头已发送后不改变 HTTP 状态。界面显示该 message，真实网络断开才显示通用中断文案。
 最终 `done` 事件包含 `disposition`、`interaction_run_ref`、`conversation_id`，以及适用时的
 `pending_confirmation`。该入口不创建后台调查或 Task/GoalGraph，也不提供旧计划步骤和
 checkpoint snapshot。
@@ -347,9 +370,15 @@ Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/
   exact-span 保存 Command；path 中的 `interaction_run_ref` 与 authenticated principal 定位唯一
   operation，confirm 还必须提供 `confirmation_ref`。内部 digest 由服务端从 Command 读取。
 
+### Artifact 原件与成果内容
+
+`POST /api/artifacts/upload` 使用 multipart 的 `file`（认证关闭时可附 `user_id`）保存原件，返回 `resource` 元数据及 `download_url`，不摄入知识。
+
+`GET /api/artifacts/{resource_id}/revisions/{revision}` 按当前认证主体恢复确切引用，校验原始字节摘要与长度后下载。缺资源或非 owner 返回 `404`，非法引用或完整性失败返回 `422`；下载返回已核验字节，不暴露存储路径。
+
 旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
 `POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用
-`POST /api/knowledge/ingest-upload`；Conversation 恢复事实由 Interaction journal 与公开
+`POST /api/knowledge/ingest-upload`，原件上传使用上述 Artifact 入口；Conversation 恢复事实由 Interaction journal 与公开
 `interaction_run_ref` 合约拥有，不再暴露 LangGraph run snapshot。
 
 ---

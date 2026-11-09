@@ -25,6 +25,7 @@ SideEffectType = Literal[
     "none",
     "read_local",
     "read_longterm",
+    "write_local",
     "external_network",
     "write_longterm",
     "delete_longterm",

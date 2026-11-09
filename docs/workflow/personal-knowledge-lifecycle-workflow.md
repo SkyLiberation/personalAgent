@@ -49,4 +49,4 @@ Capture 管理笔记、去重、chunk 和适用的复习、图谱同步；Person
 
 ## 验证依据
 
-用户结果、引用保真、身份隔离、冲突展示及问答零写入，按[当前用例盘点](../evals/02-current-case-inventory.md)中的实际证据分别验收。对象存在、投影任务生成和历史回答 DTO 中的 `evidence_coverage/missing_sections` 不作为当前产品完成判据。新验证遵守 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)，历史单元测试只读保留。
+用户结果、引用保真、身份隔离、冲突展示及问答零写入，按[当前用例盘点](../evals/02-current-case-inventory.md)中的实际证据分别验收。对象存在和投影任务生成只说明对应阶段已执行；验证分工遵守 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)。

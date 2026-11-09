@@ -1,6 +1,9 @@
 """Run a fixed ripgrep executable on authorized stdin; never invoke a shell."""
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import json
 import os
 import shutil
@@ -13,14 +16,16 @@ from personal_agent.application.conversation.artifact_search import TextMatch
 
 class RipgrepArtifactSearch:
     def __init__(self, *, executable: str | None = None, timeout_seconds: float = 10,
-                 max_output_bytes: int = 8 * 1024 * 1024):
+                 max_output_bytes: int = 8 * 1024 * 1024,
+                 prompts: PromptCatalog = DEFAULT_PROMPTS):
+        self._prompts = prompts
         self._executable = executable or shutil.which("rg")
         self._timeout = timeout_seconds
         self._max_output_bytes = max_output_bytes
 
     def find(self, text: str, *, keyword: str, regex: bool) -> tuple[TextMatch, ...]:
         if not self._executable:
-            raise RuntimeError("未安装 ripgrep，无法执行正文搜索。")
+            raise RuntimeError(self._prompts.render('artifact_search.engine_missing'))
         args = [self._executable, "--json", "--no-config", "--text", "--multiline", "--ignore-case"]
         if not regex:
             args.append("--fixed-strings")
@@ -42,13 +47,13 @@ class RipgrepArtifactSearch:
                     while chunk := process.stdout.read1(65536):
                         output.extend(chunk)
                         if len(output) > self._max_output_bytes:
-                            raise RuntimeError("搜索引擎输出超过容量，未返回不完整匹配；请缩小搜索表达式。")
+                            raise RuntimeError(self._prompts.render('artifact_search.output_limit'))
                     code = process.wait()
                     if expired.is_set():
-                        raise TimeoutError("正文搜索超时，未将未完成搜索解释为零匹配。")
+                        raise TimeoutError(self._prompts.render('artifact_search.timeout'))
                     if code not in (0, 1):
                         errors.seek(0)
-                        raise ValueError("搜索表达式或引擎执行失败：" + errors.read(4096).decode("utf-8", errors="replace"))
+                        raise ValueError(self._prompts.render('artifact_search.failed') + errors.read(4096).decode("utf-8", errors="replace"))
                 finally:
                     timer.cancel()
                     if process.poll() is None:

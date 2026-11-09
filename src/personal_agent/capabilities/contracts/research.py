@@ -1,12 +1,14 @@
 """Immutable claims and model-owned research judgments for Conversation."""
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from personal_agent.capabilities.contracts.verification import (
     ConversationAnswerSegment,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 
 class ResearchClaimContent(ConversationAnswerSegment):
@@ -66,10 +68,11 @@ class ResearchSupportFinding(BaseModel):
     evidence_ids: tuple[str, ...]
 
     @model_validator(mode="after")
-    def target_matches_category(self):
+    def target_matches_category(self, info: ValidationInfo):
+        prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         goal_gap = self.category == "requirement_not_satisfied"
         if goal_gap != isinstance(self.target, ResearchRequirementTarget):
-            raise ValueError("目标缺项须定位原验收编号；其他错误须定位当前 claim 片段或回答段落。")
+            raise ValueError(prompts.render('research_validation.target_category'))
         return self
 
 

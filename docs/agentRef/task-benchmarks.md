@@ -104,7 +104,7 @@ GitHub REST 在取得 π-Bench tree 后返回 403 rate limit，后续两个仓�
 
 ## 8. BEIR/SciFact 检索实验材料
 
-2026-10-18 为[公开检索方案复现实验候选](../optimization/to_verify/knowledge-decision-delivery.md#21-首个用例公开检索方案复现实验)取得 8 个 BEIR 源文件、4 个数据文件、2 份数据卡，以及向量模型元数据和模型卡。固定 URL、提交及 SHA-256 见[来源清单](../../.tmp/retrieval-experiment-scenario-20261018/source-manifest.json)，完整数据的结构与引用检查见[数据审计](../../.tmp/retrieval-experiment-scenario-20261018/dataset-audit.json)。只进行下载、读取和结构审计，未执行检索、下载模型权重、调用模型或运行产品 E2E。
+2026-10-18 为[公开检索方案复现实验候选](../optimization/to_verify/research-experiment-acceptance.md#11-首个用例公开检索方案复现实验)取得 8 个 BEIR 源文件、4 个数据文件、2 份数据卡，以及向量模型元数据和模型卡。固定 URL、提交及 SHA-256 见[来源清单](../../.tmp/retrieval-experiment-scenario-20261018/source-manifest.json)，完整数据的结构与引用检查见[数据审计](../../.tmp/retrieval-experiment-scenario-20261018/dataset-audit.json)。只进行下载、读取和结构审计，未执行检索、下载模型权重、调用模型或运行产品 E2E。
 
 **数据来源有正式学术依据，Agent 任务规格由本工程设计。** SciFact 由华盛顿大学与 Allen Institute for Artificial Intelligence 团队发布，对应 [EMNLP 2020 论文](https://aclanthology.org/2020.emnlp-main.609/)及[原始仓库](https://github.com/allenai/scifact/tree/68b98a56d93e0f9da0d2aab4e6c3294699a0f72e)。原任务包含 1,409 条专家编写的科学声明及摘要证据、关系和理由标注。BEIR 将其纳入统一检索格式，对应 [NeurIPS 2021 Datasets and Benchmarks 论文](https://datasets-benchmarks-proceedings.neurips.cc/paper/2021/hash/65b9eea6e1cc6bb9f0cd2a47751a186f-Abstract-round2.html)。本工程实际使用 BeIR 发布的下述固定 Hugging Face 数据文件；相关性标注服务于检索评分，不能直接作为科学声明真实性或完整回答正确性的标签。
 
@@ -116,7 +116,7 @@ GitHub REST 在取得 π-Bench tree 后返回 403 rate limit，后续两个仓�
 | --- | --- | --- |
 | [BEIR](https://github.com/beir-cellar/beir/tree/ef83d29307061c65d04b035b4f4e7c18bd8374af)，`ef83d29307061c65d04b035b4f4e7c18bd8374af`，取得 Apache-2.0 LICENSE | [GenericDataLoader](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/datasets/data_loader.py)按 qrels split 筛选查询；[EvaluateRetrieval](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/evaluation.py#L14)调用检索器并使用 `pytrec_eval` 计算 NDCG、MAP、Recall 与 Precision。2026-10-20 补核：默认 `k_values=[1,3,5,10,100,1000]`，`top_k=max(k_values)` 实际传给 `retriever.search()`，不能把默认行为描述成 top-100 | 它是检索基准及执行代码，不是 Agent 长任务 benchmark；只运行它不能证明 personalAgent。指标实现以实际返回的评分集合求平均，本工程候选须另检查所需查询集合完整，不能静默漏查后缩小分母；本轮未修改或运行该实现 |
 | 同一 BEIR 提交的 BM25 及 dense 示例 | [BM25 示例](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/examples/retrieval/evaluation/lexical/evaluate_bm25.py)直接使用 test；[BM25Search](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/search/lexical/bm25_search.py)在 `initialize=True` 时删除并重建指定 Elasticsearch 索引，零命中查询可能没有结果键；其搜索传 `top_hits=top_k+1` 排除相同 query／doc ID，但本方法没有将剩余结果再截到 `top_k`。2026-10-20 补核的 dense exact 路径则用有界 heap 保留至多 `top_k`；[dense 示例](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/examples/retrieval/evaluation/dense/evaluate_sbert.py)使用 TREC-COVID、Stella 模型及 `trust_remote_code=True` | 示例不能原样执行本例：数据、模型、开发／test 协议及资源范围均须按获准配置绑定；排名字典不能独自证明完整执行。当前 Parquet 不是 `GenericDataLoader` 的直接 JSONL 输入，基础依赖和环境尚未准备 |
-| 同一提交的向量实现，2026-10-19 补读 3 个文件 | [SentenceBERT](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/models/sentence_bert.py)委托 `SentenceTransformer` 编码查询及文档；[DenseRetrievalExactSearch](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/search/dense/exact_search.py)分块编码并用 cosine／dot 排序；另补读 Elasticsearch 适配实现，身份见[本轮来源清单](../../.tmp/experiment-program-design-20261019/source-manifest.json) | 只核实代码调用链，未运行或证明与本工程环境兼容；本工程候选程序及输入输出由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#执行哪份程序及输入输出)拥有，不能把外部库已有算法归功于 Agent 决策 |
+| 同一提交的向量实现，2026-10-19 补读 3 个文件 | [SentenceBERT](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/models/sentence_bert.py)委托 `SentenceTransformer` 编码查询及文档；[DenseRetrievalExactSearch](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/search/dense/exact_search.py)分块编码并用 cosine／dot 排序；另补读 Elasticsearch 适配实现，身份见[本轮来源清单](../../.tmp/experiment-program-design-20261019/source-manifest.json) | 只核实代码调用链，未运行或证明与本工程环境兼容；本工程候选程序及输入输出由[研究 Spec](../optimization/to_verify/research-experiment-protocol.md#24-执行哪份程序及输入输出)拥有，不能把外部库已有算法归功于 Agent 决策 |
 | [BeIR/scifact](https://huggingface.co/datasets/BeIR/scifact/tree/b3b5335604bf5ee3c4447671af975ea25143d4f5)，`b3b5335604bf5ee3c4447671af975ea25143d4f5` | 实际解析 corpus 与 queries Parquet：5,183 个唯一文档、1,109 个唯一查询，保留 `_id`、`title`、`text` | 英文科学检索材料，不代表中文个人知识库或完整 RAG 回答效果。镜像数据卡声明 CC-BY-SA-4.0，BEIR 论文附录 E 的 SciFact 声明为 CC-BY-NC-2.0；声明差异尚未解决，不用镜像元数据替代上游许可核对 |
 | [BeIR/scifact-qrels](https://huggingface.co/datasets/BeIR/scifact-qrels/tree/2938d17dc3b09882fdb8c12bbbe2e2dc0e75a029)，`2938d17dc3b09882fdb8c12bbbe2e2dc0e75a029` | 实际解析 train 的 919 条相关性记录／809 条查询，test 的 339 条／300 条；分数均为 1，split 查询无交集，引用均存在且无重复 query/doc 对 | train 可用于开发诊断，test 标注只交给受控评分端；公开数据的运行隔离不等于未见数据或排除训练污染，不能用测试集反复选配置 |
 | [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/tree/1110a243fdf4706b3f48f1d95db1a4f5529b4d41)，`1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | 取得官方模型卡与元数据，模型卡说明英文 Sentence Transformers 模型及 Apache-2.0 声明 | 只作为已命名的向量候选；权重未下载，质量、资源占用和与 BM25 的胜负均未测得 |
@@ -140,7 +140,7 @@ BEIR README 指向的原始 `scifact.zip` 下载遇到 TLS 证书链校验失败
 
 [BEIR 论文 §3.3](https://arxiv.org/pdf/2104.08663v4)以 nDCG@10 为主要指标，并在附录报告 Recall@100。nDCG@10 衡量前十条检索结果的相关性与排序质量，Recall@100 衡量前百条找回多少已标注相关文献。仅有一篇相关文献时，排第一的 nDCG@10 为 1，排第十约为 0.289，未进前十为 0；前两种的 Recall@100 都为 1。实际结果按查询求均值，计算由[固定实现](https://github.com/beir-cellar/beir/blob/ef83d29307061c65d04b035b4f4e7c18bd8374af/beir/retrieval/evaluation.py#L101)调用 `pytrec_eval` 完成。
 
-BEIR 在统一协议下比较 18 个数据集与 10 种检索方法，支持可重复的检索比较；没有统一的“达到 0.8 即有效”通过线。论文还讨论标注不穷尽和选择偏差，其 TREC-COVID 补标实验不能外推为对 SciFact 的重标注。此处指标只按该版本相关性定义解释，不能替代报告正确性、私人知识效果或 Agent 长任务验收；本工程评分资格由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#6-评估标准及评分资格)拥有。
+BEIR 在统一协议下比较 18 个数据集与 10 种检索方法，支持可重复的检索比较；没有统一的“达到 0.8 即有效”通过线。论文还讨论标注不穷尽和选择偏差，其 TREC-COVID 补标实验不能外推为对 SciFact 的重标注。此处指标只按该版本相关性定义解释，不能替代报告正确性、私人知识效果或 Agent 长任务验收；本工程评分资格由[研究 Spec](../optimization/to_verify/research-experiment-acceptance.md#4-评估标准及评分资格)拥有。
 
 ## 9. 用户输入的具体程度与来源身份
 
@@ -152,4 +152,39 @@ BEIR 在统一协议下比较 18 个数据集与 10 种检索方法，支持可�
 | [Memvid issue #93](https://github.com/memvid/memvid/issues/93)，2026-01-06 的功能提议 | 作者明确要求 RRF 与可选 reranking，并给出实现及 API 建议 | 专业用户确实可以指定方法；不把提议中的性能数字、算法评价或功能缺失声明视为已核实事实 |
 | [DeepResearch Bench 作者项目页](https://deepresearch-bench.github.io/)，本次按页面声明核对 | 原始用户查询用于主题分布分析，公开研究任务由领域专家另行设计 | 专家任务可以贴近真实需求，但不等于未经改写的用户记录，也不能用其详细题面推断用户实际输入程度 |
 
-这些资料只提供输入形态的实例与来源限制。自然输入、必要澄清及评测义务怎样设计，由[研究 Spec](../optimization/to_verify/knowledge-decision-delivery.md#23-输入不明确时怎样澄清)拥有，不在参考页复制生产规则或新增任务准入。
+这些资料只提供输入形态的实例与来源限制。自然输入、必要澄清及评测义务怎样设计，由[研究 Spec](../optimization/to_verify/research-experiment-acceptance.md#13-输入不明确时怎样澄清)拥有，不在参考页复制生产规则或新增任务准入。
+
+## 10. LongDS 长程数据分析评测
+
+2026-10-23 核对 LongDS 固定源码和已发布任务，保存 10 份来源共 206,885 字节，清单含 URL、提交及 SHA-256，见[来源清单](../../.tmp/longds-design-20261023/source-manifest.json)。这是外部源码／数据结构审计，零模型、零业务执行；没有下载输入 CSV 或运行第三方 runner。取舍及本工程候选只由[整体LongDS 长程数据分析 Spec](../optimization/to_verify/longds-analysis.md#longds-长程数据分析-spec)拥有。
+
+### 10.1 固定版本、原题与适用差异
+
+数据固定为 `zjunlp/LongDS@6b448459c333ecc050a2e89fcc65c0e044d763ac`，代码为 `zjunlp/DataMind@a814927159470ad1624602d233f57b7c0be5882e`。作者推荐 v1.1 Lite，含 24 个完整任务、777 轮；Full 含 68 个任务、2,225 轮。Lite 只选择完整任务，未裁短其中对话；v1 与 v1.1 分开报告。[数据卡](https://huggingface.co/datasets/zjunlp/LongDS)、[固定 README](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/README.md)
+
+| 候选 | 原始任务特点 | 本次选择依据 |
+| --- | --- | --- |
+| [LongDS](https://arxiv.org/abs/2605.30434) | 多轮请求依赖既有定义、计算结果、临时假设及历史版本 | 选作长期分析状态用例；固定问题序列不代表自主选题，交互轮数不等于模型工作轮数 |
+| [DABstep](https://huggingface.co/blog/dabstep) | 结构化数据与业务文档的多步计算，有参考答案 | 适合计算正确性；大量独立题目不能拼成同一长期状态任务 |
+| [DiscoveryBench](https://github.com/allenai/discoverybench) | 由数据和目标出发发现、验证假设 | 可覆盖开放研究，但不单独保证跨轮状态和自然窗口压力 |
+| [DSBench](https://github.com/LiqiangJing/DSBench) | 现实数据分析和建模，包含多表及多模态背景 | 范围较广，所需执行环境须逐题核对；本轮不将其建模能力并入目标 |
+
+选定 `business/netflix_movies_and_tv_shows/task3`，v1.1 Lite 的完整 36 轮。直接读取任务、metadata 和输入目录 API，核实 16 个 CSV、3,454,619 字节、最大标注依赖跨度 30 轮，见[任务审计](../../.tmp/longds-design-20261023/task-audit.json)。目录包含 Netflix 主目录和各国每周搜索热度；仅核实可见文件尺寸，不宣称已适配执行环境。
+
+原题逐轮要求清洗、国家归属、搜索动量、成熟度、类别、供应延续、片长等分析，后期回滚或组合历史口径并形成市场推荐。第 32 轮标注依赖第 2 轮等历史，第 36 轮依赖第 25、26、27、34、35 轮；这些标签仅供评测分析，不能提供给解题 Agent。来源是从真实 Kaggle 分析工作流构造并审查的公开题目，不称为本工程原始用户记录。[原题](https://huggingface.co/datasets/zjunlp/LongDS/resolve/6b448459c333ecc050a2e89fcc65c0e044d763ac/task/longds_v1.1/business/netflix_movies_and_tv_shows/task3/task.json)、[依赖](https://huggingface.co/datasets/zjunlp/LongDS/resolve/6b448459c333ecc050a2e89fcc65c0e044d763ac/task/longds_v1.1/business/netflix_movies_and_tv_shows/task3/metadata.json)
+
+### 10.2 实际调用、隔离与评分
+
+固定源码核对为 A 级实现证据：`run_custom_longds.py` 加载任务并逐轮发送，`worker.py` 每任务创建一个 Agent 实例，调用 `respond(message)`，只组合当前 `context`／`question`；Agent 自己拥有历史及工具。参考答案写在评测结果中交 Judge，不传给 respond。作者允许自定义 Agent，不要求用其示例 ReAct 替换已有生产循环。[runner](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/custom/run_custom_longds.py)、[worker](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/custom/worker.py)
+
+逐轮原题含 `turn_id`、`context`、`question`、`code`、`answer`；只有当前题面可交被测 Agent。正式环境还须隔离参考脚本、notebook、metadata 和未来题面，不能因为 runner 接口不传答案就推定文件系统也无泄漏。
+
+官方 Judge 输入为当前题面、参考答案、实际回答，输出 0／1 和理由。必需内容全部正确计 1，任意缺失或错误计 0；数字仅忽略无意义尾零，明确容差除外；排序按所问内容核对，数值完全并列时接受不同顺序。标签归一化规则较宽，实际错判须保留原始判分并审查，不能把模型 Judge 称为确定性事实检查。[Judge](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/src/judge.py)、[评分 Prompt](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/src/judge_prompt.py)
+
+单任务分数是正确轮数除以该任务总轮数，task3 分母为 36；原论文和官网整套分数采用任务准确率的宏平均。固定 runner 的原始聚合字段仍须按实际代码解释，不凭 `overall_accuracy` 名称推断口径；单任务评分不受不同任务轮数加权差异影响。每轮默认超时为 3,600 秒；原论文使用每用户轮最多 40 个推理／动作步骤，二者都不是整任务预算。[论文评测协议](https://arxiv.org/html/2605.30434v1#S3.SS4)、[自定义 runner](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/runners/custom/run_custom_longds.py)
+
+### 10.3 公开比较的范围
+
+固定 README 给出 v1.1 Lite 的组合系统成绩：GPT-6 Astra／Codex 78.17%，Claude Fable 5.1／Claude Code 76.53%，GPT-5.6-sol／Codex 70.71%。这是整套 24 任务的宏平均，未查到所选 task3 的单独公开结果；不作本工程通过阈值，也不能单独归功于模型或 Harness。[官方结果说明](https://github.com/zjunlp/DataMind/blob/a814927159470ad1624602d233f57b7c0be5882e/longds/README.md#longds-v11-lite-leaderboard)
+
+英文原题的公开成绩与中文改编分别报告。跨模型、任务版本、预算或工具环境的差异必须注明；本工程若只跑 task3，就报告单任务及逐轮结果，不填 Lite 榜单成绩。外部代码存在不证明 personalAgent 的跨轮引用、授权、预算或压缩已经通过。

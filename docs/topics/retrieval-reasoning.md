@@ -10,7 +10,7 @@
   -> search_personal_knowledge 或受治理只读工具
   -> 按身份与作用域执行读取
   -> bounded Observation 与可引用原文
-  -> 研究生成同版本 claims 与最终回答；普通任务生成 FinalSubmission
+  -> 研究生成同版本 claims 与最终回答；普通任务提交 FinalMessage 候选
   -> 各自适用的单次语义核验与 Completion
   -> 交付确切通过的 FinalMessage
 ```

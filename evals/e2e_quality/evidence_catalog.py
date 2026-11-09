@@ -234,7 +234,91 @@ RESEARCH_TOOL_PROTOCOL_REVIEW_OUTCOME = UserOutcomeContract(
 )
 
 
+# 阶段0独立能力准入，不加入默认release矩阵；源码/成绩仍由ProductEvidenceRecorder拥有。
+RETRIEVAL_EXPERIMENT_OUTCOMES = {
+    key: UserOutcomeContract(
+        outcome_id=case_id,
+        persona="在许可测试环境验证检索方案的中文开发者",
+        source_ref="docs/optimization/to_verify/research-experiment-protocol.md#5-当前范围与历史文件交付的关系",
+        natural_goal=goal,
+        observable_result="自主完成实际实验、消费结果并作必要选择，冻结后test并提交有依据的完整回答；原始结果供内部追溯，不要求用户下载或打包。",
+        counterfactuals=("缺必要实际执行时不能以文字回答充当完成", "test标注不向生成侧开放", "不得修改当前知识库", "P1程序必须来自本轨迹模型并实际执行，允许无提升", "下载或打包失败不得计作Agent能力失败"),
+        baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+        baseline_ref="docs/optimization/to_verify/verify_results/research-experiment.md#32-完整落地-implementation-plan",
+        assertion_owner="evals/product_baselines/test_retrieval_experiment_001.py",
+    )
+    for key, case_id, goal in (
+        ("e1", "RETRIEVAL-EXPERIMENT-001", "用SciFact实际比较BM25与向量检索，分析错例和必要组合，冻结后独立评测并说明选择依据和限制。"),
+        ("p1", "RETRIEVAL-EXPERIMENT-PROGRAM-001", "模型自己实现并实测组合检索，消费开发结果选型，在独立test后说明实际结论与限制。"),
+    )
+}
+
+
+LONGDS_OUTCOME = UserOutcomeContract(
+    outcome_id="LONGDS-NETFLIX-003",
+    persona="持续调整市场分析条件并回看历史口径的中文分析用户",
+    source_ref="docs/optimization/to_verify/longds-analysis.md#longds-长程数据分析-spec",
+    natural_goal="分析 Netflix 目录与各国搜索热度，连续处理 36 轮调整和历史比较，最终推荐三个市场。",
+    observable_result="逐轮从正式入口得到实际分析答案；按固定官方协议分别报告正确轮数、最终推荐和流程完成。",
+    counterfactuals=("未来问题和参考答案不进入生产输入", "未授权跨对话原件拒绝且零执行",
+                     "同请求恢复不重复执行", "总预算耗尽不新增付费调用，未知消费保留且不单独停止"),
+    baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+    baseline_ref="docs/optimization/to_verify/longds-analysis.md#6-分阶段验收与停止条件",
+    assertion_owner="evals/product_baselines/longds_judge.py",
+)
+
+
+VERIFICATION_CONTEXT_OUTCOME = UserOutcomeContract(
+    outcome_id="VERIFICATION-CONTEXT-001",
+    persona="通过多轮中文对话请求计算并接续先前结果的用户",
+    source_ref="docs/optimization/to_verify/analysis-goal-maintenance.md#922-核验交互逐条物化与通过判决精简",
+    natural_goal="使用 Python 计算37×43并报告结果，再将上轮结果加17。",
+    observable_result="正式入口连续两轮正常交付1591、1608；回答分别关联当时已通过的goal，真实核验消费有序历史和绑定对象的通过短记录。",
+    counterfactuals=("失败核验反馈完整保留，未通过不能正常交付", "原始判决和执行事实不因发送投影精简改变",
+                     "未来判决、理想目标和期望答案不注入生产输入"),
+    baseline_kind=BaselineKind.IMPLEMENTATION_FAILURE,
+    baseline_ref="docs/optimization/to_verify/analysis-goal-maintenance.md#922-核验交互逐条物化与通过判决精简",
+    assertion_owner="evals/product_baselines/run_verification_context_target.py",
+)
+
+
 EVIDENCE_CASES: tuple[EvidenceCase, ...] = (
+    EvidenceCase(
+        evidence_id="VERIFICATION-CONTEXT-001.two_turn_http",
+        case_id="VERIFICATION-CONTEXT-001",
+        module="run_verification_context_target.py",
+        test_name="run",
+        layers=frozenset({EvidenceLayer.UNDERSTANDING, EvidenceLayer.VERIFICATION_COMPLETION}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.PRODUCT_E2E,
+        user_outcome_contract=VERIFICATION_CONTEXT_OUTCOME,
+        covered_invariants=frozenset({"verification.chronological_messages", "verification.bound_pass_projection",
+                                      "verification.answer_goal_snapshot"}),
+    ),
+    EvidenceCase(
+        evidence_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001.native_start_http",
+        case_id="RETRIEVAL-EXPERIMENT-START-RESPONSE-001",
+        module="run_retrieval_acceptance.py",
+        test_name="run",
+        layers=frozenset({EvidenceLayer.JOURNAL_RECOVERY, EvidenceLayer.AUTHORITY_GATEWAY}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
+        fault_mechanism=FaultMechanism.IN_PROCESS_HOOK,
+        limitation="CLI 仅限独立故障准备的 fault_boundary；真实 start 发送后响应读取前中断，安全与完整交付分别复核，不计产品成功。",
+        covered_invariants=frozenset({"retrieval.same_job_no_blind_restart", "retrieval.unknown_execution_truth"}),
+    ),
+    EvidenceCase(
+        evidence_id="RETRIEVAL-EXPERIMENT-SCOPE-001.initial_artifact_http",
+        case_id="RETRIEVAL-EXPERIMENT-SCOPE-001",
+        module="test_retrieval_scope_boundary.py",
+        test_name="test_retrieval_scope_boundary",
+        layers=frozenset({EvidenceLayer.AUTHORITY_GATEWAY}),
+        entry_boundary=EntryBoundary.HTTP_PROCESS,
+        evidence_class=EvidenceClass.BOUNDARY_EVALUATION,
+        real_model_required=False,
+        limitation="真实 Runtime 在模型前拒绝无权初始 Artifact；不计完整研究交付或产品发布分子。",
+        covered_invariants=frozenset({"initial_artifact_owner_visibility", "denied_initial_input_has_no_model_or_execution"}),
+    ),
     EvidenceCase(
         evidence_id="AUD-001-REPLAY.boundary",
         case_id="AUD-001-REPLAY",
@@ -645,6 +729,7 @@ def validate_catalog() -> None:
         )
     expected = {
         EvidenceClass.PRODUCT_E2E: {
+            "VERIFICATION-CONTEXT-001",
             "AUD-001",
             "E14",
             "E22",
@@ -666,7 +751,10 @@ def validate_catalog() -> None:
             "GOV-001", "DUR-001", "OBS-001",
         },
         EvidenceClass.CAPABILITY_PROFILE: {"E16", "E18", "E19", "E21"},
-        EvidenceClass.BOUNDARY_EVALUATION: {"RESEARCH-ANSWER-OUTCOME-001", "AUD-001-REPLAY"},
+        EvidenceClass.BOUNDARY_EVALUATION: {
+            "RESEARCH-ANSWER-OUTCOME-001", "AUD-001-REPLAY", "RETRIEVAL-EXPERIMENT-SCOPE-001",
+            "RETRIEVAL-EXPERIMENT-START-RESPONSE-001",
+        },
     }
     for evidence_class, case_ids in expected.items():
         actual = {

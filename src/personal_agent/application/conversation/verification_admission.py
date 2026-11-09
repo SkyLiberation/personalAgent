@@ -23,6 +23,9 @@ from personal_agent.capabilities.contracts.verification import (
 from .models import ActionObservation, InteractionInput
 
 
+INTERACTION_VERIFICATION_CAPABILITY = "verify_interaction_draft"
+
+
 def observed_receipts(
     inputs: Sequence[InteractionInput],
     *,
@@ -50,4 +53,4 @@ def observed_receipts(
     return tuple(receipts)
 
 
-__all__ = ["observed_receipts"]
+__all__ = ["INTERACTION_VERIFICATION_CAPABILITY", "observed_receipts"]

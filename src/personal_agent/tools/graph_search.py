@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import logging
 
 from langchain_core.tools import BaseTool, tool
@@ -25,7 +28,7 @@ class GraphSearchArgs(BaseModel):
     user_id: str = Field(default="default", description="个人知识库归属用户 ID。")
 
 
-def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
+def build_graph_search_tool(graph_store: GraphitiStore, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> BaseTool:
     @tool(
         "graph_search",
         description=(
@@ -48,7 +51,7 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
     )
     def graph_search(question: str, user_id: str = "default", structured_context: dict[str, object] | None = None):
         if not graph_store.configured():
-            raise ToolError("图谱未配置或未启用。", kind="permission")
+            raise ToolError(prompts.render('tools.graph.unconfigured'), kind="permission")
         has_user_data = getattr(graph_store, "has_user_data", None)
         if callable(has_user_data):
             try:
@@ -72,7 +75,7 @@ def build_graph_search_tool(graph_store: GraphitiStore) -> BaseTool:
             user_id,
         )
         if not result.enabled:
-            raise ToolError(result.error or "图谱检索不可用。", kind="permission")
+            raise ToolError(result.error or prompts.render('tools.graph.unavailable'), kind="permission")
         evidence = graph_result_to_evidence(result, {}, question)
         return tool_response(tool_success({
             "entity_names": result.entity_names,

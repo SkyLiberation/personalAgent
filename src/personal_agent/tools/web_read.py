@@ -12,7 +12,8 @@ from personal_agent.application.capture.web_source import (
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.tool import ToolError
-from personal_agent.kernel.prompts import get_prompt
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import create_prompt_catalog
 from personal_agent.tools.base import governance_extras, tool_response, tool_success, url_allowed
 
 
@@ -25,8 +26,12 @@ class WebReadArgs(BaseModel):
     )
 
 
-def build_web_read_tool(settings: Settings, capture_service: CaptureService) -> BaseTool:
-    description = get_prompt("web_read.description")
+def build_web_read_tool(
+    settings: Settings, capture_service: CaptureService,
+    *, prompts: PromptCatalog | None = None,
+) -> BaseTool:
+    prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
+    description = prompts.get("web_read.description")
     allowed_domains = tuple(settings.web_search.allowed_domains)
 
     @tool(
@@ -43,19 +48,19 @@ def build_web_read_tool(settings: Settings, capture_service: CaptureService) -> 
     )
     def web_read(url: str):
         if not url_allowed(url, allowed_domains):
-            raise ToolError("目标域名不在允许列表中，未读取正文。", kind="permission")
+            raise ToolError(prompts.render('tools.web_read.domain_denied'), kind="permission")
         try:
             captured = capture_service.capture_url(url)
             if not captured.text.strip():
-                raise ValueError("服务提供方未返回可读正文。")
-            source_text = source_body_text(captured, max_bytes=MAX_SOURCE_PAYLOAD_BYTES)
+                raise ValueError(prompts.render('tools.web_read.no_body'))
+            source_text = source_body_text(captured, max_bytes=MAX_SOURCE_PAYLOAD_BYTES, prompts=prompts)
         except HTTPException as error:
             kind = "permission" if error.status_code in {401, 403} else "unrecoverable"
-            raise ToolError(f"网页读取失败：{error.detail}", kind=kind) from error
+            raise ToolError(prompts.render('tools.web_read.failed', detail=error.detail), kind=kind) from error
         except (TimeoutError, ConnectionError) as error:
-            raise ToolError(f"网页读取暂时失败：{error}", kind="transient") from error
+            raise ToolError(prompts.render('tools.web_read.transient', detail=error), kind="transient") from error
         except ValueError as error:
-            raise ToolError(f"网页读取未交付正文：{error}") from error
+            raise ToolError(prompts.render('tools.web_read.undelivered', detail=error)) from error
         output = WebReadOutput(
             source_url=captured.url, provider=captured.provider, source_text=source_text,
         )

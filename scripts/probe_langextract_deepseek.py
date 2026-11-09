@@ -1,6 +1,6 @@
-"""DeepSeek + LangExtract compatibility probe.
+"""Configured provider + LangExtract compatibility probe.
 
-Runs a tiny extraction against the real DeepSeek OpenAI-compatible endpoint
+Runs a tiny extraction against the current OpenAI-compatible generation endpoint
 configured in .env, prints whatever the library returns, and dumps any
 exception with full traceback so we can see the failure mode.
 
@@ -9,14 +9,15 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import sys
 import traceback
 
 from dotenv import load_dotenv
 
 import langextract as lx
-from langextract.factory import ModelConfig
+from personal_agent.application.extract.langextract_client import ConfiguredOpenAILanguageModel
+from personal_agent.infra.model_providers import build_provider_policy
+from personal_agent.kernel.config import Settings
 
 
 SAMPLE = (
@@ -57,9 +58,8 @@ EXAMPLES = [
 
 def main() -> int:
     load_dotenv(override=True)
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    model = os.getenv("OPENAI_SMALL_MODEL") or os.getenv("OPENAI_MODEL")
+    cfg = Settings.from_env().langextract
+    api_key, base_url, model = cfg.api_key, cfg.base_url, cfg.model_id
 
     print(f"[probe] base_url={base_url}")
     print(f"[probe] model={model}")
@@ -69,13 +69,12 @@ def main() -> int:
         print("[probe] missing env, abort")
         return 2
 
-    cfg = ModelConfig(
+    language_model = ConfiguredOpenAILanguageModel(
         model_id=model,
-        provider="openai",
-        provider_kwargs={
-            "api_key": api_key,
-            "base_url": base_url,
-        },
+        api_key=api_key,
+        base_url=base_url,
+        extra_body=dict(cfg.extra_body),
+        provider_policy=build_provider_policy(base_url=base_url, provider=cfg.provider),
     )
 
     try:
@@ -83,7 +82,7 @@ def main() -> int:
             text_or_documents=SAMPLE,
             prompt_description=PROMPT,
             examples=EXAMPLES,
-            config=cfg,
+            model=language_model,
             use_schema_constraints=False,
             fence_output=True,
         )

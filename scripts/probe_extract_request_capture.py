@@ -88,6 +88,7 @@ def main() -> int:
 
     from personal_agent.kernel.config import LangExtractConfig
     from personal_agent.application.extract.service import PreExtractService
+    from personal_agent.infra.model_providers import build_provider_policy
 
     cfg = LangExtractConfig(
         api_key=api_key,
@@ -99,7 +100,7 @@ def main() -> int:
         min_doc_chars=10,
         fallback_on_error=False,
     )
-    svc = PreExtractService(cfg)
+    svc = PreExtractService(cfg, provider_policy=build_provider_policy(base_url=cfg.base_url, provider=cfg.provider))
 
     print(f"[capture] live={live} model={model_id}")
     try:

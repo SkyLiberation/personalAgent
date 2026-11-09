@@ -4,14 +4,26 @@
 
 | 已解决的问题 | 固化记录 |
 | --- | --- |
-| Coverage 的引用存在性在结构恢复后才检查，非法坐标触发入口 422；局部恢复 2/2 已接入 | [同一 typed 校验与有界引用恢复](coverage-reference-recovery.md) |
-| 来源模型借用未绑定原文支撑引用，或误判已返回证据缺失；统一六类已接入 | [统一核验的证据边界与历史取舍](source-proof-boundary-isolation.md#统一核验的局部问题关闭) |
+| 执行目标重复分成三个语义字段，并另存已有材料和成果编号 | [执行目标工具的单一正文契约](conversation-goal-contract.md) |
+| 跨用户轮次只保留工具观察，调用关系丢失且逐行引用包装过重 | [跨轮工具历史与单份引用展示](conversation-tool-history.md) |
+| 完整验收标准被任意长度上限拒绝 | [验收标准的完整字符串承载](intent-criterion-length.md) |
+| MiMo 将对象联合的引用参数返回为 JSON 字符串 | [对象参数的有限引用展开](tool-schema-reference-projection.md) |
+| 工程提示混用括号分区、Markdown 及硬编码动态标题 | [工程提示的 Markdown 表达](prompt-markdown-presentation.md) |
+| 英文模板与元数据覆盖遗漏了动态工具、参数校验及修复反馈 | [英文工程提示与动态反馈](english-owned-feedback.md) |
+| Provider 参数集中后仍需修改公共品牌分支，缺少独立扩展入口 | [独立策略、配置工厂与 SDK 注入](model-provider-extensibility.md) |
+| 多 Provider 参数规则重复、独立模型绑定错误继承 | [配置驱动的模型 Provider 适配](model-provider-configuration.md) |
+| DeepSeek 思考模式拒绝强制工具选择，内部动作义务仍须保持 | [Provider 编码与严格动作解码](deepseek-thinking-action-choice.md) |
+| Coverage 引用存在性在结构恢复后才检查，非法坐标触发入口 422 | [同一 typed 校验与有界引用恢复](coverage-reference-recovery.md) |
+| 来源模型借用未绑定原文支撑引用，或误判已返回证据缺失 | [统一核验的证据边界与历史取舍](source-proof-boundary-isolation.md#统一核验的局部问题关闭) |
 | 来源支持把未排除的相邻关系当必要疑点，或把全部返回资料代替本条引用 | [证据用途与必要澄清](source-evidence-purpose.md) |
 | 来源核验混淆引用子集、返回全集与稿件限定范围 | [引用支持与实际返回范围](source-cited-returned-scope.md) |
 | 来源反馈扩大性质或字段身份，类别正确却说明失真 | [来源核验的直接分类与反馈忠实性](source-feedback-classification.md) |
 | 可读性优先级与 Code Agent 局部阅读边界未明确，模型响应解析与调用装配混装 | [可读性优先与功能模块化](code-readability-modularity.md) |
-| 无研究稿时选证Schema允许无效answered身份 | [按实际状态呈现选证契约](research-selection-state-contract.md) |
+| Runtime 的装配职责与业务协调边界不清 | [装配边界与工程取舍](runtime-composition-boundary.md) |
+| 无消费者的模型 token 流链路增加维护成本 | [旧模型流退役](model-streaming-retirement.md) |
+| 无研究稿时选证 Schema 允许无效 `answered` 身份 | [按实际状态呈现选证契约](research-selection-state-contract.md) |
 | 目录拒绝抢先绕过反馈、非法 JSON 没有进入已有一次纠正 | [Conversation 动作协议恢复](conversation-action-protocol-recovery.md) |
+| 未声明动作拒绝丢失已知具体名称，且补齐名称须保持原停止额度 | [未知动作名称反馈保真](unknown-action-name-feedback.md) |
 | 被拒稿只有正文、缺少逐段引用关系 | [完整基稿交接](complete-rejected-draft-handoff.md) |
 | 搜索返回结果时丢失实际查询参数，查询与来源证据混用 | [搜索执行参数的保真交接](query-execution-handoff.md) |
 | 验收项重抄漏标点或同义改写导致最终回执被拒 | [最终验收项引用恢复](final-criterion-transcription.md) |
@@ -26,6 +38,8 @@
 | 来源核验输入未变却随集合版本重复核验 | [按实际输入复用来源报告](claim-source-review-reuse.md) |
 | 独立评分扩大必答项、误读范围或缺少实际引用页面与版本 | [评分目标映射、依据归属及参考资格](research-grader-qualification.md) |
 | 研究独立评分器在开启思考时耗尽短输出额度 | [评分输出预算](research-grader-output-budget.md) |
+| 历史回答缺少当时已通过目标，核验交互整轮打包且通过报告重复展开 | [回答绑定当时目标与核验历史逐条呈现](verification-context-goal-binding.md) |
+| Runtime 拒绝反馈使用内部工具名、错误调用身份或过期修复条件 | [拦截反馈按当前声明给出修复](runtime-feedback-repair.md) |
 
 本目录之外的 optimization 文档只保留完成文档的引用，不继续跟踪成功问题。
 

@@ -6,9 +6,16 @@ import re
 from typing import Any
 
 from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import BaseModel
 
 _SYSTEM_TOOL_ARGS = {"user_id"}
 _MODEL_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def native_output_parameters(output_type: type[BaseModel]) -> dict[str, Any]:
+    """The same native-output parameter schema for sending and capacity accounting."""
+    return convert_to_openai_tool(output_type, strict=False)["function"]["parameters"]
 
 
 def strict_json_schema_response(name: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -54,10 +61,19 @@ def strict_tool_definition(tool: BaseTool) -> dict[str, Any]:
         "function": {
             "name": tool.name,
             "description": tool.description or "",
-            "parameters": strictify_schema(_model_visible_tool_schema(tool)),
-            "strict": True,
+            "parameters": (strictify_schema(_model_visible_tool_schema(tool))
+                           if model_tool_strict(tool) else _model_visible_tool_schema(tool)),
+            "strict": model_tool_strict(tool),
         },
     }
+
+
+def model_tool_strict(tool: BaseTool) -> bool:
+    """Read the tool's declared provider strict choice without changing its schema."""
+    strict = (tool.extras or {}).get("strict", True)
+    if not isinstance(strict, bool):
+        raise ValueError(f"Tool {tool.name!r} strict must be a boolean")
+    return strict
 
 
 def model_tool_wire_name(canonical_name: str) -> str:

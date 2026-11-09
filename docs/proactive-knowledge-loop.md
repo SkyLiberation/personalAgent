@@ -2,14 +2,7 @@
 
 本文说明知识缺口提问、主题整理和简报增长统计的现行用例及入口。各用例分别拥有检测、写入或投递事实，实际可用范围由当前曝光和执行契约决定。
 
-三项能力共享同一应用层，并从两类入口进入：
-
-- 用户请求：只有能力被当前 Conversation 显式投影并经 Admission 时，才由
-  `Conversation -> Application Capability -> use case` 进入；当前不能把旧自然语言入口描述成
-  已全部贯通
-- 定时或管理入口：`Scheduler / CLI / API -> use case -> delivery`
-
-Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报生成逻辑；意图入口也不会触发订阅投递。
+三个用例分别由应用服务实现：模型只可调用当前明确曝光的能力，定时任务按订阅调用缺口检测或简报用例，再由投递组件发送。当前曝光见第 2 节入口表；定时与主动查询共用业务用例，主动查询本身不触发订阅投递。
 
 1. **知识缺口主动追问**（`insight/`）——后台发现知识孤岛和潜在矛盾，主动向用户提问。
 2. **自动主题整理**（`consolidate_knowledge`）——按主题选择多条笔记并整理成综述，原笔记标记为已被取代。
@@ -56,10 +49,10 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 
 ### 防刷屏与幂等
 
-`is_subscription_due` 在过了 `schedule_time` 后当天会持续返回 `True`，因此必须有去重，否则 300 秒一个 tick 会刷屏。`KnowledgeGapJob` 采用两级：
+`is_subscription_due` 在到达订阅时间后，当天持续返回 `True`。`KnowledgeGapJob` 通过以下边界避免每次 tick 都重复投递：
 
 - 有 ledger（生产）：`PostgresReviewDigestStore.claim_gap_delivery(subscription_id, day)` 原子 claim，跨进程重启幂等。
-- 无 ledger（测试/降级）：进程内 `dict` 守卫。
+- 无账本的独立装配：进程内 `dict` 守卫，只在投递成功后记录，不能跨进程恢复。
 
 关键顺序：**先检测、有缺口才 claim**——避免「上午无缺口的空跑」烧掉当天名额、阻塞下午真实缺口的投递。
 
@@ -72,7 +65,7 @@ Scheduler 只负责到期判断、幂等和投递，不再承载分析或简报�
 | `gap_date` | 投递日期 |
 | `created_at` | 创建时间 |
 
-订阅复用 `digest_subscriptions`，但 gap job 用独立的 `schedule_time`（默认 20:00），与日报（默认 09:00）错开。
+订阅复用 `digest_subscriptions`，缺口调度按自身配置的时间覆盖订阅日程；具体默认值见[环境变量](env.md#知识缺口主动追问)。
 
 ---
 
@@ -99,7 +92,7 @@ topic
 | 工具适配 | `src/personal_agent/tools/consolidate_knowledge.py` | `topic`、`user_id` 参数、governance 与结果归一 |
 | 服务委托 | `AgentService.execute_consolidate` | 对外暴露入口 |
 
-工具治理：`risk_level=low`、`side_effects=("write_longterm",)`、`permission_scope="memory:write"`，无需 confirm（综述是新增笔记，原笔记走 supersede 标记而非删除，可恢复）。仍走 Gateway/Policy。
+工具声明 `risk_level=low`、`side_effects=("write_longterm",)`、`permission_scope="memory:write"`，不要求确认；执行仍经过 Gateway 与 Policy。综述写入和源笔记替代分别产生结果。
 
 容错：单条 `supersede_note` 失败记入返回的 `failed`，保留已写入的新笔记并报告失败列表。返回新笔记不代表所有源笔记均已退出检索。
 
@@ -121,14 +114,12 @@ topic
 
 ## 3. 简报知识增长 section
 
-`ReviewDigestUseCase`（[service.py](../src/personal_agent/application/review/service.py)）在「最近笔记 / 待复习」之外新增「知识增长」section：
+`ReviewDigestUseCase`（[service.py](../src/personal_agent/application/review/service.py)）在“最近笔记／待复习”之外生成“知识增长”区块：
 
-- **趋势行**（始终可用）：本周新增 vs 上周笔记数，来自本地 `created_at`，例如「本周新增 5 条笔记（上周 3 条，↑2）」。图谱不可用时仍能展示。
+- **趋势行**：按本地 `created_at` 比较最近 7 天与此前 7 天的笔记数，例如“本周新增 5 条笔记（上周 3 条，↑2）”。两段窗口均无新增或读取失败时省略，图谱不可用不影响该计算。
 - **图谱概览**（图谱可用时追加）：实体/关联总数、连接最密集的概念、关联事实样例，来自 `get_topology(user_id)`。
 
-整个 section 仅在「既无笔记增长也无图谱」时才完全省略。图谱失败只丢图谱部分，不影响趋势行——遵循「图谱失败不阻断本地路径」原则。
-
-> 配套修复：`GraphitiStore.get_topology` 此前忽略 `user_id` 返回全图，现已按 `group_id` 过滤，多用户不再串数据。
+趋势与图谱部分都为空时省略整个区块。`GraphitiStore.get_topology(user_id)` 按用户分组过滤；图谱读取失败只省略图谱部分。
 
 ---
 

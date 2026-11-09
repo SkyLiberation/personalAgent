@@ -19,6 +19,9 @@ The JSON-unwrap primitives (:func:`extract_json_object`, :func:`repair_truncated
 
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import json
 import logging
 import re
@@ -130,6 +133,8 @@ def parse_structured(
     version: str = "v1",
     model_name: str = "",
     latency_ms: float | None = None,
+    allow_json_repair: bool = True,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> StructuredParseResult[T]:
     """Parse ``content`` into a validated ``model`` instance, emitting uniform telemetry.
 
@@ -139,8 +144,12 @@ def parse_structured(
     """
     schema = model.__name__
     try:
-        data = load_json_lenient(content)
-        value = model.model_validate(data)
+        data = (
+            load_json_lenient(content)
+            if allow_json_repair
+            else json.loads(strip_json_fence(content))
+        )
+        value = model.model_validate(data, context=prompts)
     except (json.JSONDecodeError, ValidationError, ValueError, TypeError) as exc:
         log_llm_parse(
             prompt_name=operation,

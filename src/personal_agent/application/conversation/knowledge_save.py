@@ -5,13 +5,17 @@ from __future__ import annotations
 from hashlib import sha256
 import json
 from threading import RLock
+from pydantic import ValidationError
 
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .errors import (
+    ConversationFailure,
+    ConversationInputError,
     ConversationOperationConflict,
     ConversationOperationNotFound,
-    ConversationUnavailable,
 )
 from .journal import InMemoryInteractionJournal
 from .models import (
@@ -34,9 +38,11 @@ class ConversationKnowledgeSaveUseCase:
         *,
         writer: ConversationKnowledgeWriter | None,
         journal: InMemoryInteractionJournal,
+        prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
         self._writer = writer
         self._journal = journal
+        self._prompts = prompts
         self._confirmation_lock = RLock()
 
     def decide(
@@ -48,9 +54,9 @@ class ConversationKnowledgeSaveUseCase:
         confirmation_ref: str,
     ) -> ConversationKnowledgeSaveOperation:
         if decision not in {"confirm", "reject"}:
-            raise ValueError("decision must be confirm or reject")
+            raise ConversationInputError("decision must be confirm or reject")
         owner = principal
-        with self._confirmation_lock:
+        with self._journal.exclusive_run(interaction_run_ref), self._confirmation_lock:
             trace = self._journal.get(interaction_run_ref)
             if trace is None or trace.knowledge_save_operation is None:
                 raise ConversationOperationNotFound(
@@ -84,9 +90,9 @@ class ConversationKnowledgeSaveUseCase:
             else:
                 normalized_confirmation_ref = confirmation_ref.strip()
                 if not normalized_confirmation_ref:
-                    raise ValueError("confirmation_ref is required when confirming")
+                    raise ConversationInputError("confirmation_ref is required when confirming")
                 if self._writer is None:
-                    raise ConversationUnavailable(
+                    raise ConversationFailure(
                         "conversation knowledge writer is not configured"
                     )
                 result = self._writer.solidify_conversation(
@@ -126,58 +132,53 @@ class ConversationKnowledgeSaveUseCase:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="knowledge_save_requires_independent_confirmation",
-                message="A knowledge save proposal must be the only action in its turn.",
+                message=self._prompts.render("conversation.knowledge.exclusive", count=len(all_actions)),
                 repairable_fields=("actions",),
                 immutable_fields=("messages",),
-                required_repair="Propose only the knowledge_save action so its exact payload can be confirmed.",
+                required_repair=self._prompts.get("conversation.knowledge.exclusive_repair").template,
             ), None
         if self._writer is None:
             return DecisionFeedback(
                 action_id=action.action_id,
                 reason_code="capability_missing",
-                message="The governed knowledge save capability is unavailable.",
+                message=self._prompts.get("conversation.knowledge.save_unavailable").template,
                 immutable_fields=("messages",),
-                required_repair="Explain that saving is unavailable; do not claim that knowledge was saved.",
+                required_repair=self._prompts.get("conversation.knowledge.save_unavailable_repair").template,
                 disposition="fail_closed",
             ), None
         try:
             arguments = KnowledgeSaveArguments.model_validate(action.arguments)
-        except ValueError:
-            return self._source_feedback(action.action_id), None
-        indexes = tuple(
-            selection.source_message_index for selection in arguments.selections
-        )
-        if len(indexes) != len(set(indexes)):
-            return self._source_feedback(action.action_id), None
-        if any(
-            index < 0 or index >= len(messages) or messages[index].role != "user"
-            for index in indexes
-        ):
-            return self._source_feedback(action.action_id), None
-        if any(
-            not selection.text_span.strip()
-            or selection.text_span.strip()
-            not in messages[selection.source_message_index].content
-            for selection in arguments.selections
-        ):
-            return self._source_feedback(action.action_id), None
+        except ValidationError as error:
+            details = "\n".join(
+                f"{'.'.join(map(str, item['loc']))}: {item['msg']}"
+                for item in error.errors(include_input=False, include_url=False, include_context=False)
+            )
+            return self._source_feedback(action.action_id, details, messages), None
+        seen = set()
+        for position, selection in enumerate(arguments.selections):
+            index = selection.source_message_index
+            if index in seen:
+                reason = "conversation.knowledge.source_repeated"
+            elif index >= len(messages) or messages[index].role != "user":
+                reason = "conversation.knowledge.source_not_user"
+            elif not (span := selection.text_span.strip()) or span not in messages[index].content:
+                reason = "conversation.knowledge.source_span_invalid"
+            else:
+                seen.add(index)
+                continue
+            detail = self._prompts.render(reason, position=position, index=index)
+            return self._source_feedback(action.action_id, detail, messages), None
         return None, arguments
 
-    @staticmethod
-    def _source_feedback(action_id):
+    def _source_feedback(self, action_id, detail, messages):
+        allowed = [index for index, message in enumerate(messages) if message.role == "user"]
         return DecisionFeedback(
             action_id=action_id,
             reason_code="invalid_knowledge_save_source",
-            message=(
-                "Knowledge save selections must be exact non-empty spans from unique "
-                "existing user messages."
-            ),
+            message=detail,
             repairable_fields=("selections",),
             immutable_fields=("messages", "action_id"),
-            required_repair=(
-                "Select the exact user-authored knowledge span, excluding the request "
-                "to save and confirmation instructions."
-            ),
+            required_repair=self._prompts.render("conversation.knowledge.source_repair", indexes=allowed),
         )
 
     @staticmethod
@@ -225,12 +226,11 @@ class ConversationKnowledgeSaveUseCase:
             status="awaiting_confirmation",
         )
 
-    @staticmethod
-    def turn_view(conversation_id, run_ref, operation):
+    def turn_view(self, conversation_id, run_ref, operation):
         messages = {
-            "awaiting_confirmation": "请确认是否保存所选内容。确认前不会写入长期知识。",
-            "rejected": "已取消保存，未写入长期知识。",
-            "executed": "已保存所选内容。",
+            "awaiting_confirmation": self._prompts.render("conversation.knowledge_save.awaiting_confirmation"),
+            "rejected": self._prompts.render("conversation.knowledge_save.rejected"),
+            "executed": self._prompts.render("conversation.knowledge_save.executed"),
         }
         return ConversationTurnView(
             interaction_run_ref=run_ref,

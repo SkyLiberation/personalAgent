@@ -86,3 +86,38 @@ ADK 的轨迹匹配可要求相同工具与参数顺序，LangSmith 示例也允
 同日针对核验再次漏放复核 [LangSmith RAG 评测](https://docs.langchain.com/langsmith/evaluate-rag-tutorial)：回答对问题的 relevance 与回答对原文的 groundedness 是不同比较，其示例分别使用对应输入；[Anthropic outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)把 rubric 应用于实际交付物并限制迭代次数。两者均为 A 级官方动态文档。采纳目标满足与事实有据分别校准、按交付物验收和有界纠正；不照搬多个评测调用或解释字段，也不据此认定“如实说明未知”自动满足本工程的核心目标。用户允许未知的具体边界仍由本任务要求及真实用例决定。
 
 上述资料均未直接规定本工程的统一产物、八类核验及完成契约。该候选依据真实失败和用户最新要求设计，唯一正文见[研究与最终回答统一核验](../optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。参考实现的模型输出只提供语义判断或正文；权限、原文身份、版本及完成条件仍由各自宿主负责，本工程不从参考架构继承权限或恢复保证。
+
+2026-10-21 针对“程序算对、最终报告仍写错”补充复核两个独立机制。smolagents 固定提交 `96f33faaf028479119ec8d34507b47694cf14e34` 的 [CodeAgent 执行返回](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L1720-L1764)与 [最终检查消费](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L577-L618)分别把代码结果交回模型、对拟交付答案调用可选检查；检查失败可反馈并继续，步数耗尽路径不据此保证检查通过。Anthropic [Programmatic Tool Calling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling)的官方动态契约支持代码筛选、聚合后回传结果；其 [Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)另以独立上下文 grader 核查实际产物并限制修订次数。以上均按 A 级解释，闭源部分仅证明公开契约，不推测内部实现。
+
+可借鉴的分工是“程序拥有计算事实，写作者组织论证，核验消费者判断实际成文与事实是否一致”。程序结果正确、引用存在或写作者自检都不能替代最后一个边界；增加 checker 也不自动证明它准确。是否复用当前核验器、输入是否充分、反馈能否驱动有界修订，仍须由本工程真实轨迹及既定判据验证，不照搬框架或增加按错误类别划分的多套核验。
+
+## 7. 数据库执行入口的局部观察
+
+2026-10-21 为研究验收取证的重复启动阻塞核对 OpenTelemetry Python contrib 固定提交 `de43f819a4a919213d246a23e62a1b256aeca7b9`，A 级源码；[两份原件及 SHA](../../.tmp/research-capability-20261020/t5/sql-observer-external-1/source-index.json)已封存，未安装或执行第三方项目。
+
+[`wrapped_connection`](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L324-L338)配置 cursor factory；其[同步 Cursor 子类](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L384-L418)将 execute／executemany 交给 `CursorTracer.traced_execution`。该[实际执行方法](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-dbapi/src/opentelemetry/instrumentation/dbapi/__init__.py#L867-L910)在未开启 SQL commenter 时调用原 query method 并保留其返回或异常，执行后记录观测。参数收集和 SQL commenter 为不同选项；该框架也支持保存查询文本，不能把使用它等同于已满足本工程隐私要求。
+
+可借鉴其把观察限定在真实数据库调用边界的取舍，不继承全进程 Python profile、连接代理、exporter 或新的持久总账。本工程若选择在专用评测进程透明包装现有 Cursor 方法，与上述 cursor factory 装配存在差异，须另核本地池、所有调用入口、实际参数／返回／异常保持和未知消费；不能只凭外部实现证明覆盖或省时。用途及重新准入由[研究交付 Spec](../optimization/to_verify/verify_results/research-evaluation-and-delivery.md#6-同一任务的最终证据汇总)拥有，执行记录不替代知识事实前后对照或产品结果。
+
+## 8. 独立核验的价值与标准来源
+
+2026-10-26 复核官方文档，并复用[固定源码及调用链比较](runtime-recovery.md#9-原始目标工作记录与最终复核的分工)。本节区分“需要检查结果”“检查必须由独立模型完成”及“标准由谁提供”，不把三者当作同一个决定。
+
+| 实现与证据 | 标准从哪里来、怎样被消费 | 独立核验的适用边界 |
+| --- | --- | --- |
+| smolagents，原固定提交；[官方接口](https://huggingface.co/docs/smolagents/reference/agents)、[最终检查源码](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L569-L574)，A 级 | 原任务进入 Agent 记忆；调用方可提供 `final_answer_checks` 函数，消费答案、记忆及 Agent 后返回判断。接口没有强制前置标准提取模型 | 检查函数可选，不要求另加一个 LLM；默认空列表和耗尽后的其他出口按原固定源码解释 |
+| OpenHands SDK，原固定提交；[Critic 输入与反馈](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/agent/critic_mixin.py#L50)、[配置接口](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/critic/base.py)，A 级 | Critic 直接接收包含当前候选的实际事件历史，具体评估实现拥有判断；这一装配没有要求先抽出一份独立标准清单 | Critic 及迭代修订可不配置，检查和修订也分别可选；这条代码不证明任意 Critic 都能可靠识别要求 |
+| Anthropic Managed Agents，[Define outcomes](https://platform.claude.com/docs/en/managed-agents/define-outcomes)，2026-10-26 官方动态接口，A 级 | 调用方通过 `user.define_outcome` 提供目标和必需 rubric；文档允许用优质样例辅助草拟 rubric。独立上下文 grader 按它检查实际交付物，反馈再交执行 Agent | Outcomes 是明确启用的交付模式，不能外推所有对话都默认需要 grader；独立上下文隔离实现过程，不保证判断正确 |
+| Anthropic，[Building effective agents](https://www.anthropic.com/research/building-effective-agents#workflow-evaluator-optimizer)，B 级官方方法文章 | Evaluator-optimizer 以清楚的评价依据和可用反馈支持修订，不将“模型再判断一次”本身当收益 | 推荐在评价标准清楚、修订有可衡量价值时采用；文章不是本工程的效果证据 |
+| Anthropic，[Outcomes 官方 Cookbook](https://platform.claude.com/cookbook/managed-agents-cma-verify-with-outcome-grader)，官方示例，B 级 | 强调写清通过所需证据、具体反馈及忽略项；指出模糊 rubric 容易让 grader 仅凭表面覆盖放行 | 可借鉴证据与边界设计，不照搬其示例的逐条规则、额外工具循环或多阶段拓扑 |
+
+据此可比较两种标准来源：调用方显式给出可检验 rubric，或让评估实现依据原任务及实际历史理解要求；没有观察到必须统一采用“另一个模型先识别标准，再由 grader 只按识别结果评分”的要求。这是所核对实现的范围，不是对所有智能体架构的普遍断言。
+
+本工程的采用和收益门禁由[长程语义候选](../optimization/to_verify/longtask-semantic-consistency.md#2-参考替代方案与选择)拥有；本节只保存外部事实。无法从这些资料直接推出独立核验优于主 Agent 自检，或默认增加它一定值得额外 tokens、延迟和误拒风险。
+
+
+## 9. 用户要求与工作解释的核对
+
+2026-11-02重新设计核验器时，复用OpenHands并核对DeepEval和Ragas的固定源码；11份原件与SHA见[来源清单](../../.tmp/goal-verifier-redesign-20261102/source-index.json)，没有安装或执行第三方项目或模型。
+
+本次完整调用链、采用差异及局限统一见[目标维护Spec §9.13的源码对照](../optimization/to_verify/analysis-goal-maintenance.md#913-按用户要求逐项比较的统一核验)。关键区别是原始委托、模型工作解释及当前待验内容的关系；这些源码不证明模型提取的要求必然正确。本页不复制本工程候选契约或验收结果。

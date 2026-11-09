@@ -11,13 +11,16 @@ from personal_agent.capabilities.contracts.model import (
 )
 
 
-ConversationUnavailableReason: TypeAlias = (
+ConversationFailureReason: TypeAlias = (
     ModelInvocationFailureCategory
     | StructuredOutputFailureCode
     | Literal[
         "model_not_configured",
-        "final_action_required",
         "dependency_unavailable",
+        "context_capacity_exceeded", "output_capacity_exceeded",
+        "capacity_profile_mismatch", "capacity_payload_unsupported",
+        "run_deadline_exceeded", "model_token_budget_exhausted",
+        "runtime_failure",
     ]
 )
 ConversationFailureStage = Literal[
@@ -27,28 +30,34 @@ ConversationFailureStage = Literal[
     "provider_structured_decode",
     "provider_action_decode",
     "application_action_decode",
+    "model_capacity",
+    "application_budget",
+    "application_runtime",
+    "application_persistence",
 ]
 
 
-class ConversationUnavailable(RuntimeError):
+class ConversationFailure(RuntimeError):
     """Stable public failure, bounded diagnostics and an internal billable response."""
 
     def __init__(
         self,
         message: str,
         *,
-        reason_code: ConversationUnavailableReason = "dependency_unavailable",
+        reason_code: ConversationFailureReason = "dependency_unavailable",
         failure_stage: ConversationFailureStage = "application_dependency",
         operation: str | None = None,
         provider_host: str | None = None,
         provider_status_code: int | None = None,
         provider_diagnostics: ProviderFailureDiagnostics | None = None,
+        provider_response_complete: bool | None = None,
         retryable: bool = False,
         action_name: str | None = None,
         action_kind: ModelActionKind | None = None,
         field_paths: tuple[str, ...] = (),
         error_types: tuple[str, ...] = (),
         response: StructuredModelResponse[Any] | None = None,
+        prior_responses: tuple[StructuredModelResponse[Any], ...] = (),
     ) -> None:
         if len(field_paths) != len(error_types):
             raise ValueError("conversation diagnostic fields must align")
@@ -58,6 +67,7 @@ class ConversationUnavailable(RuntimeError):
         self.provider_host = provider_host
         self.provider_status_code = provider_status_code
         self.provider_diagnostics = provider_diagnostics
+        self.provider_response_complete = provider_response_complete
         self.retryable = retryable
         self.action_name = action_name
         self.action_kind = action_kind
@@ -65,6 +75,7 @@ class ConversationUnavailable(RuntimeError):
         self.error_types = error_types
         # Internal billable response; public diagnostics never serialize it.
         self.response = response
+        self.prior_responses = prior_responses
         super().__init__(message)
 
 
@@ -76,10 +87,15 @@ class ConversationOperationConflict(RuntimeError):
     pass
 
 
+class ConversationInputError(ValueError):
+    """An explicitly rejected caller input, distinct from Runtime invariants."""
+
+
 __all__ = [
+    "ConversationInputError",
     "ConversationOperationConflict",
     "ConversationOperationNotFound",
     "ConversationFailureStage",
-    "ConversationUnavailable",
-    "ConversationUnavailableReason",
+    "ConversationFailure",
+    "ConversationFailureReason",
 ]

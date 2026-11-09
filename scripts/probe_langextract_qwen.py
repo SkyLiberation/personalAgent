@@ -20,7 +20,11 @@ import traceback
 from dotenv import load_dotenv
 
 import langextract as lx
-from langextract.factory import ModelConfig
+from langextract.providers.schemas.openai import OpenAISchema
+
+from personal_agent.application.extract.langextract_client import ConfiguredOpenAILanguageModel
+from personal_agent.infra.model_providers import build_provider_policy
+from personal_agent.kernel.config import LangExtractConfig
 
 
 SAMPLE = (
@@ -61,16 +65,22 @@ EXAMPLES = [
 MODEL_ID = "qwen3-coder-flash"
 
 
-def _run(label: str, cfg: ModelConfig, *, schema: bool) -> None:
+def _run(label: str, cfg: LangExtractConfig, *, schema: bool) -> None:
     print(f"\n[probe:{label}] schema_constraints={schema}")
     try:
+        language_model = ConfiguredOpenAILanguageModel(
+            model_id=cfg.model_id, api_key=cfg.api_key, base_url=cfg.base_url,
+            extra_body=dict(cfg.extra_body),
+            provider_policy=build_provider_policy(base_url=cfg.base_url, provider=cfg.provider),
+            openai_schema=OpenAISchema.from_examples(EXAMPLES) if schema else None,
+        )
         result = lx.extract(
             text_or_documents=SAMPLE,
             prompt_description=PROMPT,
             examples=EXAMPLES,
-            config=cfg,
-            use_schema_constraints=schema,
-            fence_output=None if schema else True,
+            model=language_model,
+            use_schema_constraints=False,
+            fence_output=False if schema else True,
         )
     except Exception:
         print(f"[probe:{label}] EXCEPTION:")
@@ -106,13 +116,10 @@ def main() -> int:
         print("[probe] missing DashScope api_key, abort")
         return 2
 
-    cfg = ModelConfig(
+    cfg = LangExtractConfig(
         model_id=MODEL_ID,
-        provider="openai",
-        provider_kwargs={
-            "api_key": api_key,
-            "base_url": base_url,
-        },
+        api_key=api_key,
+        base_url=base_url,
     )
 
     _run("schema-on", cfg, schema=True)

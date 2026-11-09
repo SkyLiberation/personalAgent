@@ -24,9 +24,7 @@ from evals.product_baselines.evidence import (
     product_evidence_role,
 )
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
-from personal_agent.application.conversation.interaction_intent import (
-    _DERIVATION_INSTRUCTION,
-)
+from personal_agent.kernel.prompts import get_prompt
 
 
 _CASE_ID = "PLAN-REPLAN-001"
@@ -229,7 +227,7 @@ def _config_cohort(server: LiveWebProcess) -> str:
             "ModelActionProtocol:v2|InteractionIntentProposal:lifecycle-v2"
         ),
         "review_instruction_digest": canonical_evidence_digest(
-            _DERIVATION_INSTRUCTION
+            get_prompt("conversation.interaction_intent").template
         ),
         "plan_review_verification_policy": "final_message_only",
         "web_search_provider": settings.web_search.provider,

@@ -1,0 +1,3 @@
+interface:
+  display_name: "LLM 决策排障"
+  short_description: "按实际失败定位模型决策责任边界，匹配已有经验与对应处理方法"

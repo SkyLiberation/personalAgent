@@ -12,6 +12,8 @@ from personal_agent.application.capture.providers import (
 )
 from personal_agent.application.capture.utils import normalize_upload_filename, source_type_from_upload, validate_capture_url
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import create_prompt_catalog
 
 
 class CaptureService:
@@ -21,8 +23,10 @@ class CaptureService:
         logger: logging.Logger | None = None,
         upload_provider: UploadCaptureProvider | None = None,
         url_providers: list[UrlCaptureProvider] | None = None,
+        *, prompts: PromptCatalog | None = None,
     ) -> None:
         self.settings = settings
+        self._prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
         self.logger = logger or logging.getLogger(__name__)
         self.upload_provider = upload_provider or DefaultUploadCaptureProvider(self.logger)
         self.url_providers = url_providers or self._build_default_url_providers()
@@ -70,5 +74,5 @@ class CaptureService:
 
     def _build_default_url_providers(self) -> list[UrlCaptureProvider]:
         if self.settings.url_capture_provider == "firecrawl":
-            return [FirecrawlUrlCaptureProvider(self.settings, self.logger)]
-        return [BuiltinUrlCaptureProvider()]
+            return [FirecrawlUrlCaptureProvider(self.settings, self.logger, prompts=self._prompts)]
+        return [BuiltinUrlCaptureProvider(prompts=self._prompts)]

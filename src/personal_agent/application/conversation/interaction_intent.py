@@ -2,87 +2,67 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.capabilities.contracts.model import (
+    ModelCapacityRefused,
+    ModelInvocationUnavailable,
+    StructuredOutputFailure,
     StructuredModelClient,
     StructuredModelRequest,
     StructuredModelResponse,
     sealed_context_projection_ref,
 )
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from .models import (
     ConversationMessage,
     DecisionFeedback,
+    InteractionTrace,
     ReviewCriteria,
 )
+from .errors import ConversationFailure
 
 _FEEDBACK_ACTION_ID = "interaction_turn"
 # Thinking and the typed intent share the provider's completion budget.
 _INTENT_OUTPUT_TOKEN_LIMIT = 32_768
-
-_DERIVATION_INSTRUCTION = (
-    "First decide whether the latest user message explicitly requires work to continue "
-    "after this response and later be queried, paused, resumed, or steered. Set "
-    "background_continuation_requested=true only for that requirement, and copy the exact "
-    "proving substring into background_source_span. Otherwise return false and an empty "
-    "span. A background continuation request is not review_plan or deliver_final_result, "
-    "so interaction_phase MUST be ordinary and phase_source_span MUST be empty. Do not choose "
-    "tools, agents, plans, or implementation steps. "
-    "Derive one mutually exclusive interaction phase from the latest user message. Use "
-    "review_plan only when the latest message asks the Agent to return an intermediate plan, "
-    "checklist, proposal, draft, or staged analysis and then wait for the user to review, "
-    "confirm scope, supplement facts, or provide acceptance criteria. Use "
-    "deliver_final_result when the latest message asks to finish, complete, deliver, or close "
-    "out work that was previously staged for review. Otherwise use ordinary. Return "
-    "phase_source_span as the exact substring of the latest user message that establishes "
-    "review_plan or deliver_final_result; use an empty string for ordinary. Never use a span "
-    "from an earlier message. "
-    "Separately, return one requirement per acceptance condition the user states. For each "
-    "requirement, criterion is a single testable condition phrased as what the sent text must "
-    "or must not do, and source_span is the exact substring of a user message that states it. "
-    "Copy source_span character for character from that message: do not translate, "
-    "paraphrase, trim inner words, or merge two sentences. Every criterion must be "
-    "self-contained and judgeable without conversation history. Before returning, inspect "
-    "each criterion as if the reader cannot see any message. A criterion such as 'keep the "
-    "original scope', 'use the same sources', or 'cover the items above' is still an "
-    "acceptance condition and must not be omitted merely because the latest message does not "
-    "repeat its objects. Rewrite it by explicitly listing every referenced subject, source "
-    "type, and qualifier from the user's messages. Never return original scope, the above, "
-    "unchanged, the same, as before, a pronoun, or an unstated set as the only identity of a "
-    "required object. Preserve every proper noun and qualified product, project, organization, "
-    "and repository name exactly as written by the user; never shorten or broaden a name, such "
-    "as dropping a CLI, SDK, repository, or Agent qualifier. Return no requirement for a "
-    "condition the user did not state; never invent one. A request to answer, explain, look "
-    "something up, summarize, or save without explicit acceptance conditions has no "
-    "requirements."
-)
 
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class UserTextReference(_StrictModel):
+    """Coordinates in the original conversation, never model-authored text."""
+
+    message_index: int = Field(ge=0, strict=True)
+    line_start: int = Field(ge=1, strict=True)
+    line_end: int = Field(ge=1, strict=True)
+
+
 class ReviewRequirement(_StrictModel):
     """One acceptance condition and its verbatim user-owned source."""
 
-    criterion: str = Field(min_length=1, max_length=500)
-    source_span: str = Field(min_length=1, max_length=2_000)
+    criterion: str = Field(min_length=1)
+    source: UserTextReference
 
 
 class InteractionIntentProposal(_StrictModel):
     """Model proposal for delivery requirements, interaction phase, and review criteria."""
 
     requirements: tuple[ReviewRequirement, ...] = ()
-    interaction_phase: Literal[
-        "ordinary", "review_plan", "deliver_final_result"
-    ] = "ordinary"
-    phase_source_span: str = Field(default="", max_length=2_000)
+    interaction_phase: Literal["ordinary", "review_plan", "deliver_final_result"] = (
+        "ordinary"
+    )
+    phase_source: UserTextReference | None = None
     background_continuation_requested: bool = False
-    background_source_span: str = Field(default="", max_length=2_000)
+    background_source: UserTextReference | None = None
 
 
 class AdmittedInteractionIntent(_StrictModel):
@@ -91,57 +71,134 @@ class AdmittedInteractionIntent(_StrictModel):
     review_criteria: ReviewCriteria = Field(default_factory=ReviewCriteria)
     background_continuation_requested: bool = False
     background_requirement_grounded: bool = True
-    background_source_span: str = ""
+    background_source: UserTextReference | None = None
+
+
+def _user_lines(text: str) -> list[str]:
+    return text.splitlines(keepends=True) or [""]
+
+
+def resolve_user_text(
+    source: UserTextReference | None,
+    messages: Sequence[ConversationMessage],
+    *,
+    latest_only: bool = False,
+) -> str | None:
+    """Restore exact source bytes at the admitted message/line boundary."""
+    if source is None or source.message_index >= len(messages):
+        return None
+    message = messages[source.message_index]
+    if message.role != "user":
+        return None
+    if latest_only:
+        latest = next(
+            (index for index in range(len(messages) - 1, -1, -1)
+             if messages[index].role == "user"),
+            None,
+        )
+        if source.message_index != latest:
+            return None
+    lines = _user_lines(message.content)
+    if source.line_end < source.line_start or source.line_end > len(lines):
+        return None
+    restored = "".join(lines[source.line_start - 1:source.line_end])
+    return restored if restored.strip() else None
+
+
+def materialize_intent_messages(
+    messages: Sequence[ConversationMessage],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> list[dict[str, object]]:
+    """Show one numbered copy; coordinates still resolve against the originals."""
+    projected = []
+    latest_user = next(
+        (index for index in range(len(messages) - 1, -1, -1)
+         if messages[index].role == "user"),
+        None,
+    )
+    for index, message in enumerate(messages):
+        item = message.model_dump(mode="json")
+        if message.role == "user":
+            lines = _user_lines(message.content)
+            item["content"] = (
+                prompts.render(
+                    "conversation.intent.current_user_source_header" if index == latest_user
+                    else "conversation.intent.user_source_header",
+                    index=index, line_count=len(lines),
+                )
+                + "".join(f"L{number}|{line}" for number, line in enumerate(lines, 1))
+            )
+        projected.append(item)
+    return projected
+
+
+def materialize_previous_criteria(
+    messages: Sequence[ConversationMessage],
+    history: Sequence[InteractionTrace],
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> list[dict[str, object]]:
+    """Expose only records matching the preceding actual user/assistant exchange."""
+    if len(messages) < 3 or messages[-2].role != "assistant":
+        return []
+    preceding_messages = tuple(messages[:-2])
+    contexts = []
+    for trace in history:
+        if (trace.messages != preceding_messages or trace.final_message is None
+                or trace.final_message.message != messages[-2].content
+                or trace.review_criteria is None):
+            continue
+        entries = [
+            f"{index}. " + criterion.replace("\n", "\n   ")
+            for index, criterion in enumerate(trace.review_criteria.criteria, 1)
+        ]
+        contexts.append({"role": "system", "content": prompts.render(
+            "conversation.intent.previous_criteria",
+            run_ref=trace.interaction_run_ref,
+            message_index=len(trace.messages) - 1,
+            criteria_text="\n".join(entries),
+        )})
+    return contexts
 
 
 def admit_interaction_intent(
     proposal: InteractionIntentProposal,
     *,
     messages: Sequence[ConversationMessage],
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> AdmittedInteractionIntent:
     """Ground semantic decisions only in verbatim user-authored text."""
-    user_text = tuple(
-        message.content for message in messages if message.role == "user"
-    )
-    latest_user_text = user_text[-1:] if user_text else ()
-    background_span = proposal.background_source_span.strip()
+    background_span = resolve_user_text(proposal.background_source, messages, latest_only=True)
     background_requirement_grounded = (
-        not proposal.background_continuation_requested
-        and not background_span
+        not proposal.background_continuation_requested and proposal.background_source is None
     ) or (
         proposal.background_continuation_requested
         and proposal.interaction_phase == "ordinary"
-        and not proposal.phase_source_span.strip()
+        and proposal.phase_source is None
         and bool(background_span)
-        and _appears_in(background_span, latest_user_text)
     )
     background_continuation_requested = bool(
-        proposal.background_continuation_requested
-        and background_requirement_grounded
+        proposal.background_continuation_requested and background_requirement_grounded
     )
 
     criteria: list[str] = []
     ungrounded: list[str] = []
-    phase_span = proposal.phase_source_span.strip()
+    phase_span = resolve_user_text(proposal.phase_source, messages, latest_only=True)
     phase_grounded = bool(
-        proposal.interaction_phase == "ordinary"
+        (proposal.interaction_phase == "ordinary" and proposal.phase_source is None)
         or (
             not background_continuation_requested
+            and proposal.interaction_phase != "ordinary"
             and phase_span
-            and latest_user_text
-            and _appears_in(phase_span, latest_user_text)
         )
     )
-    interaction_phase = (
-        proposal.interaction_phase if phase_grounded else "ordinary"
-    )
-    if proposal.interaction_phase != "ordinary" and not phase_grounded:
-        ungrounded.append(phase_span or "<missing phase source>")
+    interaction_phase = proposal.interaction_phase if phase_grounded else "ordinary"
+    if not phase_grounded:
+        ungrounded.append(_source_description(proposal.phase_source, prompts=prompts))
     for requirement in proposal.requirements:
-        span = requirement.source_span.strip()
+        span = resolve_user_text(requirement.source, messages)
         criterion = requirement.criterion.strip()
-        if not criterion or not span or not _appears_in(span, user_text):
-            ungrounded.append(span or requirement.source_span)
+        if not criterion or not span:
+            ungrounded.append(_source_description(requirement.source, prompts=prompts))
             continue
         if criterion not in criteria:
             criteria.append(criterion)
@@ -153,7 +210,7 @@ def admit_interaction_intent(
         ),
         background_continuation_requested=background_continuation_requested,
         background_requirement_grounded=background_requirement_grounded,
-        background_source_span=background_span,
+        background_source=(proposal.background_source if background_continuation_requested else None),
     )
 
 
@@ -161,152 +218,197 @@ def derive_interaction_intent(
     model_client: StructuredModelClient,
     *,
     messages: Sequence[ConversationMessage],
+    history: Sequence[InteractionTrace] = (),
+    runtime_context: str = "",
+    propagate_revision_failures: bool = False,
+    deadline_at: datetime | None = None,
+    remaining_tokens: int | None = None,
+    generate: Callable[
+        [StructuredModelRequest[InteractionIntentProposal]],
+        StructuredModelResponse[InteractionIntentProposal],
+    ] | None = None,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[
     AdmittedInteractionIntent,
     tuple[StructuredModelResponse[InteractionIntentProposal], ...],
     tuple[DecisionFeedback, ...],
 ]:
     """Derive one intent, revising an ungrounded background requirement at most once."""
+    intent_prompt = prompts.get("conversation.interaction_intent")
+    generate_model = generate or model_client.generate
+    source_messages = materialize_intent_messages(messages, prompts=prompts)
+    previous_context = materialize_previous_criteria(messages, history, prompts=prompts)
+    runtime_messages = ([{"role": "system", "content": prompts.render(
+        "conversation.intent.runtime_context", context_text=runtime_context,
+    )}] if runtime_context else [])
     prompt_messages = [
-        {"role": "system", "content": _DERIVATION_INSTRUCTION},
-        *(message.model_dump(mode="json") for message in messages),
+        {"role": "system", "content": intent_prompt.template},
+        *previous_context,
+        *runtime_messages,
+        *source_messages,
     ]
-    response = model_client.generate(StructuredModelRequest(
-        operation="interaction_intent",
-        version="v2",
-        messages=prompt_messages,
-        output_type=InteractionIntentProposal,
-        context_projection_ref=sealed_context_projection_ref(
-            purpose="interaction_intent", messages=prompt_messages,
-        ),
-        temperature=0,
-        max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
-        metadata={"component": "conversation_intent_admission"},
-    ))
-    admitted = admit_interaction_intent(response.value, messages=messages)
-    if admitted.background_requirement_grounded:
-        return admitted, (response,), ()
-
-    feedback = background_requirement_revision_feedback()
-    revision_messages = [
-        {
-            "role": "system",
-            "content": (
-                f"{_DERIVATION_INSTRUCTION}\n\n"
-                "The previous background requirement proposal was rejected by deterministic "
-                "Admission. Revise only background_continuation_requested, background_source_span, "
-                "interaction_phase, and phase_source_span. Requirements remain frozen "
-                "and any changed requirements will be ignored. If the latest user "
-                "message does require independent work after this response, copy the "
-                "smallest exact proving substring. Otherwise return false with "
-                "an empty background_source_span. Previous proposal: "
-                f"{response.value.model_dump_json()}. Typed feedback: "
-                f"{feedback.model_dump_json()}."
-            ),
-        },
-        *(message.model_dump(mode="json") for message in messages),
-    ]
-    try:
-        revision = model_client.generate(StructuredModelRequest(
+    response = generate_model(
+        StructuredModelRequest(
             operation="interaction_intent",
-            version="v2",
-            messages=revision_messages,
+            version=intent_prompt.version,
+            messages=prompt_messages,
             output_type=InteractionIntentProposal,
+            output_transport="prompted_json",
             context_projection_ref=sealed_context_projection_ref(
-                purpose="interaction_intent_revision",
-                messages=revision_messages,
+                purpose="interaction_intent",
+                messages=prompt_messages,
             ),
             temperature=0,
             max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
-            metadata={
-                "component": "conversation_intent_admission",
-                "revision_attempt": 1,
-            },
-        ))
-    except Exception:
+            metadata={"component": "conversation_intent_admission"},
+        )
+    )
+    admitted = admit_interaction_intent(response.value, messages=messages, prompts=prompts)
+    if admitted.background_requirement_grounded:
+        return admitted, (response,), ()
+
+    feedback = background_requirement_revision_feedback(prompts=prompts)
+    if deadline_at is not None and datetime.now(UTC) >= deadline_at:
+        raise ConversationFailure(
+            prompts.render("conversation.intent.deadline_exceeded"),
+            reason_code="run_deadline_exceeded",
+            failure_stage="application_budget",
+            prior_responses=(response,),
+        )
+    consumed = response.total_tokens
+    if (
+        consumed is None
+        and response.input_tokens is not None
+        and response.output_tokens is not None
+    ):
+        consumed = response.input_tokens + response.output_tokens
+    if (
+        remaining_tokens is not None
+        and consumed is not None
+        and consumed >= remaining_tokens
+    ):
+        raise ConversationFailure(
+            prompts.render("conversation.intent.tokens_exhausted"),
+            reason_code="model_token_budget_exhausted",
+            failure_stage="application_budget",
+            prior_responses=(response,),
+        )
+    revision_messages = [
+        {
+            "role": "system",
+            "content": prompts.render(
+                "conversation.intent.revision", intent_prompt=intent_prompt.template,
+                proposal=response.value.model_dump_json(), feedback=feedback.model_dump_json(),
+            ),
+        },
+        *previous_context,
+        *runtime_messages,
+        *source_messages,
+    ]
+    try:
+        revision = generate_model(
+            StructuredModelRequest(
+                operation="interaction_intent_revision",
+                version=intent_prompt.version,
+                messages=revision_messages,
+                output_type=InteractionIntentProposal,
+                output_transport="prompted_json",
+                context_projection_ref=sealed_context_projection_ref(
+                    purpose="interaction_intent_revision",
+                    messages=revision_messages,
+                ),
+                temperature=0,
+                max_tokens=_INTENT_OUTPUT_TOKEN_LIMIT,
+                metadata={
+                    "component": "conversation_intent_admission",
+                    "revision_attempt": 1,
+                },
+            )
+        )
+    except ModelCapacityRefused as exc:
+        exc.prior_responses = (response, *exc.prior_responses)
+        raise
+    except (ModelInvocationUnavailable, StructuredOutputFailure, ConversationFailure) as exc:
+        if isinstance(exc, ConversationFailure) and exc.failure_stage not in {
+            "provider_request", "provider_structured_decode",
+        }:
+            raise
+        if propagate_revision_failures:
+            exc.prior_responses = (response, *exc.prior_responses)
+            raise
         return admitted, (response,), (feedback,)
 
-    revised_proposal = response.value.model_copy(update={
-        "background_continuation_requested": (
-            revision.value.background_continuation_requested
-        ),
-        "background_source_span": revision.value.background_source_span,
-        "interaction_phase": revision.value.interaction_phase,
-        "phase_source_span": revision.value.phase_source_span,
-    })
+    revised_proposal = response.value.model_copy(
+        update={
+            "background_continuation_requested": (
+                revision.value.background_continuation_requested
+            ),
+            "background_source": revision.value.background_source,
+            "interaction_phase": revision.value.interaction_phase,
+            "phase_source": revision.value.phase_source,
+        }
+    )
     return (
-        admit_interaction_intent(revised_proposal, messages=messages),
+        admit_interaction_intent(revised_proposal, messages=messages, prompts=prompts),
         (response, revision),
         (feedback,),
     )
 
 
-def background_requirement_revision_feedback() -> DecisionFeedback:
+def background_requirement_revision_feedback(
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> DecisionFeedback:
     """Describe the only fields an ungrounded background proposal may revise."""
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
         reason_code="background_requirement_revision_required",
-        message=(
-            "The proposed background continuation requirement was not supported by an exact source "
-            "span from the latest user message."
-        ),
+        message=prompts.get("conversation.intent.background_revision.message").template,
         repairable_fields=(
             "background_continuation_requested",
-            "background_source_span",
+            "background_source",
             "interaction_phase",
-            "phase_source_span",
+            "phase_source",
         ),
         immutable_fields=("messages", "requirements"),
-        required_repair=(
-            "Return true with an exact proving source span, or return false with an "
-            "empty background_source_span."
-        ),
+        required_repair=prompts.get("conversation.intent.background_revision.repair").template,
     )
 
 
-def ungrounded_criteria_feedback(criteria: ReviewCriteria) -> DecisionFeedback:
+def ungrounded_criteria_feedback(
+    criteria: ReviewCriteria, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> DecisionFeedback:
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
         reason_code="review_criteria_not_grounded",
-        message=(
-            "No success criterion for this request could be traced verbatim to a "
-            "user message, so this answer is not held to a reviewed standard."
-        ),
+        message=prompts.get("conversation.intent.ungrounded_criteria.message").template,
         repairable_fields=("message",),
         immutable_fields=("messages",),
-        required_repair=(
-            "If the request is to review specific text against stated requirements, "
-            "ask the user to restate the requirement in one sentence. Otherwise "
-            "answer the request directly and claim nothing about review or verification."
-        ),
+        required_repair=prompts.get("conversation.intent.ungrounded_criteria.repair").template,
     )
 
 
-def ungrounded_background_requirement_feedback() -> DecisionFeedback:
+def ungrounded_background_requirement_feedback(
+    *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> DecisionFeedback:
     return DecisionFeedback(
         action_id=_FEEDBACK_ACTION_ID,
         reason_code="background_requirement_not_grounded",
-        message=(
-            "The proposed background continuation requirement could not be traced to the latest user "
-            "message, so no background work was started."
-        ),
+        message=prompts.get("conversation.intent.ungrounded_background.message").template,
         repairable_fields=("message",),
         immutable_fields=("messages",),
-        required_repair=(
-            "Continue in the current Conversation or ask whether the user needs work "
-            "to continue after this response."
-        ),
+        required_repair=prompts.get("conversation.intent.ungrounded_background.repair").template,
     )
 
 
-def _appears_in(span: str, sources: Sequence[str]) -> bool:
-    return any(span in source for source in sources)
+def _source_description(source: UserTextReference | None, *, prompts: PromptCatalog) -> str:
+    return source.model_dump_json() if source is not None else prompts.render("conversation.intent.source_missing")
 
 
 __all__ = [
     "AdmittedInteractionIntent",
     "InteractionIntentProposal",
     "ReviewRequirement",
+    "UserTextReference",
     "admit_interaction_intent",
     "derive_interaction_intent",
     "background_requirement_revision_feedback",

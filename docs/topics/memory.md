@@ -6,7 +6,8 @@
 
 | 事实 | Canonical owner | 生命周期 | 是否可作为回答证据 |
 | --- | --- | --- | --- |
-| Conversation message / committed observation | Interaction journal | 单次或连续 Conversation | 只能理解指代，不直接证明外部事实 |
+| Conversation message | Interaction journal | 单次或连续 Conversation | 用户原文可作为本人陈述的来源；历史 assistant 回答只帮助理解指代 |
+| committed Observation | Interaction journal | 当前执行及恢复 | 按实际来源、引用绑定和读取范围提供证据；工具成功本身不证明内容满足目标 |
 | Personal Knowledge Artifact / EvidenceSpan / Claim / Relation | Personal Knowledge Store | 长期知识生命周期 | 经过 visibility 和 retrieval 后可以 |
 | 大文本、文件和生成产物 | Artifact Store | 由 ArtifactRef 生命周期管理 | 只有可见且有 source binding 时可以 |
 | Graphiti node / edge / episode | Graph retrieval projection | 可从 Personal Knowledge/Note 重建 | 只作为 retrieval fact/ref，不是权威写源 |
@@ -56,8 +57,7 @@ exact corrected statement
 纠正入口按 authenticated owner 限定目标；它允许用户用新权威证据替换被自动判为 `rejected` 的候选 Claim，
 但拒绝修改已 `superseded`、`deprecated` 或 `deleted` 的历史对象。
 
-纠错入口同时校验 authenticated owner；跨 owner、缺失或 terminal Claim fail closed。E10 从正式 HTTP 入口
-证明纠错“周三→周四”后 Conversation 只返回“周四”，且旧 evidence 仍可用于历史审计。
+跨 owner、缺失或终态 Claim 均拒绝纠错。E10 的具体入口、用户结果及旧 evidence 保留检查由[评测盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 读取与上下文
 

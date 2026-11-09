@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 from .models import (
     ActionObservation,
     ContinueTurnProposal,
@@ -101,7 +104,7 @@ def required_plan_review_feedback() -> DecisionFeedback:
         immutable_fields=("messages", "interaction_mode", "inputs"),
         required_repair=(
             "If required evidence is not yet present, use only planning_safe actions. "
-            "Then return ContinueTurnProposal with the grounded working_plan, "
+            "Then call the working-plan action with the grounded plan, "
             "wait_for_user true, and no actions; do not place a prose plan in FinalMessage."
         ),
     )
@@ -163,8 +166,9 @@ def admit_working_plan(
     inputs: tuple,
     wait_for_user: bool = False,
     result_delivered: bool = False,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[DecisionFeedback | None, ConversationWorkingPlan | None]:
-    step_ids = tuple(step.step_id for step in proposal.steps)
+    step_ids = tuple(step.step_id for step in proposal.steps if step.step_id is not None)
     if len(step_ids) != len(set(step_ids)):
         return DecisionFeedback(
             action_id="working_plan",
@@ -189,11 +193,11 @@ def admit_working_plan(
         return DecisionFeedback(
             action_id="working_plan",
             reason_code="working_plan_active_step_required",
-            message="工作计划最多只能有一个 in_progress 工作项。",
+            message=prompts.render("conversation.plan.active_step_limit"),
             repairable_fields=("steps",),
             immutable_fields=("goal", "grounding"),
             required_repair=(
-                "只保留当前正在推进的一个活动项，其余待办项设为 pending。"
+                prompts.render("conversation.plan.active_step_repair")
             ),
         ), None
     starts_new_plan = _starts_new_plan(current, result_delivered=result_delivered)
@@ -202,35 +206,29 @@ def admit_working_plan(
         current,
     ):
         return None, current
-    successful_action_ids_by_step = {
-        step_id: tuple(
-            item.action_id
-            for item in inputs
-            if isinstance(item, ActionObservation)
-            and item.status == "succeeded"
-            and item.plan_step_id == step_id
-        )
-        for step_id in step_ids
-    }
-    current_by_id = (
-        {step.step_id: step for step in current.steps}
-        if current is not None and not starts_new_plan
-        else {}
-    )
-    def materialize_step(step):
-        existing = current_by_id.get(step.step_id)
-        if (existing is not None and existing.status == "completed"
-                and step.status == "completed"
-                and step.description == existing.description):
-            return existing
-        return ConversationWorkingPlanStep(
-            **step.model_dump(),
-            completion_action_ids=(
-                successful_action_ids_by_step[step.step_id]
-                if step.status == "completed"
-                else ()
+    current_by_id = ({step.step_id: step for step in current.steps if step.status != "superseded"}
+                     if current is not None and not starts_new_plan else {})
+    unknown = set(step_ids) - current_by_id.keys()
+    omitted = current_by_id.keys() - set(step_ids)
+    changed_bound = [step.step_id for step in proposal.steps if step.step_id in current_by_id
+                     and current_by_id[step.step_id].completion_action_ids
+                     and step.description != current_by_id[step.step_id].description]
+    if unknown or omitted or changed_bound:
+        return DecisionFeedback(action_id="working_plan", reason_code="working_plan_step_binding_invalid",
+            message=prompts.render(
+                "conversation.plan.step_binding_invalid", unknown=sorted(unknown),
+                omitted=sorted(omitted), changed_bound=changed_bound,
             ),
-        )
+            repairable_fields=("steps",), required_repair=prompts.render("conversation.plan.step_binding_repair")), None
+
+    def materialize_step(step):
+        step_id = step.step_id or f"wstep_{uuid4().hex[:16]}"
+        existing = current_by_id.get(step_id)
+        execution_ids = tuple(item.action_id for item in inputs if isinstance(item, ActionObservation)
+                              and item.status == "succeeded" and item.plan_step_id == step_id)
+        historical = existing.completion_action_ids if existing else ()
+        return ConversationWorkingPlanStep(step_id=step_id, description=step.description, status=step.status,
+            completion_action_ids=tuple(dict.fromkeys((*historical, *execution_ids))))
     plan = ConversationWorkingPlan(
         plan_id=(
             current.plan_id
@@ -270,7 +268,7 @@ def admit_continue_turn_progress(
     observable progress.  Everything else would consume another model turn
     while presenting the next decision with the same execution state.
     """
-    if decision.actions or decision.wait_for_user or decision.finalization_requested:
+    if decision.actions or decision.wait_for_user:
         return None
     if decision.working_plan is not None and admitted_plan is not previous_plan:
         return None
@@ -288,12 +286,11 @@ def admit_continue_turn_progress(
             "actions",
             "working_plan",
             "wait_for_user",
-            "finalization_requested",
         ),
         immutable_fields=("messages", "inputs"),
         required_repair=(
             "Keep an unchanged plan unchanged and submit the next necessary concrete "
-            "action, a genuinely revised plan, wait for the user, or return FinalMessage."
+            "action, a genuinely revised plan, wait for the user, or call control_submit_final with the complete answer."
         ),
     )
 

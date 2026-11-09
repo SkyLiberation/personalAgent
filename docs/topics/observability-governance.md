@@ -45,5 +45,3 @@
 - [当前评测体系](../evals/README.md)；
 - [当前端到端用例盘点](../evals/02-current-case-inventory.md)；
 - [评测执行与发布](../evals/04-running-and-release.md)。
-
-旧 `AgentGraphState`、LangGraph 总图、通用 `AgentEvent` 收敛计划和已经迁移的 `web/agent/storage` 路径不再属于当前设计，因此已从本页删除。

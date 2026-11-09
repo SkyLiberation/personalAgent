@@ -1,0 +1,3 @@
+interface:
+  display_name: "方案推进分析"
+  short_description: "核对方案在真实运行中的落实，保留局部收益并据差异推进验证"

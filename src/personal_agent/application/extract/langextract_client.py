@@ -18,6 +18,7 @@ import langextract as lx
 from langextract.providers.openai import OpenAILanguageModel
 
 from personal_agent.kernel.config import LangExtractConfig
+from personal_agent.kernel.model_provider import ModelProviderPolicy
 from langextract.providers.schemas.openai import OpenAISchema
 
 from personal_agent.application.extract.openai_schema import build_section_openai_schema
@@ -29,9 +30,25 @@ class LangExtractMisconfiguredError(RuntimeError):
     """Raised when LangExtractConfig is enabled but missing required fields."""
 
 
+class ConfiguredOpenAILanguageModel(OpenAILanguageModel):
+    """Keep configured provider options across LangExtract's SDK whitelist."""
+
+    def __init__(self, *args, extra_body: dict[str, Any],
+                 provider_policy: ModelProviderPolicy, **kwargs) -> None:
+        self._provider_extra_body = dict(extra_body)
+        self._provider_policy = provider_policy
+        super().__init__(*args, **kwargs)
+
+    def _build_chat_completions_params(self, prompt: str, config: dict) -> dict:
+        params = super()._build_chat_completions_params(prompt, config)
+        defaults = self._provider_extra_body if params["model"] == self.model_id else {}
+        return self._provider_policy.prepare_chat_parameters(params, defaults=defaults)
+
+
 def build_language_model(
     config: LangExtractConfig,
     *,
+    provider_policy: ModelProviderPolicy,
     openai_schema: OpenAISchema | None = None,
 ) -> OpenAILanguageModel:
     """Construct an OpenAILanguageModel pre-bound to our custom strict schema."""
@@ -40,12 +57,14 @@ def build_language_model(
             "LangExtractConfig.api_key is empty; set STRUCTURED_API_KEY or "
             "PERSONAL_AGENT_EXTRACT_API_KEY in the environment."
         )
-    return OpenAILanguageModel(
+    return ConfiguredOpenAILanguageModel(
         model_id=config.model_id,
         api_key=config.api_key,
         base_url=config.base_url,
+        provider_policy=provider_policy,
         openai_schema=openai_schema or build_section_openai_schema(),
         max_workers=config.max_workers,
+        extra_body=dict(config.extra_body),
     )
 
 
@@ -55,6 +74,7 @@ def run_extract(
     prompt: str,
     examples: list[lx.data.ExampleData],
     config: LangExtractConfig,
+    provider_policy: ModelProviderPolicy,
     openai_schema: OpenAISchema | None = None,
     **extra_kwargs: Any,
 ) -> lx.data.AnnotatedDocument:
@@ -62,7 +82,7 @@ def run_extract(
 
     Caller is expected to handle exceptions; this wrapper does not swallow.
     """
-    language_model = build_language_model(config, openai_schema=openai_schema)
+    language_model = build_language_model(config, provider_policy=provider_policy, openai_schema=openai_schema)
     logger.info(
         "langextract.run model=%s base_url=%s text_len=%d passes=%d max_workers=%d",
         config.model_id,

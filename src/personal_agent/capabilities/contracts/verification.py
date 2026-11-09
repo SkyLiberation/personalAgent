@@ -17,8 +17,31 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic import model_validator
 
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 VerificationVerdict = Literal["passed", "failed"]
+VerificationKind = Literal["goal", "answer"]
+
+
+class ActionGoalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: Literal["conflict", "no_conflict", "undetermined"]
+    feedback: str = Field(max_length=1600)
+
+    @model_validator(mode="after")
+    def feedback_matches_verdict(self) -> ActionGoalDecision:
+        if self.verdict != "no_conflict" and not self.feedback.strip():
+            raise ValueError("conflict and undetermined require feedback")
+        return self
+
+
+class ActionGoalJudgment(ActionGoalDecision):
+    action_id: str = Field(min_length=1)
+
+
+class ActionGoalAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class ConversationEvidenceReference(BaseModel):
@@ -88,9 +111,7 @@ class CitedSupportRejection(BaseModel):
     checked_draft: str = Field(min_length=1)
     findings: tuple[OverreachFinding, ...] = Field(min_length=1)
     explanation: str = (
-        "本次提交的证据不足以支持所列草稿声明，暂不交付。"
-        "这不证明原文没有依据或声明必然为假。请补充已有引用、继续取证或修订结论后重新提交；"
-        "补充引用时可以保留有据的原稿，不必为了改稿而改变事实。"
+        DEFAULT_PROMPTS.get('verification.cited_support_rejection.explanation').template
     )
 
 
@@ -155,6 +176,51 @@ class SemanticVerificationReport(BaseModel):
     revision_feedback: str = ""
 
 
+class UserRequirementCheck(BaseModel):
+    """One correctable comparison of a user requirement with the submission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requirement: str = Field(
+        min_length=1, pattern=r"\S",
+        description="本轮实际适用的一项用户要求，写清对象及所要求的关系；依据原始用户消息及仍有效历史，不将模型自己的定义当作用户要求。",
+    )
+    status: Literal["satisfied", "not_satisfied", "insufficient_evidence"] = Field(
+        description="本项要求的判决：满足为 satisfied，明确遗漏或冲突为 not_satisfied，缺少不可替代前提而无法判断为 insufficient_evidence。",
+    )
+    feedback: str = Field(
+        min_length=1, pattern=r"\S",
+        description="本次待验内容怎样对应这一要求；有差异时指出实际偏离及需要修订的部分，不代写替代内容。",
+    )
+
+
+class UserRequirementAssessment(BaseModel):
+    """Requirement-level judgments, consumed by the runtime verifier adapter."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    checks: tuple[UserRequirementCheck, ...] = Field(
+        min_length=1,
+        description="JSON 对象数组，每项包含 requirement、status、feedback；逐项覆盖影响本轮交付的用户要求，至少一项，不能用字符串数组、单对象、null 或空数组替代。",
+    )
+
+
+class AnswerGoalCheck(UserRequirementCheck):
+    requirement: str = Field(
+        min_length=1, pattern=r"\S",
+        description="当前回答绑定目标中适用的交付或约束。核验未完成说明时，写明所检查的说明事项。",
+    )
+
+
+class AnswerGoalAssessment(UserRequirementAssessment):
+    """Check the delivery against its bound goal with the existing result shape."""
+
+    checks: tuple[AnswerGoalCheck, ...] = Field(
+        min_length=1,
+        description="非空对象数组，每项包含 requirement、status 和 feedback，覆盖当前绑定目标的适用要求。",
+    )
+
+
 class SemanticVerificationReceipt(SemanticVerificationReport):
     """A report plus the tool-computed facts an admission may rely on.
 
@@ -177,18 +243,113 @@ class SemanticVerificationReceipt(SemanticVerificationReport):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     criterion_results: tuple[BoundVerificationCriterionResult, ...] = Field(min_length=1)
+    checked_kind: VerificationKind
     verdict: VerificationVerdict
     receipt_id: str = Field(pattern=r"^svr_[0-9a-f]{20}$")
-    verified_draft: str = Field(min_length=1, max_length=20_000)
+    verified_draft: str = Field(min_length=1)
     draft_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     success_criteria: tuple[str, ...] = Field(min_length=1)
     criteria_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class UnverifiedGoalSnapshot(BaseModel):
+    """Accepted goal projection when its deployment explicitly disables review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    submission_id: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class VerificationEvent(BaseModel):
+    """One actual submission and its verdict, projected from the Journal."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: VerificationKind
+    submission_id: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    disposition: Literal["answer", "clarification_required", "limitation", "failed"] | None = None
+    verdict: SemanticVerificationReceipt | None = None
+    verified_goal: SemanticVerificationReceipt | None = None
+    unverified_goal: UnverifiedGoalSnapshot | None = None
+
+    @model_validator(mode="after")
+    def _paired_verdict(self):
+        if (self.kind == "answer") != (self.disposition is not None):
+            raise ValueError("only answer events carry the original disposition")
+        if self.verdict is not None and (self.verdict.checked_kind != self.kind
+                or self.verdict.verified_draft != self.content):
+            raise ValueError("verification verdict belongs to another submission")
+        if self.verified_goal is not None and (
+                self.kind != "answer" or self.verified_goal.checked_kind != "goal"
+                or self.verified_goal.verdict != "passed"):
+            raise ValueError("answer goal snapshot requires a passed goal-verification receipt")
+        if self.unverified_goal is not None and (self.kind != "answer" or self.verified_goal is not None):
+            raise ValueError("unverified goals belong only to answers without a passed goal snapshot")
+        return self
+
+
+class VerificationTurn(BaseModel):
+    """Time-ordered verification history for one user turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    user_turn: int = Field(ge=1)
+    question: str | None = Field(default=None, min_length=1)
+    events: tuple[VerificationEvent, ...]
+    summary: str | None = None
+
+
+class GoalComplianceAnswerContext(BaseModel):
+    """Runtime projection shared with pre-execution checks, ending at the pending draft."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["answer"] = "answer"
+    rounds: tuple[str, ...] = Field(min_length=1)
+    submission_id: str = Field(min_length=1)
+    disposition: Literal["answer", "clarification_required", "limitation", "failed"]
+
+
+class VerificationContext(BaseModel):
+    """One responsibility's history; the last event is its current submission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: VerificationKind
+    turns: tuple[VerificationTurn, ...] = Field(min_length=1)
+    active_goal: str | None = None
+    binding: str = Field(pattern=r"^[0-9a-f]{64}$")
+    goal_verification_enabled: bool = True
+
+    @model_validator(mode="after")
+    def _turn_order(self):
+        if tuple(item.user_turn for item in self.turns) != tuple(range(1, len(self.turns) + 1)):
+            raise ValueError("verification history must follow user-question order")
+        if any((turn.question is not None) != (self.kind == "goal") for turn in self.turns):
+            raise ValueError("only goal verification receives the original user input")
+        if any(event.kind != self.kind for turn in self.turns for event in turn.events):
+            raise ValueError("verification history contains another responsibility's events")
+        if not self.turns[-1].events or self.turns[-1].events[-1].verdict is not None:
+            raise ValueError("the current submission must await this verification")
+        current = self.turns[-1].events[-1]
+        if self.goal_verification_enabled and any(event.unverified_goal is not None
+                for turn in self.turns for event in turn.events):
+            raise ValueError("enabled goal verification cannot consume an unverified goal")
+        if self.kind == "answer" and current.disposition == "answer":
+            if self.goal_verification_enabled and current.verified_goal is None:
+                raise ValueError("normal answer verification requires its actual verified goal")
+            if not self.goal_verification_enabled and current.unverified_goal is None:
+                raise ValueError("answer verification requires its actual accepted unverified goal")
+        return self
+
+
 __all__ = [
+    "VerificationContext",
+    "VerificationEvent",
+    "VerificationTurn",
+    "VerificationKind",
     "BoundVerificationCriterionResult",
     "SemanticVerificationReceipt",
     "SemanticVerificationReport",
+    "UserRequirementAssessment",
+    "UserRequirementCheck",
     "VerificationCriterionResult",
     "VerificationCriterion",
     "VerificationVerdict",

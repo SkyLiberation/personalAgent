@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+
 import json
 import logging
 from urllib.error import HTTPError, URLError
@@ -9,6 +12,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.prompts import create_prompt_catalog
 from personal_agent.application.capture.models import UrlCaptureResult
 from personal_agent.application.capture.web_source import MAX_URL_RESPONSE_BYTES
 from personal_agent.application.capture.utils import extract_html_text
@@ -25,18 +29,19 @@ class _FirecrawlResponse(BaseModel):
     data: _FirecrawlData
 
 
-def _read_response(response) -> bytes:
+def _read_response(response, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> bytes:
     body = response.read(MAX_URL_RESPONSE_BYTES + 1)
     if len(body) > MAX_URL_RESPONSE_BYTES:
-        raise HTTPException(status_code=413, detail="网页响应超过 4 MiB 容量，未交付正文。")
+        raise HTTPException(status_code=413, detail=prompts.render('web_source.response_limit'))
     return body
 
 
 class FirecrawlUrlCaptureProvider(UrlCaptureProvider):
     name = "firecrawl"
 
-    def __init__(self, settings: Settings, logger: logging.Logger | None = None) -> None:
+    def __init__(self, settings: Settings, logger: logging.Logger | None = None, *, prompts: PromptCatalog | None = None) -> None:
         self.settings = settings
+        self._prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
         self.logger = logger or logging.getLogger(__name__)
 
     def can_handle(self, url: str) -> bool:
@@ -62,7 +67,7 @@ class FirecrawlUrlCaptureProvider(UrlCaptureProvider):
         self.logger.info("Firecrawl scrape requested url=%s base_url=%s", url, base_url)
         try:
             with urlopen(request, timeout=timeout_seconds) as response:
-                raw = _read_response(response)
+                raw = _read_response(response, prompts=self._prompts)
         except HTTPError as exc:
             detail = exc.read(240).decode("utf-8", errors="replace") if getattr(exc, "fp", None) else ""
             raise HTTPException(
@@ -87,6 +92,9 @@ class FirecrawlUrlCaptureProvider(UrlCaptureProvider):
 class BuiltinUrlCaptureProvider(UrlCaptureProvider):
     name = "builtin"
 
+    def __init__(self, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
+        self._prompts = prompts
+
     def can_handle(self, url: str) -> bool:
         return True
 
@@ -100,7 +108,7 @@ class BuiltinUrlCaptureProvider(UrlCaptureProvider):
         )
         try:
             with urlopen(request, timeout=12) as response:
-                body = _read_response(response)
+                body = _read_response(response, prompts=self._prompts)
                 content_type = response.headers.get_content_type()
                 charset = response.headers.get_content_charset() or "utf-8"
         except HTTPError as exc:
