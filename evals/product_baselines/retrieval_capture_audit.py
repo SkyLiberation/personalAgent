@@ -1,38 +1,22 @@
-"""只读审计已停止的研究采集及物理用量；不生成产品通过结论。"""
+"""读取公开 LongDS 采集的 SDK 与 HTTP 原件，按真实派发计量。"""
 from __future__ import annotations
 
-import argparse
 from collections import defaultdict
 from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Literal
-from urllib.parse import parse_qs, urlsplit
-from zipfile import ZipFile
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.application.conversation.models import ActionObservation, InteractionTrace
-from personal_agent.application.conversation.research_delivery import experiment_submission
-from personal_agent.capabilities.contracts.research import ResearchClaims, ResearchReview
+from personal_agent.application.python_execution.models import Digest
 from personal_agent.capabilities.contracts.model import (
     ModelTransportDiagnostics, ProviderExceptionFrame, ProviderFailureDiagnostics,
-)
-
-from .retrieval_qualification_review import Digest
-from .run_retrieval_acceptance import (
-    CapturedRun, CaptureLifecycle, CapturePhase, HistoricalCaptureLifecycle, EntryObservation, Preparation, _digest,
 )
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class RunSealJournalProof(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-    identity: str
-    files: dict[str, Digest]
 
 
 class ObservedProviderUsage(BaseModel):
@@ -109,37 +93,12 @@ class WireUsageGroup(_Strict):
     missing_http_response_sidecars: tuple[str, ...]
 
 
-class CaptureAudit(_Strict):
-    version: Literal[1] = 1
-    evidence_class: Literal["sealed_capture_mechanical_audit"] = "sealed_capture_mechanical_audit"
-    auditor_source_sha256: Digest
-    case: Literal["e1", "p1"]
-    phase: CapturePhase
-    preparation_sha256: Digest
-    capture_sha256: Digest
-    checksums_sha256: Digest
-    trace_sha256: Digest
-    trace_binding: Literal["authenticated_http_trace", "same_run_seal"]
-    trace_seal_sha256: Digest | None
-    source_snapshot_sha256: Digest
-    source_count: int = Field(gt=0)
-    source_changed_during_capture: bool
-    trace_revision: int = Field(ge=1)
-    lifecycle: CaptureLifecycle | HistoricalCaptureLifecycle
-    post_status: int | None
-    trace_get_status: int | None
-    final_disposition: str | None
-    delivery_roles: tuple[Literal["report", "manifest", "bundle"], ...]
-    downloads_index_present: bool
-    user_delivery: Literal["missing", "present_unscored"]
-    candidate_requests: int = Field(ge=0)
-    physical_http_requests: int = Field(ge=0)
-    complete_sdk_responses: int = Field(ge=0)
-    known_tokens: int = Field(ge=0)
-    unknown_usage_attempts: int = Field(ge=0)
-    wire_groups: tuple[WireUsageGroup, ...]
-    model_calls_by_this_audit: Literal[0] = 0
-    limitation: str
+def _json_bytes(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")
+
+
+def _digest(value: object) -> str:
+    return sha256(_json_bytes(value)).hexdigest()
 
 
 def _load(path: Path):
@@ -215,132 +174,3 @@ def _wire_groups(directory: Path) -> tuple[tuple[WireUsageGroup, ...], int]:
             if response.is_file() and SdkResponseObservation.model_validate_json(response.read_bytes()).completed:
                 raise ValueError("完整 SDK 响应没有真实 HTTP 观察，不能宣称物理费用完整")
     return tuple(groups), sum(len(paths) for paths in candidates.values())
-
-
-def audit_capture(preparation: Path, capture: Path, trace_path: Path, *, trace_seal: Path | None = None) -> CaptureAudit:
-    prepared_bytes, capture_bytes = preparation.read_bytes(), capture.read_bytes()
-    prepared = Preparation.model_validate_json(prepared_bytes)
-    facts = CapturedRun.model_validate_json(capture_bytes)
-    root, run_root = capture.resolve().parent, preparation.resolve().parent
-    if (root.parent != run_root or root.name != facts.phase or facts.case != prepared.case
-            or facts.fault != prepared.fault
-            or facts.preparation_sha256 != sha256(prepared_bytes).hexdigest()
-            or facts.source_digest != prepared.source_digest
-            or facts.configuration_digest != prepared.configuration_digest
-            or _digest(_load(run_root / "configuration.json")) != prepared.configuration_digest):
-        raise ValueError("采集与准备／配置不是同一身份")
-    checksums_path = root / "checksums.json"
-    checksums = TypeAdapter(dict[str, Digest]).validate_python(_load(checksums_path))
-    required = {"capture-result.json", "lifecycle.json", "entry-observations.json"}
-    if not required.issubset(checksums) or checksums["capture-result.json"] != sha256(capture_bytes).hexdigest():
-        raise ValueError("没有封存同一 capture 及必要正式入口事实")
-    for relative, digest in checksums.items():
-        path = root / relative
-        if path.is_symlink() or not path.resolve().is_relative_to(root) or sha256(path.read_bytes()).hexdigest() != digest:
-            raise ValueError("采集原件 checksum 失效")
-    expected_files = {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()
-                      and path != checksums_path}
-    if expected_files != set(checksums):
-        raise ValueError("采集存在未封存文件或缺文件，不能据不完整 SDK 集合计量")
-    if _load(run_root / "configuration.json").get("timeout_policy") == "configured-native-timeouts-v3":
-        lifecycle = CaptureLifecycle.model_validate_json((root / "lifecycle.json").read_bytes())
-        if (lifecycle.actual_pid is None or lifecycle.actual_exitcode is None or lifecycle.supervision_errors):
-            raise ValueError("实际解释器或监督事实不完整，不能作最终审计")
-    else:
-        lifecycle = HistoricalCaptureLifecycle.model_validate_json((root / "lifecycle.json").read_bytes())
-    if not lifecycle.actual_process_stopped or lifecycle.exitcode is None:
-        raise ValueError("采集进程尚未实际停止，不能作最终审计")
-    hashes = TypeAdapter(dict[str, Digest]).validate_python(_load(run_root / "source-hashes.json"))
-    if not hashes or _digest(hashes) != prepared.source_digest:
-        raise ValueError("源码清单与准备摘要不同")
-    snapshot_path = run_root / "source-snapshot.zip"
-    with ZipFile(snapshot_path) as snapshot:
-        names = snapshot.namelist()
-        if len(names) != len(set(names)) or set(names) != set(hashes):
-            raise ValueError("源码快照集合与准备清单不同")
-        if any(sha256(snapshot.read(name)).hexdigest() != digest for name, digest in hashes.items()):
-            raise ValueError("源码快照原字节与准备身份不同")
-    trace_bytes = trace_path.read_bytes()
-    trace = InteractionTrace.model_validate_json(trace_bytes)
-    journal = run_root / "server-data" / "interaction_runs" / prepared.world.initial.interaction_run_ref
-    if (trace_path.resolve().parent != journal.resolve() or trace_path.resolve() != sorted(journal.glob("*.json"))[-1].resolve()
-            or trace.principal != prepared.world.initial.principal
-            or trace.interaction_run_ref != prepared.world.initial.interaction_run_ref
-            or trace.input_artifact_refs != prepared.world.input_artifact_refs):
-        raise ValueError("最终 Journal 路径／主体／run／初始公开引用不属于同一采集")
-    observations = TypeAdapter(tuple[EntryObservation, ...]).validate_json((root / "entry-observations.json").read_bytes())
-    posts = [item for item in observations if item.method == "POST" and item.path == "/api/conversation/turn"]
-    gets = [item for item in observations if item.method == "GET" and item.path.startswith("/api/conversation/runs/")]
-    if len(posts) != 1 or len(gets) != 1:
-        raise ValueError("采集缺唯一正式 POST／run GET 观察")
-    get_url = urlsplit(gets[0].path)
-    if (get_url.path != f"/api/conversation/runs/{trace.interaction_run_ref}"
-            or parse_qs(get_url.query) != {"user_id": [trace.principal.user_id]}):
-        raise ValueError("正式 GET 不是准备时的确切 run／user_id")
-    seal_digest = None
-    if gets[0].status_code == 200:
-        if InteractionTrace.model_validate(gets[0].body) != trace:
-            raise ValueError("正式 GET 与最终 Journal 不是同版完整 Trace")
-        trace_binding = "authenticated_http_trace"
-    else:
-        if trace_seal is None:
-            raise ValueError("未取得正式 GET Trace，须提供同 run seal 绑定最终 Journal")
-        seal_bytes = trace_seal.read_bytes()
-        proof = RunSealJournalProof.model_validate_json(seal_bytes)
-        if proof.identity != run_root.name:
-            raise ValueError("最终 Journal seal 属于其他 run 准备目录")
-        for path in (preparation, capture, checksums_path, trace_path):
-            if proof.files.get(str(path.resolve().relative_to(run_root))) != sha256(path.read_bytes()).hexdigest():
-                raise ValueError("run seal 未绑定当前准备／capture／checksums／最终 Journal 原件")
-        trace_binding, seal_digest = "same_run_seal", sha256(seal_bytes).hexdigest()
-    if facts.phase == "initial_closure" and any(
-        isinstance(item, (ResearchClaims, ResearchReview))
-        or (isinstance(item, ActionObservation) and item.capability_id == "verify_interaction_draft")
-        for item in trace.inputs
-    ):
-        raise ValueError("初步闭环不能混入 claim 或语义 verifier 执行事实")
-    report_present = bool(trace.final_message and trace.final_message.disposition == "answer")
-    if report_present:
-        submission = experiment_submission(trace)
-        if submission.final != trace.final_message:
-            raise ValueError("当前回答与实际提交不一致")
-    present = report_present and posts[0].status_code == 200 and gets[0].status_code == 200
-    roles = ["report"] if report_present else []
-    downloads = (root / "downloads/index.json").is_file()
-    groups, candidates = _wire_groups(root / "sdk")
-    return CaptureAudit(
-        auditor_source_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),
-        case=prepared.case, phase=facts.phase, preparation_sha256=sha256(prepared_bytes).hexdigest(),
-        capture_sha256=sha256(capture_bytes).hexdigest(), checksums_sha256=sha256(checksums_path.read_bytes()).hexdigest(),
-        trace_sha256=sha256(trace_bytes).hexdigest(), trace_binding=trace_binding, trace_seal_sha256=seal_digest,
-        source_snapshot_sha256=sha256(snapshot_path.read_bytes()).hexdigest(),
-        source_count=len(hashes), source_changed_during_capture=bool(facts.source_changed_during_capture),
-        trace_revision=trace.revision, lifecycle=lifecycle, post_status=posts[0].status_code, trace_get_status=gets[0].status_code,
-        final_disposition=trace.final_message.disposition if trace.final_message else None, delivery_roles=tuple(roles),
-        downloads_index_present=downloads, user_delivery="present_unscored" if present else "missing",
-        candidate_requests=candidates, physical_http_requests=sum(len(group.http_ids) for group in groups),
-        complete_sdk_responses=sum(group.complete_sdk_responses for group in groups),
-        known_tokens=sum(group.known_tokens for group in groups), unknown_usage_attempts=sum(group.unknown_usage_attempts for group in groups),
-        wire_groups=groups, limitation="仅机械采集及物理费用；完整语义、资格、执行结果有效性、权限／知识零写入和 agency 未由此审计判定。")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--preparation", required=True, type=Path)
-    parser.add_argument("--capture", required=True, type=Path)
-    parser.add_argument("--trace", required=True, type=Path)
-    parser.add_argument("--trace-seal", type=Path, help="正式 GET 未取得 Trace 时的同 run 原封存")
-    parser.add_argument("--output", required=True, type=Path)
-    args = parser.parse_args()
-    report = audit_capture(args.preparation.resolve(), args.capture.resolve(), args.trace.resolve(),
-                           trace_seal=args.trace_seal.resolve() if args.trace_seal else None)
-    with args.output.open("x", encoding="utf-8") as stream:
-        stream.write(report.model_dump_json(indent=2))
-    print(json.dumps({"output": str(args.output), "user_delivery": report.user_delivery,
-                      "physical_http_requests": report.physical_http_requests,
-                      "complete_sdk_responses": report.complete_sdk_responses,
-                      "known_tokens": report.known_tokens, "unknown_usage_attempts": report.unknown_usage_attempts}))
-
-
-if __name__ == "__main__":
-    main()

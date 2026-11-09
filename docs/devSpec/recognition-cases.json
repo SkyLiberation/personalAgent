@@ -18,13 +18,13 @@
       "expected": "docs/AGENTS.md"
     },
     {
-      "id": "eval_catalog_overlay",
-      "path": "evals/e2e_quality/evidence_catalog.py",
+      "id": "eval_loader_overlay",
+      "path": "evals/open_ragbench/loader.py",
       "expected": "evals/AGENTS.md"
     },
     {
-      "id": "eval_product_overlay",
-      "path": "evals/product_baselines/evidence.py",
+      "id": "eval_runner_overlay",
+      "path": "evals/multihoprag/runner.py",
       "expected": "evals/AGENTS.md"
     },
     {

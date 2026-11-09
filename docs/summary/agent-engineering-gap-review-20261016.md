@@ -76,7 +76,7 @@ Web SSE 先输出处理状态，等待 `service.converse()` 完成后再分块�
 
 在已有恢复或真实使用用例中采集实际时间和副作用事实，复用同一执行身份和现有 measurement，先验证指标是否可信。需要新的流式、取消或后台协议时，再按真实需求准入，不能恢复已经删除的无消费者流链路。
 
-依据：[观测指标](../evals/05-observability-metrics.md)、[measurement 字段](../../evals/e2e_quality/measurements.py)、[SSE 实现](../../src/personal_agent/adapters/web/routes/entry_stream.py)、[流链路退役记录](../optimization/completed/model-streaming-retirement.md)。
+依据：[观测指标](../evals/05-observability-metrics.md)、[measurement 字段](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/measurements.py)、[SSE 实现](../../src/personal_agent/adapters/web/routes/entry_stream.py)、[流链路退役记录](../optimization/completed/model-streaming-retirement.md)。
 
 ### 3.6 真实使用、负反馈与运维能力尚缺可核对的交付证据
 

@@ -131,7 +131,7 @@ SQL 动作标记仅来自代码部分，普通单引号字面量及注释中的 
 
 局部方法观察器已通过[限定实现审查](../../../../.tmp/research-capability-20261020/t5/knowledge-write-method-observer-implementation-review.md)及上述[真实诊断 3](../../../../.tmp/research-capability-20261020/t5/knowledge-write-web-diagnostic-3-final-seal.json)：7.234 秒完成启动、正式 claims 读取及关闭并停止，健康／只读接口 200，关闭 401／200；313 份源码保持，CIM 确认采集与 server Python 均无存活进程。实际记录 20 次 SQL、包含全部多语句 PGresult，覆盖完整、相关未知 0；其中一条知识 schema 调用、未观察到知识 DML，21 表范围摘要保持。启动的其他系统表确有 INSERT，不能写成全部数据库零写入。独立只读 CLI 恢复同一审计，零模型／研究 turn。此处关闭取证工具的运行缺口；真实 target 的同轮知识零写入、正向 mutation／故障覆盖及完整研究交付仍未验证。
 
-当前资格材料／来源及逐关系审读、loader／verify／runner 的同契约迁移已在 v6 终态封存后落地。[知识快照 CLI](../../../../evals/product_baselines/retrieval_knowledge_snapshot.py)完成两次同主体真实只读事务，21 表均存在、范围内均为零行且摘要一致；17 表清单对照现行 DDL 一致，独立静态审查无阻断。v7 封存后已装配 target 前后读取及具名失败，并迁移唯一 capture DTO；`capture-dto-replay-1` 对真实 v6／v7 四份对象恢复相同 JSON 值，`qualification-gate-preflight-4` 六条实际 CLI 仍为零模型／零业务连接拒绝。有效 target 分支和完整写入口审计仍待完成；本项不代表非空分页实测或 v7 的 before／零写入成绩。
+当前资格材料／来源及逐关系审读、loader／verify／runner 的同契约迁移已在 v6 终态封存后落地。[知识快照 CLI](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/evals/product_baselines/retrieval_knowledge_snapshot.py)完成两次同主体真实只读事务，21 表均存在、范围内均为零行且摘要一致；17 表清单对照现行 DDL 一致，独立静态审查无阻断。v7 封存后已装配 target 前后读取及具名失败，并迁移唯一 capture DTO；`capture-dto-replay-1` 对真实 v6／v7 四份对象恢复相同 JSON 值，`qualification-gate-preflight-4` 六条实际 CLI 仍为零模型／零业务连接拒绝。有效 target 分支和完整写入口审计仍待完成；本项不代表非空分页实测或 v7 的 before／零写入成绩。
 
 [机械采集审计 CLI](../../../../evals/product_baselines/retrieval_capture_audit.py)的原 v6 回放保持 7 次物理／6 完整、147,838 known／1 unknown、`missing`。补齐 typed 元数据、部分 usage 保留及确切 GET／run seal／下载成员绑定后的独立 `e1-v6-mechanical-audit-4.json` 结果一致，旧四份报告及原 capture／seal 均保留。该模块的限定实现审查无未闭合阻断；重复 body／容量拒绝／部分 usage 仅作静态审查，未伪造样本或成功交付验证这些分支。
 

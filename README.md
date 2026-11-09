@@ -75,11 +75,11 @@ flowchart TB
 
 两者可以共享执行网关、Artifact 和观测机制，但不共享可写 Plan 或业务状态。没有失败 baseline 证明必须存在的第二套调查循环已经移除；GPT Researcher 只作为 Conversation 可委托的执行资源。
 
-## 当前证据说明
+## 评测与历史证据
 
 项目坚持先证明用户错误，再评价机制收益。单元测试、对象存在、Tool 被调用或状态为 success 只证明局部事实；用户能力必须由正式入口、真实模型与持久化路径的产品 E2E 证明。
 
-代表性证据包括：
+当前运行入口见[公开数据集评测](docs/evals/README.md#公开数据集评测)。代表性历史证据如下。
 
 - 对话工作清单的当前目标组为 `15/15 delivered`，证明指定任务分布中的审阅、纠偏和完整交付，不外推所有模型或成本收益；
 - 长期语义记忆覆盖 `15/15` 自然旅程与 1,020 条事实尾部召回；真实跨轮工作记忆 target 为 `5/5`，关闭既有事实消费后为 `0/5`；
@@ -88,7 +88,7 @@ flowchart TB
 - 显式子智能体委托只有 `10/20 delivered`，不能声称多智能体已经稳定提升效果；
 - 已撤回的后台调查正式组为 `20/20` 选择旧路径、`0/20 delivered`；当前普通 Conversation 重跑同样为 `0/20 delivered`。前者证明旧能力不应保留，后者作为独立研究质量缺口，不能被架构删除掩盖。
 
-完整口径见[证据、指标与发布资格](docs/interview/06-evidence-and-release.md)和[当前端到端用例盘点](docs/evals/02-current-case-inventory.md)。当前版本不能仅凭局部回归宣称具备完整发布资格。
+完整口径见[证据、指标与发布资格](docs/interview/06-evidence-and-release.md)和[历史端到端用例盘点](docs/evals/02-current-case-inventory.md)。当前版本不能仅凭局部回归宣称具备完整发布资格。
 
 ## 关键设计取舍
 
@@ -130,7 +130,7 @@ flowchart TB
 | Tool 与治理执行 | [`src/personal_agent/tools/`](src/personal_agent/tools/)、[`src/personal_agent/governance/`](src/personal_agent/governance/) |
 | Agent 委托 | [`src/personal_agent/agents/`](src/personal_agent/agents/) |
 | Provider 与持久化 Adapter | [`src/personal_agent/infra/`](src/personal_agent/infra/) |
-| 产品 E2E 与质量评测 | [`evals/`](evals/) |
+| 公开数据集评测 | [`evals/`](evals/) |
 
 ## 快速开始
 

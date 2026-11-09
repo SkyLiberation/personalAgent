@@ -1,6 +1,6 @@
 # MultiHopRAG 检索组件评测
 
-**本目录衡量多跳 evidence set 的召回与排序，不是产品最终回答链。** strategy registry 只包含 retrieval/component 机制；Conversation grounded answer 由 `ASK-001A/B` 从正式 HTTP 入口验证。
+本目录衡量公开 MultiHopRAG 数据集的多跳证据召回与排序。策略输出检索候选，指标覆盖检索组件。
 
 ## 与 Open RAGBench 的区别
 

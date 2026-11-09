@@ -1,5 +1,35 @@
 # 运行、归档与发布
 
+## 公开数据集运行
+
+从仓库根使用以下命令，各抽取一个公开样本，执行词法检索。每次运行使用新的输出目录。数据读取和指标定义见各数据集入口。[公开数据集索引](README.md#公开数据集评测)
+
+```powershell
+$evaluationEvidenceRoot = ".tmp/public-evaluation-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
+$env:PERSONAL_AGENT_E2E_TRACE_DIR = "$evaluationEvidenceRoot/e2e"
+$env:PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR = "$evaluationEvidenceRoot/product"
+
+uv run --extra dev --dev python -m evals.open_ragbench.runner --strategies keyword --num-queries 1 --corpus-mode relevant --output "$evaluationEvidenceRoot/open.json"
+uv run --extra dev --dev python -m evals.multihoprag.runner --strategies keyword --num-queries 1 --corpus-mode relevant --output "$evaluationEvidenceRoot/multihop.json"
+uv run --extra dev --dev python -m evals.galileo_ragbench.runner --strategy galileo_keyword_sentence --subset covidqa --split test --num-queries 1 --output "$evaluationEvidenceRoot/galileo.json"
+uv run --extra dev --dev pytest --collect-only -q evals/open_ragbench
+```
+
+CI 核对三个命令行入口和 Open RAGBench 的用例收集。词法样本可使用缓存数据运行，指标代表对应检索策略。
+
+LongDS 使用公开题面和语料，采集和独立评分各自封存。先核对官方题目与文件清单：
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_suite --root "$evaluationEvidenceRoot/longds" --collect-only
+```
+
+正式采集、恢复和评分的参数见各模块的 `--help`。原始预算和已执行记录见 [LongDS 长程分析基线](#longds-长程分析基线)。
+
+## 历史操作记录
+
+以下内容保留清理前的运行方法、归档位置与发布口径。自建矩阵、晋级门禁和相关脚本已退出当前工作树。复查旧命令时使用对应历史提交。[清理前源码与运行说明](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/docs/evals/04-running-and-release.md)
+
+
 本文维护执行命令与归档方法；用例、实际成绩和发布证据状态由[用例盘点](02-current-case-inventory.md)维护。命令从仓库根运行，本机使用 `.venv` 解释器。
 
 完整反馈历史候选的 task2 已按[Spec §9.19](../optimization/to_verify/analysis-goal-maintenance.md#919-保留完整核验历史后的-task2-全量连续运行)在 `.tmp/task2-feedback-history-full-20261103/` 一次连续执行并封存。实际请求 5 轮、交付 4 轮，第五轮容量失败；历史碰撞缺陷重新打开，当前不直接启动另一整轮或复用输出目录。结果见[记录 §38](../optimization/to_verify/verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)。原命令以 `.venv/Scripts/python.exe -X utf8` 执行该目录的 `preflight.py`、`prepare_judge.py`、`launch.py prepare`、`launch.py run`；生成停止后运行 `audit.py`、`audit_split.py`、`audit_feedback_history.py`、`audit_regeneration.py`、`score.py` 与 `finalize.py`。审计明确保留缺失反馈失败，不将容量预拒绝当作 SDK 派发，也不重采评分覆盖原分。

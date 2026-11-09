@@ -1,10 +1,10 @@
 # Open RAGBench 检索组件评测
 
-**本目录只评估检索候选、排序与证据选择，不代表产品最终回答。** 产品 grounded answer 的唯一入口与发布证据是 Conversation 的 `ASK-001A/B`；strategy registry 不包含平行的最终回答 runtime。
+本目录评估公开 Open RAGBench 数据集的检索候选、排序与证据选择。指标覆盖检索组件。
 
 ## 数据与边界
 
-- 数据通过 `datasets` 加载，默认 split 为 `test`；
+- 数据加载器从 Hugging Face 下载数据集的 `pdf/arxiv` 目录；
 - `--corpus-mode relevant` 只加载抽样 query 的相关文档，`full` 加载完整 corpus；
 - 输出 MRR、Recall@k、延迟和 query diagnostics；这些是 component metrics，不能替代正式 HTTP E2E；
 - Graphiti strategy 可复用 manifest，但 manifest identity 必须匹配 corpus 与切分配置。
@@ -32,10 +32,10 @@ uv run python -m evals.open_ragbench.runner \
   --output evals/open_ragbench/results/component-comparison.json
 ```
 
-运行低层回归：
+运行基于同一公开数据集的排序评测：
 
 ```powershell
-uv run pytest evals/open_ragbench tests/test_open_ragbench_structural.py -q
+uv run --extra dev --dev pytest evals/open_ragbench -q --num-queries 30
 ```
 
 ## 解释结果

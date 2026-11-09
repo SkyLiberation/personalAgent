@@ -84,8 +84,8 @@
 ## 权威事实入口
 
 - 当前架构：[core-architecture-current-state.md](../architecture/core-architecture-current-state.md)
-- 端到端测试分类：[evidence_catalog.py](../../evals/e2e_quality/evidence_catalog.py)
-- 发布派生：[release_gate.py](../../evals/e2e_quality/release_gate.py)
+- 端到端测试分类：[evidence_catalog.py](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/evidence_catalog.py)
+- 发布派生：[release_gate.py](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/release_gate.py)
 - 未落地候选：[design-optimization-backlog.md](../future/design-optimization-backlog.md)
 - 强制工程规范：[AGENTS.md](../../AGENTS.md)
 

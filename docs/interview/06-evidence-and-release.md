@@ -16,7 +16,7 @@
 
 ## 2. 机器用例目录只负责执行分类
 
-**编号、入口、服务提供方配置和机器发布候选集，只在 [evidence_catalog.py](../../evals/e2e_quality/evidence_catalog.py) 定义；目标用户、基线合法性和用户结果强度，以[当前用例盘点](../evals/02-current-case-inventory.md)与[基线优先审计](../evals/03-baseline-first-audit.md)为准。** 具体分类与数量由该盘点维护，本篇不复制第二份统计表。
+**编号、入口、服务提供方配置和机器发布候选集，只在 [evidence_catalog.py](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/evidence_catalog.py) 定义；目标用户、基线合法性和用户结果强度，以[当前用例盘点](../evals/02-current-case-inventory.md)与[基线优先审计](../evals/03-baseline-first-audit.md)为准。** 具体分类与数量由该盘点维护，本篇不复制第二份统计表。
 
 用例目录和发布门禁机械约束测试节点与必选集合；它们当前不检查真实需求来源、实现前失败基线，或最终断言是否真的是用户结果。
 
@@ -103,7 +103,7 @@
 
 正式运行、独立归档目录和发布门禁命令由[运行、归档与发布](../evals/04-running-and-release.md)维护，本篇不复制第二套操作指引。新运行按该手册选择独立 `.tmp/` 根目录；历史归档按原身份读取，不能借重跑或搬移覆盖原结果。
 
-指标报告示例与测量配置约束见 [evals/e2e_quality/README.md](../../evals/e2e_quality/README.md)。
+指标报告示例与测量配置约束见 [evals/e2e_quality/README.md](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/README.md)。
 
 ## 9. 证据边界不会自动变成开发任务
 

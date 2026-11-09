@@ -15,7 +15,7 @@
 - 评分 Runtime 从本次权威输入恢复原文。未知、跨角色或重复引用拒绝，零有效评分；原文身份不依赖模型重抄。Runtime 从有效 findings 推导 `failed`、`inconclusive` 或 `passed`，共用 E2E 消费者只接受 `passed`。
 - 取证历史由执行记录拥有。独立评分检查正文实际肯定的内容及用户交付；完整参考没有证明作者实际读取了全部原文。来源支持与目标覆盖分别判断。
 
-实现位于[共用评分模块](../../../evals/e2e_quality/research_answer_outcome.py)，由[正式研究 E2E 消费者](../../../evals/product_baselines/test_conversation_research_delivery_001.py)和[真实模型 Offline Eval](../../../evals/e2e_quality/test_research_answer_outcome.py)调用。旧人工事实摘要、无坐标字符串列表及模型总布尔判断已同边界替换。三个 eval 源码净增 14 行、增加四个评测类型；生产源码 262 份逐字保持，没有新增生产阶段、存储或开关。
+实现位于[共用评分模块](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/research_answer_outcome.py)，由[正式研究 E2E 消费者](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/product_baselines/test_conversation_research_delivery_001.py)和[真实模型 Offline Eval](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/test_research_answer_outcome.py)调用。旧人工事实摘要、无坐标字符串列表及模型总布尔判断已同边界替换。三个 eval 源码净增 14 行、增加四个评测类型；生产源码 262 份逐字保持，没有新增生产阶段、存储或开关。
 
 ## 决定性证据与适用范围
 
@@ -35,7 +35,7 @@
 
 ## 实际引用页面与版本的参考资格
 
-`RESEARCH-GRADER-MCP-REFERENCE-001` 已解除本次已定位的依据缺口。唯一[参考fixture](../../../evals/e2e_quality/fixtures/research_answer_official_references.json)保留原七页，补入独立抓取的 OpenAI `/api/docs/mcp` 相关完整读窗及答案实际引用的2025-06-18版 MCP tools 全文，当时参考身份为 `official-sealed-excerpts-20261008-exact-citations-v5`。来源 URL、抓取正文和版本分别有身份；新旧规范页不能互相替代精确引用依据。参考继续属于评测输入，不进入生产研究，也不证明作者已读到相应内容。v8 Prompt、Schema、用户契约和控制标签保持。
+`RESEARCH-GRADER-MCP-REFERENCE-001` 已解除本次已定位的依据缺口。唯一[参考fixture](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/fixtures/research_answer_official_references.json)保留原七页，补入独立抓取的 OpenAI `/api/docs/mcp` 相关完整读窗及答案实际引用的2025-06-18版 MCP tools 全文，当时参考身份为 `official-sealed-excerpts-20261008-exact-citations-v5`。来源 URL、抓取正文和版本分别有身份；新旧规范页不能互相替代精确引用依据。参考继续属于评测输入，不进入生产研究，也不证明作者已读到相应内容。v8 Prompt、Schema、用户契约和控制标签保持。
 
 固定既有完整正例与客户端校验缺失反例各一次，资格 **2/2**；原实际完整答案重评一次，引用缺口解除、findings为空。三项共192,273已完成tokens，实际请求、绑定和成本见[资格归档](../../../.tmp/research-reference-version-gap-20261008/qualification-result.json)。这是新参考身份下的条件Offline证据；原正式失败、旧评分和未知费用保留，正式用户结果由[评测登记](../../evals/02-current-case-inventory.md#2026-10-08-精确引用版本与评分资格复核)拥有。不将原13/13算作新参考版本执行通过，也不据两个固定控制估计判决稳定性。
 

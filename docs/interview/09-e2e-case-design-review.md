@@ -1,6 +1,6 @@
 # 评测用例分别验证什么
 
-> **本文件用于在面试中解释 canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
+> **本文件用于在面试中解释 canonical 评测用例的设计目的与关键验收点。** 用例分类与机器选择由 [`evidence_catalog.py`](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/evidence_catalog.py) 定义，执行结果与归档由[当前评测用例盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 1. 不同分类回答不同问题
 

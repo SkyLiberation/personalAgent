@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
@@ -37,14 +37,42 @@ from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.contracts.resource import ResourceRef
 
-from evals.e2e_quality.evidence_catalog import LONGDS_OUTCOME
 from .longds_materials import json_bytes, prepare, seal, verify_preparation, verify_seal
 from .retrieval_capture_process import ActualWebProcess
-from .run_retrieval_acceptance import configuration
-from .retrieval_capture_audit import _wire_groups
+from .retrieval_acceptance_server import redact_payload
+from .retrieval_capture_audit import _digest, _wire_groups
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True, slots=True)
+class LongDSOutcomeContract:
+    """Why one Product E2E may contribute to product completion claims."""
+
+    outcome_id: str
+    persona: str
+    source_ref: str
+    natural_goal: str
+    observable_result: str
+    counterfactuals: tuple[str, ...]
+    baseline_kind: Literal["implementation_failure"]
+    baseline_ref: str
+    assertion_owner: str
+
+
+LONGDS_OUTCOME = LongDSOutcomeContract(
+    outcome_id="LONGDS-NETFLIX-003",
+    persona="持续调整市场分析条件并回看历史口径的中文分析用户",
+    source_ref="docs/optimization/to_verify/longds-analysis.md#longds-长程数据分析-spec",
+    natural_goal="分析 Netflix 目录与各国搜索热度，连续处理 36 轮调整和历史比较，最终推荐三个市场。",
+    observable_result="逐轮从正式入口得到实际分析答案；按固定官方协议分别报告正确轮数、最终推荐和流程完成。",
+    counterfactuals=("未来问题和参考答案不进入生产输入", "未授权跨对话原件拒绝且零执行",
+                     "同请求恢复不重复执行", "总预算耗尽不新增付费调用，未知消费保留且不单独停止"),
+    baseline_kind="implementation_failure",
+    baseline_ref="docs/optimization/to_verify/longds-analysis.md#6-分阶段验收与停止条件",
+    assertion_owner="evals/product_baselines/longds_judge.py",
+)
 
 
 class LongDSCapture(BaseModel):
@@ -115,7 +143,27 @@ def _write(path: Path, value: object) -> None:
 
 
 def _configuration(settings: Settings) -> dict[str, object]:
-    return {**configuration(settings), "answer_result": settings.answer_result.model_dump(mode="json"),
+    result: dict[str, object] = {
+        "profile": "configured",
+        "timeout_policy": "configured-native-timeouts-v3",
+        "budget": settings.interaction_loop.model_dump(mode="json"),
+        "authentication": "ephemeral API key bound to the exact initial principal",
+    }
+    for name, model in (("structured", settings.structured), ("openai", settings.openai)):
+        result[name] = {
+            "model": model.model,
+            "provider_host": urlsplit(model.base_url or "").hostname,
+            "provider_url_digest": sha256((model.base_url or "").encode()).hexdigest(),
+            "timeout_seconds": model.timeout_seconds,
+            "max_retries": model.max_retries,
+            "capacity": model.capacity.model_dump(mode="json") if model.capacity else None,
+        }
+    result["structured"].update({
+        "output_transport": settings.structured.output_transport,
+        "extra_body": redact_payload(settings.structured.extra_body),
+        "extra_body_digest": _digest(settings.structured.extra_body),
+    })
+    return {**result, "answer_result": settings.answer_result.model_dump(mode="json"),
             "feature_flags": settings.feature_flags.model_dump(mode="json"),
             "prompt_language": settings.prompt_language,
             "web_search_available": settings.web_search_available}

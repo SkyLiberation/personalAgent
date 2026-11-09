@@ -16,11 +16,14 @@ if __name__ == "__main__":
 
     record_server_process(Path(os.environ["RETRIEVAL_E2E_PROCESS_FILE"]))
 
-from fastapi import FastAPI, HTTPException, Request
-
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
-
-from .retrieval_http_server import redact_payload
+def redact_payload(value):
+    if isinstance(value, dict):
+        return {key: "[redacted]" if str(key).lower() in {
+            "api_key", "authorization", "password", "secret", "access_token", "cookie", "extra_headers",
+        } else redact_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_payload(item) for item in value]
+    return value
 
 
 def _json_bytes(value: object) -> bytes:
@@ -130,42 +133,11 @@ def install_acceptance_observer(directory: Path) -> None:
 
 
 def main() -> None:
-    observer_configuration = os.environ.get("RETRIEVAL_E2E_WRITE_AUDIT_CONFIGURATION")
-    observer = None
-    if observer_configuration is not None:
-        from .retrieval_knowledge_write_audit import KnowledgeWriteObserver, WriteAuditConfiguration
-
-        observer = KnowledgeWriteObserver(WriteAuditConfiguration.model_validate_json(
-            Path(observer_configuration).read_bytes()))
-
     import uvicorn
 
     install_acceptance_observer(Path(os.environ["RETRIEVAL_E2E_SDK_DIRECTORY"]))
-    fault_path = os.environ.get("RETRIEVAL_E2E_FAULT_CONFIGURATION")
-    if fault_path is not None:
-        from .retrieval_start_response_fault import (
-            StartResponseFaultConfiguration,
-            install_start_response_fault,
-        )
-
-        install_start_response_fault(
-            StartResponseFaultConfiguration.model_validate_json(Path(fault_path).read_bytes())
-        )
-    app: FastAPI | str = "personal_agent.adapters.web.api:app"
-    if observer is not None:
-        from personal_agent.adapters.web.api import app as production_app
-
-        def close_write_observer(request: Request):
-            principal = AuthenticatedPrincipal.model_validate(getattr(request.state, "principal", None))
-            if principal != observer.configuration.principal:
-                raise HTTPException(status_code=403, detail="观察关闭主体不属于本次采集")
-            return observer.close().model_dump(mode="json")
-
-        production_app.add_api_route("/__retrieval_e2e_observer__/close", close_write_observer,
-                                     methods=["POST"], include_in_schema=False)
-        app = production_app
     uvicorn.run(
-        app,
+        "personal_agent.adapters.web.api:app",
         host="127.0.0.1",
         port=int(os.environ["RETRIEVAL_E2E_HTTP_PORT"]),
         log_level="info",

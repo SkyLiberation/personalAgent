@@ -119,7 +119,7 @@ claim 独有错误没有进入最终回答时，只计额外研究诊断；移�
 | 需求 | 固化方案与验收 |
 | --- | --- |
 | P1 固定指标与基线 | [基线计划](claim-verifier-baseline.plan.json)冻结版本、源汇总 SHA-256、纳入的主配对和独立任务映射；[原指标快照](claim-verifier-metrics.json)保留原身份 |
-| P2 固定正式入口 | [正式汇总入口](../../evals/e2e_quality/claim_ablation_metrics.py)读取计划与独立输出目录，校验后生成报告、源副本、计划及校验和，已存在目录拒绝覆盖 |
+| P2 固定正式入口 | [正式汇总入口](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/claim_ablation_metrics.py)读取计划与独立输出目录，校验后生成报告、源副本、计划及校验和，已存在目录拒绝覆盖 |
 | P3 明确自动统计边界 | 当前真实归档支持 A1、A2 的预设关系、任务等权均值与 A6 核验用量；其余指标继续记录未测原因。命令不生成语义标签，也不把普通阶段结果升级为 Product E2E |
 | P4 真实数据验收 | 用同一冻结源执行正式入口，主配对数、关系计数、任务均值和用量与原快照相同；检查输入与归档校验和、lint、文档链接，不新增单元测试或模型调用 |
 

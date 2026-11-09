@@ -12,16 +12,7 @@
 
 ## 2. Canonical owner 与写入口
 
-| 文件 | 唯一职责 |
-| --- | --- |
-| `evals/e2e_quality/evidence_catalog.py` | 证据类别、`UserOutcomeContract` 与机器 eligibility |
-| `evals/e2e_quality/validation_catalog.py` | 横切套件与预声明检查点；引用用例，不复制输入、评测器或改写类别 |
-| `evals/e2e_quality/evidence_audit.py` | 只读语义、重叠和配置样本组审计 |
-| `evals/e2e_quality/release_gate.py` | 发布归档信任判断 |
-| `evals/e2e_quality/measurements.py` | 测量 schema |
-| `evals/e2e_quality/metrics_report.py` | 聚合报表 |
-
-新增或修改用例同步受影响 catalog、typed contract、选择器和[权威文档](../docs/evals/README.md)，不维护第二份发布清单。内部输入、评测器输出、测量和配置身份 typed；边界校验失败显式记录，不填默认成功。
+`evals/` 保留公开数据集评测。数据集的原题、语料与相关性标签由公开发布方维护。各数据集目录拥有加载器、适配器与运行入口，复用已有共用指标与证据选择模块。新增或修改评测时同步[公开数据集索引](../docs/evals/README.md)与实际运行入口。内部输入、评测器输出、测量和配置身份 typed。边界校验失败显式记录。
 
 ## 3. 每条用例必须有唯一验收目的
 

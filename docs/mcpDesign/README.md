@@ -10,7 +10,7 @@
 | --- | --- |
 | `build_mcp_tools()` 同时创建客户端、发现工具和构造工具。客户端由工具闭包持有，现行 Web 关闭入口未调用 MCP 客户端的 `close()`。 | 将连接资源交给组合根管理，处理装配失败与正常退出。[工具工厂](../../src/personal_agent/tools/mcp.py) · [Web 关闭入口](../../src/personal_agent/adapters/web/context.py) |
 | 当前 stdio 客户端启动子进程时复制宿主环境。历史受控探针的 9 个已执行样本都把授权目录外的标记带入模型可见 Observation。 | 工具权限和进程权限分别验收。该探针结果用于定位边界风险，真实 Server 的隔离效果由新运行确认。[客户端](../../src/personal_agent/infra/mcp.py) · [历史用例盘点](../evals/02-current-case-inventory.md) |
-| 现有评测通过子进程配置注入测试 MCP。通用 Web 启动辅助以宿主环境的副本为起点。 | 复用启动和 HTTP 交互，Toolathlon 的环境由套件从显式输入生成。[启动辅助](../../evals/e2e_quality/test_release_user_outcomes.py) · [治理评测](../../evals/e2e_quality/test_governance_and_budget.py) |
+| 现有评测通过子进程配置注入测试 MCP。通用 Web 启动辅助以宿主环境的副本为起点。 | 复用启动和 HTTP 交互，Toolathlon 的环境由套件从显式输入生成。[启动辅助](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/evals/e2e_quality/test_release_user_outcomes.py) · [治理评测](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/evals/e2e_quality/test_governance_and_budget.py) |
 | 关闭外部 MCP 后，Conversation 仍会投影本地工具、自有知识与 Artifact 动作，以及已装配的子智能体。现有回答测试模式只移除澄清动作并调整提示词。 | 区分环境隔离与同工具条件对照。仅当后者成为正式目标时，扩展通用能力限制。[能力投影](../../src/personal_agent/application/conversation/service.py) · [回答测试模式](../topics/runtime.md#回答测试模式) |
 
 首个切片选择 Toolathlon 已配置的独立 stdio Time Server，验证接线与隔离。后续用 `arrange-workspace` 推演文件写入任务。该用例来自公开基准，其在本工程中的接入身份和产品发布资格分别判定。当前待验证的前提包括固定版本的 Server 在目标环境可启动、现行治理能合法承接样本写入、评测过程可以读取完整真实结果。

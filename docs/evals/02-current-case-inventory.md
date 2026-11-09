@@ -1,11 +1,13 @@
 # 当前评测用例盘点
 
+以下是自建评测退出当前工作树前的用例、分数和诊断记录。按原运行身份阅读。当前可运行的评测见[公开数据集索引](README.md#公开数据集评测)。
+
 2026-11-04核验上下文修正后的task2新后台验证已启动，归档`.tmp/vctx-task2-20261104/`，584份源码冻结，原34题从空会话连续运行；生成停止后自动做输入／职责审计及独立原评分。状态文件status.json，尚无本次成绩；不在本对话持续监控。方案与启动事实见[记录§41](../optimization/to_verify/verify_results/analysis-correctness.md#41-核验上下文修正后的-task2-后台验证)，此前7/20及其他身份保持。
 
 
 2026-11-04，按[Spec§9.21](../optimization/to_verify/analysis-goal-maintenance.md#921-系统中断后的-task2-完整验证重新执行)在`.tmp/cu-full-20261103/`执行独立连续验证：请求21/34、正常交付20，系统重启使第21轮无答复、后13轮未执行。独立评分再次中断后，用户要求继续，在`.tmp/cu-score-resume-20261104/`补齐20份答案原分：7/20（35%）通过，通过轮次1、4、6、7、9、11、19；新增17次评分／94777已知tokens、新未知0，旧第4次评分用量未知仍保留。107次主请求输入审计通过，5次自然压缩后继续；生产修改0、源码582份无漂移。第2轮候选范围及第3轮多报仍有错误，完整34轮未验证。结果及费用由[记录§40](../optimization/to_verify/verify_results/analysis-correctness.md#40-原运行到期后的-task2-独立连续重验)拥有，上一身份和3/10成绩保持。
 
-本页登记用例边界、实际结果与归档坐标。可执行分类与产品结果契约以 [evidence_catalog.py](../../evals/e2e_quality/evidence_catalog.py)及目标版本的实际收集为准；运行方法见[运行与发布](04-running-and-release.md)。
+本页登记用例边界、实际结果与归档坐标。可执行分类与产品结果契约以 [evidence_catalog.py](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/evals/e2e_quality/evidence_catalog.py)及目标版本的实际收集为准；运行方法见[运行与发布](04-running-and-release.md)。
 
 2026-11-03 按[结果卸载与完整交互压缩修订](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)启动新空会话task2连续验证，归档 `.tmp/context-unload-task2-20261103/`。先前零模型接入失败独立保留在 `.tmp/context-unload-implementation-20261103/c-recovery`，新身份不覆盖旧轨迹；确定性完整历史回放36/36通过，不能替代当前连续语义与用户结果。本次生成已因两次系统重启停止并封存：请求11/34、正常交付10，原独立分`[1,1,1,0,0,0,0,0,0,0]`，后23轮未执行。56次主请求输入审计通过，两次自然压缩后继续；全量未完成、候选范围问题仍在。结果、同run恢复及行为保持清理由[记录§39](../optimization/to_verify/verify_results/analysis-correctness.md#39-结果卸载与完整交互压缩的-task2-连续验证)拥有。
 
@@ -571,7 +573,7 @@ v7 已[截止封存](../../.tmp/research-capability-20261020/t5/e1-v7-final-seal
 
 ## 2026-10-16 Runtime 策略审计隔离
 
-新增正式 `AUD-001` 与 supporting `AUD-001-REPLAY`，分类、结果契约及 eligibility 由 [catalog](../../evals/e2e_quality/evidence_catalog.py)拥有。两个应用在同一真实进程中通过生产 `create_app()` 构造，分别使用独立 PostgreSQL 和数据目录；认证、模型及运行链没有替身。
+新增正式 `AUD-001` 与 supporting `AUD-001-REPLAY`，分类、结果契约及 eligibility 由 [catalog](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/evals/e2e_quality/evidence_catalog.py)拥有。两个应用在同一真实进程中通过生产 `create_app()` 构造，分别使用独立 PostgreSQL 和数据目录；认证、模型及运行链没有替身。
 
 | 实际身份 | 原始结果 | 用户结果与责任边界 |
 | --- | --- | --- |

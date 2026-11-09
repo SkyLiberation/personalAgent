@@ -1,1 +1,0 @@
-"""Capability resolver quality gates."""

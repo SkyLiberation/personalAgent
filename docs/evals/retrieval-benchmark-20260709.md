@@ -8,7 +8,7 @@
 
 旧报告没有逐表绑定完整代码身份、运行 manifest 和 checksum；以下数据按原值保留，复用前须补查对应原始归档。原 `production` 标签仅指当时 Ask 实现，不能表示这些组件仍由当前回答链消费。
 
-相关离线入口为 [Open runner](../../evals/open_ragbench/runner.py)、[Galileo runner](../../evals/galileo_ragbench/runner.py)与[检索指标 gate](../../evals/retrieval_gate.py)。本次未运行这些入口，未重新验证历史指标。
+相关离线入口为 [Open runner](../../evals/open_ragbench/runner.py)、[Galileo runner](../../evals/galileo_ragbench/runner.py)与[检索指标 gate](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/retrieval_gate.py)。本次未运行这些入口，未重新验证历史指标。
 
 
 ## 补充评估结论

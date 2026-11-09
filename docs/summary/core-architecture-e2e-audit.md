@@ -2,7 +2,7 @@
 
 本文是旧核心架构的历史 E2E 证据矩阵，不再是当前架构声明或发布资格的 owner。测试分类的
 唯一机器可执行 owner 是
-[`evidence_catalog.py`](../../evals/e2e_quality/evidence_catalog.py)；当前架构、事实 owner
+[`evidence_catalog.py`](https://github.com/SkyLiberation/personalAgent/blob/b153e318c59c97e5f88a95fa93aa13f03f07775e/evals/e2e_quality/evidence_catalog.py)；当前架构、事实 owner
 和发布边界分别见
 [`core-architecture-current-state.md`](../architecture/core-architecture-current-state.md) 与
 [当前评测用例盘点](../evals/02-current-case-inventory.md)。
