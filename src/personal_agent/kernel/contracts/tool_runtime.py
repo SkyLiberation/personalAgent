@@ -1,7 +1,7 @@
-"""Tool-execution boundary contracts: audit sink, idempotency, gateway context.
+"""Tool-execution boundary contracts: audit sink and gateway context.
 
 Pure structural types (Protocols + a frozen dataclass) shared between the infra
-layer (which implements ``ToolAuditSink``/``IdempotencyStore`` over Postgres) and
+layer (which implements ``ToolAuditSink`` over Postgres) and
 the governance layer (``ToolGateway``, which depends on them). Kept in the kernel
 so infra never has to import the tools/governance packages to satisfy a type.
 """
@@ -48,25 +48,6 @@ class ToolAuditSink(Protocol):
         """Persist or forward a normalized tool invocation event."""
 
 
-class IdempotencyStore(Protocol):
-    def seen(self, key: str) -> bool:
-        """Return True if this idempotency key was already committed."""
-
-    def reserve(
-        self, key: str, *, context: "ToolGatewayContext", tool_name: str
-    ) -> bool:
-        """Atomically reserve a key before executing a side effect."""
-
-    def get_receipt(self, key: str) -> dict | None:
-        """Return the committed typed tool receipt, if one exists."""
-
-    def commit(self, key: str, receipt: dict | None = None) -> None:
-        """Commit a key and its receipt so replays reuse the execution fact."""
-
-    def release(self, key: str) -> None:
-        """Release a reserved key when execution did not complete."""
-
-
 @dataclass(frozen=True, slots=True)
 class ToolGatewayContext:
     execution_scope: ExecutionScope
@@ -81,6 +62,5 @@ class ToolGatewayContext:
 __all__ = [
     "accepted_tool_request_digest",
     "ToolAuditSink",
-    "IdempotencyStore",
     "ToolGatewayContext",
 ]

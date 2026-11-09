@@ -108,7 +108,6 @@ def build_mcp_tool(
                 requires_confirmation=mapping.requires_confirmation,
                 side_effects=mapping.side_effects,  # type: ignore[arg-type]
                 permission_scope=mapping.permission_scope,
-                idempotency_key_required=mapping.idempotency_key_required,
                 rollback_supported=mapping.rollback_supported,
                 audit_required=mapping.audit_required,
                 timeout_seconds=mapping.timeout_seconds,

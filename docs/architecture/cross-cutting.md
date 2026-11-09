@@ -15,8 +15,8 @@
 | 模型计量与观测 | 同文件的 `UsageRecordingStructuredModelClient`、`ObservedStructuredModelClient` | 记录实际响应、耗用、失败和追踪；不决定业务成功 |
 | 模型 HTTP 诊断 | [model_transport.py](../../src/personal_agent/infra/model_transport.py)，由 `OpenAIModelClient._client()` 为 SDK 默认 HTTPX Client 显式装配 hook | 请求内 recorder 记录响应头、原始正文块进度和实际连接对端；typed 快照随原异常传至 retry／Conversation 日志，不改变模型载荷、传输策略或用量 |
 | 请求内用量收集 | [collect_llm_usage](../../src/personal_agent/kernel/llm_telemetry.py) | `ContextVar` 与上下文管理器限定收集范围，退出时恢复；不作为身份或授权来源 |
-| 工具治理 | [ToolExecutor](../../src/personal_agent/governance/gateway.py) | 显式处理 grant、Policy、限流、幂等、执行和审计，不通过方法名匹配插入 |
-| 策略观测归属 | [PolicyDecisionRecorder](../../src/personal_agent/kernel/observability.py) 与 [PolicyDecisionEvent](../../src/personal_agent/kernel/contracts/policy.py)，由 `AgentRuntime` 注入三个调用点 | Runtime 实例绑定本实例存储；事件不决定授权，可选 sink 失败语义保持，见 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md) |
+| 工具治理 | [ToolExecutor](../../src/personal_agent/governance/gateway.py) | 显式校验 grant、消费 Policy 决定并审计。获准后处理限流、超时和执行 |
+| 策略观测归属 | [PolicyDecisionRecorder](../../src/personal_agent/kernel/observability.py) 与 [PolicyDecisionEvent](../../src/personal_agent/kernel/contracts/policy.py) 由 `AgentRuntime` 装配 | Runtime 实例绑定本实例存储；事件不决定授权，可选 sink 失败语义保持，见 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md) |
 | 业务确认与迁移 | [KnowledgeLifecycleService](../../src/personal_agent/application/knowledge_lifecycle/service.py) 等业务用例 | 业务 owner 拥有 Command、确认绑定、合法迁移和恢复，通用切面不接管这些判断 |
 
 这些实现共享横切分离的设计思路，尚未形成统一 AOP 引擎。工具网关包含其协议内的执行策略，不能与模型重试合并成自动重跑任意操作的全局切面。
@@ -85,7 +85,7 @@ Loop 已将逐响应记录和续接接入同一 Port：response_sink 在 typed �
 
 横切实现的六项通用强制边界由 [COD](../devSpec/code-structure.md#51-横切关注点与显式组合)拥有；本节保留现行观测装配与证据限制。
 
-当前 [`PolicyDecisionRecorder`](../../src/personal_agent/kernel/observability.py) 由 `AgentRuntime` 按实例构造，并经 ToolExecutor 转交 ToolGateway，以及直接注入 MemoryFacade、ConversationService；不再注册进程全局 sink。内部事件 typed 且 immutable，保留原字段。可选 sink 仍捕获持久化异常，不能把它当作必需审计原子提交的保证；实施与正式验收见 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md)。
+当前 [`PolicyDecisionRecorder`](../../src/personal_agent/kernel/observability.py) 由 `AgentRuntime` 按实例构造。入口准入、工具派发、MemoryFacade 和 Conversation 的事件归同一个 Runtime 实例。内部事件 typed 且 immutable，主体使用 canonical identity。可选 sink 捕获持久化异常，审计记录与业务回执各有持久化责任。[观测隔离 ADR](../adr/0034-runtime-policy-audit-isolation.md) · [入口与投影契约](../mcpDesign/README.md#522-身份入口与能力可见性)
 
 ## 5. 变更时如何验收
 

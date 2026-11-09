@@ -195,7 +195,6 @@ class MCPToolConfig(_StrictBase):
     requires_confirmation: bool = False
     side_effects: tuple[str, ...] = ("none",)
     permission_scope: str = "mcp:tool"
-    idempotency_key_required: bool = False
     rollback_supported: bool = False
     audit_required: bool = True
     timeout_seconds: float | None = 30.0
@@ -223,6 +222,16 @@ class MCPServerConfig(_StrictBase):
 class MCPConfig(_StrictBase):
     enabled: bool = False
     servers: tuple[MCPServerConfig, ...] = ()
+
+
+class WorkspaceChangesConfig(_StrictBase):
+    principal: AuthenticatedPrincipal
+    conversation_id: str = Field(min_length=1)
+    workspace_ref: str = Field(min_length=1)
+    root: str = Field(min_length=1)
+    server_id: str = Field(min_length=1)
+    create_directory_tool: str = Field(min_length=1)
+    move_tool: str = Field(min_length=1)
 
 
 class EnterpriseKnowledgeConfig(_StrictBase):

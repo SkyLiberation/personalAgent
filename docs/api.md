@@ -302,7 +302,7 @@ LangGraph checkpoint。
 ```
 
 Web 响应由 `ConversationTurnResponse` 定义，包含 `interaction_run_ref`、`conversation_id`、
-`disposition` 和一条 assistant `message`。保存或删除需要确认时返回 `pending_confirmation`。
+`disposition` 和一条 assistant `message`。需要确认的知识或工作区动作返回 `pending_confirmation`。
 `disposition` 可能为 `answer`、`clarification_required`、`confirmation_required`、`plan_ready`、
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
@@ -334,6 +334,12 @@ Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、rea
 - `list_personal_knowledge`：读取当前 principal 的 active/conflicted canonical KnowledgeItem 引用；
 - `prepare_conversation_knowledge_save`：冻结 exact user span；
 - `prepare_knowledge_delete`：准备 lifecycle delete command，确认前零副作用。
+
+### `POST /api/conversation/{interaction_run_ref}/workspace-changes/decision`
+
+工作区会话在适用部署中返回 `kind=workspace_changes`、`command_digest` 和有序的 `changes`。已认证用户提交原 `conversation_id`、`command_digest` 和 `decision`（`approve` 或 `reject`）。响应包含该摘要、整体状态和按批准顺序记录的执行结果。相同决定重复提交返回原回执，并发处理或决定冲突时返回 409，其他主体或错误摘要返回 404。客户端取得回执后，用原消息、原会话和原运行引用再次调用 `POST /api/conversation/turn`。执行成功时模型消费实际回执并继续交付，拒绝或结果未知时展示对应状态。
+
+配置入口允许名单时，对话、SSE 和直接工具 API 的未授权请求在执行前返回 403。认证与工作区部署配置见 [MCP 接入 Spec](mcpDesign/README.md#523-工作区变更确认与接续)。
 
 ### `GET /api/entry/stream`
 

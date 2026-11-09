@@ -8,11 +8,7 @@ from psycopg.types.json import Jsonb
 
 from personal_agent.kernel.contracts.tool import ToolInvocationEvent
 from personal_agent.kernel.contracts.policy import PolicyDecisionEvent
-from personal_agent.kernel.contracts.tool_runtime import (
-    IdempotencyStore,
-    ToolAuditSink,
-    ToolGatewayContext,
-)
+from personal_agent.kernel.contracts.tool_runtime import ToolAuditSink
 from personal_agent.infra.storage.audit_redaction import redact_audit_payload
 from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 
@@ -20,14 +16,18 @@ from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 _DUPLICATE_SIDE_EFFECT_MARKER = "已执行过或正在执行"
 
 
-class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyStore):
-    """Durable ledger and audit sink for governed tool side effects."""
+class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink):
+    """Persist tool audit events and expose historical idempotency records."""
 
     def ensure_schema(self) -> None:
         if self._initialized:
             return
         with self._connect() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    ("personal_agent:tool_governance_schema",),
+                )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS tool_idempotency_ledger (
@@ -167,112 +167,6 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
                 )
             conn.commit()
         self._initialized = True
-
-    def seen(self, key: str) -> bool:
-        self.ensure_schema()
-        with self._connect(row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT 1
-                    FROM tool_idempotency_ledger
-                    WHERE idempotency_key = %s
-                      AND status IN ('reserved', 'committed')
-                    LIMIT 1
-                    """,
-                    (key,),
-                )
-                return cur.fetchone() is not None
-
-    def reserve(self, key: str, *, context: ToolGatewayContext, tool_name: str) -> bool:
-        self.ensure_schema()
-        now = datetime.now(UTC)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO tool_idempotency_ledger (
-                        idempotency_key, status, tool_name, thread_id, step_id,
-                        tool_call_id, user_id, reserved_at, updated_at, metadata
-                    )
-                    VALUES (%s, 'reserved', %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                    """,
-                    (
-                        key,
-                        tool_name,
-                        context.execution_scope.thread_id,
-                        (
-                            context.execution_scope.logical_subgoal_id
-                            or context.execution_scope.task_id
-                        ),
-                        context.tool_call_id,
-                        context.execution_scope.principal.principal_id,
-                        now,
-                        now,
-                        Jsonb({
-                            "principal": (
-                                context.execution_scope.principal.model_dump(
-                                    mode="json"
-                                )
-                            ),
-                            "source_platform": context.source_platform,
-                            "execution_mode": context.execution_mode,
-                            "run_id": context.execution_scope.execution_id,
-                        }),
-                    ),
-                )
-                inserted = (cur.rowcount or 0) == 1
-            conn.commit()
-        return inserted
-
-    def get_receipt(self, key: str) -> dict | None:
-        self.ensure_schema()
-        with self._connect(row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT receipt
-                    FROM tool_idempotency_ledger
-                    WHERE idempotency_key = %s AND status = 'committed'
-                    """,
-                    (key,),
-                )
-                row = cur.fetchone()
-        receipt = row.get("receipt") if row else None
-        return dict(receipt) if isinstance(receipt, dict) else None
-
-    def commit(self, key: str, receipt: dict | None = None) -> None:
-        self.ensure_schema()
-        now = datetime.now(UTC)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE tool_idempotency_ledger
-                    SET status = 'committed',
-                        committed_at = COALESCE(committed_at, %s),
-                        receipt = COALESCE(%s, receipt),
-                        updated_at = %s
-                    WHERE idempotency_key = %s
-                    """,
-                    (now, Jsonb(receipt) if receipt is not None else None, now, key),
-                )
-            conn.commit()
-
-    def release(self, key: str) -> None:
-        self.ensure_schema()
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    DELETE FROM tool_idempotency_ledger
-                    WHERE idempotency_key = %s
-                      AND status = 'reserved'
-                    """,
-                    (key,),
-                )
-            conn.commit()
 
     def record(self, event: ToolInvocationEvent) -> None:
         self.ensure_schema()
@@ -475,11 +369,10 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink, IdempotencyS
         return [self._serialize_row(row) for row in rows]
 
     def trace_idempotency(self, key: str, *, reveal: bool = False) -> dict[str, Any] | None:
-        """Return the full lifecycle of one confirmed tool call by its key.
+        """Return the legacy ledger row and matching audit events.
 
-        Combines the idempotency ledger row, every audit event sharing the key
-        as ``side_effect_id``, and any policy decisions on the same run/thread —
-        answering "who confirmed what, when, and was it executed".
+        Legacy confirmation values came from tool arguments and do not prove
+        user approval.
         """
         self.ensure_schema()
         with self._connect(row_factory=dict_row) as conn:

@@ -12,7 +12,7 @@ from personal_agent.capabilities.contracts.interaction import (
     InteractionToolCallValidation,
     InteractionToolDefinition,
 )
-from personal_agent.governance.policy import PolicyEngine
+from personal_agent.kernel.contracts.policy import PolicyEvaluator
 from personal_agent.tools.base import (
     ToolExposure,
     tool_failure,
@@ -20,12 +20,11 @@ from personal_agent.tools.base import (
     tool_schema,
 )
 from personal_agent.governance.gateway import (
-    IdempotencyStore,
     ToolAuditSink,
     ToolGateway,
     ToolGatewayContext,
 )
-from personal_agent.kernel.contracts.scope import ExecutionScope
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.observability import PolicyDecisionRecorder
 from personal_agent.kernel.llm_schemas import model_tool_strict
@@ -54,8 +53,7 @@ class ToolExecutor:
         self,
         audit_sink: ToolAuditSink | None = None,
         *,
-        idempotency_store: IdempotencyStore | None = None,
-        policy_engine: PolicyEngine | None = None,
+        policy_engine: PolicyEvaluator | None = None,
         policy_decisions: PolicyDecisionRecorder | None = None,
         prompts: PromptCatalog = DEFAULT_PROMPTS,
     ) -> None:
@@ -63,7 +61,6 @@ class ToolExecutor:
         self._gateway = ToolGateway(
             prompts=prompts,
             audit_sink=audit_sink,
-            idempotency_store=idempotency_store,
             policy_engine=policy_engine,
             policy_decisions=policy_decisions,
         )
@@ -98,10 +95,17 @@ class ToolExecutor:
             return None
         return tool
 
-    def list_interaction_tools(self) -> tuple[InteractionToolDefinition, ...]:
+    def list_interaction_tools(
+        self, *, principal: AuthenticatedPrincipal, source_platform: str
+    ) -> tuple[InteractionToolDefinition, ...]:
         definitions: list[InteractionToolDefinition] = []
         for tool in self.list_tools(exposures={"public_agent"}):
             governance = tool_governance(tool)
+            decision = self._gateway.policy_decision(
+                tool, governance, principal=principal, source_platform=source_platform,
+            )
+            if decision.effect in {"deny", "require_escalation"}:
+                continue
             side_effects = set(governance.side_effects) - {
                 "none",
                 "read_local",
@@ -183,21 +187,22 @@ class ToolExecutor:
     def invoke_direct(
         self,
         name: str,
+        arguments: dict[str, Any],
         *,
         execution_scope: ExecutionScope,
-        **kwargs: Any,
+        source_platform: str | None,
     ) -> dict[str, Any]:
         if name not in self:
             return tool_failure(self._prompts.render('tool_gateway.not_found', tool_name=name)).model_dump(mode="json")
         tool_call_id = f"direct-{name}"
         return self._gateway.invoke(
             name,
-            kwargs,
+            arguments,
             ToolGatewayContext(
                 execution_scope=execution_scope,
                 execution_mode="direct",
                 tool_call_id=tool_call_id,
-                source_platform=kwargs.get("source_platform"),
+                source_platform=source_platform,
             ),
         )
 

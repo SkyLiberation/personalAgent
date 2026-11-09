@@ -44,6 +44,7 @@ from .goal_models import goal_verification_action_id
 from .verification_admission import observed_receipts, INTERACTION_VERIFICATION_CAPABILITY
 from .journal_lock import exclusive_run_lock
 from .model_history import validate_decision_extension, prior_analysis_turns
+from .workspace_changes import validate_workspace_progress
 from .models import (
     ActionGoalBinding, ActionGoalReview, ActionObservation,
     CommittedUsage,
@@ -293,6 +294,7 @@ class InMemoryInteractionJournal:
             )
         if previous is not None:
             validate_decision_extension(previous, trace)
+            validate_workspace_progress(previous.workspace_changes, trace.workspace_changes)
             if trace.action_goal_reviews[:len(previous.action_goal_reviews)] != previous.action_goal_reviews:
                 raise ConversationOperationConflict("action goal reviews are immutable")
             if trace.goal_operations[:len(previous.goal_operations)] != previous.goal_operations:

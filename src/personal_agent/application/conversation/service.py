@@ -127,6 +127,10 @@ from .errors import (
     ConversationOperationNotFound,
     ConversationFailure,
 )
+from .workspace_changes import (
+    WORKSPACE_CHANGES, Decision as WorkspaceDecision, WorkspaceChangeArguments, WorkspaceChangeConfirmation,
+    WorkspaceChangeOperation, WorkspaceChangeReceipt, WorkspaceChangeService,
+)
 from .journal import (
     FileInteractionJournal,
     InMemoryInteractionJournal,
@@ -229,6 +233,7 @@ class ConversationService:
         knowledge_writer: ConversationKnowledgeWriter | None = None,
         knowledge_reader: ConversationKnowledgeReadPort | None = None,
         knowledge_lifecycle: ConversationKnowledgeLifecyclePort | None = None,
+        workspace_changes: WorkspaceChangeService | None = None,
         budget_policy: LoopBudgetPolicy | None = None,
         journal: InMemoryInteractionJournal | None = None,
         action_diagnostics_reveal_field_names: bool = False,
@@ -260,6 +265,7 @@ class ConversationService:
         self._knowledge_writer = knowledge_writer
         self._knowledge_reader = knowledge_reader
         self._knowledge_lifecycle = knowledge_lifecycle
+        self._workspace_changes = workspace_changes
         self._action_diagnostics_reveal_field_names = (
             action_diagnostics_reveal_field_names
         )
@@ -448,6 +454,25 @@ class ConversationService:
             raise ConversationOperationConflict(
                 "interaction_run_ref is already bound to different user input"
             )
+        if prior.workspace_changes and source_platform != "web":
+            raise PermissionError("工作区对话只能通过 Web 恢复")
+        pending_workspace = next((item for item in prior.workspace_changes if item.receipt is None), None)
+        if pending_workspace is not None:
+            if self._workspace_changes is None:
+                raise ConversationOperationConflict("当前部署未装配工作区授权")
+            return self._workspace_confirmation(pending_workspace, working_plan)
+        if prior.workspace_changes:
+            receipt = prior.workspace_changes[-1].receipt
+            if receipt is not None and receipt.status != "applied":
+                message = {
+                    "rejected": "你已拒绝这份工作区变更清单，未执行其中的操作。",
+                    "unknown": "工作区变更有操作结果未知，已停止后续派发。请先核对实际文件状态。",
+                    "blocked": "工作区变更被当前策略阻止，后续操作未执行。请查看已记录的执行结果。",
+                }[receipt.status]
+                return ConversationTurnView(
+                    conversation_id=conversation_id, interaction_run_ref=run_ref, disposition="limitation",
+                    message=ConversationMessage(role="assistant", content=message), working_plan=working_plan,
+                )
         if prior is not None and prior.knowledge_save_operation is not None:
             return self._knowledge_save.turn_view(
                 conversation_id,
@@ -611,7 +636,7 @@ class ConversationService:
         while True:
             trace = self._journal.get(run_ref)
             usage = trace.usage
-            capabilities = self._effective_capabilities(run_ref=run_ref)
+            capabilities = self._effective_capabilities(run_ref=run_ref, source_platform=source_platform)
             trace = self._model_journal_call("agent_interaction_turn", self._journal.recover_model_response_originals,
                 ExecutionScope(principal=principal, execution_id=run_ref, thread_id=conversation_id))
             usage = trace.usage
@@ -687,7 +712,7 @@ class ConversationService:
                     )
             if decision is None:
                 decision, model_response, composition, protocol_feedback = self._decide(
-                    run_ref=run_ref, messages=messages,
+                    run_ref=run_ref, messages=messages, source_platform=source_platform,
                     capabilities=self._model_visible_capabilities_for_turn(capabilities, inputs, run_ref=run_ref),
                     inputs=inputs, usage=usage, review_criteria=review_criteria,
                     turn_index=usage.model_turns, working_plan=working_plan,
@@ -1321,6 +1346,30 @@ class ConversationService:
                     or (latest.run_deadline_at is not None and datetime.now(UTC) >= latest.run_deadline_at)):
                 return self._budget_exhausted(conversation_id, run_ref, principal, messages, inputs,
                     latest.usage, execution_order, concurrent_batches, context_composition, review_criteria, working_plan)
+            workspace_action = next((action for action in decision.actions if isinstance(action, ToolCallProposal)
+                                     and action.tool_name == WORKSPACE_CHANGES), None)
+            if workspace_action is not None:
+                try:
+                    if self._workspace_changes is None or len(decision.actions) != 1:
+                        raise ValueError("请单独提交完整的工作区变更清单")
+                    if workspace_action.action_id in committed_call_ids:
+                        raise ValueError("工作区调用标识已经使用")
+                    if latest.usage.tool_calls >= self._budget_policy.max_tool_calls:
+                        raise ValueError("工作区变更已达本轮工具调用额度")
+                    operation = self._workspace_changes.prepare(
+                        latest, source_platform=source_platform, action_id=workspace_action.action_id,
+                        arguments=WorkspaceChangeArguments.model_validate(workspace_action.arguments),
+                        plan_step_id=active_working_plan_step_id(working_plan),
+                    )
+                except (ValueError, PermissionError, ConversationOperationConflict) as error:
+                    inputs.append(self._name_action_feedback(
+                        self._application_operation_feedback(workspace_action, error), decision.actions,
+                    ))
+                    self._commit(run_ref, principal, messages, inputs, usage, execution_order, concurrent_batches,
+                                 context_composition, review_criteria=review_criteria, working_plan=working_plan)
+                    continue
+                self._workspace_changes.store(operation)
+                return self._workspace_confirmation(operation, working_plan)
             results, usage, concurrent = self._execute_actions(
                 decision,
                 conversation_id=conversation_id,
@@ -1610,6 +1659,32 @@ class ConversationService:
             )
         )
         raise PermissionError("interaction run scope mismatch")
+
+    @staticmethod
+    def _workspace_confirmation(operation: WorkspaceChangeOperation, working_plan) -> ConversationTurnView:
+        command = operation.command
+        return ConversationTurnView(
+            conversation_id=command.scope.thread_id,
+            interaction_run_ref=command.scope.execution_id,
+            disposition="confirmation_required",
+            message=ConversationMessage(role="assistant", content="请审核清单中的工作区变更并确认是否执行。"),
+            pending_confirmation=WorkspaceChangeConfirmation(
+                command_digest=command.digest, changes=command.arguments.changes,
+            ),
+            working_plan=working_plan,
+        )
+
+    def decide_workspace_changes(
+        self, *, conversation_id: str, interaction_run_ref: str,
+        principal: AuthenticatedPrincipal, command_digest: str, decision: WorkspaceDecision,
+    ) -> WorkspaceChangeReceipt:
+        with (self._journal.exclusive_conversation(conversation_id, principal),
+              self._journal.exclusive_run(interaction_run_ref)):
+            trace = self._journal.get(interaction_run_ref)
+            if self._workspace_changes is None or trace is None or trace.conversation_id != conversation_id:
+                raise ConversationOperationNotFound("工作区命令不存在")
+            self._require_trace_scope(trace, principal, action="workspace_changes_decision")
+            return self._workspace_changes.decide(trace, digest=command_digest, decision=decision)
 
     def decide_knowledge_save(
         self,
@@ -2339,7 +2414,9 @@ class ConversationService:
                         candidate, arguments, capacity.estimated_input_tokens))
                 arguments["usage"] = self._journal.get(run_ref).usage
                 arguments["capabilities"] = self._model_visible_capabilities_for_turn(
-                    self._effective_capabilities(run_ref=run_ref), arguments["inputs"], run_ref=run_ref)
+                    self._effective_capabilities(
+                        run_ref=run_ref, source_platform=arguments["source_platform"]
+                    ), arguments["inputs"], run_ref=run_ref)
                 continue
             if refusal is not None:
                 raise self._capacity_failure(refusal)
@@ -2350,7 +2427,9 @@ class ConversationService:
     def _require_history_reduction(self, candidate: HistoryCompactionCheckpoint, arguments, original_input_tokens: int):
         revised = {**arguments, "usage": self._journal.get(arguments["run_ref"]).usage}
         revised["capabilities"] = self._model_visible_capabilities_for_turn(
-            self._effective_capabilities(run_ref=arguments["run_ref"]), arguments["inputs"],
+            self._effective_capabilities(
+                run_ref=arguments["run_ref"], source_platform=arguments["source_platform"]
+            ), arguments["inputs"],
             run_ref=arguments["run_ref"], history_checkpoint=candidate)
         request, _ = self._build_decision_request(**revised, candidate=candidate)
         try:
@@ -2367,6 +2446,7 @@ class ConversationService:
         *,
         run_ref,
         messages,
+        source_platform,
         capabilities,
         inputs,
         usage,
@@ -2888,8 +2968,19 @@ class ConversationService:
             action_error_types=error.error_types or None,
         )
 
-    def _effective_capabilities(self, *, run_ref: str | None = None) -> EffectiveCapabilities:
+    def _effective_capabilities(self, *, run_ref: str, source_platform: str) -> EffectiveCapabilities:
+        trace = self._journal.get(run_ref)
+        principal = trace.principal
         tools: list[EffectiveToolCapability] = []
+        if self._workspace_changes is not None and self._workspace_changes.visible(trace, source_platform):
+            tools.append(EffectiveToolCapability(
+                name=WORKSPACE_CHANGES,
+                description=("提交一份有序的工作区变更清单供用户一次确认。"
+                             "使用完整绝对路径，先列出必要的建目录，再列出移动。"
+                             "确认后按序执行，回执会交回本次对话。请单独调用此动作。"),
+                input_schema=WorkspaceChangeArguments.model_json_schema(),
+                strict=False, read_only=False, planning_safe=False, safely_retryable=False,
+            ))
         if self._knowledge_writer is not None:
             tools.append(
                 EffectiveToolCapability(
@@ -2971,7 +3062,9 @@ class ConversationService:
                 )
             )
         if self._tool_port is not None:
-            for candidate in self._tool_port.list_interaction_tools():
+            for candidate in self._tool_port.list_interaction_tools(
+                principal=principal, source_platform=source_platform,
+            ):
                 if candidate.name == "retrieval_experiment" and (
                     run_ref is None or self._journal.get(run_ref).deployment_digest is None):
                     continue
@@ -3014,7 +3107,10 @@ class ConversationService:
                 task_types=profile.task_types,
                 allowed_operations=profile.allowed_operations,
             )
-            for profile in (self._agent_port.profiles() if self._agent_port else ())
+            for profile in (
+                self._agent_port.interaction_profiles(principal=principal, source_platform=source_platform)
+                if self._agent_port else ()
+            )
         )
         return EffectiveCapabilities(
             tools=tuple(tools),
@@ -4414,6 +4510,7 @@ class ConversationService:
                 review_criteria=review_criteria,
                 final_message=final_message,
                 knowledge_save_operation=knowledge_save_operation,
+                workspace_changes=prior.workspace_changes if prior else (),
                 knowledge_delete_command_ref=(
                     knowledge_delete_command_ref
                     if knowledge_delete_command_ref is not None

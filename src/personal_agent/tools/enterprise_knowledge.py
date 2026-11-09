@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from personal_agent.tools.base import governance_extras, tool_response, tool_success
-from personal_agent.kernel.contracts.scope import interaction_execution_scope
+from personal_agent.tools.base import governance_extras, require_gateway_context, tool_response, tool_success
 
 
 class EnterpriseKnowledgeSearchArgs(BaseModel):
@@ -33,26 +33,22 @@ def build_enterprise_knowledge_search_tool(tool_executor) -> BaseTool:
     )
     def enterprise_knowledge_search(
         query: str,
+        config: RunnableConfig,
         limit: int = 5,
         user_id: str = "default",
         run_id: str | None = None,
     ):
+        context = require_gateway_context(config)
         results: list[dict[str, Any]] = []
         for source_tool in _enterprise_source_tools(tool_executor):
             if len(results) >= limit:
                 break
             outcome = tool_executor.invoke_direct(
                 source_tool.name,
-                execution_scope=interaction_execution_scope(
-                    tenant_id="personal-agent",
-                    user_id=user_id,
-                    execution_id=run_id or f"enterprise:{user_id}",
-                    task_id=source_tool.name,
-                ),
-                query=query,
-                limit=max(1, limit - len(results)),
-                user_id=user_id,
-                run_id=run_id,
+                {"query": query, "limit": max(1, limit - len(results)),
+                 "user_id": context.execution_scope.principal.user_id, "run_id": run_id},
+                execution_scope=context.execution_scope.model_copy(update={"task_id": source_tool.name}),
+                source_platform=context.source_platform,
             )
             results.extend(_normalize_enterprise_results(source_tool.name, outcome))
         return tool_response(tool_success({

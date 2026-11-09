@@ -4,10 +4,18 @@ from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from langchain_core.tools import BaseTool, tool
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from personal_agent.kernel.models import local_now
-from personal_agent.tools.base import governance_extras, tool_failure, tool_response, tool_success
+from personal_agent.tools.base import governance_extras, require_gateway_context, tool_failure, tool_response, tool_success
+
+
+def _memory_user(config: RunnableConfig, requested: str | None) -> str:
+    principal = require_gateway_context(config).execution_scope.principal
+    if principal.tenant_id != "personal-agent" or (requested is not None and requested != principal.user_id):
+        raise PermissionError("当前主体无权访问该个人租户的记忆。")
+    return principal.user_id
 
 
 def _note_summary(note) -> dict:
@@ -26,25 +34,25 @@ def _note_summary(note) -> dict:
 
 
 class ListRecentNotesArgs(BaseModel):
-    user_id: str = "default"
+    user_id: str | None = None
     limit: int = Field(default=10, ge=1, le=50)
 
 
 class GetNoteArgs(BaseModel):
     note_id: str = Field(min_length=1)
-    user_id: str = "default"
+    user_id: str | None = None
     include_content: bool = True
 
 
 class FindSimilarNotesArgs(BaseModel):
     query: str = Field(min_length=1)
-    user_id: str = "default"
+    user_id: str | None = None
     limit: int = Field(default=8, ge=1, le=30)
 
 
 class UpdateNoteArgs(BaseModel):
     note_id: str = Field(min_length=1)
-    user_id: str = "default"
+    user_id: str | None = None
     title: str | None = None
     content: str | None = None
     summary: str | None = None
@@ -54,19 +62,19 @@ class UpdateNoteArgs(BaseModel):
 class SupersedeNoteArgs(BaseModel):
     old_note_id: str = Field(min_length=1)
     new_note_id: str = Field(min_length=1)
-    user_id: str = "default"
+    user_id: str | None = None
     reason: str = ""
 
 
 class MarkNoteDeprecatedArgs(BaseModel):
     note_id: str = Field(min_length=1)
-    user_id: str = "default"
+    user_id: str | None = None
     reason: str = ""
 
 
 class MarkNotesConflictedArgs(BaseModel):
     note_ids: list[str] = Field(min_length=2)
-    user_id: str = "default"
+    user_id: str | None = None
     reason: str = ""
 
 
@@ -81,8 +89,8 @@ def build_list_recent_notes_tool(memory) -> BaseTool:
         response_format="content_and_artifact",
         extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
     )
-    def list_recent_notes(user_id: str = "default", limit: int = 10):
-        notes = memory.list_recent_notes(user_id, limit=limit, include_chunks=False)
+    def list_recent_notes(config: RunnableConfig, user_id: str | None = None, limit: int = 10):
+        notes = memory.list_recent_notes(_memory_user(config, user_id), limit=limit, include_chunks=False)
         return tool_response(tool_success({"notes": [_note_summary(note) for note in notes]}))
 
     return list_recent_notes
@@ -99,8 +107,8 @@ def build_get_note_tool(memory, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> 
         response_format="content_and_artifact",
         extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
     )
-    def get_note(note_id: str, user_id: str = "default", include_content: bool = True):
-        note = memory.get_note(note_id, user_id=user_id)
+    def get_note(note_id: str, config: RunnableConfig, user_id: str | None = None, include_content: bool = True):
+        note = memory.get_note(note_id, user_id=_memory_user(config, user_id))
         if note is None:
             return tool_response(tool_failure(prompts.render('tools.knowledge.note_unavailable'), error_kind="invalid_param"))
         payload = _note_summary(note)
@@ -123,8 +131,8 @@ def build_find_similar_notes_tool(memory) -> BaseTool:
         response_format="content_and_artifact",
         extras=governance_extras(exposure="public_agent", side_effects=("read_longterm",), permission_scope="memory:read"),
     )
-    def find_similar_notes(query: str, user_id: str = "default", limit: int = 8):
-        notes = memory.find_similar_notes(user_id, query, limit=limit)
+    def find_similar_notes(query: str, config: RunnableConfig, user_id: str | None = None, limit: int = 8):
+        notes = memory.find_similar_notes(_memory_user(config, user_id), query, limit=limit)
         return tool_response(tool_success({"notes": [_note_summary(note) for note in notes]}))
 
     return find_similar_notes
@@ -146,12 +154,14 @@ def build_update_note_tool(memory) -> BaseTool:
     )
     def update_note(
         note_id: str,
-        user_id: str = "default",
+        config: RunnableConfig,
+        user_id: str | None = None,
         title: str | None = None,
         content: str | None = None,
         summary: str | None = None,
         tags: list[str] | None = None,
     ):
+        user_id = _memory_user(config, user_id)
         note = memory.get_note(note_id, user_id=user_id)
         if note is None:
             return tool_response(tool_failure("未找到该用户可更新的笔记。", error_kind="invalid_param"))
@@ -187,9 +197,11 @@ def build_supersede_note_tool(memory) -> BaseTool:
     def supersede_note(
         old_note_id: str,
         new_note_id: str,
-        user_id: str = "default",
+        config: RunnableConfig,
+        user_id: str | None = None,
         reason: str = "",
     ):
+        user_id = _memory_user(config, user_id)
         old_note, new_note = memory.supersede_note(
             old_note_id, new_note_id, user_id=user_id, reason=reason
         )
@@ -215,8 +227,8 @@ def build_mark_note_deprecated_tool(memory) -> BaseTool:
             timeout_seconds=20,
         ),
     )
-    def mark_note_deprecated(note_id: str, user_id: str = "default", reason: str = ""):
-        note = memory.mark_note_deprecated(note_id, user_id=user_id, reason=reason)
+    def mark_note_deprecated(note_id: str, config: RunnableConfig, user_id: str | None = None, reason: str = ""):
+        note = memory.mark_note_deprecated(note_id, user_id=_memory_user(config, user_id), reason=reason)
         return tool_response(tool_success({"note": _note_summary(note)}))
 
     return mark_note_deprecated
@@ -236,8 +248,8 @@ def build_mark_notes_conflicted_tool(memory) -> BaseTool:
             timeout_seconds=20,
         ),
     )
-    def mark_notes_conflicted(note_ids: list[str], user_id: str = "default", reason: str = ""):
-        notes = memory.mark_notes_conflicted(note_ids, user_id=user_id, reason=reason)
+    def mark_notes_conflicted(note_ids: list[str], config: RunnableConfig, user_id: str | None = None, reason: str = ""):
+        notes = memory.mark_notes_conflicted(note_ids, user_id=_memory_user(config, user_id), reason=reason)
         return tool_response(tool_success({"notes": [_note_summary(note) for note in notes]}))
 
     return mark_notes_conflicted

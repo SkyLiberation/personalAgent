@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.contracts.tool import RiskLevel, SideEffectType
 
 # allow                 执行放行
@@ -19,6 +20,11 @@ from personal_agent.kernel.contracts.tool import RiskLevel, SideEffectType
 # require_confirmation   需要人工确认（HITL）后才能执行副作用
 # require_escalation     超出当前主体授权，需要升级审批
 PolicyEffect = Literal["allow", "deny", "require_confirmation", "require_escalation"]
+EntrySource = Literal["web", "cli", "feishu"]
+
+
+class EntryPolicyDenied(PermissionError):
+    """A trusted product entry was denied by deployment policy."""
 
 # 被治理的动作类别。工具调用、记忆读写删、图谱同步、入口接入都走同一套决策。
 PolicyAction = Literal[
@@ -63,7 +69,7 @@ class PolicyInput:
     """
 
     action: PolicyAction
-    user_id: str | None = None
+    principal: AuthenticatedPrincipal
     session_id: str | None = None
     source_platform: str | None = None
     # 执行场景：deterministic | react | direct | memory | entry。
@@ -83,7 +89,11 @@ class PolicyInput:
     confirmed: bool = False
     react_allowed_tools: frozenset[str] = frozenset()
     # 资源归属用户（用于记忆层 owner 校验）。
-    resource_owner: str | None = None
+    resource_owner: AuthenticatedPrincipal | None = None
+
+    @property
+    def principal_id(self) -> str:
+        return self.principal.principal_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +166,8 @@ class PolicyEvaluator(Protocol):
 
 
 __all__ = [
+    "EntryPolicyDenied",
+    "EntrySource",
     "PolicyAction",
     "PolicyDecision",
     "PolicyDecisionEvent",

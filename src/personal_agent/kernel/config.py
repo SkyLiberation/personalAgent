@@ -28,6 +28,7 @@ from personal_agent.kernel.config_models import (
     StructuredConfig,
     WebApiConfig,
     WebSearchConfig,
+    WorkspaceChangesConfig,
 )
 
 
@@ -62,6 +63,7 @@ class Settings(_StrictBase):
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
     langextract: LangExtractConfig = Field(default_factory=LangExtractConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
+    workspace_changes: WorkspaceChangesConfig | None = None
     enterprise_knowledge: EnterpriseKnowledgeConfig = Field(default_factory=EnterpriseKnowledgeConfig)
     ask: AskConfig = Field(default_factory=AskConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)

@@ -4,6 +4,8 @@ from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.policy import EntrySource
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.kernel.prompts import create_prompt_catalog
 from personal_agent.infra.model_providers import build_provider_policy
 from personal_agent.memory.graphiti.store import GraphitiStore
@@ -123,11 +125,15 @@ class AgentService:
     def capability_inventory(self):
         return self.runtime.capability_inventory()
 
-    def execute_tool(self, name: str, *, execution_scope, **kwargs: object):
+    def execute_tool(
+        self, name: str, arguments: dict[str, object], *,
+        execution_scope: ExecutionScope, source_platform: EntrySource,
+    ):
         return self.runtime.execute_tool(
             name,
+            arguments,
             execution_scope=execution_scope,
-            **kwargs,
+            source_platform=source_platform,
         )
 
     def query_tool_audit(self, **filters):
@@ -206,11 +212,19 @@ class AgentService:
     def converse(self, *args, **kwargs):
         return self.runtime.converse(*args, **kwargs)
 
+    def authorize_entry(
+        self, principal: AuthenticatedPrincipal, source_platform: EntrySource, *, preflight: bool = False
+    ) -> None:
+        self.runtime.authorize_entry(principal, source_platform, preflight=preflight)
+
     def conversation_trace(self, *args, **kwargs):
         return self.runtime.conversation_trace(*args, **kwargs)
 
     def decide_conversation_knowledge_save(self, **kwargs):
         return self.runtime.decide_conversation_knowledge_save(**kwargs)
+
+    def decide_workspace_changes(self, **kwargs):
+        return self.runtime.decide_workspace_changes(**kwargs)
 
     def list_procedure_definitions(self):
         return self.runtime.list_procedure_definitions()

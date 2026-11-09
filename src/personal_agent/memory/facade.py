@@ -23,6 +23,7 @@ from personal_agent.kernel.contracts.policy import (
     PolicyEvaluator,
     PolicyInput,
 )
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 if TYPE_CHECKING:
     from personal_agent.memory.graphiti.store import GraphitiStore
@@ -90,19 +91,23 @@ class MemoryFacade:
         self,
         action: PolicyAction,
         *,
-        subject: str | None,
+        subject: str,
         owner: str | None = None,
         resource: str | None = None,
         confirmed: bool = False,
     ) -> PolicyDecision:
         """Evaluate a memory access decision and audit non-allow outcomes."""
+        principal = AuthenticatedPrincipal(tenant_id="personal-agent", user_id=subject)
         decision = self._policy.evaluate(
             PolicyInput(
                 action=action,
-                user_id=subject,
+                principal=principal,
                 execution_mode="memory",
                 resource=resource,
-                resource_owner=owner,
+                resource_owner=(
+                    AuthenticatedPrincipal(tenant_id="personal-agent", user_id=owner)
+                    if owner is not None else None
+                ),
                 permission_scope=_MEMORY_SCOPES.get(action, "memory:access"),
                 confirmed=confirmed,
             )
@@ -116,7 +121,7 @@ class MemoryFacade:
                     reason=decision.reason,
                     permission_scope=_MEMORY_SCOPES.get(action, "memory:access"),
                     resource=resource,
-                    user_id=subject,
+                    user_id=principal.principal_id,
                     execution_mode="memory",
                 )
             )

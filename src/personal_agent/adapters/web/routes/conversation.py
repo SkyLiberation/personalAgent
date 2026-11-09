@@ -18,11 +18,15 @@ from personal_agent.application.conversation import (
     ConversationWorkingPlan,
 )
 from personal_agent.application.conversation.models import KnowledgeDeleteConfirmation
+from personal_agent.application.conversation.workspace_changes import (
+    Decision as WorkspaceDecision, Digest as WorkspaceDigest, WorkspaceChangeConfirmation, WorkspaceChangeReceipt,
+)
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.policy import EntryPolicyDenied
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
-from personal_agent.adapters.web.routes._shared import resolve_requested_principal
+from personal_agent.adapters.web.routes._shared import require_entry_identity, resolve_requested_principal
 from personal_agent.adapters.web.routes.artifacts import (
     ArtifactResourceView,
     artifact_resource_view,
@@ -64,6 +68,14 @@ class ConversationKnowledgeSaveDecisionRequest(BaseModel):
     confirmation_ref: str = Field(default="", max_length=500)
 
 
+class WorkspaceChangeDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    command_digest: WorkspaceDigest
+    decision: WorkspaceDecision
+
+
 class ConversationTurnResponse(BaseModel):
     """HTTP projection of a turn with authenticated download paths."""
 
@@ -82,7 +94,7 @@ class ConversationTurnResponse(BaseModel):
     ]
     message: ConversationMessage
     pending_confirmation: (
-        ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | None
+        ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | WorkspaceChangeConfirmation | None
     ) = None
     working_plan: ConversationWorkingPlan | None = None
 
@@ -113,6 +125,28 @@ def register_conversation_routes(
     settings: Settings,
     service: AgentService,
 ) -> None:
+    @app.post("/api/conversation/{interaction_run_ref}/workspace-changes/decision",
+              response_model=WorkspaceChangeReceipt)
+    def decide_workspace_changes(
+        interaction_run_ref: str, body: WorkspaceChangeDecisionRequest, request: Request,
+    ) -> WorkspaceChangeReceipt:
+        if getattr(request.state, "principal", None) is None:
+            raise HTTPException(status_code=403, detail="工作区变更需要 Web 认证。")
+        try:
+            principal = resolve_requested_principal(request, settings, None)
+            return service.decide_workspace_changes(
+                conversation_id=body.conversation_id, interaction_run_ref=interaction_run_ref,
+                principal=principal, command_digest=body.command_digest, decision=body.decision,
+            )
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (PermissionError, ConversationOperationNotFound):
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
+        except ConversationOperationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post(
         "/api/conversation/turn",
         response_model=ConversationTurnResponse,
@@ -126,6 +160,7 @@ def register_conversation_routes(
         # is the accepted semantic input. The model alone owns answer-vs-
         # clarification semantics; this boundary only admits or rejects.
         try:
+            require_entry_identity(request, settings)
             principal = resolve_requested_principal(
                 request,
                 settings,
@@ -147,6 +182,8 @@ def register_conversation_routes(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ConversationOperationConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ConversationOperationNotFound, PermissionError):
             raise HTTPException(status_code=404, detail="Resource not found.") from None
         except ConversationFailure as exc:

@@ -12,7 +12,8 @@ from langchain_core.tools import BaseTool
 from urllib.parse import urlparse
 
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.contracts.policy import EntryPolicyDenied, EntrySource, PolicyDecisionEvent, PolicyInput
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
 from personal_agent.kernel.models import (
     KnowledgeNote,
@@ -54,6 +55,7 @@ from personal_agent.infra.storage.postgres_agent_run_store import PostgresAgentR
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from personal_agent.governance import ToolExecutor
 from personal_agent.orchestration.mcp_bindings import register_mcp_tools
+from personal_agent.orchestration.workspace_changes import bind_workspace_changes
 from personal_agent.tools import (
     build_capture_text_tool,
     build_capture_upload_tool,
@@ -261,7 +263,6 @@ class AgentRuntime:
         self._tool_executor = ToolExecutor(
             prompts=self._prompts,
             audit_sink=self.tool_governance_store,
-            idempotency_store=self.tool_governance_store,
             policy_engine=self._policy_engine,
             policy_decisions=self._policy_decisions,
         )
@@ -421,6 +422,10 @@ class AgentRuntime:
         answer_result = (
             DirectAnswerResult if self.settings.answer_result.writer == "direct" else ClaimAnswerResult
         )(self.settings.answer_result, feature_flags=self.settings.feature_flags)
+        workspace_changes, mcp_tools = bind_workspace_changes(
+            settings, mcp_tools, policy=self._policy_engine, decisions=self._policy_decisions,
+            audit=self.tool_governance_store, journal=conversation_journal, prompts=self._prompts,
+        )
         self._conversation_service = ConversationService(
             self._structured_client,
             prompts=self._prompts,
@@ -432,6 +437,7 @@ class AgentRuntime:
             knowledge_writer=self.knowledge_service,
             knowledge_reader=ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
+            workspace_changes=workspace_changes,
             budget_policy=LoopBudgetPolicy(
                 **self.settings.interaction_loop.model_dump()
             ),
@@ -656,11 +662,16 @@ class AgentRuntime:
             ),
         )
 
-    def execute_tool(self, name: str, *, execution_scope, **kwargs: object):
+    def execute_tool(
+        self, name: str, arguments: dict[str, object], *,
+        execution_scope: ExecutionScope, source_platform: EntrySource,
+    ):
+        self.authorize_entry(execution_scope.principal, source_platform)
         return self._tool_executor.invoke_direct(
             name,
+            arguments,
             execution_scope=execution_scope,
-            **kwargs,
+            source_platform=source_platform,
         )
 
     # ---- tool audit query API (P1) ----
@@ -960,8 +971,25 @@ class AgentRuntime:
     def step_projection_validator(self):
         return self._step_projection_validator
 
-    def converse(self, *args, **kwargs):
-        return self._conversation_service.respond(*args, **kwargs)
+    def authorize_entry(
+        self, principal: AuthenticatedPrincipal, source_platform: EntrySource, *, preflight: bool = False
+    ) -> None:
+        decision = self._policy_engine.evaluate(PolicyInput(
+            action="entry_access", principal=principal, source_platform=source_platform,
+            execution_mode="entry", permission_scope="agent:entry",
+        ))
+        if not preflight or not decision.allowed:
+            self._policy_decisions.record(PolicyDecisionEvent(
+                action="entry_access", effect=decision.effect, rule=decision.rule,
+                reason=decision.reason, user_id=principal.principal_id,
+                source_platform=source_platform, permission_scope="agent:entry", execution_mode="entry",
+            ))
+        if not decision.allowed:
+            raise EntryPolicyDenied(decision.reason)
+
+    def converse(self, *, principal: AuthenticatedPrincipal, source_platform: EntrySource, **kwargs):
+        self.authorize_entry(principal, source_platform)
+        return self._conversation_service.respond(principal=principal, source_platform=source_platform, **kwargs)
 
     def conversation_trace(self, interaction_run_ref: str, *, principal):
         return self._conversation_service.trace(
@@ -971,6 +999,10 @@ class AgentRuntime:
 
     def decide_conversation_knowledge_save(self, **kwargs):
         return self._conversation_service.decide_knowledge_save(**kwargs)
+
+    def decide_workspace_changes(self, *, principal: AuthenticatedPrincipal, **kwargs):
+        self.authorize_entry(principal, "web")
+        return self._conversation_service.decide_workspace_changes(principal=principal, **kwargs)
 
     def list_procedure_definitions(self):
         return self.procedure_definition_store.list_definitions()

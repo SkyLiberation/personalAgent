@@ -33,7 +33,9 @@ from personal_agent.application.artifacts.models import (
 
 
 class InteractionToolPort(Protocol):
-    def list_interaction_tools(self) -> tuple[InteractionToolDefinition, ...]: ...
+    def list_interaction_tools(
+        self, *, principal: AuthenticatedPrincipal, source_platform: str
+    ) -> tuple[InteractionToolDefinition, ...]: ...
 
     def validate_interaction_call(
         self,
@@ -73,7 +75,9 @@ class InteractionToolPort(Protocol):
 
 
 class InteractionAgentPort(Protocol):
-    def profiles(self) -> tuple[SubagentProfile, ...]: ...
+    def interaction_profiles(
+        self, *, principal: AuthenticatedPrincipal, source_platform: str
+    ) -> tuple[SubagentProfile, ...]: ...
 
     def profile(self, agent_id: str) -> SubagentProfile | None: ...
 

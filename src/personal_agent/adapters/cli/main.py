@@ -12,6 +12,7 @@ from personal_agent.kernel.contracts.scope import (
 )
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.policy import EntryPolicyDenied
 from personal_agent.kernel.logging_utils import setup_logging
 from personal_agent.adapters.feishu import FeishuService
 from personal_agent.application.review import (
@@ -63,15 +64,16 @@ def entry(
     """通过 canonical interaction loop 处理一轮用户消息。"""
     with _build_service() as service:
         logger.info("CLI entry invoked user=%s session=%s", user_id, session_id)
-        result = service.converse(
-            conversation_id=session_id,
-            messages=[ConversationMessage(role="user", content=text.strip())],
-            principal=AuthenticatedPrincipal(
-                tenant_id="personal-agent",
-                user_id=user_id,
-            ),
-            source_platform="cli",
-        )
+        try:
+            result = service.converse(
+                conversation_id=session_id,
+                messages=[ConversationMessage(role="user", content=text.strip())],
+                principal=AuthenticatedPrincipal(tenant_id="personal-agent", user_id=user_id),
+                source_platform="cli",
+            )
+        except EntryPolicyDenied as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
         typer.echo(_format_conversation_result(result))
 
 

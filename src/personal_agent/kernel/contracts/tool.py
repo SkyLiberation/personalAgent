@@ -63,7 +63,6 @@ class ToolGovernance:
     requires_confirmation: bool = False
     side_effects: tuple[SideEffectType, ...] = ("none",)
     permission_scope: str = "agent:tool"
-    idempotency_key_required: bool = False
     rollback_supported: bool = False
     audit_required: bool = True
     timeout_seconds: float | None = 30.0

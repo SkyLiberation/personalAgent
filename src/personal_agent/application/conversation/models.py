@@ -27,6 +27,7 @@ from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.feature_flags import FeatureFlags
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.application.conversation.observation_bounds import ReadWindowRequest
+from personal_agent.application.conversation.workspace_changes import WorkspaceChangeConfirmation, WorkspaceChangeOperation
 from personal_agent.application.artifacts.models import (
     ArtifactResourceItem,
     ArtifactWriteReceipt,
@@ -883,6 +884,7 @@ class InteractionTrace(_StrictModel):
     final_message: FinalMessage | None = None
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
     knowledge_delete_command_ref: str | None = None
+    workspace_changes: tuple[WorkspaceChangeOperation, ...] = ()
     working_plan: ConversationWorkingPlan | None = None
 
     @property
@@ -922,7 +924,7 @@ class ConversationTurnView(_StrictModel):
     ]
     message: ConversationMessage
     pending_confirmation: (
-        ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | None
+        ConversationKnowledgeSaveOperation | KnowledgeDeleteConfirmation | WorkspaceChangeConfirmation | None
     ) = None
     working_plan: ConversationWorkingPlan | None = None
 

@@ -7,7 +7,7 @@
 | 记录 | 责任主体 | 可以证明 | 不能证明 |
 | --- | --- | --- | --- |
 | `InteractionTrace` | Conversation | 本轮输入、上下文组成、执行顺序、用量和最终消息 | 长期知识或 Agent 运行状态 |
-| 工具审计与幂等记录 | 工具执行网关及持久化 Adapter | 调用是否获准、是否执行、是否重复和副作用引用 | 用户目标已经完成 |
+| 工具审计与历史通用幂等记录 | 工具网关记录派发，持久化 Adapter 保留历史查询 | 调用是否获准和执行。旧账本保留已记录的重复与副作用引用，其中的确认字段来自当时的调用参数 | 用户目标已经完成 |
 | Agent run 与周期任务记录 | `AgentGateway`、`ResearchService` | 委托、provider task、订阅、运行和投递事实 | 父级目标已经完成 |
 | E2E archive | 评测系统 | 冻结代码与配置下的用户结果、指标和校验和 | 其他版本或未覆盖场景的质量 |
 | LangSmith trace | 观测 Adapter | 模型和运行阶段的诊断投影 | canonical 审计、权限或发布资格 |
@@ -15,6 +15,8 @@
 日志、追踪记录和归档可以通过稳定身份互相定位，但禁止用 listener 或 converter 在它们之间同步第二份业务状态。
 
 策略观测通过 immutable `PolicyDecisionEvent` 交给所属 Runtime 的 `PolicyDecisionRecorder`。组合根将同一实例注入工具网关、MemoryFacade 和 Conversation，存储目的地保持本实例绑定；管理员查询消费所属应用的既有存储。可选持久化失败仍记录异常并隔离，不提升为必需审计原子提交保证。决定及证据见 [ADR 0034](../adr/0034-runtime-policy-audit-isolation.md)，当前组合见[横切机制](../architecture/cross-cutting.md#4-横切实现的强制边界)。
+
+入口并发访问空库时，两个策略事件可能同时初始化审计表。工具治理存储以数据库事务锁串行化该 Schema 初始化。锁只覆盖首次初始化事务，日常审计写入沿既有路径。
 
 ## 2. LLM Trace 脱敏策略
 

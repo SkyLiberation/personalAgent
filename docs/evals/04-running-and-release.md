@@ -20,7 +20,22 @@ $env:PYTHONPATH = (Join-Path (Get-Location) "src")
 
 报告中两个样本的 `isolated` 均应为 `true`。冲突样本的 `existing_destination_overwritten` 应为 `false`，`overwrite_error` 应表明目标已存在，样本目录中的源文件和原目标文件均应保留。
 
+确认派发探针复用同一镜像和正式工具 HTTP 入口。它记录远端实际收到的调用，验证未确认、参数自报确认、配置拒绝和正常读取。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.confirmation_probe --image personal-agent-toolathlon-filesystem:2.2.0 --postgres-image paradedb/paradedb:latest --output "$toolathlonRun/confirmation"
+```
+
 `report.json` 和摘要记录实际配置与结果。验证范围见 [MCP 接入 Spec](../mcpDesign/README.md#7-场景推演与验收)。
+
+工作区正式用例通过真实模型提交清单，并由测试调用方在认证 Web 入口决定。按场景独立运行 `approve`、`reject`、`disconnect` 和 `arrange`。完整整理需要固定版本的上游 checkout，评分器在工具容器外运行。输出目录名宜保持简短以兼容 Windows 的模型归档路径。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.workspace_case --scenario approve --image personal-agent-toolathlon-filesystem:2.2.0 --postgres-image paradedb/paradedb:latest --model-env .env --output .tmp/workspace-approve
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.workspace_case --scenario arrange --image personal-agent-toolathlon-filesystem:2.2.0 --postgres-image paradedb/paradedb:latest --model-env .env --upstream toolServer/Toolathlon --output .tmp/workspace-arrange
+```
+
+`approval_passed` 核对正式确认和实际 MCP 派发，`workspace_passed` 核对外部文件终态，`answer_passed` 核对产品交付。完整样本还记录上游评分退出码和文件内容摘要。
 
 
 ## 公开数据集运行

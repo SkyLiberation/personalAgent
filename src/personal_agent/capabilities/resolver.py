@@ -19,7 +19,6 @@ from personal_agent.kernel.contracts.derivation import (
     DerivationRecord,
     canonical_digest,
 )
-from personal_agent.kernel.contracts.policy import PolicyEvaluator, PolicyInput
 from personal_agent.capabilities.admission import ResolutionValidator
 from personal_agent.capabilities.outcomes import (
     CapabilityRanker,
@@ -41,12 +40,10 @@ class CapabilityResolver:
         self,
         registry: CapabilityPortfolio,
         *,
-        policy_engine: PolicyEvaluator | None = None,
         validator: ResolutionValidator | None = None,
         ranker: CapabilityRanker | None = None,
     ) -> None:
         self._registry = registry
-        self._policy_engine = policy_engine
         self._validator = validator or ResolutionValidator()
         self._ranker = ranker or OutcomeAwareCapabilityRanker()
 
@@ -250,38 +247,7 @@ class CapabilityResolver:
             and capability.trust_level not in {"trusted", "scoped"}
         ):
             return "sensitive_requires_trusted_provider"
-        policy_decision = self._policy_decision(capability, request)
-        if policy_decision is not None and policy_decision.effect in {"deny", "require_escalation"}:
-            return f"policy:{policy_decision.rule}"
         return None
-
-    def _policy_decision(
-        self,
-        capability: Capability,
-        request: ExecutionCapabilityRequest,
-    ):
-        if self._policy_engine is None:
-            return None
-        if capability.kind == "agent":
-            action = "agent_call"
-        elif capability.kind == "retriever":
-            action = "memory_read"
-        else:
-            action = "tool_call"
-        return self._policy_engine.evaluate(PolicyInput(
-            action=action,  # type: ignore[arg-type]
-            user_id=_context_str(request, "user_id"),
-            session_id=_context_str(request, "session_id"),
-            source_platform=_context_str(request, "source_platform"),
-            execution_mode="capability_resolution",
-            tool_name=_capability_local_name(capability),
-            risk_level=capability.risk_level,  # type: ignore[arg-type]
-            side_effects=capability.side_effects,  # type: ignore[arg-type]
-            permission_scope=capability.auth_scope,
-            react_allowed_tools=frozenset(
-                request.runtime_context.react_allowed_tools
-            ),
-        ))
 
 
 def default_capability_policy(
@@ -535,11 +501,6 @@ def _is_local_capability(capability: Capability) -> bool:
     }:
         return True
     return not {"external_network", "send_external"} & set(capability.side_effects)
-
-
-def _context_str(request: ExecutionCapabilityRequest, key: str) -> str | None:
-    value = getattr(request.runtime_context, key)
-    return str(value) if value is not None and str(value) else None
 
 
 def _discovery_snapshot_ref(capabilities: tuple[Capability, ...]) -> str:

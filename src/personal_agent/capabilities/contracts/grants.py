@@ -31,7 +31,6 @@ class GrantDependencySet(BaseModel):
     availability_dependencies: tuple[AvailabilityDependency, ...] = ()
     authority_revision: int = Field(ge=1)
     policy_bundle_hash: str
-    confirmation_revision: int | None = Field(default=None, ge=1)
 
 
 class AtomicCapabilityGrant(BaseModel):
@@ -46,7 +45,6 @@ class AtomicCapabilityGrant(BaseModel):
     granted_operation_scope: OperationScope
     granted_data_egress: str
     granted_credential_mode: str
-    required_confirmation_ref: str | None = None
     retry_family_id: str
     dependency_set: GrantDependencySet
     expires_at: datetime = Field(default_factory=lambda: datetime.now(UTC) + timedelta(minutes=10))
@@ -66,7 +64,6 @@ class ProcedureGrant(BaseModel):
     granted_operation_scope: OperationScope
     granted_data_egress: str
     granted_credential_mode: str
-    required_confirmation_ref: str | None = None
     retry_family_id: str
     dependency_set: GrantDependencySet
     expires_at: datetime = Field(default_factory=lambda: datetime.now(UTC) + timedelta(minutes=10))
@@ -88,7 +85,6 @@ class ProcedureNodeGrant(BaseModel):
     granted_operation_scope: OperationScope
     granted_data_egress: str
     granted_credential_mode: str
-    required_confirmation_ref: str | None = None
     retry_family_id: str
     dependency_set: GrantDependencySet
     expires_at: datetime = Field(default_factory=lambda: datetime.now(UTC) + timedelta(minutes=10))
@@ -110,7 +106,6 @@ class DelegationGrant(BaseModel):
     granted_operation_scope: OperationScope
     granted_data_egress: str
     granted_credential_mode: str
-    required_confirmation_ref: str | None = None
     retry_family_id: str
     dependency_set: GrantDependencySet
     expires_at: datetime = Field(default_factory=lambda: datetime.now(UTC) + timedelta(minutes=10))

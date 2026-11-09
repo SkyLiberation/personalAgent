@@ -9,6 +9,7 @@ import lark_oapi as lark
 
 from personal_agent.orchestration.service import AgentService
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.policy import EntryPolicyDenied
 from personal_agent.application.conversation import ConversationMessage
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
@@ -51,6 +52,11 @@ class FeishuService(FeishuClientMixin):
         self._processed_lock = threading.Lock()
 
     def process_incoming_message(self, incoming_message: FeishuIncomingMessage) -> str:
+        principal = AuthenticatedPrincipal(tenant_id="feishu", user_id=incoming_message.user_id)
+        try:
+            self.agent_service.authorize_entry(principal, "feishu", preflight=True)
+        except EntryPolicyDenied as exc:
+            return str(exc)
         logger.info(
             "Feishu message processing started event_id=%s message_id=%s session_id=%s",
             incoming_message.event_id,
@@ -90,10 +96,7 @@ class FeishuService(FeishuClientMixin):
         conversation_result = self.agent_service.converse(
             conversation_id=incoming_message.session_id,
             messages=messages,
-            principal=AuthenticatedPrincipal(
-                tenant_id="feishu",
-                user_id=incoming_message.user_id,
-            ),
+            principal=principal,
             source_platform="feishu",
         )
         reply_text = conversation_result.message.content

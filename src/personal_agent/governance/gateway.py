@@ -21,17 +21,21 @@ from personal_agent.kernel.observability import (
 from personal_agent.kernel.rate_limit import InMemoryRateLimiter
 from personal_agent.kernel.models import EntryInput
 from personal_agent.kernel.contracts.tool_runtime import (
-    IdempotencyStore,
     ToolAuditSink,
     ToolGatewayContext,
 )
-from personal_agent.governance.policy import PolicyDecision, PolicyEngine, PolicyInput
+from personal_agent.governance.policy import PolicyEngine
 from personal_agent.capabilities.contracts.grants import (
     AtomicCapabilityGrant,
     ProcedureNodeGrant,
 )
 from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
-from personal_agent.kernel.contracts.policy import PolicyDecisionEvent
+from personal_agent.kernel.contracts.policy import (
+    PolicyDecision,
+    PolicyDecisionEvent,
+    PolicyEvaluator,
+    PolicyInput,
+)
 from personal_agent.tools.base import (
     ToolArtifact,
     ToolError,
@@ -75,38 +79,6 @@ class InMemoryToolAuditSink:
         self.events.append(event)
 
 
-@dataclass(slots=True)
-class InMemoryIdempotencyStore:
-    """Process-local idempotency ledger.
-
-    Guards confirmed high-risk executions against duplicate side effects from
-    checkpoint resume, user double-confirmation, or network retries. A durable
-    backend can replace this without changing the gateway contract.
-    """
-
-    _entries: dict[str, dict[str, Any] | None] = field(default_factory=dict)
-
-    def seen(self, key: str) -> bool:
-        return key in self._entries
-
-    def reserve(self, key: str, *, context: ToolGatewayContext, tool_name: str) -> bool:
-        if self.seen(key):
-            return False
-        self._entries[key] = None
-        return True
-
-    def get_receipt(self, key: str) -> dict | None:
-        receipt = self._entries.get(key)
-        return dict(receipt) if receipt is not None else None
-
-    def commit(self, key: str, receipt: dict | None = None) -> None:
-        self._entries[key] = dict(receipt) if receipt is not None else {}
-
-    def release(self, key: str) -> None:
-        if self._entries.get(key) is None:
-            self._entries.pop(key, None)
-
-
 @dataclass(frozen=True, slots=True)
 class _PolicyViolation:
     """A pre-execution policy rejection carrying its error classification."""
@@ -121,22 +93,22 @@ class ToolGateway:
     The gateway keeps the same ``tool_messages`` contract expected by the
     graph, but centralizes project-specific governance before a real tool can
     touch storage or the network: error-kind-driven retries, external-access
-    domain allow-listing, idempotent side-effect dedup, and structured audit.
+    domain allow-listing, dispatch admission, and structured audit.
     """
 
     def __init__(
         self,
         audit_sink: ToolAuditSink | None = None,
         *,
-        idempotency_store: IdempotencyStore | None = None,
-        policy_engine: PolicyEngine | None = None,
+        policy_engine: PolicyEvaluator | None = None,
         policy_decisions: PolicyDecisionRecorder | None = None,
         prompts: PromptCatalog = DEFAULT_PROMPTS,
+        application_owned_tools: frozenset[str] = frozenset(),
     ) -> None:
         self._prompts = prompts
         self._tools: dict[str, BaseTool] = {}
+        self._application_owned_tools = application_owned_tools
         self.audit_sink = audit_sink
-        self._idempotency = idempotency_store or InMemoryIdempotencyStore()
         self._policy = policy_engine or PolicyEngine(prompts=prompts)
         self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
         self._rate_limiter = InMemoryRateLimiter()
@@ -161,6 +133,20 @@ class ToolGateway:
         *,
         grant: AtomicCapabilityGrant | ProcedureNodeGrant | None = None,
     ) -> dict[str, Any]:
+        return self._invoke(name, args, context, grant=grant, confirmed=False)
+
+    def invoke_confirmed(
+        self, name: str, args: dict[str, Any], context: ToolGatewayContext,
+    ) -> dict[str, Any]:
+        """Dispatch a command already approved by the owning Application."""
+        if name not in self._application_owned_tools:
+            raise PermissionError("tool has no application-owned approval binding")
+        return self._invoke(name, args, context, grant=None, confirmed=True)
+
+    def _invoke(
+        self, name: str, args: dict[str, Any], context: ToolGatewayContext, *,
+        grant: AtomicCapabilityGrant | ProcedureNodeGrant | None, confirmed: bool,
+    ) -> dict[str, Any]:
         tool = self._tools.get(name)
         if tool is None:
             return tool_failure(
@@ -174,18 +160,11 @@ class ToolGateway:
         rate_limited = False
         try:
             governance = tool_governance(tool)
-            grant_violation = self._validate_execution_grant(
-                tool,
-                args,
-                context,
-                grant,
-                confirmation_required=(
-                    governance.requires_confirmation
-                    and governance.risk_level == "high"
-                    and bool(args.get("confirmed"))
-                ),
+            violation = (
+                self._validate_execution_grant(tool, args, context, grant)
+                or self._validate_policy(tool, governance, context, confirmed=confirmed)
+                or self._validate_external_access(tool, governance, args)
             )
-            violation = grant_violation or self._validate_policy(tool, args, context)
             if violation is not None:
                 output = tool_failure(violation.message, error_kind=violation.kind)
             elif self._is_rate_limited(tool, context):
@@ -195,29 +174,9 @@ class ToolGateway:
                     error_kind="transient",
                 )
             else:
-                idempotency_key, replayed_output = self._reserve_idempotency(
-                    tool,
-                    args,
-                    context,
+                output, attempts, timed_out = self._invoke_with_strategy(
+                    tool, name, args, context
                 )
-                try:
-                    if replayed_output is not None:
-                        output = replayed_output
-                        attempts = 0
-                    else:
-                        output, attempts, timed_out = self._invoke_with_strategy(
-                            tool,
-                            name,
-                            args,
-                            context,
-                        )
-                    self._commit_idempotency(tool, args, output)
-                    if idempotency_key and not output.ok:
-                        self._idempotency.release(idempotency_key)
-                except Exception:
-                    if idempotency_key:
-                        self._idempotency.release(idempotency_key)
-                    raise
         except Exception as exc:
             logger.exception("Tool gateway execution failed for %s", name)
             output = tool_failure(str(exc)[:500], error_kind=_classify_exception(exc))
@@ -232,6 +191,7 @@ class ToolGateway:
             attempts=attempts,
             timed_out=timed_out,
             rate_limited=rate_limited,
+            confirmed=confirmed,
         )
         return output.model_dump(mode="json")
 
@@ -374,41 +334,48 @@ class ToolGateway:
     def _validate_policy(
         self,
         tool: BaseTool,
-        args: dict[str, Any],
+        governance: ToolGovernance,
         context: ToolGatewayContext,
+        *,
+        confirmed: bool,
     ) -> _PolicyViolation | None:
-        governance = tool_governance(tool)
-        decision = self._policy.evaluate(
+        decision = self.policy_decision(
+            tool, governance, principal=context.execution_scope.principal,
+            source_platform=context.source_platform, execution_mode=context.execution_mode,
+            react_allowed_tools=context.react_allowed_tools,
+            confirmed=confirmed,
+        )
+        self._record_policy_decision(tool, governance, context, decision)
+        if not decision.allowed:
+            return _PolicyViolation(decision.reason, kind=decision.error_kind)
+        return None
+
+    def policy_decision(
+        self,
+        tool: BaseTool,
+        governance: ToolGovernance,
+        *,
+        principal: AuthenticatedPrincipal,
+        source_platform: str | None,
+        execution_mode: str = "direct",
+        react_allowed_tools: frozenset[str] = frozenset(),
+        confirmed: bool = False,
+    ) -> PolicyDecision:
+        return self._policy.evaluate(
             PolicyInput(
                 action="tool_call",
-                user_id=context.execution_scope.principal.principal_id,
-                session_id=context.execution_scope.principal.user_id,
-                source_platform=context.source_platform,
-                execution_mode=context.execution_mode,
+                principal=principal,
+                source_platform=source_platform,
+                execution_mode=execution_mode,
                 tool_name=tool.name,
                 risk_level=governance.risk_level,
                 requires_confirmation=governance.requires_confirmation,
                 side_effects=tuple(governance.side_effects),
                 permission_scope=governance.permission_scope,
-                confirmed=bool(args.get("confirmed")),
-                react_allowed_tools=context.react_allowed_tools,
+                react_allowed_tools=react_allowed_tools,
+                confirmed=confirmed,
             )
         )
-        self._record_policy_decision(tool, governance, context, decision)
-        if decision.effect in ("deny", "require_escalation"):
-            return _PolicyViolation(decision.reason, kind=decision.error_kind)
-        # require_confirmation 不阻断调用：工具会走无副作用的确认预览分支，生成
-        # pending_confirmation 负载，由图层的 HITL interrupt 暂停等待用户确认。真实
-        # 副作用只在 confirmed=true 时发生，并受下方幂等机制保护。
-
-        domain_violation = self._validate_external_access(tool, governance, args)
-        if domain_violation is not None:
-            return domain_violation
-
-        # 策略放行后，gateway 仍负责确认动作的幂等前置校验（key 必填）。
-        # 真正的并发去重在执行前的 reserve() 完成，避免 seen()/commit()
-        # 分离导致两个进程同时通过检查。
-        return self._validate_idempotency(tool, governance, args)
 
     @staticmethod
     def _validate_execution_grant(
@@ -416,8 +383,6 @@ class ToolGateway:
         args: dict[str, Any],
         context: ToolGatewayContext,
         grant: AtomicCapabilityGrant | ProcedureNodeGrant | None,
-        *,
-        confirmation_required: bool = False,
     ) -> _PolicyViolation | None:
         if context.execution_mode == "direct":
             return None
@@ -443,13 +408,6 @@ class ToolGateway:
         ):
             return _PolicyViolation(
                 "execution grant is bound to a different invocation"
-            )
-        if confirmation_required and grant.required_confirmation_ref != (
-            context.execution_scope.logical_subgoal_id
-            or context.execution_scope.task_id
-        ):
-            return _PolicyViolation(
-                "confirmed high-risk execution requires a confirmation-bound grant"
             )
         locator = grant.granted_resource_selector.locator
         mcp = (tool.extras or {}).get("mcp")
@@ -494,49 +452,6 @@ class ToolGateway:
             if isinstance(grant, (AtomicCapabilityGrant, ProcedureNodeGrant))
             else None
         )
-
-    def _validate_idempotency(
-        self,
-        tool: BaseTool,
-        governance: ToolGovernance,
-        args: dict[str, Any],
-    ) -> _PolicyViolation | None:
-        is_confirmed_execution = bool(args.get("confirmed"))
-        if not (
-            governance.requires_confirmation
-            and governance.risk_level == "high"
-            and is_confirmed_execution
-        ):
-            return None
-        key = str(args.get("idempotency_key", "")).strip()
-        if governance.idempotency_key_required and not key:
-            return _PolicyViolation(
-                self._prompts.render('tool_gateway.idempotency_key_missing', tool_name=tool.name),
-                kind="invalid_param",
-            )
-        return None
-
-    def _reserve_idempotency(
-        self,
-        tool: BaseTool,
-        args: dict[str, Any],
-        context: ToolGatewayContext,
-    ) -> tuple[str | None, ToolArtifact | None]:
-        governance = tool_governance(tool)
-        if not (governance.idempotency_key_required and bool(args.get("confirmed"))):
-            return None, None
-        key = str(args.get("idempotency_key", "")).strip()
-        if not key:
-            return None, None
-        if not self._idempotency.reserve(key, context=context, tool_name=tool.name):
-            receipt = self._idempotency.get_receipt(key)
-            if receipt is not None:
-                return key, ToolArtifact.model_validate(receipt)
-            raise ToolError(
-                self._prompts.render('tool_gateway.idempotency_pending', tool_name=tool.name, key=key),
-                kind="transient",
-            )
-        return key, None
 
     def _record_policy_decision(
         self,
@@ -585,19 +500,6 @@ class ToolGateway:
                 )
         return None
 
-    def _commit_idempotency(
-        self, tool: BaseTool, args: dict[str, Any], output: ToolArtifact
-    ) -> None:
-        """Record a successful confirmed side effect so replays are rejected."""
-        if not output.ok:
-            return
-        governance = tool_governance(tool)
-        if not (governance.idempotency_key_required and bool(args.get("confirmed"))):
-            return
-        key = str(args.get("idempotency_key", "")).strip()
-        if key:
-            self._idempotency.commit(key, output.model_dump(mode="json"))
-
     def _record_invocation(
         self,
         tool: BaseTool,
@@ -609,6 +511,7 @@ class ToolGateway:
         attempts: int = 1,
         timed_out: bool = False,
         rate_limited: bool = False,
+        confirmed: bool = False,
     ) -> None:
         event = tool_invocation_event(
             tool,
@@ -628,7 +531,7 @@ class ToolGateway:
             attempts=attempts,
             timed_out=timed_out,
             rate_limited=rate_limited,
-        )
+        ).model_copy(update={"confirmed": confirmed})
         if self.audit_sink is not None:
             self.audit_sink.record(event)
         record_tool_audit(event)

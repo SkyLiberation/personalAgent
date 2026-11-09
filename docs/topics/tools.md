@@ -55,7 +55,7 @@ Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/applicat
 
 | 契约 | 责任 |
 | --- | --- |
-| `ToolGovernance` | 声明曝光、风险、副作用、权限域、确认、幂等、审计、超时、重试、限流和域名约束 |
+| `ToolGovernance` | 声明曝光、风险、副作用、权限域、确认、审计、超时、重试、限流和域名约束 |
 | `ToolArtifact` | 表达 `ok`、业务 `data`、`error`、`error_kind` 与 `evidence` |
 | `ToolErrorKind` | 区分 `transient`、`invalid_param`、`permission` 和 `unrecoverable`；Gateway 依据分类处理失败 |
 | `ToolInvocationEvent` | 记录调用归属、输入输出、治理属性、执行耗时和策略结果 |
@@ -66,9 +66,9 @@ Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/applicat
 
 [governance/gateway.py](../../src/personal_agent/governance/gateway.py)消费 `ToolGatewayContext.execution_scope`、执行模式、调用 ID 和来源平台，统一处理 Policy、直接 URL 域名限制、限流、超时、分类重试及审计。`allowed_domains` 约束直接 URL 的域名后缀，网络重定向和地址安全仍按实际执行边界判断。
 
-Gateway 将 typed `ToolGatewayContext` 经 `RunnableConfig.configurable` 交给需要它的工具工厂；其中的 scope、合法资源及已接受请求摘要不属于模型参数。`write_artifact`、`retrieval_experiment` 和 `execute_python` 在派发前由原 Conversation Journal 保存确切请求，原 owner 保存回执后才形成 Observation。它们声明 `write_local`，不作为规划安全操作，也不由通用超时线程或自动重试启动第二次执行；恢复消费原请求和回执，未知实验先对账。该路径与通用工具的事后幂等缓存分别解释。
+Gateway 将 typed `ToolGatewayContext` 经 `RunnableConfig.configurable` 交给需要它的工具工厂；其中的 scope、合法资源及已接受请求摘要不属于模型参数。`write_artifact`、`retrieval_experiment` 和 `execute_python` 在派发前由原 Conversation Journal 保存确切请求，原 owner 保存回执后才形成 Observation。它们声明 `write_local`，不作为规划安全操作，也不由通用超时线程或自动重试启动第二次执行；恢复消费原请求和回执，未知实验先对账。各业务的幂等和恢复沿原 Command 与 Receipt 处理。
 
-确认且要求幂等的通用工具通过 `IdempotencyStore` 预占 key，成功后提交结果供重放；生产适配器是 [PostgresToolGovernanceStore](../../src/personal_agent/infra/storage/postgres_tool_governance_store.py)。账本只证明所覆盖调用的执行事实，跨系统副作用仍由相应业务契约约束。
+Gateway 通过 `PolicyEvaluator` 获取并审计决定。只有 `allow` 才进入执行，`require_confirmation` 与 `require_escalation` 在通用入口均产生权限失败。业务参数 `confirmed` 不构成确认凭据。待确认状态、确认后的恢复与幂等属于具体 Application。已有通用幂等记录仍可通过原审计入口查阅。部署中的 MCP 映射如包含旧字段 `idempotency_key_required`，迁移时删除该字段。[派发边界 ADR](../adr/0052-tool-policy-dispatch-gate.md)
 
 固定知识保存、删除和恢复由各自 Application 拥有 Command、确认、Receipt 与事务；工具层不复制这些状态。删除恢复链路见[固定流程](../workflow/delete-knowledge-workflow.md)，保存见 [ADR 0006](../adr/0006-conversation-governed-knowledge-save.md)。
 

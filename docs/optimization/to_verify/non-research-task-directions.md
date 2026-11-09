@@ -60,7 +60,7 @@
 | --- | --- | --- |
 | 有界上下文与可恢复原文 | 大结果保留完整原文及作用域引用，本轮只物化所需索引／窗口；后续能补读遗漏依据，而不是反复注入全部历史或只留无源摘要 | [Context 物化](../../../src/personal_agent/application/conversation/context_materialization.py)及 [Conversation 的卸载和补读](../../../src/personal_agent/application/conversation/service.py)已有实现；当前材料是否实际触发该边界、同预算下是否改善交付尚未验收，也不能据此宣称已有任意会话自动压缩 |
 | 进展与跨边界接续 | 保留有效稿件、已提交动作与结果、尚欠工作；接续时从权威事实构造输入。待执行任务的恢复与已交付后的新请求分别处理 | [Journal](../../../src/personal_agent/application/conversation/journal.py)已有工作清单绑定事实投影和文件持久化，并在 [Runtime](../../../src/personal_agent/orchestration/runtime.py)装配；当前三案只有连续会话，不检验重启或上下文轮换，也不证明日历副作用可恢复 |
-| 授权与部分执行 | 将批准绑定到确切对象、参会人和摘要，执行时不让模型重新生成批准正文；区分未执行、已成功和结果未知，对未知外部写入按提供方能力对账或明确停止 | [工具网关](../../../src/personal_agent/governance/gateway.py)已有 grant、策略和幂等原语；业务确认仍限现有知识动作，日历绑定未接入。通用超时重试或本地幂等记录不能证明外部写入恰好一次，提供方对账及部分完成协议仍待核实 |
+| 授权与部分执行 | 将批准绑定到确切对象、参会人和摘要，执行时不让模型重新生成批准正文；区分未执行、已成功和结果未知，对未知外部写入按提供方能力对账或明确停止 | [工具网关](../../../src/personal_agent/governance/gateway.py)已有 grant 校验和策略派发门禁。业务确认仍限现有知识动作，日历绑定未接入。外部写入的幂等及恢复需要该业务的 Command 和执行证据，提供方对账及部分完成协议仍待核实 |
 | 子能力的统一治理 | 任务需要研究或委派时，给出有界输入和权限，消费结果引用及明确停止原因；内部调用继续计量，子级成功不能直接完成父级目标 | [AgentGateway](../../../src/personal_agent/agents/gateway.py)已有作用域、提交及返回结果治理；研究内部与主循环仍存在已记录的职责混合，完整模块化边界是候选。当前会议用例不要求子 Agent，不能为展示强制委派 |
 | 交付与有界停止 | 按本任务结果契约消费业务事实和必要语义判断，分别解释成功交付、等待与限制；确定性 Gate 不自行判断准备稿语义 | 沿用 [Verification／Completion](../../topics/verification-and-completion.md)及原预算协议；具体依据与判据见[本场景完成验收](#35-完成判据材料与日历分别验收)。日历结果链路未接入；不为所有步骤添加模型 Judge |
 
@@ -156,7 +156,7 @@
 
 已读官方 SDK `larksuite/oapi-sdk-python@0d9749a4728446a0ffa2e8374b37b5e1ce1cfd9c` 的 [日程调用](https://github.com/larksuite/oapi-sdk-python/blob/0d9749a4728446a0ffa2e8374b37b5e1ce1cfd9c/lark_oapi/api/calendar/v4/resource/calendar_event.py)、[参与人调用](https://github.com/larksuite/oapi-sdk-python/blob/0d9749a4728446a0ffa2e8374b37b5e1ce1cfd9c/lark_oapi/api/calendar/v4/resource/calendar_event_attendee.py)及请求模型，快照与摘要见[接口清单](../../../.tmp/meeting-prep-e2e-design-20261018/calendar-source-manifest.json)。创建事件、添加参与人、修改事件和删除参与人为不同请求，创建请求另有 `idempotency_key` 参数。源码证明调用契约存在，不证明幂等有效期、通知送达或本工程接入已通过。底层稳定请求可以封装在同一获准业务动作内，不要求模型逐个调用 REST，也不以调用数量评分。
 
-当前 [ConversationTurnView](../../../src/personal_agent/application/conversation/models.py)的 `pending_confirmation` 仅列知识保存和删除对象。日历业务如何将批准绑定到确切对象及正文是待核实接入缺口，不能把聊天里的“同意”直接等同于已有合法执行凭据；本轮不新增确认 Schema 或旁路。
+当前 [ConversationTurnView](../../../src/personal_agent/application/conversation/models.py) 的 `pending_confirmation` 支持知识保存、知识删除和已装配的工作区变更。日历业务仍需核对如何将批准绑定到确切对象及正文。工作区采用独立的 [应用确认契约](../../mcpDesign/README.md#523-工作区变更确认与接续)。
 
 **初始材料。** 已取得下列文档快照，父文件摘要、完整章节范围及内容摘要由[材料清单](../../../.tmp/meeting-prep-e2e-design-20261018/material-source-manifest.json)固定。它们尚未导入正式入口，不能声称模型已经看到。
 

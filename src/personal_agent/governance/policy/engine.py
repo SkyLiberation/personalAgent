@@ -17,6 +17,7 @@ from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 import logging
 from dataclasses import dataclass, field
+from typing import Literal
 
 from personal_agent.governance.policy.invariants import (
     is_high_risk_side_effect_action,
@@ -46,18 +47,6 @@ class PolicyRules:
     # 是否对所有高风险动作强制要求确认（默认开启）。
     require_confirmation_for_high_risk: bool = True
 
-    @property
-    def is_empty(self) -> bool:
-        return not (
-            self.deny_users
-            or self.allow_users
-            or self.deny_sources
-            or self.allow_sources
-            or self.deny_tools
-            or self.deny_scopes
-        )
-
-
 class PolicyEngine:
     """Evaluate a ``PolicyInput`` into a ``PolicyDecision``.
 
@@ -86,7 +75,7 @@ class PolicyEngine:
         if request.action == "tool_call":
             return self._evaluate_tool(request)
         if request.action == "agent_call":
-            return self._evaluate_agent(request)
+            return self._evaluate_call(request, kind="agent")
         if request.action in ("memory_read", "memory_write", "memory_delete", "memory_graph_sync"):
             return self._evaluate_memory(request)
         if request.action == "entry_access":
@@ -97,9 +86,9 @@ class PolicyEngine:
 
     def _evaluate_overrides(self, request: PolicyInput) -> PolicyDecision | None:
         rules = self._rules
-        if request.user_id and request.user_id in rules.deny_users:
+        if request.principal_id in rules.deny_users:
             return PolicyDecision.deny(
-                self._prompts.render('policy.deny_user', user_id=request.user_id),
+                self._prompts.render('policy.deny_user', user_id=request.principal_id),
                 rule="override.deny_user",
             )
         if request.source_platform and request.source_platform in rules.deny_sources:
@@ -127,26 +116,20 @@ class PolicyEngine:
             if react_block is not None:
                 return react_block
 
-        # 高风险副作用动作：未确认则要求确认，已确认则放行交由 gateway 做幂等校验。
-        if self._is_high_risk_side_effect(request):
-            if not request.confirmed:
-                return PolicyDecision.confirm(
-                    self._prompts.render('policy.tool_confirmation', tool_name=request.tool_name),
-                    rule="tool.high_risk_confirmation",
-                )
-            return PolicyDecision.allow(rule="tool.high_risk_confirmed")
+        return self._evaluate_call(request, kind="tool")
 
-        return PolicyDecision.allow(rule="tool.default")
-
-    def _evaluate_agent(self, request: PolicyInput) -> PolicyDecision:
-        if self._is_high_risk_side_effect(request):
-            if not request.confirmed:
-                return PolicyDecision.confirm(
-                    self._prompts.render('policy.agent_confirmation', agent_id=request.tool_name),
-                    rule="agent.high_risk_confirmation",
-                )
-            return PolicyDecision.allow(rule="agent.high_risk_confirmed")
-        return PolicyDecision.allow(rule="agent.default")
+    def _evaluate_call(
+        self, request: PolicyInput, *, kind: Literal["tool", "agent"]
+    ) -> PolicyDecision:
+        if not self._is_high_risk_side_effect(request):
+            return PolicyDecision.allow(rule=f"{kind}.default")
+        if request.confirmed:
+            return PolicyDecision.allow(rule=f"{kind}.high_risk_confirmed")
+        if kind == "tool":
+            reason = self._prompts.render("policy.tool_confirmation", tool_name=request.tool_name)
+        else:
+            reason = self._prompts.render("policy.agent_confirmation", agent_id=request.tool_name)
+        return PolicyDecision.confirm(reason, rule=f"{kind}.high_risk_confirmation")
 
     def _evaluate_react_guard(self, request: PolicyInput) -> PolicyDecision | None:
         if request.tool_name and request.tool_name not in request.react_allowed_tools:
@@ -166,6 +149,8 @@ class PolicyEngine:
         return None
 
     def _is_high_risk_side_effect(self, request: PolicyInput) -> bool:
+        if request.requires_confirmation:
+            return True
         if not self._rules.require_confirmation_for_high_risk:
             return False
         return is_high_risk_side_effect_action(
@@ -178,10 +163,11 @@ class PolicyEngine:
 
     def _evaluate_memory(self, request: PolicyInput) -> PolicyDecision:
         owner = request.resource_owner
-        subject = request.user_id
-        if owner is not None and subject is not None and owner != subject:
+        if owner is not None and owner != request.principal:
             return PolicyDecision.deny(
-                self._prompts.render('policy.owner_mismatch', resource=request.resource or '', user_id=subject),
+                self._prompts.render(
+                    'policy.owner_mismatch', resource=request.resource or '', user_id=request.principal_id
+                ),
                 rule="memory.owner_mismatch",
             )
         if request.action == "memory_delete" and not request.confirmed:
@@ -200,9 +186,9 @@ class PolicyEngine:
                 self._prompts.render('policy.source_not_allowed', source=request.source_platform),
                 rule="entry.source_not_allowed",
             )
-        if rules.allow_users and request.user_id not in rules.allow_users:
+        if rules.allow_users and request.principal_id not in rules.allow_users:
             return PolicyDecision.deny(
-                self._prompts.render('policy.user_not_allowed', user_id=request.user_id),
+                self._prompts.render('policy.user_not_allowed', user_id=request.principal_id),
                 rule="entry.user_not_allowed",
             )
         return PolicyDecision.allow(rule="entry.default")

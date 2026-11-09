@@ -53,10 +53,14 @@
 
 ```text
 src/personal_agent/
+  application/conversation/
+    workspace_changes.py        冻结清单、保存决定与回执
+  governance/                   评估部署规则、复核派发与审计
   infra/mcp.py                  调整协议客户端和会话关闭
   tools/mcp.py                  保留单工具映射与结果转换
   orchestration/
     mcp_bindings.py             新增按配置连接、发现和绑定的装配入口
+    workspace_changes.py       绑定工作区专用写入端口
     service.py                  持有并关闭 MCP 连接资源
     runtime.py                  消费已绑定的工具并注册
   adapters/
@@ -67,8 +71,8 @@ src/personal_agent/
 deploy/mcp/                     有实际生产部署时存放对应配置
 evals/
   Toolathlon/
-    runner.py                   新增用例环境、产品 HTTP 交互和评分适配
-    cases/                      固定任务、上游版本、映射及评分入口
+    runner.py                   独立环境、Time 接线与生命周期
+    workspace_case.py           工作区用户确认、文件样本与上游评分
 toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 ```
 
@@ -104,6 +108,34 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 远端工具名和 Schema 属于发现事实。映射以 `server_id` 与 `remote_name` 绑定能力，并声明本地名称、权限范围、风险、副作用和结果契约。临时端口、进程 ID 与会话 ID 只标识运行实例。MCP 注解是服务提供方声明，宿主按本地治理配置决定权限。返回值在映射层校验并经现有 Observation 流程交回。具体 ToolCall 的授权、确认、Command 和 Receipt 由现有链按适用条件产生。[MCP Tools 规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) · [受治理执行细则](../devSpec/agentic-execution.md)
 
 区分启动或握手错误、配置或 Schema 不匹配、准入拒绝、远端工具错误，以及执行结果未知。环境配置错误由 Runner 归为环境失败。工具错误进入现有反馈链。写调用超时或断线时，在能够从权威终态确认结果之前按未知处理。连接恢复可以重新握手。重发写操作必须满足该工具的幂等或状态核对契约，产品执行仍使用原授权与执行事实。
+
+#### 5.2.1 工具策略决定与派发门禁
+
+V4 的真实反例中，Policy 已返回 `require_confirmation`，网关仍派发了 `move_file`。网关还把业务参数 `confirmed` 传入 Policy，调用方可以用同一个字段跳过规则。修复恢复通用派发边界。`PolicyEngine` 负责规则、优先级和风险判断，`ToolGateway` 通过 `PolicyEvaluator` 消费决定并记录审计，只有 `allow` 可进入域名、限流和执行。`deny`、`require_confirmation` 和 `require_escalation` 统一返回权限失败，工具派发次数为零。业务 payload 中的 `confirmed` 不能提供授权证据，审计中的确认状态也不由该参数推导。
+
+工具和子 Agent 复用同一高风险确认判据及决定流程，保留各自现有规则 ID、反馈和生效范围。网关删除依赖通用工具自行预览的隐式放行，以及依赖参数自报确认的 grant 检查和无消费者的旧确认引用字段。旧通用幂等写入由同一自报确认字段触发，随该授权路径删除。历史查询继续读取原审计和账本，已确认业务动作的幂等仍由具体 Application 持有。原有授权范围、域名、限流、超时和重试继续由网关处理。普通 ToolCall 入口当前没有通用待确认 Command 的合法写入和恢复消费者，对需确认的工具明确返回不可派发。文件整理的正向可写流程需要业务确认入口后再验收。[责任边界 ADR](../adr/0052-tool-policy-dispatch-gate.md)
+
+验收复用真实 Filesystem Server 和正式工具 HTTP 入口。只读挂载上提交原始移动、附带 `confirmed=true` 的同一移动、部署规则拒绝的建目录及正常列目录，各执行一次。记录 MCP stdio 实收请求、策略日志和文件终态。前两项应得到 `require_confirmation`，第三项应为部署拒绝，三项都应为零远端调用。正常列目录应返回原文件，所有文件摘要保持不变。基线同一正式入口实测原始移动到达 Server，附带确认字段的调用获 Policy 放行后被适配器拒绝。目标失败则保留封存并停止开放正向写入。该检查不调用模型。知识确认使用独立业务入口核对原 Command 与 Receipt，整套 Toolathlon 评分保持独立。
+
+#### 5.2.2 身份、入口与能力可见性
+
+入口从已认证的调用者和自身渠道构造策略输入。Web 对话、直接工具 API、CLI 和飞书执行入口消费 `entry_access`。配置的允许名单仅约束入口，显式拒绝优先。业务参数与渠道元数据分开传递。拒绝发生在模型调用及工具派发之前，Web 返回 403。入口白名单不应用于宿主内部工作流。
+
+策略主体采用 `AuthenticatedPrincipal`，部署规则和策略审计使用 `tenant_id:user_id`。历史记忆存储仍以个人租户的裸用户键索引，在记忆边界转换为该租户的主体，资源归属与策略主体分别构造。外部数据和工具参数不能提供另一个策略主体。
+
+在普通对话生成模型动作声明前，已注册工具与子 Agent 按相同主体、渠道和权限域检查部署拒绝规则。派发时以实际调用上下文再次判定。应用自有动作由各自的 Capability 及授权契约管理。投影保留可能获准的动作，不为投影写执行审计。[固定版本静态排除实现](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/core/src/policy/policy-engine.ts#L892)
+
+在隔离 Time Server 和正式 Web 入口验证。用真实模型发送「请把纽约上午九点换算成东京时间」，归档实际请求的 `action_definitions`。基线配置拒绝 `time.convert_time` 时该能力仍出现在模型请求，目标应移除该能力而保留未拒绝的同源能力。显式直调被拒绝的工具应零远端调用。配置信任的主体与来源时，另一租户同名用户和伪造来源应在入口获 403，允许的主体保留读取能力。核对入口审计和真实远端调用。
+
+#### 5.2.3 工作区变更确认与接续
+
+工作区变更由 Conversation 的文件工作区用例拥有。部署显式绑定认证主体、对话、单写者 POSIX 工作区和两种底层能力。模型一次提交有序的建目录与移动清单，用户在认证 Web 入口批准这一份冻结清单。每项派发前先持久化状态，独立保存终态。失败后停止后续执行，回执标明已执行范围。未决派发恢复为结果未知，同一绑定下冻结后续写入。完成后的回执以原模型调用的 Observation 继续原对话。底层写映射从普通 Registry 移出，由专用执行端口消费，使用同一网关与策略引擎重新判定。服务端的路径解析和目标存在检查依赖隔离、无符号链接、单写者工作区。
+
+单文件目标使用「请把 /case/inbox/记录.txt 移到 /case/归档/记录.txt，完成后告诉我存放位置」。基线正式入口返回文字澄清，无可批准命令。目标比较源目标摘要和实际 MCP 请求，检查批准前、拒绝、跨用户、篡改、重放均无新增派发。该场景通过后才进入原始 22 文件 V4。V4 使用原始档案与独立评分器，记录确认次数、实际模型预算和最终用户交付。单文件通过只验收确认纵向切片。[工作区授权 ADR](../adr/0053-workspace-change-approval.md)
+
+`PERSONAL_AGENT_WORKSPACE_CHANGES` 接收一个配置对象，字段为 `principal`、`conversation_id`、`workspace_ref`、`root`、`server_id`、`create_directory_tool` 和 `move_tool`。主体须已有 Web 认证密钥。两项写映射来自同一 stdio Filesystem Server，声明强制确认且禁用重试。用户拒绝、策略阻止和结果未知均以原回执结束本轮，明确保留已执行范围。已持久化的成功项在重启恢复时跳过。只有下一项从未进入派发才可继续。一次 80,000 tokens 单文件样本已执行并取得回执，后续模型核验耗尽预算。可复现用例预设 220,000 tokens，只影响本次独立评测环境。原样本路径和原始上游评分契约保持独立，中文请求将两条混用 ASCII 线条的 Work 子目录用统一树形线条表达。
+
+真实续跑显示，核验单独引用 `applied` 或单条路径时，无法还原完整执行事实。交互投影为每个操作生成单行证据，合并状态与该操作的完整路径。来源仍为冻结命令和已存回执。验收同时在续跑后重复提交原决定，要求拿到同一回执。
 
 ### 5.3 选择 Toolathlon 传输
 
@@ -146,14 +178,14 @@ Conversation 在 `EffectiveCapabilities` 投影处将部署限制与既有身份
 
 ### 7.1 文件整理场景
 
-原 Toolathlon 任务镜像中的文件 Server 为 `2025.7.1`。真实探测中，`move_file` 覆盖了已存在的目标，与工具声明不符。先在原任务镜像内以只读挂载替换运行时，验证修复行为。正式评测构建独立的 Filesystem 镜像，固定 Filesystem Server `2.2.0` 及其所需的 Node.js `24.22.2`。构建固定 slim 基础镜像的摘要，并校验 Node.js 官方归档的 SHA-256。Server 负责在写入前拒绝覆盖。评测侧拥有镜像配方和样本工作区，复用现有 stdio 客户端及探测入口。当前对话运行器只开放 Time 的转换工具。[上游修复](https://github.com/modelcontextprotocol/servers/pull/4630)
+原 Toolathlon 任务镜像中的文件 Server 为 `2025.7.1`。真实探测中，`move_file` 覆盖了已存在的目标，与工具声明不符。先在原任务镜像内以只读挂载替换运行时，验证修复行为。正式评测构建独立的 Filesystem 镜像，固定 Filesystem Server `2.2.0` 及其所需的 Node.js `24.22.2`。构建固定 slim 基础镜像的摘要，并校验 Node.js 官方归档的 SHA-256。Server 负责在写入前拒绝覆盖。评测侧拥有镜像配方和样本工作区，复用现有 stdio 客户端及工作区确认入口。[上游修复](https://github.com/modelcontextprotocol/servers/pull/4630)
 
 独立镜像验证复用原任务镜像的冲突和跨目录探测。一次运行检查两个隔离样本，其中一个带已有目标文件。冲突必须返回目标已存在，源文件与原目标内容均保留。另用一个独立工作区核对 `list_directory`、`create_directory` 和 `move_file` 的入参，以及目标为空时能完成移动。任一检查失败即停止采用该镜像。验证只启动真实文件 Server，无模型调用。通过后将镜像作为 V4 的文件 Server 环境，产品写入授权和完整任务评分分别按以下步骤验证。
 
 Toolathlon 的 `arrange-workspace` 配置包含文件系统、终端、PDF、Excel 和若干宿主辅助动作。其预处理将初始档案展开到工作区，评分器对比最终目录和文件路径集合。首个写入候选以同一份初始档案运行中文改编任务，向用户提供同一目标目录结构。上游文件 Server 配置使用未固定版本的 npm 包。V4 前先选定并锁定实际包版本，核对列举、创建目录和移动文件所需的工具、Schema、覆盖行为及副作用，再固定映射。[上游任务配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/task_config.json) · [文件 Server 配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/configs/mcp_servers/filesystem.yaml) · [预处理](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/preprocess/main.py) · [目录评分](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/evaluation/check_local.py)
 
 1. Runner 启动任务环境并放入初始文件。用户经 `POST /api/conversation/turn` 提交“请按下面的目录结构整理我的工作区文件”，附上任务提供的目标结构。
-2. 真实模型读目录、判断文件归属、选择移动动作，并根据真实回执决定后续动作和交付。首个切片只采用现行 Policy 能按真实风险和任务作用域合法准入的写入。执行前沿正式入口核对所需 Command、用户授权及确认是否可达。如果工具需要确认而现行入口无法承接，停止 V4 并记录阻塞。Runner 的配置只提供环境和任务身份，用户授权来自正式交互。
+2. 真实模型读目录、判断文件归属并提出变更。Runner 核对冻结清单符合测试用户授权的范围，以用户身份通过正式入口确认。产品逐项执行，模型根据真实回执决定后续动作和交付。Runner 在容器外保留评分器与标准结果。
 3. 产品按自身完成契约交付。评分器独立检查目录和文件路径集合。必要隔离反例检查其他工作区和评分资料不可读写。对移除移动映射的控制组，记录未提供移动能力、工具拒绝或零写入的实际证据。模型报告完成与真实终态单独计分。
 
 V4 恢复验证先执行两个独立样本。其一在只读挂载的临时工作区，以 `POST /api/tools/{name}/execute` 请求一个声明需要确认的移动，省略确认字段。若在工具网关拒绝或暂停，远端应无执行。若返回来自文件 Server 的只读错误，则判为网关已派发且确认边界未成立。其二展开上游真实档案，只映射 `list_directory`，以正式对话入口提交原题的中文表达和原始目录目标。核对未映射移动能力、前后文件摘要和上游目录评分。该对照应保持工作区原状。独立记录对话是否明确交代限制、实际模型请求和用量。两组各一次，模型对照使用现行默认预算。出现未授权派发即停止开放可写工作区，保留只读对照证据。 若 Windows 在保存模型响应原件时因输出路径超长失败，只缩短工作树内的归档目录，保留原失败身份，以同一输入、映射、模型和预算进行一次有界复验。
@@ -186,6 +218,14 @@ V2 的独立真实协议与组合根探测中，旧客户端断线后拒绝继�
 V3 使用锁定 Toolathlon 镜像，在两个各自挂载单一样本目录的容器运行真实文件 Server。两个样本均成功读取自己的标记，越界读取与移动均被拒绝，原文件内容保持。对应报告为运行目录的 `filesystem-boundary/report.json`。该证据只覆盖服务端工作区隔离。升级后的专用镜像复验通过。两个样本的越界读写均被拒绝，同名目标的移动返回 `Destination already exists`，源和原目标内容保持。独立样本确认了列目录、创建目录、移动的参数和正常移动的文件终态。对应归档为 `.tmp/toolathlon-filesystem-upgrade-20261109-210601-534/acceptance.json`，以镜像摘要区分原镜像和升级镜像。V4 的产品写入授权和完整用户任务仍待验证。V5 与 V6 的比较目标或选定传输仍待触发。
 
 V4 准入探针使用 `d2dfc26` 和真实 Filesystem Server，向正式工具 API 提交未确认的高风险移动。Policy 返回 `require_confirmation`，ToolGateway 仍调用了通用 MCP 映射。文件 Server 返回 `EROFS`，样本保持原状。网关把待确认决定交给工具自行生成预览，而通用 MCP 工具直接派发且没有预览契约。正向可写样本停在 Command 与确认边界。原始证据在 MCP 工作树 `.tmp/toolathlon-arrange-v4-20261109-212931-726/approval/`。[网关策略处理](../../src/personal_agent/governance/gateway.py) · [MCP 映射](../../src/personal_agent/tools/mcp.py)
+
+派发门禁修复已复验。相同探针在基线与修复版本上使用相同镜像、映射和请求。修复后的远端实收仅一次 `list_directory`，两次移动与拒绝域的建目录均为零次，三项拒绝的错误类型均为 `permission`，审计没有将自报确认记为已确认，工作区内容一致。基线、同脚本目标与最终带审计断言的复验分别为 `.tmp/gate-red-223556/`、`.tmp/gate-green-223756/`、`.tmp/gz-224428/`。真实 Time 对话继续通过，正式工具审计记录模型调用，答复为东京上午 10 点。知识删除 HTTP 回归确认无确认时返回 409，确认后取得原 Command 对应的 Receipt，重复确认返回同一 Receipt。报告分别为 `.tmp/gt-223900/` 和 `.tmp/gk-223948/`。
+
+身份与投影对照中，基线跨租户同名用户经直调获 200，目标获 403。配置拒绝的 `time.convert_time` 从 4 次模型动作声明降为零，合法的 `time.get_current_time` 继续出现。伪造来源、SSE 被拒入口和启用主体白名单时的未认证直调均获 403。个人租户记忆读取正常，参数切换用户和跨租户读取均被拒绝。证据位于 `.tmp/pol-b/`、`.tmp/pol-t/` 和 `.tmp/pol-final/`。派发探针最终复验为 `.tmp/wg-final/`。
+
+工作区单文件批准、拒绝和断连各一个样本通过，归档为 `.tmp/wg-a/`、`.tmp/wg-r/` 和 `.tmp/wg-u/`。批准组实际移动一次，源目标内容摘要相同，答复交付确切位置。拒绝和断连组无远端写入，分别持久化 `rejected` 与 `unknown`，续跑返回对应的用户结果。三个样本均在续跑后重复提交同一决定并得到原回执。独立进程重放已完成的真实快照时，并发决定一项返回原回执，一项获运行锁冲突 409，后续重试返回原回执，MCP 实收为零。空数据库的并发审计初始化复验无 DDL 竞争异常，归档为 `.tmp/wg-rep2/`。
+
+V4 完整样本 `.tmp/wg-f/` 在一次正式批准后执行 16 项建目录和 22 项移动，22 份文件内容摘要保持。上游评分器确认 18 个目录正确，20 个文件位置匹配。`cv-gboeing.pdf` 与 `exam.xlsx` 的分类与评分标准不一致，评分退出 1。产品答复达到 12 次工具调用门禁后返回 `limitation`，模型实际消费 92,107 tokens。授权与执行检查通过，完整任务评分和最终交付未通过。
 
 V4 只读对照在真实初始档案上展开 22 个文件。正式工具 API 能列出 `/case`，未映射的移动被拒绝。真实对话的 5 次模型请求均未暴露移动，工具审计记录 3 次目录读取成功和 2 次拒绝或失败，其中容器根目录 `/` 读取被隔离边界拒绝。前后路径和内容摘要一致，上游评分器按未整理状态退出 1。对话因默认 32,000 tokens 门禁返回 `limitation`，实记 38,291 tokens，未生成交付答复。正向样本未运行。复验归档为 MCP 工作树 `.tmp/v4r-213257/readonly/`。
 

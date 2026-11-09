@@ -8,9 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from personal_agent.adapters.web.routes._shared import (
     auth_is_disabled,
     is_admin,
+    require_entry_identity,
     resolve_principal,
 )
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.policy import EntryPolicyDenied
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.orchestration.service import AgentService
 from personal_agent.tools import tool_governance
@@ -86,6 +88,10 @@ def register_system_routes(
         body: ToolExecuteRequest,
         request: Request,
     ) -> dict[str, object]:
+        try:
+            require_entry_identity(request, settings)
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         if auth_is_disabled(settings):
             principal = AuthenticatedPrincipal(
                 tenant_id=body.tenant_id,
@@ -98,16 +104,20 @@ def register_system_routes(
                 or principal.user_id != body.user_id
             ):
                 raise HTTPException(status_code=404, detail="Resource not found.")
-        result = service.execute_tool(
-            name,
-            execution_scope=interaction_execution_scope(
-                tenant_id=principal.tenant_id,
-                user_id=principal.user_id,
-                execution_id=f"direct:{name}",
-                task_id=name,
-            ),
-            **body.kwargs,
-        )
+        try:
+            result = service.execute_tool(
+                name,
+                body.kwargs,
+                execution_scope=interaction_execution_scope(
+                    tenant_id=principal.tenant_id,
+                    user_id=principal.user_id,
+                    execution_id=f"direct:{name}",
+                    task_id=name,
+                ),
+                source_platform="web",
+            )
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         return {"ok": result.get("ok", False), "data": result.get("data"), "error": result.get("error")}
 
     @app.post("/api/debug/reset-database", response_model=ResetDebugDataResponse)

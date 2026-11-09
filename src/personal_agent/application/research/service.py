@@ -1499,13 +1499,14 @@ class ResearchService:
         run_id = str(kwargs.get("run_id") or (state.run_id if state else name))
         outcome = self.tools.invoke_direct(
             name,
+            kwargs,
             execution_scope=interaction_execution_scope(
                 tenant_id="personal-agent",
                 user_id=user_id,
                 execution_id=run_id,
                 task_id=trace_decision_id or name,
             ),
-            **kwargs,
+            source_platform=None,
         )
         if state is not None:
             state.tool_call_traces.append(ResearchToolCallTrace(

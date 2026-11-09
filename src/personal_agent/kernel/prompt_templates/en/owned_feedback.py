@@ -518,14 +518,6 @@ Default wording: {question}""",
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The tool node received no pending tool call.',
     ),
-    'tool_gateway.idempotency_key_missing': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Tool {tool_name} is missing idempotency_key for a confirmed high-risk action.',
-    ),
-    'tool_gateway.idempotency_pending': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The same idempotent call of tool {tool_name} is still executing and has no replayable receipt (idempotency_key={key}).',
-    ),
     'tool_gateway.domain_denied': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The target URL of tool {tool_name} is outside the allowed domain list.',

@@ -7,7 +7,8 @@ import json
 from threading import RLock
 from typing import Protocol
 
-from personal_agent.governance.policy import PolicyEngine, PolicyInput
+from personal_agent.kernel.contracts.policy import PolicyDecision, PolicyEvaluator, PolicyInput
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.capabilities.contracts.grants import DelegationGrant
 from personal_agent.kernel.contracts.agent import (
     AgentAdapter,
@@ -170,7 +171,7 @@ class AgentGateway:
     def __init__(
         self,
         *,
-        policy_engine: PolicyEngine,
+        policy_engine: PolicyEvaluator,
         store: AgentRunStorePort,
     ) -> None:
         self._policy_engine = policy_engine
@@ -182,6 +183,17 @@ class AgentGateway:
 
     def profiles(self) -> tuple[SubagentProfile, ...]:
         return tuple(adapter.profile for adapter in self._adapters.values())
+
+    def interaction_profiles(
+        self, *, principal: AuthenticatedPrincipal, source_platform: str
+    ) -> tuple[SubagentProfile, ...]:
+        return tuple(
+            profile for profile in self.profiles()
+            if self._policy_decision(
+                profile, principal=principal, source_platform=source_platform,
+                execution_mode="direct",
+            ).effect not in {"deny", "require_escalation"}
+        )
 
     def profile(self, agent_id: str) -> SubagentProfile | None:
         adapter = self._adapters.get(agent_id)
@@ -489,22 +501,36 @@ class AgentGateway:
         *,
         execution_mode: str,
     ) -> None:
+        decision = self._policy_decision(
+            definition, principal=context.execution_scope.principal,
+            source_platform=context.source_platform, execution_mode=execution_mode,
+            confirmed=context.confirmed,
+        )
+        if not decision.allowed:
+            raise PermissionError(decision.reason or f"Agent {definition.agent_id} is not allowed.")
+
+    def _policy_decision(
+        self,
+        definition: SubagentProfile,
+        *,
+        principal: AuthenticatedPrincipal,
+        source_platform: str | None,
+        execution_mode: str,
+        confirmed: bool = False,
+    ) -> PolicyDecision:
         governance = definition.governance
-        decision = self._policy_engine.evaluate(PolicyInput(
+        return self._policy_engine.evaluate(PolicyInput(
             action="agent_call",
-            user_id=context.execution_scope.principal.principal_id,
-            session_id=context.execution_scope.principal.user_id,
-            source_platform=context.source_platform,
+            principal=principal,
+            source_platform=source_platform,
             execution_mode=execution_mode,
             tool_name=definition.agent_id,
             risk_level=governance.risk_level,  # type: ignore[arg-type]
             requires_confirmation=False,
             side_effects=governance.side_effects,  # type: ignore[arg-type]
             permission_scope=governance.permission_scope,
-            confirmed=context.confirmed,
+            confirmed=confirmed,
         ))
-        if not decision.allowed:
-            raise PermissionError(decision.reason or f"Agent {definition.agent_id} is not allowed.")
 
     @staticmethod
     def _authorize_grant(

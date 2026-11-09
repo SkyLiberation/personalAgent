@@ -34,6 +34,7 @@ from personal_agent.kernel.config_models import (
     StructuredConfig,
     WebApiConfig,
     WebSearchConfig,
+    WorkspaceChangesConfig,
 )
 
 
@@ -430,6 +431,10 @@ def settings_from_env(settings_cls: type):
             ),
         ),
         mcp=_mcp_config_from_env(),
+        workspace_changes=(
+            WorkspaceChangesConfig.model_validate_json(raw_workspace)
+            if (raw_workspace := os.getenv("PERSONAL_AGENT_WORKSPACE_CHANGES")) else None
+        ),
         enterprise_knowledge=EnterpriseKnowledgeConfig(
             raw_roots=tuple(
                 Path(item)

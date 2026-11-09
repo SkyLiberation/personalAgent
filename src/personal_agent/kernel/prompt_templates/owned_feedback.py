@@ -518,14 +518,6 @@ JSON schema：{{"topic":"...","instructions":"...","max_items":1,"lookback_hours
         name='tool_gateway.no_pending_call', version='2026-10-27.v1', owner='tool_gateway',
         template='工具节点未收到待执行的工具调用。',
     ),
-    'tool_gateway.idempotency_key_missing': PromptSpec(
-        name='tool_gateway.idempotency_key_missing', version='2026-10-27.v1', owner='tool_gateway',
-        template='工具 {tool_name} 执行高风险确认动作时缺少 idempotency_key。',
-    ),
-    'tool_gateway.idempotency_pending': PromptSpec(
-        name='tool_gateway.idempotency_pending', version='2026-10-27.v1', owner='tool_gateway',
-        template='工具 {tool_name} 的同一幂等调用正在执行且尚无可重放 receipt（idempotency_key={key}）。',
-    ),
     'tool_gateway.domain_denied': PromptSpec(
         name='tool_gateway.domain_denied', version='2026-10-27.v1', owner='tool_gateway',
         template='工具 {tool_name} 的目标 URL 不在允许域名列表中。',

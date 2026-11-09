@@ -7,11 +7,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from personal_agent.adapters.web.input_normalization import normalize_entry_text
-from personal_agent.adapters.web.routes._shared import resolve_requested_principal
+from personal_agent.adapters.web.routes._shared import require_entry_identity, resolve_requested_principal
 from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, sse_event
 from personal_agent.adapters.web.routes.conversation_errors import conversation_failure_detail
 from personal_agent.application.conversation import ConversationFailure, ConversationMessage
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.contracts.policy import EntryPolicyDenied
 from personal_agent.orchestration.service import AgentService
 
 logger = logging.getLogger(__name__)
@@ -31,11 +32,15 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
         if not normalized_text:
             raise HTTPException(status_code=400, detail="Text is required.")
         try:
+            require_entry_identity(request, settings)
             principal = resolve_requested_principal(
                 request,
                 settings,
                 user_id if user_id != "default" else None,
             )
+            service.authorize_entry(principal, "web", preflight=True)
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except PermissionError:
             raise HTTPException(status_code=404, detail="Resource not found.")
         resolved_user = principal.user_id
