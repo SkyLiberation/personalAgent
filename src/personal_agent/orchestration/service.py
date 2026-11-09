@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from typing import TYPE_CHECKING
 
 from personal_agent.kernel.config import Settings
@@ -7,6 +8,7 @@ from personal_agent.kernel.prompts import create_prompt_catalog
 from personal_agent.infra.model_providers import build_provider_policy
 from personal_agent.memory.graphiti.store import GraphitiStore
 from personal_agent.infra.storage.postgres_memory_store import PostgresMemoryStore
+from personal_agent.orchestration.mcp_bindings import bind_mcp_tools
 from personal_agent.orchestration.runtime import AgentRuntime
 
 if TYPE_CHECKING:
@@ -39,16 +41,30 @@ class AgentService:
             or resolved_settings.openai.base_url,
             langsmith_config=resolved_settings.langsmith,
         )
-        self.runtime = AgentRuntime(
-            settings=resolved_settings,
-            prompts=prompts,
-            store=store,
-            graph_store=GraphitiStore(resolved_settings, prompts=prompts, provider_policy=build_provider_policy(
-                base_url=resolved_settings.graphiti.llm_base_url or resolved_settings.openai.base_url,
-                provider=resolved_settings.graphiti.llm_provider,
-            )),
-            capture_service=capture_service,
-        )
+        with ExitStack() as resources:
+            mcp_tools = bind_mcp_tools(resolved_settings.mcp, resources)
+            self.runtime = AgentRuntime(
+                settings=resolved_settings,
+                prompts=prompts,
+                store=store,
+                graph_store=GraphitiStore(resolved_settings, prompts=prompts, provider_policy=build_provider_policy(
+                    base_url=resolved_settings.graphiti.llm_base_url or resolved_settings.openai.base_url,
+                    provider=resolved_settings.graphiti.llm_provider,
+                )),
+                capture_service=capture_service,
+                mcp_tools=mcp_tools,
+            )
+
+            self._resources = resources.pop_all()
+
+    def close(self) -> None:
+        self._resources.close()
+
+    def __enter__(self) -> AgentService:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
     @property
     def settings(self):

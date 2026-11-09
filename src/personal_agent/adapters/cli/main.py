@@ -61,18 +61,18 @@ def entry(
     session_id: str = "default",
 ) -> None:
     """通过 canonical interaction loop 处理一轮用户消息。"""
-    service = _build_service()
-    logger.info("CLI entry invoked user=%s session=%s", user_id, session_id)
-    result = service.converse(
-        conversation_id=session_id,
-        messages=[ConversationMessage(role="user", content=text.strip())],
-        principal=AuthenticatedPrincipal(
-            tenant_id="personal-agent",
-            user_id=user_id,
-        ),
-        source_platform="cli",
-    )
-    typer.echo(_format_conversation_result(result))
+    with _build_service() as service:
+        logger.info("CLI entry invoked user=%s session=%s", user_id, session_id)
+        result = service.converse(
+            conversation_id=session_id,
+            messages=[ConversationMessage(role="user", content=text.strip())],
+            principal=AuthenticatedPrincipal(
+                tenant_id="personal-agent",
+                user_id=user_id,
+            ),
+            source_platform="cli",
+        )
+        typer.echo(_format_conversation_result(result))
 
 
 @app.command("worker")
@@ -87,29 +87,29 @@ def worker(
     """Run a durable workflow activity worker."""
     from personal_agent.orchestration.worker import WorkflowWorker
 
-    service = _build_service()
-    if queue == "research":
-        feishu_service = FeishuService(service.settings, service)
-        service.research_service.set_delivery_router(DeliveryRouter({
-            "feishu": FeishuDeliveryProvider(feishu_service),
-            "in_app": InAppDeliveryProvider(),
-        }))
-    runner = WorkflowWorker(
-        service.runtime,
-        queue=queue,
-        worker_id=worker_id,
-        lease_seconds=lease_seconds,
-        max_running_per_user=max_running_per_user,
-    )
-    stats = runner.run_forever(poll_seconds=poll_seconds, max_tasks=max_tasks)
-    typer.echo(json.dumps({
-        "worker_id": runner.worker_id,
-        "queue": queue,
-        "leased": stats.leased,
-        "completed": stats.completed,
-        "failed": stats.failed,
-        "unsupported": stats.unsupported,
-    }, ensure_ascii=False, indent=2))
+    with _build_service() as service:
+        if queue == "research":
+            feishu_service = FeishuService(service.settings, service)
+            service.research_service.set_delivery_router(DeliveryRouter({
+                "feishu": FeishuDeliveryProvider(feishu_service),
+                "in_app": InAppDeliveryProvider(),
+            }))
+        runner = WorkflowWorker(
+            service.runtime,
+            queue=queue,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            max_running_per_user=max_running_per_user,
+        )
+        stats = runner.run_forever(poll_seconds=poll_seconds, max_tasks=max_tasks)
+        typer.echo(json.dumps({
+            "worker_id": runner.worker_id,
+            "queue": queue,
+            "leased": stats.leased,
+            "completed": stats.completed,
+            "failed": stats.failed,
+            "unsupported": stats.unsupported,
+        }, ensure_ascii=False, indent=2))
 
 
 @app.command("procedure-eval-record")
@@ -123,24 +123,24 @@ def procedure_eval_record(
     report_json: str = typer.Option("{}"),
 ) -> None:
     """Record an eval result for CI/deployment gating."""
-    service = _build_service()
-    result = service.record_procedure_eval_run(
-        procedure_id,
-        version,
-        suite=suite,
-        passed=passed,
-        score=score,
-        metrics=json.loads(metrics_json),
-        report=json.loads(report_json),
-    )
-    typer.echo(json.dumps({
-        "eval_run_id": result.eval_run_id,
-        "procedure_id": result.procedure_id,
-        "version": result.version,
-        "suite": result.suite,
-        "passed": result.passed,
-        "score": result.score,
-    }, ensure_ascii=False, indent=2))
+    with _build_service() as service:
+        result = service.record_procedure_eval_run(
+            procedure_id,
+            version,
+            suite=suite,
+            passed=passed,
+            score=score,
+            metrics=json.loads(metrics_json),
+            report=json.loads(report_json),
+        )
+        typer.echo(json.dumps({
+            "eval_run_id": result.eval_run_id,
+            "procedure_id": result.procedure_id,
+            "version": result.version,
+            "suite": result.suite,
+            "passed": result.passed,
+            "score": result.score,
+        }, ensure_ascii=False, indent=2))
 
 
 @app.command("procedure-deploy")
@@ -155,25 +155,25 @@ def procedure_deploy(
     force: bool = typer.Option(False, help="Bypass eval gate."),
 ) -> None:
     """Deploy a procedure version after the eval gate passes."""
-    service = _build_service()
-    result = service.set_procedure_deployment(
-        procedure_id,
-        stable_version=stable_version,
-        environment=environment,
-        status=status,
-        canary_version=canary_version,
-        canary_percent=canary_percent,
-        eval_suite=eval_suite,
-        require_eval_gate=not force,
-    )
-    typer.echo(json.dumps({
-        "procedure_id": result.procedure_id,
-        "environment": result.environment,
-        "stable_version": result.stable_version,
-        "canary_version": result.canary_version,
-        "canary_percent": result.canary_percent,
-        "status": result.status,
-    }, ensure_ascii=False, indent=2))
+    with _build_service() as service:
+        result = service.set_procedure_deployment(
+            procedure_id,
+            stable_version=stable_version,
+            environment=environment,
+            status=status,
+            canary_version=canary_version,
+            canary_percent=canary_percent,
+            eval_suite=eval_suite,
+            require_eval_gate=not force,
+        )
+        typer.echo(json.dumps({
+            "procedure_id": result.procedure_id,
+            "environment": result.environment,
+            "stable_version": result.stable_version,
+            "canary_version": result.canary_version,
+            "canary_percent": result.canary_percent,
+            "status": result.status,
+        }, ensure_ascii=False, indent=2))
 
 
 @app.command("procedure-dry-run")
@@ -182,12 +182,12 @@ def procedure_dry_run(
     routing_key: str = typer.Option("cli-dry-run"),
 ) -> None:
     """Validate and project the active procedure without executing it."""
-    service = _build_service()
-    typer.echo(json.dumps(
-        service.dry_run_procedure(procedure_id=procedure_id, routing_key=routing_key),
-        ensure_ascii=False,
-        indent=2,
-    ))
+    with _build_service() as service:
+        typer.echo(json.dumps(
+            service.dry_run_procedure(procedure_id=procedure_id, routing_key=routing_key),
+            ensure_ascii=False,
+            indent=2,
+        ))
 
 
 @app.command("review-digest")
@@ -196,43 +196,43 @@ def review_digest(
     chat_id: str | None = typer.Option(None, help="Override Feishu chat_id for this run."),
 ) -> None:
     """Run the internal review digest delivery job."""
-    service = _build_service()
-    feishu_service = FeishuService(service.settings, service)
-    digest_store = PostgresReviewDigestStore(service.settings.postgres_url or "")
-    for subscription in subscriptions_from_settings(service.settings):
-        digest_store.upsert_subscription(subscription)
-    job = ReviewDigestJob(
-        service.review_digest_use_case,
-        DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)}),
-        ledger=digest_store,
-    )
-    subscriptions = digest_store.list_subscriptions()
-    if chat_id:
-        resolved_user_id = user_id or service.settings.default_user
-        subscriptions = [
-            DigestSubscription(
-                id=f"manual:feishu:{resolved_user_id}:{chat_id}",
-                user_id=resolved_user_id,
-                channel="feishu",
-                target_type="chat_id",
-                target_id=chat_id,
-                enabled=True,
-            )
-        ]
-        results = [job.run(subscription) for subscription in subscriptions]
-    elif user_id:
-        subscriptions = [
-            subscription
-            for subscription in subscriptions
-            if subscription.user_id == user_id
-        ]
-        scheduler = ReviewDigestScheduler(digest_store, job)
-        due_ids = {subscription.id for subscription in scheduler.due_subscriptions()}
-        results = [job.run(subscription) for subscription in subscriptions if subscription.id in due_ids]
-    else:
-        results = ReviewDigestScheduler(digest_store, job).run_due()
+    with _build_service() as service:
+        feishu_service = FeishuService(service.settings, service)
+        digest_store = PostgresReviewDigestStore(service.settings.postgres_url or "")
+        for subscription in subscriptions_from_settings(service.settings):
+            digest_store.upsert_subscription(subscription)
+        job = ReviewDigestJob(
+            service.review_digest_use_case,
+            DeliveryRouter({"feishu": FeishuDeliveryProvider(feishu_service)}),
+            ledger=digest_store,
+        )
+        subscriptions = digest_store.list_subscriptions()
+        if chat_id:
+            resolved_user_id = user_id or service.settings.default_user
+            subscriptions = [
+                DigestSubscription(
+                    id=f"manual:feishu:{resolved_user_id}:{chat_id}",
+                    user_id=resolved_user_id,
+                    channel="feishu",
+                    target_type="chat_id",
+                    target_id=chat_id,
+                    enabled=True,
+                )
+            ]
+            results = [job.run(subscription) for subscription in subscriptions]
+        elif user_id:
+            subscriptions = [
+                subscription
+                for subscription in subscriptions
+                if subscription.user_id == user_id
+            ]
+            scheduler = ReviewDigestScheduler(digest_store, job)
+            due_ids = {subscription.id for subscription in scheduler.due_subscriptions()}
+            results = [job.run(subscription) for subscription in subscriptions if subscription.id in due_ids]
+        else:
+            results = ReviewDigestScheduler(digest_store, job).run_due()
 
-    typer.echo(json.dumps([r.model_dump(mode="json") for r in results], ensure_ascii=False, indent=2))
+        typer.echo(json.dumps([r.model_dump(mode="json") for r in results], ensure_ascii=False, indent=2))
 
 
 @app.command("research-once")
@@ -244,19 +244,19 @@ def research_once(
     lookback_hours: int = typer.Option(24, min=1, max=720),
 ) -> None:
     """Run a one-shot external research workflow."""
-    service = _build_service()
-    run = service.run_research_once(
-        user_id=user_id,
-        topic=topic,
-        instructions=instructions,
-        max_items=max_items,
-        lookback_hours=lookback_hours,
-    )
-    digest = service.research_store.get_digest(run.digest_id) if run.digest_id else None
-    typer.echo(json.dumps({
-        "run": run.model_dump(mode="json"),
-        "digest": digest.model_dump(mode="json") if digest else None,
-    }, ensure_ascii=False, indent=2))
+    with _build_service() as service:
+        run = service.run_research_once(
+            user_id=user_id,
+            topic=topic,
+            instructions=instructions,
+            max_items=max_items,
+            lookback_hours=lookback_hours,
+        )
+        digest = service.research_store.get_digest(run.digest_id) if run.digest_id else None
+        typer.echo(json.dumps({
+            "run": run.model_dump(mode="json"),
+            "digest": digest.model_dump(mode="json") if digest else None,
+        }, ensure_ascii=False, indent=2))
 
 
 @app.command("research-subscribe")
@@ -272,23 +272,23 @@ def research_subscribe(
     max_items: int = typer.Option(5, min=1, max=20),
 ) -> None:
     """Create a durable scheduled research subscription."""
-    service = _build_service()
-    subscription = service.create_research_subscription(ResearchSubscriptionRecord.create(
-        ResearchSubscriptionSpec(
-        user_id=user_id,
-        name=name or f"{topic} 情报简报",
-        topic=topic,
-        instructions=instructions,
-        max_items=max_items,
-        schedule=SchedulePolicy(
-            frequency=frequency,
-            schedule_time=schedule_time,
-            timezone=timezone,
-        ),
-        delivery=DeliveryTarget(target_id=chat_id),
-        )
-    ))
-    typer.echo(subscription.model_dump_json(indent=2))
+    with _build_service() as service:
+        subscription = service.create_research_subscription(ResearchSubscriptionRecord.create(
+            ResearchSubscriptionSpec(
+            user_id=user_id,
+            name=name or f"{topic} 情报简报",
+            topic=topic,
+            instructions=instructions,
+            max_items=max_items,
+            schedule=SchedulePolicy(
+                frequency=frequency,
+                schedule_time=schedule_time,
+                timezone=timezone,
+            ),
+            delivery=DeliveryTarget(target_id=chat_id),
+            )
+        ))
+        typer.echo(subscription.model_dump_json(indent=2))
 
 
 @app.command("research-schedule")
@@ -296,16 +296,16 @@ def research_schedule() -> None:
     """Enqueue all due research subscriptions."""
     from personal_agent.application.research import ResearchScheduler
 
-    service = _build_service()
-    runs = ResearchScheduler(
-        service.research_store,
-        service.research_service,
-    ).enqueue_due()
-    typer.echo(json.dumps(
-        [run.model_dump(mode="json") for run in runs],
-        ensure_ascii=False,
-        indent=2,
-    ))
+    with _build_service() as service:
+        runs = ResearchScheduler(
+            service.research_store,
+            service.research_service,
+        ).enqueue_due()
+        typer.echo(json.dumps(
+            [run.model_dump(mode="json") for run in runs],
+            ensure_ascii=False,
+            indent=2,
+        ))
 
 
 if __name__ == "__main__":

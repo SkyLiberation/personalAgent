@@ -15,6 +15,7 @@ from personal_agent.capabilities.inventory import (
 from personal_agent.kernel.config_models import MCPConfig
 from personal_agent.kernel.contracts.agent import SubagentProfile
 from personal_agent.tools.base import tool_governance, tool_schema
+from personal_agent.tools.mcp import mcp_tool_name
 from personal_agent.tools.mcp_capability import mcp_capability_from_tool
 from personal_agent.tools.mcp_capability import capability_from_tool
 
@@ -60,7 +61,7 @@ def build_runtime_capability_inventory(
         enabled = mcp_config.enabled and server.enabled
         for mapping in server.tools:
             registered = registered_mcp.get((server.server_id, mapping.remote_name))
-            local_name = mapping.name or f"mcp.{server.server_id}.{mapping.remote_name}"
+            local_name = mcp_tool_name(server.server_id, mapping)
             mcp_connectors.append(MCPConnectorInventoryItem(
                 server_id=server.server_id,
                 remote_tool_name=mapping.remote_name,

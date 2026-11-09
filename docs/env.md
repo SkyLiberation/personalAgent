@@ -354,6 +354,8 @@ Provider 由 Composition Root 静态绑定，不做运行时 fallback；AnySearc
 
 ## MCP 工具接入
 
+启用且声明工具映射的 Server 由 `AgentService` 连接。必需工具缺失或名称冲突会拒绝启动。服务结束会关闭所持连接和本地 stdio 进程。stdio Server 中途退出时，重启宿主以重新装配。详细责任见[连接生命周期 ADR](adr/0051-mcp-client-lifecycle.md)。
+
 GitHub MCP 有一组一等配置，适合默认启用官方 Docker stdio server 的只读仓库能力：
 
 ```env

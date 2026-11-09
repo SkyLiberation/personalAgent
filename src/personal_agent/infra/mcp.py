@@ -39,11 +39,13 @@ class MCPJsonRpcClient:
         self.config = config
         self._next_id = 1
         self._initialized = False
+        self._closed = False
         self._session_id: str | None = None
         self._process: subprocess.Popen[str] | None = None
-        self._stdout_queue: queue.Queue[str] = queue.Queue()
+        self._stdout_queue: queue.Queue[str | None] = queue.Queue()
         self._stderr_tail: list[str] = []
-        self._stdio_lock = threading.Lock()
+        self._stdout_closed = threading.Event()
+        self._stdio_lock = threading.RLock()
 
     @property
     def server_id(self) -> str:
@@ -85,23 +87,20 @@ class MCPJsonRpcClient:
         return result
 
     def _ensure_initialized(self) -> None:
-        if self._initialized:
-            return
-        self._request("initialize", {
-            "protocolVersion": self.config.protocol_version,
-            "capabilities": {},
-            "clientInfo": {
-                "name": "personal-agent",
-                "version": "0.1.0",
-            },
-        })
-        try:
-            self._request(
-                "notifications/initialized",
-                {},
-                expect_response=False,
-            )
-        finally:
+        with self._stdio_lock:
+            if self._closed:
+                raise MCPError(f"MCP server {self.server_id} client is closed.")
+            if self._initialized:
+                return
+            self._request("initialize", {
+                "protocolVersion": self.config.protocol_version,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "personal-agent",
+                    "version": "0.1.0",
+                },
+            })
+            self._request("notifications/initialized", {}, expect_response=False)
             self._initialized = True
 
     def _request(
@@ -111,8 +110,11 @@ class MCPJsonRpcClient:
         *,
         expect_response: bool = True,
     ) -> dict[str, Any]:
-        request_id = self._next_id
-        self._next_id += 1
+        with self._stdio_lock:
+            if self._closed:
+                raise MCPError(f"MCP server {self.server_id} client is closed.")
+            request_id = self._next_id
+            self._next_id += 1
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
@@ -203,6 +205,8 @@ class MCPJsonRpcClient:
                     raise MCPError(
                         f"MCP server {self.server_id} timed out waiting for {method}."
                     ) from exc
+                if response_line is None:
+                    raise self._stdio_disconnected()
                 if not response_line.strip():
                     continue
                 try:
@@ -216,7 +220,11 @@ class MCPJsonRpcClient:
                 return self._result_from_response(decoded, method)
 
     def _ensure_process(self) -> subprocess.Popen[str]:
-        if self._process is not None and self._process.poll() is None:
+        if self._closed:
+            raise MCPError(f"MCP server {self.server_id} client is closed.")
+        if self._process is not None:
+            if self._process.poll() is not None or self._stdout_closed.is_set():
+                raise self._stdio_disconnected()
             return self._process
         if not self.config.command:
             raise MCPError(f"MCP server {self.server_id} has no stdio command configured.")
@@ -257,9 +265,16 @@ class MCPJsonRpcClient:
             ).start()
         return self._process
 
+    def _stdio_disconnected(self) -> MCPError:
+        return MCPError(f"MCP server {self.server_id} stdio disconnected. Restart the host to reconnect.")
+
     def _read_stdout(self, stream) -> None:
-        for line in stream:
-            self._stdout_queue.put(line.strip())
+        try:
+            for line in stream:
+                self._stdout_queue.put(line.strip())
+        finally:
+            self._stdout_closed.set()
+            self._stdout_queue.put(None)
 
     def _read_stderr(self, stream) -> None:
         for line in stream:
@@ -273,14 +288,28 @@ class MCPJsonRpcClient:
         return "\n".join(self._stderr_tail[-20:])
 
     def close(self) -> None:
-        process = self._process
-        if process is None or process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        with self._stdio_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._session_id = None
+            process = self._process
+            if process is None:
+                return
+            if process.stdin is not None:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
     def _result_from_response(self, decoded: Any, method: str) -> dict[str, Any]:
         if not isinstance(decoded, dict):

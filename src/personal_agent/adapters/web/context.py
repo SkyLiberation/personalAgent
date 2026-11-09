@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 from logging import Logger
 
@@ -67,10 +68,13 @@ class WebAppContext:
             self.research_runner.start()
 
     def shutdown(self) -> None:
-        self.review_digest_runner.stop()
-        self.knowledge_gap_runner.stop()
-        self.research_runner.stop()
-        close_postgres_connection_pools()
+        with ExitStack() as shutdown:
+            shutdown.callback(close_postgres_connection_pools)
+            shutdown.callback(self.service.close)
+            shutdown.callback(self.research_runner.stop)
+            shutdown.callback(self.knowledge_gap_runner.stop)
+            shutdown.callback(self.review_digest_runner.stop)
+            self.feishu_service.drain_event_messages()
 
 
 class _GapSubscriptionStore:
@@ -95,6 +99,16 @@ class _GapSubscriptionStore:
 def build_web_app_context(settings: Settings, logger: Logger) -> WebAppContext:
     capture_service = CaptureService(settings, logger)
     service = AgentService(settings, capture_service=capture_service)
+    try:
+        return _assemble_web_context(settings, capture_service, service)
+    except BaseException:
+        service.close()
+        raise
+
+
+def _assemble_web_context(
+    settings: Settings, capture_service: CaptureService, service: AgentService,
+) -> WebAppContext:
     review_digest_store = PostgresReviewDigestStore(settings.postgres_url or "")
     review_feedback_use_case = ReviewFeedbackUseCase(service.memory, review_digest_store)
     feishu_service = FeishuService(

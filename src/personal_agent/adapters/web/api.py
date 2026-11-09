@@ -22,7 +22,16 @@ def create_app() -> FastAPI:
     settings = Settings.from_env()
     log_file = setup_logging(settings.log_level)
     context = build_web_app_context(settings, logger)
-    logger.info("Logging initialized at %s", log_file)
+    try:
+        logger.info("Logging initialized at %s", log_file)
+        return _assemble_app(context)
+    except BaseException:
+        context.service.close()
+        raise
+
+
+def _assemble_app(context: WebAppContext) -> FastAPI:
+    settings = context.settings
     app = FastAPI(
         title="Personal Agent API",
         version="0.2.0",
@@ -100,8 +109,8 @@ def _frontend_dist_dir() -> Path:
 def _lifespan(context: WebAppContext):
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        context.startup()
         try:
+            context.startup()
             yield
         finally:
             context.shutdown()

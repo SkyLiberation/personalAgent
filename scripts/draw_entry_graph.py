@@ -22,8 +22,8 @@ def _get_orch_graph():
     from personal_agent.kernel.config import Settings
 
     settings = Settings.from_env()
-    service = AgentService(settings=settings)
-    return service.runtime._entry._get_orch_graph()
+    with AgentService(settings=settings) as service:
+        return service.runtime._entry._get_orch_graph()
 
 
 def _build_mermaid(xray: int | bool = False) -> str:

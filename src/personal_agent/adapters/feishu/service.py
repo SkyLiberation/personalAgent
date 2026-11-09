@@ -44,6 +44,8 @@ class FeishuService(FeishuClientMixin):
         self._ws_client: lark.ws.Client | None = None
         self._ws_thread: threading.Thread | None = None
         self._ws_started = False
+        self._ws_accept_messages = False
+        self._ws_message_threads: set[threading.Thread] = set()
         self._ws_lock = threading.Lock()
         self._processed_event_ids: dict[str, float] = {}
         self._processed_lock = threading.Lock()

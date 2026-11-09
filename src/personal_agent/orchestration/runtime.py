@@ -7,6 +7,8 @@ from personal_agent.infra.artifact_ripgrep import RipgrepArtifactSearch
 import json
 import logging
 from typing import TYPE_CHECKING
+
+from langchain_core.tools import BaseTool
 from urllib.parse import urlparse
 
 from personal_agent.kernel.config import Settings
@@ -51,6 +53,7 @@ from personal_agent.infra.storage.postgres_execution_replay_store import (
 from personal_agent.infra.storage.postgres_agent_run_store import PostgresAgentRunStore
 from personal_agent.memory.structural_retriever import StructuralRetrieverStore
 from personal_agent.governance import ToolExecutor
+from personal_agent.orchestration.mcp_bindings import register_mcp_tools
 from personal_agent.tools import (
     build_capture_text_tool,
     build_capture_upload_tool,
@@ -70,7 +73,6 @@ from personal_agent.tools import (
     build_supersede_note_tool,
     build_mark_note_deprecated_tool,
     build_mark_notes_conflicted_tool,
-    build_mcp_tools,
     build_raw_wiki_search_tools,
     build_inspect_worker_queue_tool,
     build_retry_worker_task_tool,
@@ -178,6 +180,7 @@ class AgentRuntime:
         graph_store: GraphitiStore,
         capture_service: "CaptureService | None" = None,
         *, prompts: PromptCatalog | None = None,
+        mcp_tools: tuple[BaseTool, ...] = (),
     ) -> None:
         if not settings.postgres_url:
             raise ValueError(
@@ -459,6 +462,7 @@ class AgentRuntime:
                 self._conversation_service.generate_verification,
                 prompts=self._prompts,
             ))
+        register_mcp_tools(self._tool_executor, mcp_tools)
         self._sync_procedure_definitions()
         self._procedure_runtime = ProcedureRuntime(
             ProcedureMaterializer(PROCEDURE_CATALOG),
@@ -619,8 +623,6 @@ class AgentRuntime:
             self._tool_executor.register(
                 build_web_search_tool(self.settings, web_provider, prompts=self._prompts)
             )
-        for mcp_tool in build_mcp_tools(self.settings.mcp):
-            self._tool_executor.register(mcp_tool)
         for raw_wiki_tool in build_raw_wiki_search_tools(
             self.settings.enterprise_knowledge
         ):

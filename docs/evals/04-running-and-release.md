@@ -1,5 +1,25 @@
 # 运行、归档与发布
 
+## Toolathlon MCP 验证
+
+从仓库根运行。Time 镜像使用 Toolathlon 锁定的 Time Server 依赖。每个场景创建独立数据库、产品进程和工具容器。`protocol_and_lifecycle_passed` 评价接线与生命周期。`--model-env` 可追加一次正式对话并归档答复及模型请求声明。
+
+```powershell
+docker build --tag personal-agent-toolathlon-time:0.6.2 evals/toolathlon
+$toolathlonRun = ".tmp/toolathlon-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.toolathlon.runner --scenario read --time-image personal-agent-toolathlon-time:0.6.2 --postgres-image paradedb/paradedb:latest --output "$toolathlonRun/read"
+```
+
+生命周期场景包括 `unmapped`、`partial`、`duplicate` 和 `disconnect`。每个场景使用新的输出目录。文件权限探测使用原 Toolathlon 任务镜像和临时标记。
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location) "src")
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.toolathlon.filesystem_probe --image lockon0927/toolathlon-task-image:1016beta --output "$toolathlonRun/filesystem"
+```
+
+`report.json` 和摘要记录实际配置与结果。验证范围见 [MCP 接入 Spec](../mcpDesign/README.md#7-场景推演与验收)。
+
+
 ## 公开数据集运行
 
 从仓库根使用以下命令，各抽取一个公开样本，执行词法检索。每次运行使用新的输出目录。数据读取和指标定义见各数据集入口。[公开数据集索引](README.md#公开数据集评测)

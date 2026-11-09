@@ -1,6 +1,6 @@
 # MCP 客户端与 Toolathlon 评测接入 Spec
 
-> 状态：候选设计。2026-11-09 按本工程源码、Toolathlon 固定版本和历史评测证据整理。本文记录实施和验收规格，接通、隔离与用户结果待验证。现行契约见[工具专题](../topics/tools.md)和[MCP 配置](../env.md#mcp-工具接入)。
+> 状态：连接生命周期、显式映射及 Time 评测运行器已实现。文件 Server 的工作区边界已执行真实探测。验收进度与证据边界见[实施状态](#8-实施顺序迁移与状态)。现行契约见[工具专题](../topics/tools.md)和[MCP 配置](../env.md#mcp-工具接入)。
 
 ## 1. 目标、范围与依据
 
@@ -66,7 +66,6 @@ src/personal_agent/
 
 deploy/mcp/                     有实际生产部署时存放对应配置
 evals/
-  e2e_quality/fixtures/         现有评测专用 MCP 及数据
   toolathlon/
     runner.py                   新增用例环境、产品 HTTP 交互和评分适配
     cases/                      固定任务、上游版本、映射及评分入口
@@ -81,7 +80,7 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 | 上游任务包或评分格式变化 | `evals/toolathlon/` |
 | 新评测套件 | `evals/<suite>/`。已有两个实际消费者时可抽取共用进程与 HTTP 辅助，保留各自环境构造和评分 |
 
-生产部署沿用 `PERSONAL_AGENT_MCP_SERVERS` 解析入口。若使用独立部署文件，由启动侧读入并传给该入口。评测生成的配置属于本次运行，生产默认装配从自己的部署输入构造。上游 checkout 以提交固定，第三方 Python 或 Node 依赖和镜像留在独立评测环境。生产镜像继续只装配生产源码与依赖。
+生产部署沿用 `PERSONAL_AGENT_MCP_SERVERS` 解析入口。若使用独立部署文件，由启动侧读入并传给该入口。评测生成的配置属于本次运行，生产默认装配从自己的部署输入构造。上游 checkout 以提交固定，第三方 Python 或 Node 依赖和镜像留在独立评测环境。生产镜像只装配生产源码与依赖，构建上下文排除上游 checkout。
 
 ## 5. 装配、权限与失败契约
 
@@ -118,7 +117,7 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 
 | 类别 | 装配规则 |
 | --- | --- |
-| 测试专用 MCP 和探针 | `governance_budget_mcp`、`tool_discovery_scale_mcp`、`local_mcp_filesystem_probe` 等归现有用例。仅由用例配置注入本套件进程。现有证据按原身份保留。 |
+| 测试专用 MCP 和探针 | `governance_budget_mcp`、`tool_discovery_scale_mcp`、`local_mcp_filesystem_probe` 等归现有用例。当前工作树已清理这批夹具。历史证据按原身份保留，未来同类夹具由用例配置注入本套件进程。 |
 | 运维诊断工具 | 按真实调用者划分。以 `inspect_worker_queue` 为例，其当前声明为 `public_agent`。若要调整到运维入口，先核对真实消费者和授权，以独立改动验收。 |
 | 产品工具和已授权子智能体 | 产品工具面评测按固定部署装配。同工具条件对照按任务限制额外的业务能力，两类运行分别记录。 |
 | Toolathlon 本地辅助能力 | 从上游任务配置逐项核对与产品的对应关系，完成、计划、核验和历史处理由相应宿主承担。把差异写入比较身份。 |
@@ -147,6 +146,8 @@ Conversation 在 `EffectiveCapabilities` 投影处将部署限制与既有身份
 
 ### 7.1 文件整理场景
 
+V4 暂停在写入授权边界。Toolathlon 镜像内的文件 Server 为 `2025.7.1`。真实受控调用中，`move_file` 覆盖了已存在的目标，而远端描述声称此情况会失败。首个写用例要么选择实际提供禁止覆盖语义的工具并重新验证，要么先取得覆盖动作的正式授权和适用确认。当前运行器只开放 Time 的转换工具。
+
 Toolathlon 的 `arrange-workspace` 配置包含文件系统、终端、PDF、Excel 和若干宿主辅助动作。其预处理将初始档案展开到工作区，评分器对比最终目录和文件路径集合。首个写入候选以同一份初始档案运行中文改编任务，向用户提供同一目标目录结构。上游文件 Server 配置使用未固定版本的 npm 包。V4 前先选定并锁定实际包版本，核对列举、创建目录和移动文件所需的工具、Schema、覆盖行为及副作用，再固定映射。[上游任务配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/task_config.json) · [文件 Server 配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/configs/mcp_servers/filesystem.yaml) · [预处理](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/preprocess/main.py) · [目录评分](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/evaluation/check_local.py)
 
 1. Runner 启动任务环境并放入初始文件。用户经 `POST /api/conversation/turn` 提交“请按下面的目录结构整理我的工作区文件”，附上任务提供的目标结构。
@@ -167,6 +168,18 @@ Toolathlon 的 `arrange-workspace` 配置包含文件系统、终端、PDF、Exc
 每个用例在执行前固定入口、命令、样本、预算、停止条件与归档身份。首轮接线和隔离以一个正常样本及表中必要反事实为范围，写入用例独立预声明。按[评测模块规范](../../evals/AGENTS.md)保存上游提交、Server 版本或镜像摘要、脱敏配置、请求与动作声明、外部状态、评分版本、预算和结果。缺失 Server、泄漏、评分资料曝光或评分不可用时，停止依赖该环境的样本并按最早责任归因。用户结果、协议检查点和隔离检查点单独报告。正式发布资格由现有证据目录和门禁判断。
 
 ## 8. 实施顺序、迁移与状态
+
+已迁移 Web、CLI、worker 和仍构造 `AgentService` 的仓库脚本。批量工厂已删除。连接装配决定记录在[连接生命周期 ADR](../adr/0051-mcp-client-lifecycle.md)。评测启动和证据查看见[评测运行说明](../evals/04-running-and-release.md)。
+
+V1 的正式工具 API 返回东京 10:00。移除映射并向父进程注入无效旧配置后，实际盘点为空，直接调用被拒绝，工具容器未运行。真实对话按两个预算组分别封存。12,000 tokens 组调用 Time 成功，交付在核验预算门禁停止。采用仓库默认预算的独立样本自主调用 Time 并回答东京上午 10 点，实际模型 3 次、15,423 tokens。该样本的用户答复和评测器关闭故障分别计分，关闭由修正后的确定性场景验证。
+
+正式 HTTP 的确定性运行覆盖正常调用、移除映射、第二个 Server 缺少工具、重名和断线五个场景，均符合判据。断线反事实中，旧版本的正式工具 API 超时且容器被隐式重启。目标版本拒绝继续派发，重启宿主后重新握手并成功调用。报告分别位于运行目录的 `final-baseline-disconnect` 和 `target-final-*`。
+
+V2 的独立真实协议与组合根探测中，旧客户端断线后拒绝继续派发，容器没有被隐式重启。新客户端握手成功，正常关闭后容器退出。第二个 Server 缺少映射工具时，前后两个容器都被回收。报告为运行目录的 `target-protocol-composition.json`。
+
+V3 使用锁定 Toolathlon 镜像，在两个各自挂载单一样本目录的容器运行真实文件 Server。两个样本均成功读取自己的标记，越界读取与移动均被拒绝，原文件内容保持。对应报告为运行目录的 `filesystem-boundary/report.json`。该证据只覆盖服务端工作区隔离。V4 未执行用户任务，V5 与 V6 的比较目标或选定传输仍待触发。
+
+实施前使用独立 Time Server 复核了 MCP 客户端边界。按上游锁定版本构建后，`tools/list` 返回两个工具，`convert_time` 返回东京 10:00。停止真实 Server 后，旧客户端启动了新进程，仍沿用已初始化状态，随后调用超时。V2 因而分别断言旧实例拒绝继续派发，以及显式重新装配完成新握手。镜像构建采用上游锁文件的 Time Server 依赖闭包，评测启动代码随套件保存。
 
 | 顺序 | 变更与验证 | 迁移或退出 |
 | --- | --- | --- |

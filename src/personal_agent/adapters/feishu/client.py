@@ -51,7 +51,15 @@ class FeishuClientMixin:
             )
             self._ws_thread.start()
             self._ws_started = True
+            self._ws_accept_messages = True
             logger.info("Feishu long connection startup requested")
+
+    def drain_event_messages(self) -> None:
+        with self._ws_lock:
+            self._ws_accept_messages = False
+            active = tuple(self._ws_message_threads)
+        for thread in active:
+            thread.join()
 
     def _run_event_listener(self) -> None:
         logger.info("Feishu long connection thread started")
@@ -94,12 +102,16 @@ class FeishuClientMixin:
             incoming_message.message_type,
             incoming_message.chat_id,
         )
-        threading.Thread(
+        thread = threading.Thread(
             target=self._process_long_connection_message,
             args=(incoming_message,),
             name=f"feishu-event-{incoming_message.message_id or 'unknown'}",
             daemon=True,
-        ).start()
+        )
+        with self._ws_lock:
+            if self._ws_accept_messages:
+                thread.start()
+                self._ws_message_threads.add(thread)
 
     def _process_long_connection_message(self, incoming_message: FeishuIncomingMessage) -> None:
         try:
@@ -110,6 +122,9 @@ class FeishuClientMixin:
                 incoming_message.event_id,
                 incoming_message.message_id,
             )
+        finally:
+            with self._ws_lock:
+                self._ws_message_threads.discard(threading.current_thread())
 
     def _from_p2_message_event(self, data: P2ImMessageReceiveV1) -> FeishuIncomingMessage | None:
         return parse_p2_message_event(data, resolve_user_id=self._resolve_user_id)

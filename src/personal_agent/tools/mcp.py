@@ -12,7 +12,7 @@ from pydantic import ConfigDict, Field, create_model
 
 from personal_agent.infra.mcp import MCPError, MCPJsonRpcClient, MCPToolDefinition
 from personal_agent.capabilities.contracts.execution import MCPCapability
-from personal_agent.kernel.config_models import MCPConfig, MCPServerConfig, MCPToolConfig
+from personal_agent.kernel.config_models import MCPServerConfig, MCPToolConfig
 from personal_agent.tools.base import ToolError, governance_extras, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
@@ -27,24 +27,8 @@ _GATEWAY_CONTEXT_ARG_NAMES = frozenset({
 })
 
 
-def build_mcp_tools(config: MCPConfig) -> list[BaseTool]:
-    """Build governed LangChain tools from business-approved MCP mappings."""
-    if not config.enabled:
-        return []
-    tools: list[BaseTool] = []
-    for server in config.servers:
-        if not server.enabled:
-            continue
-        client = MCPJsonRpcClient(server)
-        discovered = {tool.name: tool for tool in client.list_tools()}
-        for mapping in server.tools:
-            remote = discovered.get(mapping.remote_name)
-            if remote is None:
-                raise MCPError(
-                    f"MCP server {server.server_id} does not expose tool {mapping.remote_name!r}."
-                )
-            tools.append(build_mcp_tool(client, server, mapping, remote))
-    return tools
+def mcp_tool_name(server_id: str, mapping: MCPToolConfig) -> str:
+    return mapping.name or f"mcp.{server_id}.{mapping.remote_name}"
 
 
 def build_mcp_tool(
@@ -53,7 +37,7 @@ def build_mcp_tool(
     mapping: MCPToolConfig,
     remote: MCPToolDefinition,
 ) -> BaseTool:
-    tool_name = mapping.name or f"mcp.{server.server_id}.{remote.name}"
+    tool_name = mcp_tool_name(server.server_id, mapping)
     description = mapping.description or remote.description
     properties = remote.input_schema.get("properties", {})
     if (
@@ -392,4 +376,4 @@ def _normalize_mcp_result(
     }
 
 
-__all__ = ["build_mcp_tool", "build_mcp_tools"]
+__all__ = ["build_mcp_tool", "mcp_tool_name"]

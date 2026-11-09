@@ -113,15 +113,14 @@ def main() -> int:
         print("[probe] langextract.api_key missing — abort")
         return 2
 
-    service = AgentService(settings=settings)
-
-    print("[probe] running execute_capture …")
-    result = service.execute_capture(
-        text=text,
-        source_type="text",
-        user_id=settings.default_user,
-        source_ref=str(doc_path),
-    )
+    with AgentService(settings=settings) as service:
+        print("[probe] running execute_capture …")
+        result = service.execute_capture(
+            text=text,
+            source_type="text",
+            user_id=settings.default_user,
+            source_ref=str(doc_path),
+        )
 
     note = result.note
     print("\n=== parent note ===")

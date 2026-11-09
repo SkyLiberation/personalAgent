@@ -96,7 +96,7 @@ Context 按 `Visibility -> Requirement Retrieval -> Semantic Selection -> Budget
 
 工具执行主链是“临时能力投影 -> Proposal -> Schema/曝光校验 -> Policy/Admission -> 执行网关 -> Observation -> Verification/Completion”。模型看到的 Tool Schema 从注册定义与当前能力集合物化；资源读取按身份过滤，工具调用由 Admission/Gateway 授权，投影不代表获准执行。
 
-MCP discovery 拥有远端名称和 Schema 观测；本工程 mapping 拥有曝光名称、风险、权限范围和结果契约。只有已受治理的 mapping 才能进入 `EffectiveCapabilities`。
+MCP 发现提供远端工具名和 Schema。部署映射声明本地名称、风险、权限范围与结果契约。`AgentService` 持有 MCP 客户端，`bind_mcp_tools()` 发现并绑定工具，`AgentRuntime` 校验名称后注册。Conversation 按现行治理契约投影和调用工具。宿主结束时关闭所持客户端，stdio 断线后由显式重启建立新会话。[装配与关闭](../adr/0051-mcp-client-lifecycle.md)
 
 智能体委托通过 `AgentGateway` 和类型化 `DelegationGrant` 执行。子运行的 definition、submission binding、status 和 `ArtifactRef` 由智能体运行存储拥有；父级 Application 仍负责判断子结果是否满足用户目标。用户取消和预算超时分别记录为 `cancelled` 与 `timed_out`，两者不共用一个业务原因。
 

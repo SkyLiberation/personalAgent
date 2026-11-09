@@ -11,6 +11,8 @@
 | [Galileo RAGBench](../../evals/galileo_ragbench/README.md) | [Galileo 数据集](https://huggingface.co/datasets/galileo-ai/ragbench) |
 | [LongDS](04-running-and-release.md#公开数据集运行) | [LongDS 数据集](https://huggingface.co/datasets/zjunlp/LongDS) |
 
+[Toolathlon MCP 接线与文件隔离](04-running-and-release.md#toolathlon-mcp-验证)使用上游工具配置和镜像，按实际边界记录支持证据。
+
 ## 验证与结果边界
 
 本次清理以数据集来源为保留依据。项目自建设例、专用夹具、评分与晋级入口从当前工作树退出。清理前的用例与证据按原版本查阅。[历史用例盘点](02-current-case-inventory.md)

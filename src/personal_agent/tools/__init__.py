@@ -32,7 +32,6 @@ from personal_agent.tools.knowledge_lifecycle import (
     build_supersede_note_tool,
     build_update_note_tool,
 )
-from personal_agent.tools.mcp import build_mcp_tools
 from personal_agent.tools.mcp_capability import (
     build_execution_capability_portfolio,
     build_capability_portfolio,
@@ -91,7 +90,6 @@ __all__ = [
     "build_supersede_note_tool",
     "build_mark_note_deprecated_tool",
     "build_mark_notes_conflicted_tool",
-    "build_mcp_tools",
     "build_execution_capability_portfolio",
     "build_capability_portfolio",
     "build_mcp_capability_portfolio",
