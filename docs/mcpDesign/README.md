@@ -146,7 +146,9 @@ Conversation 在 `EffectiveCapabilities` 投影处将部署限制与既有身份
 
 ### 7.1 文件整理场景
 
-V4 暂停在写入授权边界。Toolathlon 镜像内的文件 Server 为 `2025.7.1`。真实受控调用中，`move_file` 覆盖了已存在的目标，而远端描述声称此情况会失败。首个写用例要么选择实际提供禁止覆盖语义的工具并重新验证，要么先取得覆盖动作的正式授权和适用确认。当前运行器只开放 Time 的转换工具。
+原 Toolathlon 任务镜像中的文件 Server 为 `2025.7.1`。真实探测中，`move_file` 覆盖了已存在的目标，与工具声明不符。先在原任务镜像内以只读挂载替换运行时，验证修复行为。正式评测构建独立的 Filesystem 镜像，固定 Filesystem Server `2.2.0` 及其所需的 Node.js `24.22.2`。构建固定 slim 基础镜像的摘要，并校验 Node.js 官方归档的 SHA-256。Server 负责在写入前拒绝覆盖。评测侧拥有镜像配方和样本工作区，复用现有 stdio 客户端及探测入口。当前对话运行器只开放 Time 的转换工具。[上游修复](https://github.com/modelcontextprotocol/servers/pull/4630)
+
+独立镜像验证复用原任务镜像的冲突和跨目录探测。一次运行检查两个隔离样本，其中一个带已有目标文件。冲突必须返回目标已存在，源文件与原目标内容均保留。另用一个独立工作区核对 `list_directory`、`create_directory` 和 `move_file` 的入参，以及目标为空时能完成移动。任一检查失败即停止采用该镜像。验证只启动真实文件 Server，无模型调用。通过后将镜像作为 V4 的文件 Server 环境，产品写入授权和完整任务评分分别按以下步骤验证。
 
 Toolathlon 的 `arrange-workspace` 配置包含文件系统、终端、PDF、Excel 和若干宿主辅助动作。其预处理将初始档案展开到工作区，评分器对比最终目录和文件路径集合。首个写入候选以同一份初始档案运行中文改编任务，向用户提供同一目标目录结构。上游文件 Server 配置使用未固定版本的 npm 包。V4 前先选定并锁定实际包版本，核对列举、创建目录和移动文件所需的工具、Schema、覆盖行为及副作用，再固定映射。[上游任务配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/task_config.json) · [文件 Server 配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/configs/mcp_servers/filesystem.yaml) · [预处理](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/preprocess/main.py) · [目录评分](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/evaluation/check_local.py)
 
@@ -177,7 +179,7 @@ V1 的正式工具 API 返回东京 10:00。移除映射并向父进程注入无
 
 V2 的独立真实协议与组合根探测中，旧客户端断线后拒绝继续派发，容器没有被隐式重启。新客户端握手成功，正常关闭后容器退出。第二个 Server 缺少映射工具时，前后两个容器都被回收。报告为运行目录的 `target-protocol-composition.json`。
 
-V3 使用锁定 Toolathlon 镜像，在两个各自挂载单一样本目录的容器运行真实文件 Server。两个样本均成功读取自己的标记，越界读取与移动均被拒绝，原文件内容保持。对应报告为运行目录的 `filesystem-boundary/report.json`。该证据只覆盖服务端工作区隔离。V4 未执行用户任务，V5 与 V6 的比较目标或选定传输仍待触发。
+V3 使用锁定 Toolathlon 镜像，在两个各自挂载单一样本目录的容器运行真实文件 Server。两个样本均成功读取自己的标记，越界读取与移动均被拒绝，原文件内容保持。对应报告为运行目录的 `filesystem-boundary/report.json`。该证据只覆盖服务端工作区隔离。升级后的专用镜像复验通过。两个样本的越界读写均被拒绝，同名目标的移动返回 `Destination already exists`，源和原目标内容保持。独立样本确认了列目录、创建目录、移动的参数和正常移动的文件终态。对应归档为 `.tmp/toolathlon-filesystem-upgrade-20261109-210601-534/acceptance.json`，以镜像摘要区分原镜像和升级镜像。V4 的产品写入授权和完整用户任务仍待验证。V5 与 V6 的比较目标或选定传输仍待触发。
 
 实施前使用独立 Time Server 复核了 MCP 客户端边界。按上游锁定版本构建后，`tools/list` 返回两个工具，`convert_time` 返回东京 10:00。停止真实 Server 后，旧客户端启动了新进程，仍沿用已初始化状态，随后调用超时。V2 因而分别断言旧实例拒绝继续派发，以及显式重新装配完成新握手。镜像构建采用上游锁文件的 Time Server 依赖闭包，评测启动代码随套件保存。
 

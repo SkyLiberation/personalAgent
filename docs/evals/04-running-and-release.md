@@ -10,12 +10,15 @@ $toolathlonRun = ".tmp/toolathlon-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.runner --scenario read --time-image personal-agent-toolathlon-time:0.6.2 --postgres-image paradedb/paradedb:latest --output "$toolathlonRun/read"
 ```
 
-生命周期场景包括 `unmapped`、`partial`、`duplicate` 和 `disconnect`。每个场景使用新的输出目录。文件权限探测使用原 Toolathlon 任务镜像和临时标记。
+生命周期场景包括 `unmapped`、`partial`、`duplicate` 和 `disconnect`。每个场景使用新的输出目录。文件权限与覆盖探测使用[专用 Filesystem 镜像](../../evals/Toolathlon/Dockerfile.filesystem)和临时样本。
 
 ```powershell
+docker build --platform linux/amd64 --tag personal-agent-toolathlon-filesystem:2.2.0 --file evals/Toolathlon/Dockerfile.filesystem evals/Toolathlon
 $env:PYTHONPATH = (Join-Path (Get-Location) "src")
-.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.filesystem_probe --image lockon0927/toolathlon-task-image:1016beta --output "$toolathlonRun/filesystem"
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.filesystem_probe --image personal-agent-toolathlon-filesystem:2.2.0 --output "$toolathlonRun/filesystem"
 ```
+
+报告中两个样本的 `isolated` 均应为 `true`。冲突样本的 `existing_destination_overwritten` 应为 `false`，`overwrite_error` 应表明目标已存在，样本目录中的源文件和原目标文件均应保留。
 
 `report.json` 和摘要记录实际配置与结果。验证范围见 [MCP 接入 Spec](../mcpDesign/README.md#7-场景推演与验收)。
 
