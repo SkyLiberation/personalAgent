@@ -342,7 +342,7 @@ interaction_phase：最新用户要求先交中间计划、清单、方案、草
     ),
     'conversation.action': PromptSpec(
         name='conversation.action',
-        version='v39-plain-action-repair',
+        version='v41-round-budget-reminder',
         owner='conversation',
         output_contract='Provider assistant message',
         template="""
@@ -384,7 +384,7 @@ artifact_source 只提供当前可读文件元数据，不表示正文已读。�
 ## 运行数据
 
 可用能力：{projection}
-剩余预算：{remaining}{time_budget_note}
+剩余预算：{remaining}{time_budget_note}{low_token_budget_note}
 {plan_context}
 {plan_control}
 """,
@@ -393,6 +393,11 @@ artifact_source 只提供当前可读文件元数据，不表示正文已读。�
         name='conversation.time_budget_snapshot', version='v1', owner='conversation',
         output_contract='RemainingInteractionBudget snapshot explanation',
         template='\nwall_seconds_at_input 是本次输入构造时的剩余秒数快照；后续模型生成、工具与交付持续计时，不是保证可用的动作时长。',
+    ),
+    'conversation.low_token_budget_reminder': PromptSpec(
+        name='conversation.low_token_budget_reminder', version='v1', owner='conversation',
+        output_contract='Guidance for prompt delivery when the token budget is low',
+        template='\n请尽快产出用户要求的目标产物，并总结实际结果。',
     ),
     'conversation.research_entry.explicit': PromptSpec(
         name='conversation.research_entry.explicit', version='v5-native-assistant-response-md1', owner='conversation',

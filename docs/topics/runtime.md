@@ -37,6 +37,8 @@ HTTP / CLI / Message Adapter
 
 `interaction_prompt.RemainingInteractionBudget` 向主决策物化剩余 model turns、tool calls、agent calls 和 tokens。存在 `run_deadline_at` 时，再由同一 Trace 截止与当前 UTC 派生 `wall_seconds_at_input`；无截止时省略。快照不暂停计时，恢复沿用原截止。任务墙钟和累计实验执行额度分别配置，参数与证据见[研究 Spec](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)，快照契约见[主循环 Spec §3.17](../optimization/to_verify/conversation-loop-boundaries.md#317-已有运行截止的模型可见投影)。
 
+主决策回合结束后的下一次主请求可随预算快照收到通用收尾提醒。触发和验证由[主循环 Spec §3.19](../optimization/to_verify/conversation-loop-boundaries.md#319-主决策后的低预算提醒)定义。
+
 通用 Python 分析可按显式主体／对话许可独立装配。Trace 保存该授权摘要；Journal 在对话锁内聚合原 run 消费，并投影成功程序及工作产物，后继 run 不复制 usage 或压缩 checkpoint。当前剩余 tokens 按已知消费受 per-run 和任务阈值约束；模型费用不完整时保留未知标记，仍可调用模型、压缩及跨用户轮继续，不以完整性标记判断任务完成。未决工具执行、授权和截止继续守原边界；原件读取经 Artifact 校验。通用授权不触发检索领域冻结／test；实现契约及尚未完成的真实验收见 [ADR 0040](../adr/0040-scoped-python-analysis-authorization.md)和 [Python Spec](../optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配)。
 
 ```text

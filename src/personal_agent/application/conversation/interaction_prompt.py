@@ -90,6 +90,11 @@ def build_interaction_system_prompt(
         if wall_seconds_at_input is not None
         else ""
     )
+    low_token_budget_note = (
+        prompts.get("conversation.low_token_budget_reminder").template
+        if usage.model_turns > 0 and 0 < remaining.tokens * 10 < policy.max_total_tokens
+        else ""
+    )
     plan_context = (
         prompts.get("conversation.plan_context").render(
             total=str(len(working_plan.steps)),
@@ -119,6 +124,7 @@ def build_interaction_system_prompt(
         verification_note="" if explicit_research_entry else verification_note,
         remaining=json.dumps(remaining.model_dump(exclude_none=True)),
         time_budget_note=time_budget_note,
+        low_token_budget_note=low_token_budget_note,
         plan_context=plan_context,
         projection=projection,
         plan_control=plan_control,

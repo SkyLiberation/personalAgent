@@ -292,7 +292,7 @@ Check that conditions serve the current goal, resolve references, preserve chang
 Use the rejection cause and any field diagnostics to choose a valid next step from the current tool declarations. To inspect the original arguments, read the paired call or any unpaired calls included with the feedback. Rejected calls did not run.""",
     ),
     "conversation.action": PromptTranslation(
-        'v39-plain-action-repair', 'v39-plain-action-repair-en.1',
+        'v41-round-budget-reminder', 'v41-round-budget-reminder-en.1',
         """
 
 ## Goal and output
@@ -332,7 +332,7 @@ artifact_source supplies only metadata for currently readable files; it does not
 ## Runtime data
 
 Available capabilities: {projection}
-Remaining budget: {remaining}{time_budget_note}
+Remaining budget: {remaining}{time_budget_note}{low_token_budget_note}
 {plan_context}
 {plan_control}
 """,
@@ -340,6 +340,10 @@ Remaining budget: {remaining}{time_budget_note}
     "conversation.time_budget_snapshot": PromptTranslation(
         "v1", "v1-en.1",
         "\nwall_seconds_at_input is a snapshot of the remaining seconds when this input was constructed. Subsequent model generation, tools, and delivery continue consuming time; it is not a guaranteed duration available for actions.",
+    ),
+    "conversation.low_token_budget_reminder": PromptTranslation(
+        "v1", "v1-en.1",
+        "\nProduce the deliverables the user requested as soon as possible and summarize the actual results.",
     ),
     "conversation.research_entry.explicit": PromptTranslation(
         'v5-native-assistant-response-md1', 'v5-native-assistant-response-en.1-md1',
