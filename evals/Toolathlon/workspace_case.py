@@ -203,16 +203,21 @@ def run(args, report):
         mappings = [MAPPINGS[0], {**MAPPINGS[1], "requires_confirmation": True}, MAPPINGS[2]]
         server = {**runner.server(server_id, SERVER_ID, mappings[0]), "tools": mappings}
         env = runner.product_environment(args.output, runner.postgres_url(database), [server], args.model_env)
+        budget = runner.configure_interaction_budget(env, args)
         env.update(
             PERSONAL_AGENT_API_KEYS=json.dumps({key: PRINCIPAL, other_key: {**PRINCIPAL, "tenant_id": "other"}}),
-            PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=str(args.model_budget),
+            PERSONAL_AGENT_E2E_TRACE_DIR=str(args.output / "e2e"),
+            PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR=str(args.output / "product"),
             PERSONAL_AGENT_WORKSPACE_CHANGES=json.dumps({
                 "principal": PRINCIPAL, "conversation_id": CONVERSATION, "workspace_ref": args.output.name,
                 "root": "/case", "server_id": SERVER_ID, "create_directory_tool": CREATE, "move_tool": MOVE,
             }),
         )
-        report.update(model=env["STRUCTURED_MODEL"], model_budget=args.model_budget, mappings=mappings,
-                      image_id=runner.docker("image", "inspect", args.image, "--format", "{{.Id}}"))
+        report.update(
+            model=env["STRUCTURED_MODEL"], model_budget=budget.max_total_tokens,
+            model_turn_limit=budget.max_model_turns, tool_call_limit=budget.max_tool_calls,
+            mappings=mappings, image_id=runner.docker("image", "inspect", args.image, "--format", "{{.Id}}"),
+        )
         with runner.product(args.output, env) as (base, process):
             if not runner.wait_for_product(base, process, 120):
                 raise RuntimeError("Product Web process exited before startup.")
@@ -244,7 +249,7 @@ def main() -> int:
     parser.add_argument("--image", required=True)
     parser.add_argument("--postgres-image", required=True)
     parser.add_argument("--model-env", required=True, type=Path)
-    parser.add_argument("--model-budget", default=220_000, type=int)
+    runner.add_interaction_budget_arguments(parser)
     parser.add_argument("--upstream", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()

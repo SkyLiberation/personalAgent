@@ -29,7 +29,8 @@ from .context_materialization import (
     select_visible_successful_observations,
 )
 from .goal_models import GOAL_PENDING_ACTION_REJECTED
-from .models import ActionObservation, DecisionFeedback, InteractionInput
+from .mcp_result_projection import mcp_duplicate_lines, project_mcp_result
+from .models import ActionObservation, ArtifactSourceInput, DecisionFeedback, InteractionInput
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY, observed_receipts
 from .artifact_search import SearchActionOutputArguments, SourceSearchResult
 from .source_reading import (
@@ -99,6 +100,7 @@ def _inline_document(
     observation: ActionObservation,
 ) -> tuple[CitationSource, tuple[ReturnedSourceLine, ...]]:
     data = observation.payload.get("data")
+    omitted_lines = frozenset()
     if isinstance(data, dict) and data.get("format") == WEB_SOURCE_FORMAT:
         output = WebReadOutput.model_validate(data)
         text = output.source_text
@@ -122,9 +124,11 @@ def _inline_document(
             line=1,
             start_column=1,
         )
+        omitted_lines = mcp_duplicate_lines(observation.payload)
     lines = tuple(
         ReturnedSourceLine(line=number, text=line)
         for number, line in enumerate(text.splitlines(), 1)
+        if number not in omitted_lines
     )
     return source, lines
 
@@ -246,27 +250,121 @@ def materialize_citation_context(
     return tuple(result)
 
 
-def render_citable_input(item: CitableInput, *, prompts: PromptCatalog = DEFAULT_PROMPTS) -> str:
-    """Render exact citation lines once; the typed catalog still owns binding."""
-    if (isinstance(item.observation, DecisionFeedback)
-            and item.observation.reason_code == GOAL_PENDING_ACTION_REJECTED):
-        return f"{item.observation.message}\n{item.observation.required_repair}"
-    metadata = item.model_dump(mode="json", exclude_none=True,
-        exclude={"citations": True, "observation": {"artifact_recovery_ref"}})
-    if item.observation.kind == "artifact_source":
-        # The existing read tools bind owner from the authenticated principal.
-        metadata["observation"]["resource"]["resource_ref"].pop("owner")
-    if (isinstance(item.observation, ActionObservation)
-            and item.observation.capability_id == INTERACTION_VERIFICATION_CAPABILITY):
-        receipts = observed_receipts((item.observation,), capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY}))
-        if receipts and receipts[0].verdict == "passed":
-            receipt = receipts[0]
-            metadata["observation"]["payload"] = {
-                "data": receipt.model_dump(mode="json", include={"checked_kind", "verdict", "receipt_id", "draft_digest"}),
-                "message": verification_judgment_text(receipt, prompts=prompts),
-            }
-    return prompts.render("conversation.model_input", metadata_json=json.dumps(metadata, ensure_ascii=False),
-        source_lines="\n".join(f"{line.evidence_id}|{line.text}" for line in item.citations))
+_DIAGNOSTIC_LABELS = frozenset({"schema_enum", "schema_type", "schema_required", "schema_additionalProperties"})
+
+
+def render_decision_feedback(
+    feedback: DecisionFeedback, *, prompts: PromptCatalog, submitted_arguments: Mapping[str, object] | None = None,
+) -> str:
+    if feedback.reason_code == GOAL_PENDING_ACTION_REJECTED:
+        return f"{feedback.message}\n{feedback.required_repair}"
+    message = (prompts.render("conversation.context.feedback.action", action_name=feedback.action_name, message=feedback.message)
+               if feedback.action_name else feedback.message)
+    details = []
+    for diagnostic in feedback.action_diagnostics:
+        error_type = diagnostic.error_type
+        key = diagnostic.field_path.removeprefix("$.")
+        if error_type == "schema_enum" and submitted_arguments is not None and key in submitted_arguments:
+            value = json.dumps(submitted_arguments[key], ensure_ascii=False)
+            if len(value) <= 512:
+                details.append(prompts.render("conversation.context.feedback.schema_enum_value",
+                    path=diagnostic.field_path, value=value))
+                continue
+        problem = (prompts.get(f"conversation.context.feedback.{error_type}").template
+                   if error_type in _DIAGNOSTIC_LABELS
+                   else prompts.render("conversation.context.feedback.other", error_type=error_type))
+        details.append(prompts.render("conversation.context.feedback.field", path=diagnostic.field_path, problem=problem))
+    calls = [prompts.render("conversation.context.feedback.unpaired", action_name=call.name, call_id=call.call_id,
+                            arguments=json.dumps(call.arguments, ensure_ascii=False))
+             for call in feedback.rejected_action_invocations]
+    repair = feedback.required_repair.strip()
+    if (len(details) == len(feedback.action_diagnostics) == 1
+            and feedback.action_diagnostics[0].error_type == "schema_enum"
+            and repair == prompts.get("conversation.action_protocol_repair").template.strip()):
+        repair = ""
+    return "\n".join(part for part in (message, *details, *calls, repair) if part)
+
+
+def _render_observation(
+    observation: ActionObservation, item: CitableInput, *, prompts: PromptCatalog, native_tool_result: bool,
+) -> str:
+    status = prompts.get(f"conversation.context.state.{observation.status}").template
+    parts = [prompts.render("conversation.context.tool.status", tool_name=observation.capability_id, status=status)]
+    if not native_tool_result:
+        parts.append(prompts.render("conversation.context.tool.call", action_id=observation.action_id))
+    if observation.plan_step_id is not None:
+        parts.append(prompts.render("conversation.context.tool.plan_step", step_id=observation.plan_step_id))
+    if observation.capability_id == INTERACTION_VERIFICATION_CAPABILITY:
+        receipts = observed_receipts((observation,), capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY}))
+        if receipts:
+            parts.append(verification_judgment_text(receipts[0], prompts=prompts))
+            return "\n".join(parts)
+
+    payload = dict(project_mcp_result(observation.payload))
+    payload.pop("ok", None)
+    error = payload.pop("error", None)
+    error_kind = payload.pop("error_kind", None)
+    if error or error_kind:
+        parts.append(prompts.render("conversation.context.tool.error", error=error or error_kind))
+    preview = payload.pop("observation_excerpt", None)
+    omitted = payload.pop("observation_excerpt_omitted_chars", None)
+    payload.pop("observation_excerpt_removed", None)
+    retrieval = payload.pop("retrieval", None)
+    if isinstance(retrieval, dict):
+        ref = retrieval.get("resource_ref")
+        if isinstance(ref, dict) and ref.get("resource_id"):
+            parts.append(prompts.render("conversation.context.tool.resource", resource_id=ref["resource_id"]))
+        if retrieval.get("total_lines") is not None:
+            parts.append(prompts.render("conversation.context.tool.lines", lines=retrieval["total_lines"]))
+        if omitted is not None:
+            parts.append(prompts.render("conversation.context.tool.omitted", count=omitted))
+        elif retrieval.get("omitted_chars"):
+            parts.append(prompts.render("conversation.context.tool.legacy_omitted", count=retrieval["omitted_chars"]))
+        if retrieval.get("unavailable_reason"):
+            parts.append(retrieval["unavailable_reason"])
+        if retrieval.get("read_more"):
+            parts.append(retrieval["read_more"])
+    elif omitted is not None:
+        parts.append(prompts.render("conversation.context.tool.omitted", count=omitted))
+    if observation.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
+        # Authorization and version checks use the original typed receipt.
+        payload.pop("content_digest", None)
+        ref = payload.pop("resource_ref", None)
+        if isinstance(ref, dict) and ref.get("resource_id"):
+            parts.append(prompts.render("conversation.context.tool.source", resource_id=ref["resource_id"]))
+        total_lines = payload.pop("total_lines", None)
+        if total_lines is not None:
+            parts.append(prompts.render("conversation.context.tool.lines", lines=total_lines))
+        explanation = payload.pop("explanation", "")
+        if explanation:
+            parts.append(explanation)
+    if payload:
+        parts.append(prompts.render("conversation.context.tool.data", data=json.dumps(payload, ensure_ascii=False)))
+    if item.executed_query is not None:
+        parts.append(prompts.render("conversation.context.tool.query",
+            query=item.executed_query.model_dump_json(exclude_none=True)))
+    if item.citations:
+        parts.append(prompts.render("conversation.context.tool.citations",
+            lines="\n".join(f"{line.evidence_id}|{line.text}" for line in item.citations)))
+    if isinstance(preview, str) and preview:
+        parts.append(prompts.render("conversation.tool_result.preview", preview=preview))
+    return "\n\n".join(parts)
+
+
+def render_citable_input(
+    item: CitableInput, *, prompts: PromptCatalog = DEFAULT_PROMPTS, native_tool_result: bool = False,
+) -> str:
+    """Present decision facts and keep actual source lines and call data verbatim."""
+    observation = item.observation
+    if isinstance(observation, DecisionFeedback):
+        return render_decision_feedback(observation, prompts=prompts)
+    if isinstance(observation, ActionObservation):
+        return _render_observation(observation, item, prompts=prompts, native_tool_result=native_tool_result)
+    if isinstance(observation, ArtifactSourceInput):
+        resource = observation.resource
+        return prompts.render("conversation.context.tool.material", filename=resource.filename,
+            resource_id=resource.resource_ref.resource_id, size=resource.size_bytes)
+    return prompts.render("conversation.context.execution_data", data=item.model_dump_json(exclude_none=True))
 
 
 _CitationT = TypeVar("_CitationT", bound=CitationLine)

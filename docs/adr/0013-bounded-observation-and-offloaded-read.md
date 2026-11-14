@@ -2,6 +2,7 @@
 
 - 状态：Observation 上限与卸载机制 Accepted；读取接口由 [ADR 0024](0024-plain-source-tools-and-inline-citations.md)试接入替换，以下旧 E2E 数值仅为历史证据。
 - 日期：2026-07-31
+- 现行单条预算、正文预览及验证由[工具上下文契约](../context/tool.md)维护。
 - 影响范围：`ConversationService` 的 Observation 装配、请求级 Context 物化、`read_action_output` 能力、回合终止判据
 - 相关：[ADR 0010](0010-runtime-owned-interaction-verification.md)（同一形状：结构性不变量不交给 prompt 措辞）
 
@@ -79,8 +80,7 @@ principal 和 scope 是回合解析出的请求身份，模型既不知道也不
 `resource_ref`，使「这个远端输出读过没有」成为对 inputs 的纯函数判定，不需要在回合里另
 存一份已读集合。
 
-`retrieval` 只在 Observation 被界定时出现，字段是 `omitted_chars`、`original_chars`，加上
-`resource_ref`、`total_lines` 和 `read_more`，或卸载失败时的 `unavailable_reason`。卸载失败可见而不静默。
+`retrieval` 在回执超限时记录原件状态。历史回执用 `retrieval.omitted_chars` 标记裁剪。现行普通工具回执在 `retrieval` 记录原始 UTF-8 字节数及续读引用，在 `observation_excerpt_omitted_chars` 记录预览省略量。主请求按当轮工具声明组装 `read_more`。保存失败用 `unavailable_reason` 表示。字段与预算见[工具上下文契约](../context/tool.md#2-外置原件并返回限长回执)。
 
 读取返回契约现由 [ADR 0024](0024-plain-source-tools-and-inline-citations.md)拥有：搜索返回命中自然行，读取返回 `next_read`；超长行显式带列范围，累计覆盖仍由实际 Observation 派生。旧 `ReadWindowState` 只随保留但不可向模型调用的 `read_action_output` 使用。零搜索结果、后缀结束和全文已读保持不同含义。原歧义修正及历史验证见[第 68 节](../optimization/evidence-acquisition.md#68-读取返回歧义的最小工程修正)，新试接入的实际结果见[第 103 节](../optimization/evidence-acquisition.md#103-正文行坐标统一与预编号引用联动)。
 
@@ -114,10 +114,9 @@ principal 和 scope 是回合解析出的请求身份，模型既不知道也不
 没有」是模型的判断，「没看就收尾」不是。只对 `succeeded` 的 Observation 生效：失败调用
 被卸载的错误文本不是任何人在找的证据。
 
-多个卸载结果进入下一模型轮时，`context_materialization.py` 删除有 ArtifactRef 的 lossy excerpt，只保留
-status、omission metadata 与 exact re-read ref。它不修改 committed Observation；成功重读窗口保持原样。
-若模型在某 capability 的卸载结果尚未成功重读时再次调用该 capability，Admission 返回
-`offloaded_output_refetch`，要求使用现有 `ResourceRef`；拒绝的 proposal 不消耗 Tool call 预算。该规则只
+多个卸载结果进入下一模型轮时，`context_materialization.py` 保留状态、省略信息和原件引用。主模型还收到已保存的有界文本预览和续读方式，具体见[超限回执物化](../topics/context-engineering.md#artifact-backed-observation-的请求级物化)。预览属于请求视图，已提交 Observation 和成功重读窗口保持原事实。
+已保存外置结果的同一工具及参数再次提交时，Admission 返回
+`offloaded_output_refetch`，报告重复调用未执行。现有 `ResourceRef` 仍可用于读取已保存结果。拒绝的 proposal 不消耗 Tool call 预算。该规则只
 排除不能暴露 omitted middle 的重复执行，不判断关键词、窗口或用户目标是否已满足。
 
 ## Verification and Remaining Risk

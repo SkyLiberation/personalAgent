@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
+from jsonschema.validators import validator_for
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import ConfigDict, Field, create_model
 
 from personal_agent.infra.mcp import MCPError, MCPJsonRpcClient, MCPToolDefinition
 from personal_agent.capabilities.contracts.execution import MCPCapability
@@ -16,16 +15,6 @@ from personal_agent.kernel.config_models import MCPServerConfig, MCPToolConfig
 from personal_agent.tools.base import ToolError, governance_extras, tool_response, tool_success
 
 logger = logging.getLogger(__name__)
-
-_GATEWAY_CONTEXT_ARG_NAMES = frozenset({
-    "run_id",
-    "user_id",
-    "session_id",
-    "source_platform",
-    "thread_id",
-    "step_id",
-})
-
 
 def mcp_tool_name(server_id: str, mapping: MCPToolConfig) -> str:
     return mapping.name or f"mcp.{server_id}.{mapping.remote_name}"
@@ -51,15 +40,17 @@ def build_mcp_tool(
             f"MCP tool {server.server_id}.{remote.name} declares unknown "
             f"resource locator argument {mapping.resource_locator_arg!r}."
         )
-    (
-        args_schema,
-        allowed_arg_names,
-        additional_properties,
-        omit_none_arg_names,
-    ) = _json_schema_to_args_model(
-        tool_name,
-        remote.input_schema,
-    )
+    for field in mapping.model_integer_string_fields:
+        field_schema = properties.get(field) if isinstance(properties, dict) else None
+        if not isinstance(field_schema, dict) or field_schema.get("type") != "integer":
+            raise MCPError(f"MCP tool {server.server_id}.{remote.name} cannot read integer strings for {field!r}.")
+    input_schema = remote.input_schema
+    validator_class = validator_for(input_schema)
+    try:
+        validator_class.check_schema(input_schema)
+    except SchemaError as error:
+        raise MCPError(f"MCP tool {tool_name!r} has an invalid input Schema: {error.message}") from error
+    input_validator = validator_class(input_schema)
 
     capability = _mcp_capability(
         server=server,
@@ -74,13 +65,11 @@ def build_mcp_tool(
         output_schema=mapping.output_schema,
     )
 
-    def _invoke(**kwargs: Any):
-        arguments = _remote_arguments(
-            kwargs,
-            allowed_arg_names=allowed_arg_names,
-            additional_properties=additional_properties,
-            omit_none_arg_names=omit_none_arg_names,
-        )
+    def _invoke(**arguments: Any):
+        try:
+            input_validator.validate(arguments)
+        except ValidationError as error:
+            raise ValueError(f"Invalid MCP argument at {error.json_path}: {error.message}") from error
         result = client.call_tool(mapping.remote_name, arguments)
         _validate_mcp_result(
             server_id=server.server_id,
@@ -98,10 +87,11 @@ def build_mcp_tool(
         func=_invoke,
         name=tool_name,
         description=description,
-        args_schema=args_schema,
+        args_schema=input_schema,
         infer_schema=False,
         response_format="content_and_artifact",
         extras={
+            "strict": False,
             **governance_extras(
                 exposure=mapping.exposure,  # type: ignore[arg-type]
                 risk_level=mapping.risk_level,  # type: ignore[arg-type]
@@ -125,6 +115,7 @@ def build_mcp_tool(
                 "input_schema": remote.input_schema,
             },
             "mcp_capability": capability.model_dump(mode="json"),
+            "model_integer_string_fields": mapping.model_integer_string_fields,
         },
     )
 
@@ -164,52 +155,6 @@ def _mcp_capability(
         input_schema=remote.input_schema,
         output_schema=mapping.output_schema,
         examples=mapping.examples,
-    )
-
-
-def _json_schema_to_args_model(tool_name: str, schema: dict[str, Any]):
-    properties = schema.get("properties", {})
-    required = set(schema.get("required", []) or [])
-    additional = bool(schema.get("additionalProperties", False))
-    model_name = _safe_model_name(tool_name)
-    fields: dict[str, tuple[Any, Any]] = {}
-    omit_none_arg_names: set[str] = set()
-    if isinstance(properties, dict):
-        for name, prop_schema in properties.items():
-            if not isinstance(name, str) or not isinstance(prop_schema, dict):
-                continue
-            annotation = _annotation_from_json_schema(prop_schema)
-            is_required = name in required
-            if not is_required:
-                # An absent JSON property and an explicit JSON null are distinct
-                # at the MCP boundary. Pydantic still has to accept ``None`` when
-                # a model emits null for an optional tool parameter; the adapter
-                # then omits it unless the remote schema explicitly permits null.
-                annotation = annotation | None
-                if not _json_schema_permits_null(prop_schema):
-                    omit_none_arg_names.add(name)
-            default_value = ... if is_required else prop_schema.get("default", None)
-            fields[name] = (
-                annotation,
-                Field(
-                    default_value,
-                    description=prop_schema.get("description"),
-                ),
-            )
-    model = create_model(
-        model_name,
-        # ToolExecutor.invoke_direct passes execution context values through the
-        # same kwargs dict as tool arguments. Allow extras at Pydantic validation
-        # time, then strip known context fields and reject unknown business args
-        # before the remote MCP call.
-        __config__=ConfigDict(extra="allow"),
-        **fields,
-    )
-    return (
-        model,
-        frozenset(fields.keys()),
-        additional,
-        frozenset(omit_none_arg_names),
     )
 
 
@@ -280,76 +225,6 @@ def _single_json_text_content(content: Any) -> Any | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (dict, list)) else None
-
-
-def _remote_arguments(
-    kwargs: dict[str, Any],
-    *,
-    allowed_arg_names: frozenset[str],
-    additional_properties: bool,
-    omit_none_arg_names: frozenset[str],
-) -> dict[str, Any]:
-    unknown = set(kwargs) - allowed_arg_names - _GATEWAY_CONTEXT_ARG_NAMES
-    if unknown and not additional_properties:
-        joined = ", ".join(sorted(unknown))
-        raise ValueError(f"MCP tool received unsupported argument(s): {joined}")
-    if additional_properties:
-        return {
-            key: value
-            for key, value in kwargs.items()
-            if key not in _GATEWAY_CONTEXT_ARG_NAMES
-            and not (key in omit_none_arg_names and value is None)
-        }
-    return {
-        key: value
-        for key, value in kwargs.items()
-        if key in allowed_arg_names
-        and not (key in omit_none_arg_names and value is None)
-    }
-
-
-def _json_schema_permits_null(schema: dict[str, Any]) -> bool:
-    schema_type = schema.get("type")
-    if schema_type == "null":
-        return True
-    if isinstance(schema_type, list) and "null" in schema_type:
-        return True
-    for keyword in ("anyOf", "oneOf"):
-        alternatives = schema.get(keyword)
-        if isinstance(alternatives, list) and any(
-            isinstance(item, dict) and _json_schema_permits_null(item)
-            for item in alternatives
-        ):
-            return True
-    return False
-
-
-def _annotation_from_json_schema(schema: dict[str, Any]) -> Any:
-    schema_type = schema.get("type")
-    if isinstance(schema_type, list):
-        non_null = [item for item in schema_type if item != "null"]
-        schema_type = non_null[0] if non_null else "string"
-    if schema_type == "string":
-        return str
-    if schema_type == "integer":
-        return int
-    if schema_type == "number":
-        return float
-    if schema_type == "boolean":
-        return bool
-    if schema_type == "array":
-        return list[Any]
-    if schema_type == "object":
-        return dict[str, Any]
-    return Any
-
-
-def _safe_model_name(tool_name: str) -> str:
-    parts = re.split(r"[^0-9A-Za-z]+", tool_name)
-    body = "".join(part[:1].upper() + part[1:] for part in parts if part)
-    if not body or body[0].isdigit():
-        body = "MCP" + body
-    return f"{body}Args"
 
 
 def _normalize_mcp_result(

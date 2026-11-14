@@ -22,7 +22,7 @@ Procedure 只封装 prepare、confirm、commit、receipt、compensate 和 reconc
 
 **新增或修改 Plan 与 ToolCall 协议时，模型只在工作状态发生变化时更新 Plan，具体工具只接收完成业务动作所需的参数。** 禁止要求模型在每次搜索、读取、写入或智能体调用中重复提交 canonical Plan 已经拥有的步骤标识；这种镜像字段不能增加语义信息，只会扩大服务提供方 Schema、Admission 和恢复失败面。
 
-审阅前只可执行 Policy 投影为 planning-safe 的低风险读取；planning-safe 不等于严格 read-only，其他执行会关闭新 Plan 的审阅迁移。
+普通进度清单可以直接创建和更新。用户要求先审阅时，审阅前只可执行 Policy 投影为 planning-safe 的动作。其他执行会关闭新 Plan 的审阅迁移。
 
 Plan 协议必须遵守以下责任边界：
 
@@ -32,7 +32,7 @@ Plan 协议必须遵守以下责任边界：
 4. 同一活动项下可以连续执行多个动作，不要求逐动作更新 Plan。模型只有在验收条件满足、用户改变目标、新事实要求修订，或需要切换工作项时才提交 Plan 变更。
 5. 与 canonical Plan 完全一致的 Proposal 是幂等 no-op，不创建新版本，也不得阻塞同一 Proposal 中其他合法动作；幂等接受不能替模型完成、切换或改写工作项。
 
-同一未交付任务的 Plan 修订保留身份；新计划的交付边界由 Journal 已接纳的 answer 确定，不从步骤 completed 推导。新计划仍遵守调用方的审阅规则。整体修正与验证范围见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
+空参数读取清单。提交步骤默认替换，合并模式按现有步骤 ID 更新并追加。Journal 保存清单与原生调用回执。同一未交付任务的修订保留身份，新计划边界以 Journal 已接纳的 answer 为准。整体决定见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
 工具或 Command 的成功只产生 Execution Fact。模型可以根据执行事实提出中间工作项完成，但 Admission 只能校验状态迁移；它不能用 Receipt 自动生成语义完成事实。
 
@@ -67,7 +67,7 @@ digest 是冻结 canonical payload 的一致性指纹，不是身份、授权或
 - 用户授权后仍存在独立的 Command 编译、Provider binding 或 Grant 阶段；
 - 两个 digest 有不同 owner、输入字段和信任边界；
 - 系统可机械证明最终执行命令未超出授权；
-- ADR 和 E2E 覆盖重绑定、参数变化、越权拒绝与 replay。
+- ADR 和验收计划覆盖重绑定、参数变化、越权拒绝与 replay。按 [EVD](change-evidence.md#12-按实际影响选择证据)选择相应证据。
 
 若授权内容与最终执行内容相同，禁止使用双 digest。客户端回传服务端生成的 digest 不能替代认证、Policy 或 Confirmation。
 

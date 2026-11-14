@@ -165,9 +165,9 @@ TRANSLATIONS = {
         template="Keep only the one step currently being advanced active; set the other remaining steps to pending.",
     ),
     "conversation.plan.step_binding_repair": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="Omit step_id or set it to null for new steps; retain all current valid IDs and the responsibilities of bound steps. The entire plan remains unchanged.",
+        source_version="v2-list-control",
+        version="v2-list-control-en.1",
+        template="Use a step_id from the current list for an existing step. Omit step_id for a new step. Keep the description of a bound step or add a new step.",
     ),
     "conversation.experiment.submission_missing": PromptTranslation(
         source_version="2026-10-27.v1",
@@ -210,9 +210,13 @@ TRANSLATIONS = {
         template="New research claim references must come from visible evidence coordinates selected this turn; coordinates not selected this turn: {unselected}.",
     ),
     "conversation.plan.step_binding_invalid": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="The complete plan update was rejected: unknown IDs={unknown}; omitted steps={omitted}; changed responsibilities of bound steps={changed_bound}.",
+        source_version="v2-list-control",
+        version="v2-list-control-en.1",
+        template="The task list was not updated. Unknown step IDs: {unknown}. Steps with execution bindings whose descriptions changed: {changed_bound}.",
+    ),
+    "conversation.plan.goal_binding_invalid": PromptTranslation(
+        source_version="v1", version="v1-en.1",
+        template="Each unfinished plan step needs the IDs of the active goal items it serves. Revise the steps using the latest goal.",
     ),
     "conversation.experiment.citations_unbound": PromptTranslation(
         source_version="2026-10-27.v1",

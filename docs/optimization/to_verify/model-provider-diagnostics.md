@@ -14,7 +14,7 @@ LongDS 的 MiMo 第 4 次请求在响应读取阶段抛出 `RemoteProtocolError`
 
 此前两个 429 反事实仅证明 HTTP 错误体诊断链，并未覆盖这类连接／读取异常；原 2/2 成绩保持，本例暴露的是未覆盖边界。已保存证据中的缺失消息和字节不能事后补造。2026-10-23 用户已授权补齐定位信息；本轮先实施下述诊断切片，传输策略及原任务未知消费保持。
 
-源码坐标：[`_provider_diagnostics`](../../../src/personal_agent/infra/structured_model.py)、[`_log_model_failure`](../../../src/personal_agent/application/conversation/service.py)、[正式采集观察器](../../../evals/product_baselines/retrieval_acceptance_server.py)。[本次只读审计](../../../.tmp/mimo-transport-document-audit-20261023/report.json)固定实际请求、失败、源码和当前安装依赖身份。工具调用传输覆盖与下一步取证由[传输记录](../model-provider-transport.md#2026-10-23-longds-工具调用断连与诊断覆盖)拥有。
+源码坐标：[`_provider_diagnostics`](../../../src/personal_agent/infra/structured_model.py)、[`_log_model_failure`](../../../src/personal_agent/application/conversation/service.py)、[历史采集观察器](https://github.com/SkyLiberation/personalAgent/blob/b2c34d90e5476a78282b9884e8edc947509525af/evals/product_baselines/retrieval_acceptance_server.py)。[本次只读审计](../../../.tmp/mimo-transport-document-audit-20261023/report.json)固定实际请求、失败、源码和当前安装依赖身份。工具调用传输覆盖与下一步取证由[传输记录](../model-provider-transport.md#2026-10-23-longds-工具调用断连与诊断覆盖)拥有。
 
 ### 诊断补齐规格与架构分析
 

@@ -1,0 +1,42 @@
+name: toolathlon-verified
+
+services:
+  alita:
+    image: docker.io/lockon0927/toolathlon-task-image:1016beta@sha256:4d04fe4e0a6fdb4946f51bb05120cb44a0eef980231c11252f93b62897afcb9f
+    init: true
+    working_dir: /workspace
+    ports:
+      - "127.0.0.1:18160:10086"
+    volumes:
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/utils:/workspace/utils:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/scripts/decoupled:/workspace/scripts/decoupled:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/scripts/formal_run_v0.json:/workspace/scripts/formal_run_v0.json:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/configs/global_configs_example.py:/workspace/configs/global_configs.py:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/configs/token_key_session_example.py:/workspace/configs/token_key_session.py:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/configs/mcp_servers:/workspace/configs/mcp_servers:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/tasks/finalpool/find-alita-paper/docs:/workspace/tasks/finalpool/find-alita-paper/docs:ro"
+      - "${TOOLATHLON_UPSTREAM_DIR:-../../toolServer/Toolathlon}/tasks/finalpool/find-alita-paper/task_config.json:/workspace/tasks/finalpool/find-alita-paper/task_config.json:ro"
+    command:
+      - bash
+      - -ec
+      - |
+        uv run python -m scripts.decoupled.container_preprocess \
+          --eval_config scripts/formal_run_v0.json \
+          --task_dir finalpool/find-alita-paper \
+          --bundle_file /run/toolathlon-task.json
+        exec uv run python -m scripts.decoupled.container_tool_gateway \
+          --bundle_file /run/toolathlon-task.json
+    healthcheck:
+      test:
+        - CMD
+        - .venv/bin/python
+        - -c
+        - >-
+          import json, sys, urllib.request;
+          response = urllib.request.urlopen('http://127.0.0.1:10086/health', timeout=2);
+          status = json.load(response);
+          sys.exit(0 if set(status['connected_servers']) == {'arxiv_local', 'filesystem', 'scholarly'} else 1)
+      interval: 5s
+      timeout: 3s
+      start_period: 45s
+      retries: 12

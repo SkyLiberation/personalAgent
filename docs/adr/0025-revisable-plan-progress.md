@@ -5,6 +5,18 @@
 - 问题与证据：[拒稿恢复循环 §108](../optimization/revision-feedback-loop.md#108-plan-生命周期整体修正)
 - 前序：[ADR 0016](0016-separate-plan-control-from-action-execution.md)、[ADR 0017](0017-separate-action-selection-from-final-delivery.md)
 
+## 2026-11-11 修订：可读写的进度清单
+
+现有调用在每次修改时要求完整回传清单，新建清单还默认进入用户审阅。两者把持续记录进度和等待用户合在同一个操作中。选用[归档原生计划调用](../../.tmp/ns27/c/sdk/b0f351c763b54cb4a7c798eef1112519.candidate.response.json)核对既有完整提交的兼容性。
+
+采用 Hermes 的读写方式和规则落点。空参数读取当前清单，提交 `steps` 默认替换当前清单，`merge: true` 按步骤 ID 更新和追加。常规创建和更新继续执行。工具描述说明何时维护、如何更新、何时等待。当前计划由 Journal 恢复并直接进入主请求，压缩后只投影待办和进行中项。新读写回执绑定调用当时的完整清单和版本，沿原生工具消息投影。业务进度和工具执行事实各自保持原身份。[Hermes 读写](https://github.com/NousResearch/hermes-agent/blob/f19432adb7ac4aa2920797a7d092d3987012d4b2/tools/todo_tool.py#L26) · [Hermes 压缩后的清单](https://github.com/NousResearch/hermes-agent/blob/f19432adb7ac4aa2920797a7d092d3987012d4b2/agent/conversation_compression.py#L2980)
+
+产品继续提供可审阅计划。模型依据用户要求选择 `wait_for_user`，适用的审阅阶段由 Runtime 校验。保留计划 ID、已提交的执行绑定、最终答案验收和已接纳交付后的计划结算。调用方可继续传原交互模式字段，普通清单的推进统一使用工具参数。
+
+验收先回放既有原生调用，再核对空参数读取、替换、合并、重复读取与写入、同批执行、显式等待、拒绝及压缩后的主请求。以实际请求核对双语工具说明和当轮声明。离线检查只证明确定性路径，模型选用清单的频率和整例用户结果另行验证。
+
+本轮中英文离线回放通过归档调用、空清单、版本化回执、替换与合并、压缩后活动项投影、同批执行及中断续跑检查。显式审阅在同一运行重试时返回原待审计划。一次真实原生决策选择了 `control_working_plan`，提交 6 项和 `wait_for_user: true`，共 3,965 tokens。本次真实请求验证了明确要求审阅时的单次工具选择，完整 Product E2E 尚未执行。[离线回放](../../.tmp/local-tool-schema-doc-20261111/replay_working_plan.py) · [真实请求检查](../../.tmp/local-tool-schema-doc-20261111/live_plan_check.json)
+
 ## 1. 失败与统一责任边界
 
 正式研究用例在模型把三项进度全部标记完成后，连续三个有效读取或搜索提议被
@@ -26,7 +38,7 @@ prepare_final → FinalMessage → 原 Verification / Completion。
 3. 同一未交付任务的 Plan 修订保持身份，不因 completed 重开新计划；新计划边界通过同一身份、
    会话范围内的已接纳 answer 查询确定，不由 goal 文字相似度或步骤状态判断。
 4. 进度完成不自动调用 Final、不自动通过 Verifier。拒稿后模型可以直接补证或重开步骤；
-   仅通过原答案门禁才交付。新计划仍遵守调用方 default/auto 审阅规则。
+   仅通过原答案门禁才交付。新计划的现行审阅规则见本页修订。
 5. 模型输入以中文说明当前进度、可修订性与交付区别，统一替换矛盾的不可重开指令。
    保留来源读取、引用、缺项分类、权限与预算约束。
 

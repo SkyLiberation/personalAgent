@@ -18,6 +18,16 @@
 
 入口并发访问空库时，两个策略事件可能同时初始化审计表。工具治理存储以数据库事务锁串行化该 Schema 初始化。锁只覆盖首次初始化事务，日常审计写入沿既有路径。
 
+### 1.1 工具审计入库的 NUL 处理
+
+**AUD-NUL-1** 要求成功返回的工具结果含 NUL（U+0000）时，正式工具入口仍返回结果并保存审计。Toolathlon `imagenet` 中，PDF MCP 搜索回包里的 NUL 导致 PostgreSQL 拒绝写入 `JSONB`，对话随即返回 HTTP 500。[原始运行](../../.tmp/ta3-1111-122140/run/imagenet/report.json) · [数据库复现](../../.tmp/imagenet-pdf-replay-20261111/report.json)
+
+[PostgreSQL 工具审计存储](../../src/personal_agent/infra/storage/postgres_tool_governance_store.py)在序列化前直接移除入库副本的 NUL，覆盖嵌套字符串、对象键及同源文本列。对象键在移除 NUL 后重名时保留最后一项。其他字符和 JSON 的 `null` 值照常保存。运行时继续消费工具原始结果，存储继续使用既有表和事务。此转换沿用目标数据库写入前清理字符的做法。[Airbyte PostgreSQL 写入实现](https://github.com/airbytehq/airbyte/blob/1b74767395bfd2e13c4c632a640eb4811fab950b/airbyte-integrations/connectors/destination-postgres/src/main/kotlin/io/airbyte/integrations/destination/postgres/write/transform/PostgresValueCoercer.kt#L57-L78)
+
+验收从正式工具 HTTP 入口回放已归档的两条搜索请求，复用相同 PDF、MCP 镜像和真实 PostgreSQL。含 NUL 的搜索须返回 HTTP 200，响应保留工具原文，数据库新增一条移除 NUL 的成功审计。无 NUL 的搜索须保持成功，响应与存入的工具结果相同。该验证覆盖工具派发和审计写入。
+
+2026-11-11 的基线在审计插入时返回 HTTP 500。修复后的两个回放均返回 HTTP 200，各存入一条成功审计。第一条响应仍含原始 NUL，审计副本已移除。第二条审计与响应的工具结果一致。[基线日志](../../.tmp/audit-nul-20261111/baseline/web.log#L91) · [回放报告](../../.tmp/audit-nul-20261111/verified/report.json)
+
 ## 2. LLM Trace 脱敏策略
 
 **LangSmith 默认关闭；启用后也只接收观测投影。** `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，模型调用只上传用途、模型参数、消息数量、字符数、延迟和 token 等摘要，不上传用户消息、模型正文、工具参数或工具结果正文。

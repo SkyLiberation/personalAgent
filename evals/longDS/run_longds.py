@@ -33,6 +33,7 @@ from personal_agent.application.conversation.journal import FileInteractionJourn
 from personal_agent.application.python_execution.models import PythonExecutionAuthorization
 from personal_agent.infra.python_execution.deployment import PythonExecutionDeploymentConfig
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.feature_flags import write_feature_flags
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.contracts.resource import ResourceRef
@@ -71,7 +72,7 @@ LONGDS_OUTCOME = LongDSOutcomeContract(
                      "同请求恢复不重复执行", "总预算耗尽不新增付费调用，未知消费保留且不单独停止"),
     baseline_kind="implementation_failure",
     baseline_ref="docs/optimization/to_verify/longds-analysis.md#6-分阶段验收与停止条件",
-    assertion_owner="evals/product_baselines/longds_judge.py",
+    assertion_owner="evals/longDS/longds_judge.py",
 )
 
 
@@ -180,7 +181,7 @@ def _usage(sdk: Path) -> tuple[int, int, int]:
 
 def _source_paths() -> list[Path]:
     return [*ROOT.joinpath("src").rglob("*.py"),
-            *ROOT.joinpath("evals/product_baselines").glob("*.py"),
+            *Path(__file__).resolve().parent.glob("*.py"),
             Path(__file__).with_name("longds_zh.json"), ROOT / "pyproject.toml"]
 
 
@@ -239,10 +240,7 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
         env.pop(name, None)
     if authorization_file is not None:
         env["PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG"] = str(authorization_file)
-    flags = settings.feature_flags
-    (directory / "feature_flags.toml").write_text(
-        f"[features]\ngoal_verification = {str(flags.goal_verification).lower()}\n"
-        f"answer_verification = {str(flags.answer_verification).lower()}\n", encoding="utf-8")
+    write_feature_flags(directory / "feature_flags.toml", settings.feature_flags)
     return env
 
 
@@ -352,7 +350,7 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
     try:
         with (directory / "server.log").open("wb") as log:
             process = subprocess.Popen(
-                [sys.executable, "-B", "-m", "evals.product_baselines.retrieval_acceptance_server"],
+                [sys.executable, "-B", "-m", "evals.longDS.retrieval_acceptance_server"],
                 cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
             )
             with httpx.Client(base_url=f"http://127.0.0.1:{port}",

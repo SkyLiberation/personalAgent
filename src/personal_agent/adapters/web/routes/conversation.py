@@ -52,11 +52,7 @@ class ConversationTurnRequest(BaseModel):
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
     interaction_mode: ConversationInteractionMode = Field(
         default="default",
-        description=(
-            "default requires review before a new formal plan can execute; "
-            "auto admits a new plan without waiting, then exposes its pending "
-            "steps for bound execution on the next model turn"
-        ),
+        description="Retained for existing callers. Plan review follows the user request and plan action.",
     )
 
 

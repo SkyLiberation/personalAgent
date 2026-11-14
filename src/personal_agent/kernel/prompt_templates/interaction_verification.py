@@ -35,7 +35,7 @@ PROMPTS: dict[str, PromptSpec] = {
 {stage}""",
     ),
     "interaction_verification.action_goal": PromptSpec(
-        name="interaction_verification.action_goal", version="v8-goal-compliance",
+        name="interaction_verification.action_goal", version="v10-goal-snapshot",
         owner="interaction_verifier", output_contract="ActionGoalAssessment",
         template="""## 任务
 
@@ -43,7 +43,7 @@ PROMPTS: dict[str, PromptSpec] = {
 
 ## 判断
 
-- 结合内联代码和绑定文件的 source_code 还原实际程序。source_status 表示挂载脚本内容未提供；只有该脚本承载判断所需逻辑时才因此记未决。数据文件的正文不在输入中。
+- 结合内联代码和已提供的挂载脚本原码还原实际程序。缺失的脚本会注明原因；只有该脚本承载判断所需逻辑时才因此记未决。数据文件的正文不在输入中。
 - 读完整程序，沿变量和数据流追踪实际计算、过滤、比较及可见输出的范围。区分用于探索或准备的中间数据与程序用作交付的结果。允许先读、检查或计算更大的数据范围，只要程序没有把它用作违反目标的交付。当前程序只完成部分步骤、使用其他合法方法或仅在调试，不构成冲突。
 - 先定位当前动作实际承担的交付或比较，再找适用于该交付且仍有效的目标约束。目标若区分输入全集、按规则选出的子集与展示范围，逐一检查输出、比较及汇总所用的集合来自哪一步。若目标明确要求先选取子集再比较，代码直接用全集做差集或比较就是可判断的流程冲突，即使运行后两者碰巧有相同成员。只有在该限制仍适用于当前动作时才作此判断。
 - 比较涉及多个操作数时，逐一从比较位置向上追溯其来源及选择步骤，保留每项可确认且会影响交付的冲突。区分代码中确定缺少的筛选与尚不知真实成员的集合。不根据经验推断集合里有哪些成员。脚本未重算有可能已在此前完成的材料，或者当前只是产生部分中间结果，本身不足以认定其违反目标。
@@ -76,6 +76,11 @@ PROMPTS: dict[str, PromptSpec] = {
         owner="interaction_verifier", output_contract="AnswerGoalAssessment",
         template="#### 待交付回答\n\n提交标识 {submission_id}，回答类型 {disposition}\n\n{draft}",
     ),
+    "interaction_verification.compliance.answer_evidence": PromptSpec(
+        name="interaction_verification.compliance.answer_evidence", version="v2",
+        owner="interaction_verifier", output_contract="AnswerGoalAssessment",
+        template="##### 待交付回答的证据\n\ncited_text 提供引用原文及来源坐标。workspace_execution_facts 是 Runtime 提交的工作区操作状态与路径。按各证据实际覆盖的事实核对回答。\n\n{evidence}",
+    ),
     "interaction_verification.compliance.history_action": PromptSpec(
         name="interaction_verification.compliance.history_action", version="v1",
         owner="interaction_verifier", output_contract="ActionGoalAssessment",
@@ -84,7 +89,7 @@ PROMPTS: dict[str, PromptSpec] = {
     "interaction_verification.compliance.history_answer": PromptSpec(
         name="interaction_verification.compliance.history_answer", version="v1",
         owner="interaction_verifier", output_contract="AnswerGoalAssessment",
-        template="##### 历史回答\n\n提交标识 {submission_id}，回答类型 {disposition}，是否交付 {delivered}\n\n{draft}",
+        template="##### 历史回答\n\n提交标识 {submission_id}，回答类型 {disposition}。{delivered}\n\n{draft}",
     ),
     "interaction_verification.action_goal.pending": PromptSpec(
         name="interaction_verification.action_goal.pending", version="v1",
@@ -190,16 +195,34 @@ PROMPTS.update({
         name='interaction_verification.history.goal_delta', version='v1-goal-draft', owner='interaction_verifier',
         template='## 有效目标到候选目标的实际差异\n\n以下由 Runtime 对比全文生成，供核对改动及删除。用户原话仍是判断依据。\n\n```diff\n{delta}\n```',
         output_contract='GoalVerificationInput'),
-    'interaction_verification.goal': PromptSpec(name='interaction_verification.goal', version='v16-goal-draft', owner="interaction_verifier",
+    'interaction_verification.goal.task_review': PromptSpec(
+        name='interaction_verification.goal.task_review', version='v2-task-evidence', owner="interaction_verifier",
+        template="## 本轮任务归属提议\n\n关系：{action}\n本轮证据：{evidence}\n切换前的任务入口：{current_task_request}\n\n先核对关系是否符合本轮原话和交付对象。continue 延续，start 开始独立任务，side_question 是一次性插问，resume 恢复选中的旧任务。start 和 side_question 时，切换前任务仅用于判断归属。逐项检查新候选的实质条件，包括精度、格式、排序、统计方法及验收条件。要求必须得到本轮用户原话支持，旧规则须由本轮明确引用。可选的实现方法留给执行；候选若把这些方法或旧规则写成义务，按 not_satisfied 指明条件与缺少的依据。后续修订继续检查选中任务仍适用的要求。",
+    ),
+    'interaction_verification.goal.clarification_resolution': PromptSpec(
+        name='interaction_verification.goal.clarification_resolution', version='v1', owner="interaction_verifier",
+        template="""## 应用数据：本次拟关闭的澄清事项
+
+clarification_id {clarification_id} 定位已交付的问题。核对本轮用户引文是否回答该问题或明确撤回。依据不足时报告具体缺口。
+
+原问题
+{question}
+
+本轮用户引文
+{evidence}""",
+    ),
+    'interaction_verification.goal': PromptSpec(name='interaction_verification.goal', version='v20-task-evidence', owner="interaction_verifier",
         template="""## 任务
 
 核验最后一次目标提交是否忠实表达本轮用户任务。此次只审阅任务定义，通过后才允许执行；不验收执行成果或最终回答。
 
-{criteria_json}
+{criteria_text}
 
 ## 输入与判断
 
 用户原话及其仍有效的历史修改是要求依据。当前有效目标、历次目标提交、对应判决及修订都是可纠正的工作记录。按原交互顺序理解它们，不把模型自己的定义或旧通过当成用户要求。
+
+候选 items 列出本轮适用的条目及其验收条件。对照用户原话判断每项要求的适用范围、验收条件和相互关系。尤其核对约束弱化或撤销、execution_control 的解除是否得到本轮用户明确授权。含糊的授权报告依据不足。单纯暂停或限制执行可以先保存执行控制，不要求凭空补齐任务条目。
 
 逐项比较本轮要求与仍有效的历史要求：对象、条件、关系、范围及例外是否保留。对照实际差异检查改动和删除是否有用户依据，并检查全文中受这些改动影响的其他表述。长期要求可在本轮不执行，但不能因此从目标丢失；用户改变或撤销的要求只在指定范围内替换。检查遗漏、范围改变、条件关系替换和新增义务；词语、数字或主题相同不足以证明一致。合法实现方法可以不同。
 
@@ -208,18 +231,18 @@ PROMPTS.update({
 ## 输出
 
 仅返回 Schema 所需的 checks 非空对象数组，每项含具体用户要求 requirement、status 和对应说明 feedback。satisfied 表示目标正确表达该要求；not_satisfied 表示任务定义明确遗漏或改变该要求；insufficient_evidence 表示缺少判断任务定义所必需的前提。反馈指出目标应修订的具体差异，不要求先执行目标，不代写目标。不要用质量形容词或段落标题代替要求，不输出总体分数、总体判决或完整思考过程。只审任务定义，不增加来源审读、程序复核或表达质量义务。""", output_contract="UserRequirementAssessment"),
-    'interaction_verification.answer': PromptSpec(name='interaction_verification.answer', version='v6-goal-compliance', owner="interaction_verifier",
+    'interaction_verification.answer': PromptSpec(name='interaction_verification.answer', version='v9-goal-snapshot', owner="interaction_verifier",
         template="""## 任务
 
 交付前核验当前待交付回答对适用要求的实际遵循。
 
-{criteria_json}
+{criteria_text}
 
 ## 判断范围
 
 逐项核对回答实际交付的结果及其适用的对象、条件、关系、范围和例外。区分不同对象或阶段各自的范围。标题、意图或自称已完成不能代替要求交付的内容。若稿件写明采用了某种方法、输入或精度，直接与适用目标对照。稿件的具体做法与笼统的合规声明冲突时，以具体做法判断。允许符合目标的补充和不同实现方法。历史仅用于理解当前目标引用的前置结果和实际修订，旧反馈不产生新的要求。
 
-只检查回答中可见的交付。外部材料的真伪、工具是否执行以及独立复算均不属于本次检查。无法复查这些事项不能成为退回理由。反馈只指出稿内缺项或偏差，不要求提供证据、原始材料或执行记录供核验。目标明确要求交付材料或说明时，只检查回答是否交付该项。
+按当前有效条目的验收条件核对回答。若用户要求实际执行或产生实际产物，用 Runtime 提供的相关执行结果和产物记录支持判断，证据缺失时指出具体缺口。仅需文本的交付直接核对文本。外部材料鉴真及独立复算不属于本次检查。
 
 answer 是正常交付。clarification_required、limitation 和 failed 分别是澄清、限制与失败说明，检查回答是否清楚交代缺口和未完成内容。有绑定目标时，用目标判断说明所指的事项。
 
@@ -228,7 +251,7 @@ answer 是正常交付。clarification_required、limitation 和 failed 分别�
 仅返回非空 checks，每项包含以下字段。
 
 - requirement 写明适用的目标要求或待核对的说明事项。
-- status 在回答满足时用 satisfied，回答有明确遗漏或冲突时用 not_satisfied。仅当绑定目标缺少判断所需的定义时用 insufficient_evidence。
+- status 在回答满足且所需证据齐全时用 satisfied，回答有明确遗漏或冲突时用 not_satisfied。缺少判断所需的定义或必要执行证据时用 insufficient_evidence。
 - feedback 写明回答中的对应内容或需要修订的具体偏差。目标定义不明确时，指出缺少哪项定义。""", output_contract="AnswerGoalAssessment"),
     'interaction_verification.goal.criteria': PromptSpec(name='interaction_verification.goal.criteria', version='v1', owner="interaction_verifier",
         template='目标必须忠实定义原始用户要求及仍有效历史要求：正确规定要取得和交付什么，而不要求此刻已经执行完成。', output_contract="UserRequirementAssessment"),
@@ -243,3 +266,34 @@ answer 是正常交付。clarification_required、limitation 和 failed 分别�
 })
 
 __all__ = ["PROMPTS"]
+
+
+PROMPTS.update({
+    name: PromptSpec(name=name, version="v1-readable-verification", owner="interaction_verifier", template=template)
+    for name, template in {
+        'interaction_verification.context.failed': '核验未通过。回执 ID 为 `{receipt_id}`。',
+        'interaction_verification.context.criterion': '- 判据「{criterion}」，结论为{status}。{feedback}',
+        'interaction_verification.context.status.satisfied': '满足',
+        'interaction_verification.context.status.not_satisfied': '未满足',
+        'interaction_verification.context.status.insufficient_evidence': '依据不足',
+        'interaction_verification.context.revision': '修订反馈\n{feedback}',
+        'interaction_verification.context.action_id': '历史 Python 调用 ID 为 `{action_id}`。',
+        'interaction_verification.context.input': '输入文件 `{binding_name}` 对应 resource_id `{resource_id}`。',
+        'interaction_verification.context.input_revision': '输入文件版本为 {revision}。',
+        'interaction_verification.context.input_version': '输入文件版本为 {revision}，原文件名 `{filename}`，内容类型 `{media}`。',
+        'interaction_verification.context.code': '本次调用的 Python 原码\n\n{code}',
+        'interaction_verification.context.mounted_code': '挂载脚本 `{binding_name}` 的原码\n\n{code}',
+        'interaction_verification.context.source.unavailable': '无法提供该挂载脚本的原码。',
+        'interaction_verification.context.source.over_budget': '该挂载脚本超过核验输入的源码额度。',
+        'interaction_verification.context.judgment': '动作核验结论为{verdict}。{feedback}',
+        'interaction_verification.context.action.conflict': '明确冲突',
+        'interaction_verification.context.action.no_conflict': '未发现冲突',
+        'interaction_verification.context.action.undetermined': '尚无法判断',
+        'interaction_verification.context.observation': '实际执行状态为{status}。',
+        'interaction_verification.context.stdout': '标准输出原件 resource_id 为 `{resource_id}`，版本 {revision}。',
+        'interaction_verification.context.stream': '实际输出预览（{stream}）\n\n{text}',
+        'interaction_verification.context.delivered': '该回答已交付。',
+        'interaction_verification.context.not_delivered': '该稿件没有交付记录。',
+        'interaction_verification.context.pending_slot': '待验 Python 调用 `{action_id}`，请用槽位 `{slot}` 返回本次判决。',
+    }.items()
+})

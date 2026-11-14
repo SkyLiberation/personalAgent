@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.validators import validator_for
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
@@ -28,7 +29,7 @@ from personal_agent.capabilities.contracts.model import (
     StructuredModelResponse,
     StructuredOutputFailureCode,
 )
-from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.decimal_integer import read_decimal_integer
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.kernel.llm_schemas import model_tool_wire_name, strictify_schema
@@ -46,8 +47,8 @@ from .models import (
     WorkingPlanProposal,
 )
 from .goal_models import (
-    AnalysisGoal, GOAL_PENDING_ACTION_REJECTED, GoalMaintenanceInvocation,
-    GoalReadInvocation, ReadCurrentGoalArguments, RetainGoalArguments, SubmitGoalDraftArguments,
+    GOAL_PENDING_ACTION_REJECTED, SUBMIT_GOAL_PATCH, GoalMaintenanceInvocation, GoalPatchProposal,
+    GoalReadInvocation, ReadCurrentGoalArguments,
 )
 from .tool_requests import (
     CREATE_ARTIFACT_ACTION,
@@ -59,6 +60,7 @@ from .tool_requests import (
 _WORKING_PLAN_TARGET = "working_plan"
 CLARIFICATION_TOOL = "control_request_clarification"
 TEST_MODE_DISABLED_TOOLS = frozenset({CLARIFICATION_TOOL})
+_MODEL_INTEGER_MAX_DIGITS = 18
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _RUNTIME_FIELD_NAMES = frozenset(
     {
@@ -70,23 +72,12 @@ _RUNTIME_FIELD_NAMES = frozenset(
 )
 
 
-def goal_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True,
-                           has_goal: bool = False, draft_refs: tuple[ResourceRef, ...] = ()) -> ModelActionDefinition:
-    name = "conversation.goal.submit_description" if has_goal else "conversation.goal.description"
-    schema = (SubmitGoalDraftArguments if has_goal else AnalysisGoal).model_json_schema()
-    if has_goal and draft_refs:
-        schema["properties"]["resource_id"]["enum"] = [ref.resource_id for ref in draft_refs]
-    return ModelActionDefinition(name="maintain_goal", kind="maintain_goal",
-        target_name="submit_goal_draft" if has_goal else "maintain_goal",
+def goal_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True) -> ModelActionDefinition:
+    name = "conversation.goal.description"
+    return ModelActionDefinition(name=SUBMIT_GOAL_PATCH, kind="maintain_goal",
+        target_name="maintain_goal",
         description=prompts.get(name if verification_enabled else name + "_unverified").template,
-        input_schema=schema, strict=False)
-
-
-def goal_retain_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True) -> ModelActionDefinition:
-    return ModelActionDefinition(name="retain_goal", kind="maintain_goal", target_name="retain_goal",
-        description=prompts.get("conversation.goal.retain_description" if verification_enabled
-                                else "conversation.goal.retain_description_unverified").template,
-        input_schema=RetainGoalArguments.model_json_schema(), strict=False)
+        input_schema=GoalPatchProposal.tool_schema(), strict=False)
 
 
 def goal_read_action_definition(prompts: PromptCatalog) -> ModelActionDefinition:
@@ -125,7 +116,10 @@ def _schema_without_fields(
 
 def _working_plan_action_schema() -> dict[str, Any]:
     schema = deepcopy(WorkingPlanProposal.model_json_schema())
-    schema["properties"]["wait_for_user"] = {"type": "boolean", "default": False}
+    schema["properties"]["wait_for_user"] = {
+        "type": "boolean", "default": False,
+        "description": "Return the plan to the user and pause for review before executing business actions.",
+    }
     # Optional business fields keep their declared defaults; Runtime does not
     # infer waiting intent or new step identities from omitted values.
     return schema
@@ -174,6 +168,7 @@ def build_model_action_definitions(
                 input_schema=(strictify_schema(capability.input_schema)
                               if capability.strict else deepcopy(capability.input_schema)),
                 strict=capability.strict,
+                model_integer_string_fields=capability.model_integer_string_fields,
             )
         )
     for capability in capabilities.agents:
@@ -220,49 +215,34 @@ def _agent_action_schema(
     return projected
 
 
-def model_visible_capability_policy_json(
+def model_visible_capability_policy(
     capabilities: EffectiveCapabilities,
     *,
     definitions: tuple[ModelActionDefinition, ...] | None = None,
     prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> str:
-    """Serialize policy metadata without duplicating action descriptions or schemas."""
-    current = (
-        definitions
-        if definitions is not None
-        else build_model_action_definitions(capabilities, prompts=prompts)
-    )
-    agent_names = {item.target_name: item.name for item in current if item.kind == "agent"}
+    """Describe the constraints that affect selection of the declared actions."""
+    current = definitions if definitions is not None else build_model_action_definitions(capabilities, prompts=prompts)
+    agents = {item.agent_id: item for item in capabilities.agents}
     tools = {item.name: item for item in capabilities.tools}
-    tool_policies = []
+    rules = []
     for action in current:
-        if action.kind != "tool":
-            continue
-        tool = tools[action.target_name]
-        tool_policies.append({
-            "name": action.name,
-            "capability_id": tool.name,
-            "read_only": tool.read_only,
-            "planning_safe": tool.planning_safe,
-            "safely_retryable": tool.safely_retryable,
-            "emits_verified_artifact": tool.emits_verified_artifact,
-        })
-    return json.dumps(
-        {
-            "tools": tool_policies,
-            "agents": [
-                {
-                    "name": agent_names[item.agent_id],
-                    "agent_id": item.agent_id,
-                    "task_types": item.task_types,
-                    "allowed_operations": item.allowed_operations,
-                }
-                for item in capabilities.agents
-            ],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+        if action.kind == "agent":
+            agent = agents[action.target_name]
+            rules.append(prompts.render("conversation.context.agent_policy", action_name=action.name,
+                task_types=", ".join(agent.task_types), operations=", ".join(agent.allowed_operations)))
+        elif action.kind == "tool":
+            tool = tools[action.target_name]
+            notes = [
+                prompts.get(f"conversation.context.policy.{key}").template
+                for key, applies in (
+                    ("planning_safe", tool.planning_safe), ("may_write", not tool.read_only),
+                    ("no_safe_retry", not tool.safely_retryable), ("verified_artifact", tool.emits_verified_artifact),
+                ) if applies
+            ]
+            if notes:
+                rules.append(prompts.render("conversation.context.tool_policy", action_name=action.name, notes=" · ".join(notes)))
+    return "\n".join((prompts.get("conversation.context.declared_tools").template, *rules))
 
 
 def _definition_map(
@@ -380,7 +360,19 @@ def _payload_failure(
 
 
 def _wire_schema_error_details(error: SchemaValidationError) -> tuple[SchemaValidationError, ...]:
-    """Locate invalid fields inside a nullable value without choosing a union branch."""
+    """Locate invalid fields for nullable values and explicitly selected union branches."""
+    if error.validator == "oneOf" and isinstance(error.instance, dict):
+        discriminator = error.schema.get("discriminator", {})
+        tag = error.instance.get(discriminator.get("propertyName"))
+        if isinstance(tag, str):
+            reference = discriminator.get("mapping", {}).get(tag)
+            if reference is not None:
+                branch = next((index for index, schema in enumerate(error.validator_value)
+                               if schema.get("$ref") == reference), None)
+                if branch is not None:
+                    details = tuple(detail for child in error.context if child.schema_path[0] == branch
+                                    for detail in _wire_schema_error_details(child))
+                    return details or (error,)
     alternatives = error.validator_value if error.validator == "anyOf" else ()
     if len(alternatives) != 2 or {"type": "null"} not in alternatives:
         return (error,)
@@ -413,6 +405,15 @@ def _wire_type_repair(
     actual = _JSON_TYPE_NAMES.get(type(error.instance))
     if actual is None:
         return None
+    if expected == "integer":
+        number = read_decimal_integer(error.instance, max_digits=_MODEL_INTEGER_MAX_DIGITS)
+        if (
+            number is not None
+            and not {"$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "if", "not"}.intersection(error.schema)
+            and Draft202012Validator(error.schema).is_valid(number)
+        ):
+            return prompts.render("conversation.action_integer_literal_repair", field_path=field_path,
+                actual_value=json.dumps(error.instance), number=number)
     if expected == "array" and isinstance(error.instance, dict) and len(error.instance) == 1:
         member, value = next(iter(error.instance.items()))
         if isinstance(value, list):
@@ -429,6 +430,28 @@ def _wire_type_repair(
     )
 
 
+def _read_tool_arguments(
+    arguments: dict[str, Any], fields: tuple[str, ...],
+) -> tuple[dict[str, Any], tuple[SchemaValidationError, ...]]:
+    if not fields:
+        return arguments, ()
+    payload = dict(arguments)
+    errors = []
+    for field in fields:
+        value = payload.get(field)
+        number = read_decimal_integer(value, max_digits=_MODEL_INTEGER_MAX_DIGITS)
+        if number is not None:
+            payload[field] = number
+        elif isinstance(value, float) and value.is_integer():
+            # JSON Schema treats integral floats as integers. The opted-in reader
+            # accepts the integer representation and the explicit string form.
+            errors.append(SchemaValidationError(
+                "tool argument requires an integer", validator="type",
+                validator_value="integer", instance=value, path=(field,),
+            ))
+    return payload, tuple(errors)
+
+
 def _wire_payload(
     invocation: ModelActionInvocation,
     definition: ModelActionDefinition,
@@ -436,9 +459,10 @@ def _wire_payload(
     prompts: PromptCatalog,
     reveal_invalid_action_field_names: bool,
 ) -> dict[str, Any]:
-    errors = tuple(
+    payload, reading_errors = _read_tool_arguments(invocation.arguments, definition.model_integer_string_fields)
+    errors = reading_errors + tuple(
         detail
-        for error in Draft202012Validator(definition.input_schema).iter_errors(invocation.arguments)
+        for error in validator_for(definition.input_schema)(definition.input_schema).iter_errors(payload)
         for detail in _wire_schema_error_details(error)
     )
     if errors:
@@ -478,7 +502,7 @@ def _wire_payload(
             error_types=tuple(kind for _, kind in diagnostics),
             repair_hints=tuple(repair_hints),
         )
-    return invocation.arguments
+    return payload
 
 
 def decode_model_action_invocations(
@@ -488,7 +512,7 @@ def decode_model_action_invocations(
     prompts: PromptCatalog = DEFAULT_PROMPTS,
     reveal_invalid_action_field_names: bool = False,
 ) -> ContinueTurnProposal | AnswerResultInvocation | ClarificationInvocation:
-    """Decode provider actions without authorizing, repairing, or executing them."""
+    """Read the declared wire representation and form proposals before admission."""
     if not invocations:
         raise StructuredOutputFailure(
             "agent_interaction_turn",
@@ -544,15 +568,8 @@ def decode_model_action_invocations(
             if definition.kind == "request_clarification":
                 return ClarificationInvocation(call_id=invocation.call_id, **payload)
             if definition.kind == "maintain_goal":
-                if definition.target_name == "retain_goal":
-                    RetainGoalArguments.model_validate(payload)
-                    goal = None
-                elif definition.target_name == "submit_goal_draft":
-                    goal = SubmitGoalDraftArguments.model_validate(payload)
-                else:
-                    goal = AnalysisGoal.model_validate(payload)
                 return ContinueTurnProposal(goal_maintenance=GoalMaintenanceInvocation(
-                    call_id=invocation.call_id, arguments=goal))
+                    call_id=invocation.call_id, arguments=GoalPatchProposal.model_validate(payload).to_patch()))
             if definition.kind == "read_current_goal":
                 return ContinueTurnProposal(goal_read=GoalReadInvocation(
                     call_id=invocation.call_id, arguments=ReadCurrentGoalArguments.model_validate(payload)))
@@ -630,7 +647,7 @@ def decode_model_action_invocations(
 __all__ = [
     "build_model_action_definitions",
     "decode_model_action_invocations",
-    "model_visible_capability_policy_json",
+    "model_visible_capability_policy",
 ]
 
 
@@ -639,8 +656,7 @@ def provider_action_feedback(
     goal_maintenance_actions: tuple[str, ...] | None = None,
 ) -> DecisionFeedback:
     read_error = error.action_kind == "read_current_goal" or error.action_name == "read_current_goal"
-    retain_error = error.action_name == "retain_goal"
-    goal_error = read_error or error.action_kind == "maintain_goal" or error.action_name == "maintain_goal"
+    goal_error = read_error or error.action_kind == "maintain_goal" or error.action_name == SUBMIT_GOAL_PATCH
     message = prompts.get("conversation.action_protocol_rejected").template
     repair = prompts.get("conversation.action_protocol_repair").template
     reason_code = error.reason_code
@@ -653,8 +669,7 @@ def provider_action_feedback(
     elif goal_error:
         message = prompts.render("conversation.goal.rejected", reason_code=error.reason_code,
             details_json=json.dumps({"field_paths": error.field_paths, "error_types": error.error_types}))
-        repair = prompts.get("conversation.goal.read_repair" if read_error else
-                             "conversation.goal.retain_repair" if retain_error else "conversation.goal.repair").template
+        repair = prompts.get("conversation.goal.read_repair" if read_error else "conversation.goal.repair").template
     elif error.action_kind == "request_clarification":
         repair = prompts.get("conversation.clarification.repair").template
     if error.repair_hints:

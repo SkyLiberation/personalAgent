@@ -100,18 +100,6 @@ PROMPTS = {
         template='该知识条目已删除。',
         owner="conversation",
     ),
-    'conversation.service.intent_request_incomplete': PromptSpec(
-        name='conversation.service.intent_request_incomplete',
-        version='2026-10-27.v1',
-        template='研究意图模型调用未完成；已保留已知消费。',
-        owner="conversation",
-    ),
-    'conversation.service.intent_protocol_invalid': PromptSpec(
-        name='conversation.service.intent_protocol_invalid',
-        version='2026-10-27.v1',
-        template='研究意图的结构化输出未满足协议；已保留已知消费。',
-        owner="conversation",
-    ),
     'conversation.service.background_unavailable': PromptSpec(
         name='conversation.service.background_unavailable',
         version='2026-10-27.v1',
@@ -219,8 +207,8 @@ PROMPTS = {
         template='当前原件 `{resource_id}` 的省略部分尚未查阅，本轮暂不能以 `{disposition}` 结束。',
     ),
     'conversation.service.artifact_refetch': PromptSpec(
-        name='conversation.service.artifact_refetch', version='v1', owner='conversation',
-        template='相同请求已产生外置原件 `{resource_id}`。重复抓取无法看到被省略的内容。',
+        name='conversation.service.artifact_refetch', version='v2', owner='conversation',
+        template='重复工具调用，本次未执行。',
     ),
     'conversation.service.artifact_repair_read': PromptSpec(
         name='conversation.service.artifact_repair_read', version='v1', owner='conversation',

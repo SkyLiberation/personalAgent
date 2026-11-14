@@ -117,6 +117,7 @@ from personal_agent.application.conversation import (
 from personal_agent.application.conversation.knowledge_reading import (
     ConversationKnowledgeReadAdapter,
 )
+from personal_agent.application.conversation.budget import ConversationBudget
 from personal_agent.orchestration.runtime_admin import _protected_eval_graph_group_ids
 from personal_agent.orchestration.capability_inventory import (
     build_runtime_capability_inventory,
@@ -438,8 +439,10 @@ class AgentRuntime:
             knowledge_reader=ConversationKnowledgeReadAdapter(self.knowledge_service),
             knowledge_lifecycle=self.knowledge_lifecycle_service,
             workspace_changes=workspace_changes,
-            budget_policy=LoopBudgetPolicy(
-                **self.settings.interaction_loop.model_dump()
+            budget=ConversationBudget(
+                LoopBudgetPolicy(**self.settings.interaction_loop.model_dump()),
+                conversation_journal,
+                python_authorization,
             ),
             journal=conversation_journal,
             experiment_deployment=experiment_deployment,

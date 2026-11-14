@@ -304,8 +304,24 @@ class GoalComplianceAnswerContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["answer"] = "answer"
     rounds: tuple[str, ...] = Field(min_length=1)
+    cited_units: tuple[CitedDraftUnit, ...] = ()
+    workspace_execution_facts: tuple[str, ...] = ()
     submission_id: str = Field(min_length=1)
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]
+
+
+class GoalClarificationReview(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    clarification_id: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+
+
+class GoalTaskReview(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    action: Literal["continue", "start", "side_question", "resume"]
+    evidence: str | None = None
+    current_task_request: str | None = None
 
 
 class VerificationContext(BaseModel):
@@ -317,9 +333,13 @@ class VerificationContext(BaseModel):
     active_goal: str | None = None
     binding: str = Field(pattern=r"^[0-9a-f]{64}$")
     goal_verification_enabled: bool = True
+    clarification_resolution: GoalClarificationReview | None = None
+    task_review: GoalTaskReview | None = None
 
     @model_validator(mode="after")
     def _turn_order(self):
+        if (self.clarification_resolution is not None or self.task_review is not None) and self.kind != "goal":
+            raise ValueError("only goal verification reviews goal maintenance proposals")
         if tuple(item.user_turn for item in self.turns) != tuple(range(1, len(self.turns) + 1)):
             raise ValueError("verification history must follow user-question order")
         if any((turn.question is not None) != (self.kind == "goal") for turn in self.turns):

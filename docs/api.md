@@ -307,6 +307,8 @@ Web 响应由 `ConversationTurnResponse` 定义，包含 `interaction_run_ref`�
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
 
+用户要求先审阅时，`plan_ready` 返回待审 `working_plan`。同一运行重试可取得原待审计划。请求继续接受 `interaction_mode` 字段，清单是否暂停由用户要求和计划工具的 `wait_for_user` 决定。[工作清单工具](context/local-tools.md#5-conversation-直接声明的本地动作)
+
 Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、reason_code、failure_stage、retryable；可得时附 provider_status_code／provider_response_complete。模型输出协议无效投影本地 502，请求超时 504，实际临时过载 503，本地实现或持久化异常 500；明确输入校验、权限和冲突仍沿各自契约。**本地 HTTP 状态不是上游实际状态。** 例如完整模型响应无法按当前输出协议消费时：
 
 ```json

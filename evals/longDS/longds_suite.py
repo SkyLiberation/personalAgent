@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from personal_agent.kernel.config import Settings
+from personal_agent.kernel.feature_flags import FeatureFlags, write_feature_flags
 
 from .longds_judge import JudgeScoreReport, MeteredJudge, require_qualification, score
 from .longds_judge_config import LongDSJudgeSettings, build_judge_configuration
@@ -225,10 +226,11 @@ def configure(output: Path) -> Settings:
     legacy_verification = expected["answer_result"].get("verification", "required")
     flags = expected.get("feature_flags", {"goal_verification": True,
                                          "answer_verification": legacy_verification == "required"})
+    effective_flags = FeatureFlags.model_validate(flags)
     flag_path = (output / "feature_flags.toml").resolve()
-    flag_path.write_text("[features]\n" + "".join(
-        f"{key} = {str(value).lower()}\n" for key, value in flags.items()), encoding="utf-8")
-    expected = {**expected, "answer_result": {"writer": writer}, "feature_flags": flags}
+    write_feature_flags(flag_path, effective_flags)
+    expected = {**expected, "answer_result": {"writer": writer},
+                "feature_flags": effective_flags.model_dump(mode="json")}
     if (settings.structured.model != expected["structured"]["model"]
             or settings.openai.model != expected["openai"]["model"]
             or settings.structured.extra_body != expected["structured"]["extra_body"]):
@@ -262,9 +264,9 @@ def _sources_unchanged(output: Path) -> bool:
 
 
 def _check_windows_paths(output: Path) -> None:
-    invocation = ("server-data/interaction_runs/irun_" + "f" * 32 + "/model_invocations/"
-        + "f" * 32 + "/000000." + "f" * 32 + ".response.json")
-    paths = [output / "t23/capture/checkpoint-17" / invocation]
+    invocation = Path("server-data/interaction_runs") / ("irun_" + "f" * 32) / ("f" * 32)
+    temporary = invocation / ("." + "f" * 12 + ".tmp")
+    paths = [output / "t23/capture/checkpoint-17" / temporary]
     paths.extend(output / "t23/capture/source-snapshot" / p.relative_to(ROOT) for p in _source_paths())
     if os.name == "nt" and max(len(str(p)) for p in paths) >= 260:
         raise ValueError("当前归档路径超过Windows安全长度，请使用更短的输出根")

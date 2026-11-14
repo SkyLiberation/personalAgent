@@ -14,6 +14,7 @@ class InteractionToolDefinition(BaseModel):
     description: str
     input_schema: dict[str, object]
     strict: bool = True
+    model_integer_string_fields: tuple[str, ...] = ()
     read_only: bool
     planning_safe: bool
     safely_retryable: bool

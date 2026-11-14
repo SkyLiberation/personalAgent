@@ -1,5 +1,11 @@
 # ADR 0048：Conversation 持续执行目标与每轮前置处理
 
+2026-11-13 补充决定。所有 Conversation 运行统一消费目标前置、任务历史和相应核验。旧独立意图分类与配置退役，交付方式及验收条件通过 Goal 维护。既有动作权限、Python 授权和研究结果契约按各自入口继续约束执行。迁移和验收见[统一主循环规格](../optimization/to_verify/analysis-goal-maintenance.md#统一-conversation-主循环)。以下先前适用范围均为历史。
+
+2026-11-13 决定：将原会话级 Goal 链替换为任务级链。同一 Conversation Journal 的首个接纳操作同时绑定该轮任务，现有会话锁及条件更新负责原子接纳。沿用 Goal 身份作为任务身份。任务归属由原维护模型提议，按现行配置交原 Goal 核验。执行、恢复、计划与核验消费选中任务。完整设计、原题验收及当前状态见[任务切换上下文](../context/agent-loop.md#同一对话中的任务切换)。
+
+2026-11-12，目标状态和模型提交协议由[增量目标契约](../optimization/to_verify/analysis-goal-maintenance.md#当前改造版本化目标条目和增量提交)更新。保留原 Journal、会话分支和核验门禁。模型按版本提交条目操作，Journal 校验原提议并原子写入。执行限制独立保存，按当前范围派发动作。旧单正文和文稿协议及其结果保留为以下历史。
+
 日期：2026-11-02更新。§9.12历史状态：按用户批准的[Spec §9.12](../optimization/to_verify/analysis-goal-maintenance.md#912-单正文的任务定义与四项内容核验)已实施单字段四段内容及四项目标核验，空会话前三轮3/3交付，原分[1,0,0]、用户结果通过／失败／失败。接入成立而语义验收失败，见[记录§32](../optimization/to_verify/verify_results/analysis-correctness.md#32-单正文四项内容契约的空会话连续前三轮)。原§9.11分数[1,0,1]和用户结果通过／失败／失败保持历史身份，不能证明新语义效果。
 
 2026-11-03当前契约由[Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)拥有：目标定义核验与回答交付核验使用独立任务及相关历史，原Journal、目标写入前门禁及反馈回环保持。已接入并完成新连续前三轮，原分[1,1,1]、用户结果通过／通过／失败，见[记录§34](../optimization/to_verify/verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)；旧统一核验第一轮误拒与正常答案0由[记录§33](../optimization/to_verify/verify_results/analysis-correctness.md#33-逐项用户要求核验的空会话连续前三轮)保留。

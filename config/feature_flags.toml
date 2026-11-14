@@ -9,3 +9,5 @@
 goal_verification = true
 # 是否接入回答核验器。
 answer_verification = true
+# 是否在主模型的新请求中提示本 run 的 token 余额低于 10%。
+low_budget_warning = true

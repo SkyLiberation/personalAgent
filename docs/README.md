@@ -14,7 +14,10 @@ personalAgent 是个人知识智能体 Runtime。用户表达目标，系统协�
 | [`agentRef/`](agentRef/README.md) | 按组件组织的外部机制检索与分级参考；不定义本工程现状、路线或采用结论 |
 | [`experience/`](experience/README.md) | 已发生问题的快速识别与排查经验；标明适用范围、原始证据和结论边界，不替代生产契约或正式评测 |
 | [`problems/longDS.md`](problems/longDS.md) | LongDS Task 2 的问题归因与原始证据入口 |
+| [`problems/toolathlon-verifierd.md`](problems/toolathlon-verifierd.md) | Toolathlon-Verified 历次已运行用例的问题汇总与逐例证据 |
+| [`problems/toolathlon-verified.md`](problems/toolathlon-verified.md) | Toolathlon-Verified 分批评测记录、启动问题与原始归档入口 |
 | [`context/`](context/README.md) | 按模型任务维护上下文模式、输入顺序、反馈修复与源码检索入口；预期要求、实现及验证状态分开记录 |
+| [`budge/`](budge/README.md) | 对话、模型请求与专项任务的预算速查，链接对应配置和执行契约 |
 | [`architecture/`](architecture/README.md) | 现行全局架构、代码地图与横切机制的权威正文；作为后续设计和开发的框架基线 |
 | [`mcpDesign/`](mcpDesign/README.md) | MCP 客户端、Server 接入及 Toolathlon 评测隔离的候选设计与验收规格 |
 | `topics/` | 入口、运行系统、工具、记忆、上下文、检索与验收的详细契约，入口见下方主题表 |

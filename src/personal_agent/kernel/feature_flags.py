@@ -10,6 +10,7 @@ class FeatureFlags(BaseModel):
 
     goal_verification: StrictBool = True
     answer_verification: StrictBool = True
+    low_budget_warning: StrictBool = False
 
 
 class _FeatureFlagDocument(BaseModel):
@@ -25,3 +26,8 @@ def load_feature_flags(path: Path = Path("config/feature_flags.toml")) -> Featur
     if flags.model_fields_set != set(FeatureFlags.model_fields):
         raise ValueError(f"feature flag 配置必须包含全部开关：{path}")
     return flags
+
+
+def write_feature_flags(path: Path, flags: FeatureFlags) -> None:
+    values = (f"{key} = {str(value).lower()}\n" for key, value in flags.model_dump().items())
+    path.write_text("[features]\n" + "".join(values), encoding="utf-8")

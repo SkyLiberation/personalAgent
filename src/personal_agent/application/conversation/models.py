@@ -45,7 +45,7 @@ from personal_agent.application.python_execution.models import (
 )
 from .tool_requests import WriteArtifactArgs
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey, VerificationHistoryCheckpoint
-from .goal_models import AnalysisGoalRef, GoalMaintenanceInvocation, GoalOperationRecord, GoalReadInvocation
+from .goal_models import AnalysisGoalRef, GoalItemId, GoalMaintenanceInvocation, GoalOperationRecord, GoalReadInvocation
 
 
 ConversationInteractionMode = Literal["default", "auto"]
@@ -82,8 +82,13 @@ class ConversationMessage(_StrictModel):
         return content
 
 
+WORKING_PLAN_MAX_STEPS = 12
+
+
 class WorkingPlanStepProposal(_StrictModel):
     step_id: str | None = Field(default=None, min_length=1, max_length=100)
+    goal_item_ids: tuple[GoalItemId, ...] | None = Field(default=None, max_length=32,
+        description="Active goal item IDs this step serves. Omit only to keep an existing step's IDs or when there is no structured goal.")
     description: str = Field(
         min_length=1,
         max_length=1_000,
@@ -93,29 +98,37 @@ class WorkingPlanStepProposal(_StrictModel):
             "state only a search, read, tool call, or other activity."
         ),
     )
-    status: Literal["pending", "in_progress", "completed"] = "pending"
+    status: Literal["pending", "in_progress", "completed", "cancelled"] = "pending"
 
 
 class WorkingPlanProposal(_StrictModel):
-    """A short-horizon user-visible contract for unresolved result obligations.
-
-    Propose this without waiting for the user to name planning when it materially
-    prevents omission, repeated work, or loss across a budget, context, process,
-    or user-turn boundary. It is not required merely because several actions are
-    possible.
-    """
-
-    goal: str = Field(min_length=1, max_length=4_000)
-    grounding: str = Field(
-        default="",
+    goal: str | None = Field(
+        default=None, min_length=1, max_length=4_000,
+        description="The plan goal. Required for a new plan. Omit to keep the current goal.",
+    )
+    grounding: str | None = Field(
+        default=None,
         max_length=4_000,
         description=(
             "Observed facts, constraints, trade-offs, and source references that "
             "justify this plan. State evidence already learned here; do not turn it "
-            "into a future activity step. Leave empty when no grounding was needed."
+            "into a future activity step. Omit to keep the current basis or use an empty string to clear it."
         ),
     )
-    steps: tuple[WorkingPlanStepProposal, ...] = Field(min_length=1, max_length=12)
+    steps: tuple[WorkingPlanStepProposal, ...] | None = Field(
+        default=None, max_length=WORKING_PLAN_MAX_STEPS,
+        description="Steps to save. Omit all arguments to read the current plan.",
+    )
+    merge: bool = Field(
+        default=False,
+        description="True updates existing steps by ID and appends new steps. False replaces the list.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_read_arguments(self) -> "WorkingPlanProposal":
+        if self.steps is None and (self.goal is not None or self.grounding is not None or self.merge):
+            raise ValueError("writing a working plan requires steps")
+        return self
 
 
 class ConversationWorkingPlanStep(_StrictModel):
@@ -129,8 +142,9 @@ class ConversationWorkingPlanStep(_StrictModel):
             "The admitted verifiable work result and its explicit completion condition."
         ),
     )
-    status: Literal["pending", "in_progress", "completed", "superseded"]
+    status: Literal["pending", "in_progress", "completed", "cancelled", "superseded"]
     completion_action_ids: tuple[str, ...] = ()
+    goal_item_ids: tuple[GoalItemId, ...] = ()
 
 
 class ConversationWorkingPlan(_StrictModel):
@@ -140,7 +154,7 @@ class ConversationWorkingPlan(_StrictModel):
     revision: int = Field(ge=1)
     goal: str = Field(min_length=1, max_length=4_000)
     grounding: str = Field(default="", max_length=4_000)
-    steps: tuple[ConversationWorkingPlanStep, ...] = Field(min_length=1, max_length=12)
+    steps: tuple[ConversationWorkingPlanStep, ...] = Field(max_length=WORKING_PLAN_MAX_STEPS)
 
     @model_validator(mode="after")
     def _has_at_most_one_active_step(self) -> "ConversationWorkingPlan":
@@ -280,11 +294,7 @@ class SubmittedFinal(_StrictModel):
 
 
 class ContinueTurnProposal(_StrictModel):
-    """Continue required work through actions, a coordination boundary, or both.
-
-    A new formal working plan waits for user review in default interaction mode.
-    It may use ``wait_for_user=false`` only in caller-selected auto mode.
-    """
+    """Continue required work through actions, a coordination boundary, or both."""
 
     kind: Literal["continue_turn"] = "continue_turn"
     actions: tuple[ActionProposal, ...] = ()
@@ -308,6 +318,7 @@ class EffectiveToolCapability(_StrictModel):
     description: str
     input_schema: dict[str, Any]
     strict: bool = True
+    model_integer_string_fields: tuple[str, ...] = ()
     read_only: bool
     planning_safe: bool
     safely_retryable: bool
@@ -329,22 +340,11 @@ class EffectiveCapabilities(_StrictModel):
 
 
 class ReviewCriteria(_StrictModel):
-    """The frozen standard one interaction's answer is verified against.
-
-    Derived by the runtime once per interaction and committed, so neither a later
-    model turn nor a restart can move the standard the answer is measured by.
-    ``ungrounded_spans`` keeps the dropped derivations visible: a turn that could
-    not trace any criterion to the user is distinguishable from one that was
-    never a review request.
-
-    Standalone direct analysis does not derive this contract. Its empty value
-    leaves task understanding in the main model and authority in user messages.
-    """
+    """Read-only delivery projection of the current accepted Goal."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     criteria: tuple[str, ...] = ()
-    ungrounded_spans: tuple[str, ...] = ()
     interaction_phase: ConversationInteractionPhase = "ordinary"
 
     @property
@@ -355,14 +355,13 @@ class ReviewCriteria(_StrictModel):
     def plan_review_required(self) -> bool:
         return self.interaction_phase == "review_plan"
 
-    @property
-    def final_result_required(self) -> bool:
-        return self.interaction_phase == "deliver_final_result"
-
 
 class ActionProtocolDiagnostic(_StrictModel):
     field_path: str
     error_type: str
+
+
+OFFLOADED_OUTPUT_REFETCH = "offloaded_output_refetch"
 
 
 class DecisionFeedback(_StrictModel):
@@ -452,6 +451,7 @@ class _AcceptedToolRequest(_StrictModel):
     execution_scope: ExecutionScope
     request_digest: ContentDigest
     plan_step_id: str | None = None
+    goal_ref: AnalysisGoalRef | None = None
 
 
 class AcceptedArtifactToolRequest(_AcceptedToolRequest):
@@ -651,11 +651,14 @@ class ResearchExperimentDelivery(_StrictModel):
 class ModelCallDisposition(_StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     call_id: str = Field(min_length=1)
-    operation: Literal["working_plan", "answer_result", "knowledge_save", "knowledge_delete", "maintain_goal",
+    operation: Literal["working_plan", "read_working_plan", "answer_result", "knowledge_save", "knowledge_delete", "maintain_goal",
                        "read_current_goal", "request_clarification"]
     status: Literal["accepted", "deferred", "prepared"]
     plan_id: str | None = None
     plan_revision: int | None = Field(default=None, ge=1)
+    working_plan_snapshot: ConversationWorkingPlan | None = None
+    plan_waiting: bool = False
+    plan_review_message: str | None = Field(default=None, min_length=1)
     operation_ref: str | None = None
 
     @model_validator(mode="after")
@@ -664,6 +667,17 @@ class ModelCallDisposition(_StrictModel):
             raise ValueError("plan disposition requires both identity and revision")
         if self.operation == "working_plan" and self.status == "accepted" and self.plan_id is None:
             raise ValueError("accepted plan disposition requires its canonical version")
+        if self.working_plan_snapshot is not None and (
+            self.operation not in ("working_plan", "read_working_plan")
+            or self.status != "accepted"
+            or (self.plan_id, self.plan_revision)
+            != (self.working_plan_snapshot.plan_id, self.working_plan_snapshot.revision)
+        ):
+            raise ValueError("working plan snapshot must match its accepted call and version")
+        if self.plan_waiting and (self.operation != "working_plan" or self.working_plan_snapshot is None):
+            raise ValueError("waiting for plan review requires an accepted plan snapshot")
+        if self.plan_review_message is not None and not self.plan_waiting:
+            raise ValueError("a plan review message requires a waiting plan")
         if self.status == "prepared":
             if self.operation not in ("knowledge_save", "knowledge_delete") or self.operation_ref is None:
                 raise ValueError("prepared operation requires its canonical operation reference")
@@ -880,16 +894,31 @@ class InteractionTrace(_StrictModel):
     concurrent_batches: tuple[tuple[str, ...], ...] = ()
     context_composition: tuple[TurnContextComposition, ...] = ()
     model_decisions: tuple[ModelDecisionRecord, ...] = ()
-    review_criteria: ReviewCriteria | None = None
     final_message: FinalMessage | None = None
     knowledge_save_operation: ConversationKnowledgeSaveOperation | None = None
     knowledge_delete_command_ref: str | None = None
     workspace_changes: tuple[WorkspaceChangeOperation, ...] = ()
     working_plan: ConversationWorkingPlan | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def read_retired_intent_metadata(cls, value):
+        if not isinstance(value, dict):
+            return value
+        fields = {key: item for key, item in value.items() if key != "review_criteria"}
+        flags = fields.get("feature_flags_binding")
+        if isinstance(flags, dict) and "interaction_intent_classification" in flags:
+            fields["feature_flags_binding"] = {key: item for key, item in flags.items()
+                                               if key != "interaction_intent_classification"}
+        return fields
+
     @property
     def python_profile_digest(self) -> ContentDigest | None:
         return self.python_authorization_digest or self.deployment_digest
+
+    @property
+    def first_goal_operation(self) -> GoalOperationRecord | None:
+        return next((item for item in self.goal_operations if item.operation != "read"), None)
 
     @model_validator(mode="after")
     def execution_authorization_is_bound(self) -> InteractionTrace:

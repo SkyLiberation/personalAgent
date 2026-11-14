@@ -2,6 +2,10 @@
 
 ## Toolathlon MCP 验证
 
+Toolathlon 的隔离产品进程关闭前置意图分类。各场景按自己的核验配置运行，生成的 `feature_flags.toml` 随结果保存。
+
+需要上游任务材料或验证聚合网关时，按[本地部署说明](../../evals/Toolathlon/DEPLOYMENT.md)准备固定版本的独立检出。
+
 从仓库根运行。Time 镜像使用 Toolathlon 锁定的 Time Server 依赖。每个场景创建独立数据库、产品进程和工具容器。`protocol_and_lifecycle_passed` 评价接线与生命周期。`--model-env` 可追加一次正式对话并归档答复及模型请求声明。
 
 ```powershell
@@ -38,6 +42,63 @@ $env:PYTHONPATH = (Join-Path (Get-Location) "src")
 `approval_passed` 核对正式确认和实际 MCP 派发，`workspace_passed` 核对外部文件终态，`answer_passed` 核对产品交付。完整样本还记录上游评分退出码和文件内容摘要。
 
 
+PDF 文件交付样本使用同一独立环境。原件挂载为只读，模型将新文件写入本次输出目录。用例运行固定的上游评分器，并在报告中分别记录真实工具预检、产品答复和文件评分。 PDF 页范围的两个整数字段通过本地映射启用[模型参数读取约定](../context/runtime-feedback.md#显式允许的整数表示)，原题和评分条件沿用上游。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.pdf_cases --scenario imagenet --upstream toolServer/Toolathlon --model-env .env --output .tmp/pdf-imagenet
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.pdf_cases --scenario detect-revised-terms --upstream toolServer/Toolathlon --model-env .env --output .tmp/pdf-revised
+```
+
+### SerpApi 地图工具
+
+地图用例可以使用 [SerpApi 地图适配器](../../evals/Toolathlon/serpapi_maps.py)。从仓库根目录运行以下命令，`$toolathlonNetwork` 取本次样本网关与评分器使用的 Docker 网络。服务容器使用评测镜像中的 MCP SDK，结束本次运行后按返回的容器 ID 回收。
+
+```powershell
+$env:SERP_API = [Environment]::GetEnvironmentVariable('SERP_API', 'Machine')
+$mapsAdapter = (Resolve-Path 'evals/Toolathlon/serpapi_maps.py').Path
+docker run --rm -d --network $toolathlonNetwork --network-alias serpapi-maps -e SERP_API --mount "type=bind,source=$mapsAdapter,target=/run/serpapi_maps.py,readonly" --entrypoint /workspace/.venv/bin/python lockon0927/toolathlon-task-image:1016beta -B /run/serpapi_maps.py
+```
+
+在网关和通过 `MCPServerManager` 查询地图的评分器容器启动参数中，将 [SerpApi MCP 配置](../../evals/Toolathlon/serpapi_maps.yaml)只读挂载到 `/workspace/configs/mcp_servers/google_map.yaml`。网关工具名使用 `google_map-` 前缀，产品映射使用 `google_map.` 前缀，后缀为 `maps_directions`、`maps_search_places`、`maps_place_details` 或 `maps_distance_matrix`。权限为读取，外部请求使用服务凭据。报告须记录 SerpApi 作为地图服务方。判据见 [MCP 接入 Spec](../mcpDesign/README.md#533-serpapi-地点与距离矩阵)。
+
+### 对话预算
+
+工作区和 PDF 用例从 `--model-env` 指定的配置读取累计 token、主决策轮数和工具调用上限。使用仓库的 `.env` 时，两类用例均采用[本地对话预算](../env.md#对话运行预算)。命令行的 `--model-budget`、`--model-turns` 和 `--tool-calls` 分别覆盖对应字段，文件中缺失的值采用 Runtime 默认配置。每个用例的报告记录三个生效值。
+
+预算装配验收核对同一配置文件在工作区和 PDF 入口启动的子进程，以及批量入口的逐项覆盖。对照使用缺少预算字段的配置，核对 Runtime 默认值。以子进程读取到的预算为准。
+
+2026-11-11 核对 `arrange-workspace`、`imagenet` 和 `detect-revised-terms` 的批量参数与实际子进程配置。三例读取同一 `.env` 时均为 32 轮、48 次工具调用、2,000,000 tokens。单项覆盖、三项覆盖及缺失字段回退均通过。该检查覆盖预算配置，模型调用为零。[配置验证报告](../../.tmp/toolathlon-budget-20261111/report.json)
+
+### 多用例并行执行
+
+批量入口接收用空格分隔的用例列表，按 `--workers` 限制同时运行的用例数，默认是 2。从仓库根运行，`--output` 须指向新目录。可用用例名称见 `--help`。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.parallel imagenet detect-revised-terms --workers 2 --model-env .env --output .tmp/tap
+```
+
+每个用例由独立子进程调用原单用例 CLI，继续使用该入口的产品配置、工具映射和评分器。产品子进程自行绑定 Web 端口，并在退出前持有端口。工作区和 PDF 用例要求 `--model-env`。`--upstream` 默认是 `toolServer/Toolathlon`。批量入口向工作区和 PDF 用例转发三个对话预算参数。
+
+每个用例的产物和原报告保存在批次目录下的同名子目录，子进程日志保存在同名 `.log` 文件。批次 `report.json` 按输入顺序记录每个用例的执行时间、退出码及证据位置。单例失败后继续调度其余用例。所有子进程退出码均为 0 时批次返回 0，否则返回 1。
+
+调度验收使用已有 Time 接线和启动拒绝场景，核对真实子进程重叠、独立报告及原有判据。另用一个无效 Time 镜像与一个正常 Filesystem 探针同批运行，核对失败后其余用例仍完成、批次返回非零。
+
+### Redis Helm 官方 Agent 对照
+
+`k8s-redis-helm-upgrade` 用于观察同一 MiniMax-M3.1-Flash 在 Toolathlon 官方 Agent 与 personalAgent 中如何推进 Redis Helm 升级。历史 personalAgent 样本在累计 200 万 token 后结束，官方评分为 0.8。待验证的问题是官方 Agent 是否会提交升级，以及它在镜像检查、配置迁移、工具拒绝和验收上的实际路径。
+
+1. 复用固定版本的上游预处理、Kubernetes／终端／文件系统 MCP 网关和 Redis 评分器。每次建独立 Kind 集群，使用同一原题与工作区说明，初始 Chart 为 `19.0.0`。上游评分器负责核对目标 `22.0.0`、自定义配置和服务状态。
+2. 从仓库根调用 `evals.Toolathlon.compare.redis_helm`。入口使用现有 Docker 容器辅助函数，将上游官方单轮 Agent 连接到本次网关，模型配置从 `--model-env` 读取。`--model-turns` 设置官方 Agent 的内部决策轮数，默认 32。两边的会话等待上限均为 600 秒。历史 personalAgent 使用 32 轮、48 次工具调用和 200 万累计 token。对照保留双方 Prompt、工具协议和预算差异，结论以实际轨迹及评分为准。
+3. 先核对入口参数、历史报告与固定版本，然后串行运行官方样本。首次使用上游默认 SSE 等待时间，真实终端调用多次在 5 秒时超时。后续用 `--mcp-session-timeout 90` 为终端自身的 60 秒命令上限预留回包时间，其余 Agent 行为沿用上游。两次运行分别归档。评分记录 Agent 终态、升级版本与官方分数，同时保存可取得的模型请求数、token、工具调用、耗时、原始轨迹及校验和。结果归档在 `.tmp/`，可选的 `--personal-run` 指向已有 personalAgent 用例目录。
+
+```powershell
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.compare.redis_helm --model-env .env --output .tmp/ta-redis-compare --mcp-session-timeout 90 --personal-run .tmp/ta27-1113-k8s/final-redis-helm-upgrade/k8s-redis-helm-upgrade
+```
+
+本地入口启动上游 `scripts.decoupled.host_agent_loop`，任务与评分来自上游 `9be8d8fe07a497b18ee61e3f2ae694e9797f39eb`。`--check-only` 核对版本、模型与历史输入，不启动容器。实际对照结果见[历次评测问题汇总](../problems/toolathlon-verifierd.md#redis-helm-官方-agent-对照)。
+
+扩大预算的对照为两个 Agent 各执行一次 64 轮样本，沿用同一模型、原题、Kind 初始状态与官方评分器。personalAgent 使用 128 次工具调用和 800 万累计 token，让它有额度继续执行 64 轮。官方 Agent 继续使用 90 秒 SSE 等待设置，工具调用和累计 token 随其原生循环统计。两个新集群串行启动。评分分别核对升级版本、配置及运行状态，另记录停止原因和用量。此前 32 轮运行按原身份保留。
+
 ## 公开数据集运行
 
 从仓库根使用以下命令，各抽取一个公开样本，执行词法检索。每次运行使用新的输出目录。数据读取和指标定义见各数据集入口。[公开数据集索引](README.md#公开数据集评测)
@@ -55,13 +116,19 @@ uv run --extra dev --dev pytest --collect-only -q evals/open_ragbench
 
 CI 核对三个命令行入口和 Open RAGBench 的用例收集。词法样本可使用缓存数据运行，指标代表对应检索策略。
 
-LongDS 使用公开题面和语料，采集和独立评分各自封存。先核对官方题目与文件清单：
+LongDS 的现行入口位于 `evals/longDS/`，使用公开题面和语料，采集和独立评分各自封存。先核对官方题目与文件清单：
 
 ```powershell
-.\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_suite --root "$evaluationEvidenceRoot/longds" --collect-only
+.\.venv\Scripts\python.exe -B -X utf8 -m evals.longDS.longds_suite --root "$evaluationEvidenceRoot/longds" --collect-only
 ```
 
-正式采集、恢复和评分的参数见各模块的 `--help`。原始预算和已执行记录见 [LongDS 长程分析基线](#longds-长程分析基线)。
+正式采集和恢复入口为 `python -m evals.longDS.run_longds`，独立评分入口为 `python -m evals.longDS.longds_judge`。各模块用 `--help` 查看参数。迁移沿用原 HTTP 装配、题面与评分协议，验收核对三个入口、HTTP 健康检查、封存题面及用量。旧检查点的源码摘要包含原路径，续跑使用当次冻结源码。原始预算和已执行记录见 [LongDS 长程分析基线](#longds-长程分析基线)。
+
+## 正式发布验证
+
+按 [REL 发布门禁](../devSpec/migration-release.md#3-完成检查表)，在目标 clean revision 上完成 `evals/` 公开数据集的 Product E2E。运行前确定适用用例、生产配置和通过判据，使用本页现行入口完成采集、评分和归档。通过发布判据后才可正式发布。
+
+当前长程任务可使用上节 LongDS 的正式产品入口。每条发布用例都须满足 [Product E2E 资格](../devSpec/change-evidence.md#2-产品-e2e-的最低资格)。词法检索样本、仅收集用例及未走完整生产链的采集按各自证据类别记录。按 [EVM](../../evals/AGENTS.md#5-比较身份与归档)保留目标版本、配置、实际结果和校验和。
 
 ## 历史操作记录
 
@@ -218,7 +285,7 @@ uv run python -m evals.e2e_quality.release_gate `
   --trace-root "$evaluationEvidenceRoot/e2e"
 ```
 
-gate 当前检查：
+历史 gate 检查：
 
 1. catalog 计算为 `release_eligible`；
 2. archive checksum 有效；
@@ -231,9 +298,11 @@ gate 还会 fail closed 拒绝缺少 `UserOutcomeContract`、错层或使用 tes
 
 ## 当前发布状态
 
-目标版本的发布资格由上节 Release gate 判断，实际运行与证据限制见[用例盘点](02-current-case-inventory.md)。历史门禁曾以 `target_revision_dirty`、`missing_same_revision_passing_trace` 拒绝发布；这些快照按原版本解释，不代表后续工作树状态。定向归档与历史完整矩阵不能替代目标 clean revision 的完整发布证据。
+当时的发布资格由上节历史 Release gate 判断，实际运行与证据限制见[用例盘点](02-current-case-inventory.md)。历史门禁曾以 `target_revision_dirty`、`missing_same_revision_passing_trace` 拒绝发布。现行要求见[正式发布验证](#正式发布验证)。
 
 ## LongDS 长程分析基线
+
+LongDS 采集进程显式关闭前置意图分类，按实际部署配置运行目标和回答核验。有效开关随采集配置封存。
 
 2026-10-28用户要求切回MiniMax后重新执行英文task2，使用当前冻结源码和新空对话；评分器独立保持MiMo Pro。预声明、费用与停止条件见[切回MiniMax规格](../optimization/to_verify/prompt-language-selection.md#12-切回-minimax-后重新执行-task22026-10-28)。先准备独立身份，再运行；已有身份和捕获禁止覆盖。启动器内仍调用正式`run_longds.baseline`，生成停止且封存后自动评分新答案。
 

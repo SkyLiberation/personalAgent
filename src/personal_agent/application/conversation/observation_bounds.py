@@ -6,10 +6,8 @@ oversized tool return inside a turn has already been sent by the time the
 ceiling is next read. E21 measured one read at 1,940,197 payload characters and
 776,720 committed tokens against a declared 32,000 ceiling.
 
-Bounding here is paging, not summarising. The excerpt keeps head and tail,
-states how much was dropped, and travels with a reference the model can read by
-keyword or line range. Which part of the omitted text matters stays a model
-decision; this module only decides how much fits.
+Initial tool receipts use a byte budget and a contiguous text prefix.
+Explicit read windows use a separate character budget.
 """
 
 from __future__ import annotations
@@ -23,8 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
+MAX_TOOL_OBSERVATION_BYTES = 50 * 1024
+"""UTF-8 JSON ceiling for an initial tool receipt and its preview."""
+
 MAX_OBSERVATION_PAYLOAD_CHARS = 20_000
-"""Serialized ceiling for one observation payload entering the context."""
+"""Character ceiling for explicit reads and searches over stored results."""
 
 _HEAD_RATIO = 0.2
 _MIN_STRING_CHARS = 400
@@ -45,6 +46,44 @@ class BoundedPayload:
 
 def serialized_length(payload: Any) -> int:
     return len(json.dumps(payload, ensure_ascii=False, default=str))
+
+
+def serialized_utf8_size(payload: Any) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def fit_observation_preview(
+    payload: dict[str, Any], text: str, *, previously_omitted: int | None = None,
+) -> dict[str, Any]:
+    """Fill the receipt's remaining byte budget with a verbatim prefix."""
+    if serialized_utf8_size(payload) > MAX_TOOL_OBSERVATION_BYTES:
+        payload = {key: value for key, value in payload.items()
+                   if key in {"ok", "error_kind", "status", "retrieval", "observation_excerpt_removed"}}
+    fitted = {**payload, "observation_excerpt": ""}
+    fitted.pop("observation_excerpt_removed", None)
+    total_chars = len(text) + previously_omitted if previously_omitted is not None else None
+    if total_chars is not None:
+        fitted["observation_excerpt_omitted_chars"] = 0
+    available_bytes = MAX_TOOL_OBSERVATION_BYTES - serialized_utf8_size(fitted)
+    if available_bytes <= 0 or not text:
+        return payload
+
+    lower, upper = 0, min(len(text), available_bytes)
+    while lower < upper:
+        end = (lower + upper + 1) // 2
+        excerpt_bytes = serialized_utf8_size(text[:end]) - 2  # empty JSON string already counted
+        if total_chars is not None:
+            excerpt_bytes += len(str(total_chars - end)) - 1
+        if excerpt_bytes <= available_bytes:
+            lower = end
+        else:
+            upper = end - 1
+    if not lower:
+        return payload
+    fitted["observation_excerpt"] = text[:lower]
+    if total_chars is not None:
+        fitted["observation_excerpt_omitted_chars"] = total_chars - lower
+    return fitted
 
 
 def _bound_string(text: str, limit: int, *, prompts: PromptCatalog) -> tuple[str, int]:

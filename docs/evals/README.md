@@ -11,7 +11,11 @@
 | [Galileo RAGBench](../../evals/galileo_ragbench/README.md) | [Galileo 数据集](https://huggingface.co/datasets/galileo-ai/ragbench) |
 | [LongDS](04-running-and-release.md#公开数据集运行) | [LongDS 数据集](https://huggingface.co/datasets/zjunlp/LongDS) |
 
-[Toolathlon MCP 接线与文件隔离](04-running-and-release.md#toolathlon-mcp-验证)使用上游工具配置和镜像，按实际边界记录支持证据。
+[Toolathlon MCP 接线、文件隔离与 PDF 交付](04-running-and-release.md#toolathlon-mcp-验证)使用上游工具配置和镜像，按实际边界记录支持证据。工作区和 PDF 用例共享[对话预算配置](04-running-and-release.md#对话预算)，可通过[并行入口](04-running-and-release.md#多用例并行执行)批量调度。
+
+地图用例可使用[评测专用的 SerpApi 接入](04-running-and-release.md#serpapi-地图工具)。
+
+Redis Helm 用例支持[官方 Agent 与 personalAgent 对照](04-running-and-release.md#redis-helm-官方-agent-对照)。
 
 ## 验证与结果边界
 

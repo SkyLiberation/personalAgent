@@ -107,6 +107,8 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 
 远端工具名和 Schema 属于发现事实。映射以 `server_id` 与 `remote_name` 绑定能力，并声明本地名称、权限范围、风险、副作用和结果契约。临时端口、进程 ID 与会话 ID 只标识运行实例。MCP 注解是服务提供方声明，宿主按本地治理配置决定权限。返回值在映射层校验并经现有 Observation 流程交回。具体 ToolCall 的授权、确认、Command 和 Receipt 由现有链按适用条件产生。[MCP Tools 规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) · [受治理执行细则](../devSpec/agentic-execution.md)
 
+本地映射可用 `model_integer_string_fields` 指定哪些已发现的顶层整数字段允许按标准十进制写法读取模型字符串。这个约定随可见能力封存到当次模型动作定义，由对话动作解码消费。模型 Schema、直接工具入口和远端工具参数仍沿各自的原有契约。首个采用点、输入边界和验收见[显式允许的整数表示](../context/runtime-feedback.md#显式允许的整数表示)。
+
 区分启动或握手错误、配置或 Schema 不匹配、准入拒绝、远端工具错误，以及执行结果未知。环境配置错误由 Runner 归为环境失败。工具错误进入现有反馈链。写调用超时或断线时，在能够从权威终态确认结果之前按未知处理。连接恢复可以重新握手。重发写操作必须满足该工具的幂等或状态核对契约，产品执行仍使用原授权与执行事实。
 
 #### 5.2.1 工具策略决定与派发门禁
@@ -143,6 +145,18 @@ V4 的真实反例中，Policy 已返回 `require_confirmation`，网关仍派�
 
 重复决定绑定原命令。用户拒绝后可在同一会话的新运行中重新请求相同清单并获得新确认。原拒绝回执保持不变。同一运行仍拒绝重复提交，未决或结果未知仍冻结部署绑定内的后续写入。复验检查新运行和新摘要，二次批准前远端写入为零。
 
+#### 5.2.4 沿用上游输入 Schema
+
+Toolathlon 的 `fetch.fetch_json` 曾在第二轮传入上游允许的 `Accept` 对象，仍被本地严格化封闭的请求头 Schema 拒绝。`filesystem.read_file` 也曾因省略上游允许缺省的 `tail` 被拒绝。[原始用例与轨迹](../problems/toolathlon-verified.md#预检受阻的-14-个用例重跑)
+
+LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并把调用参数送给 MCP 会话。MCP Server 声明输入约束并验证收到的调用。personalAgent 的 MCP 装配同样采用发现的 Schema。模型工具定义、动作解码、准入预检查和派发前校验消费这份契约。服务方工具声明使用 `strict: false`，保留上游的字段可选性和开放对象。权限、域名和确认仍由现有 ToolGateway 执行。[LangChain 装配与调用](https://github.com/langchain-ai/langchain-mcp-adapters/blob/52a4535f3eb4b98f386836e4d9b8c4cadf99afca/langchain_mcp_adapters/tools.py#L419-L485) · [MCP 工具规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) · [OpenAI 工具严格模式](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)
+
+`fetch` 的 `headers` 可以省略，传入时按上游要求为对象，自定义键由上游的对象规则决定。`filesystem.read_file` 的 `head`、`tail` 可分别省略，未知字段和类型错误按上游 Schema 拒绝。运行时参数 Schema 重建和本地请求头名单从装配路径移除。适用的旧映射移除 `allowed_request_headers` 和 `use_upstream_input_schema`。
+
+验收回放 `git-milestone` 的真实数组和对象两轮、`identify-all-songs` 的语言头以及 `profile-update-online` 省略 `tail` 的调用。合法原参数和自定义请求头应原样派发，非法类型及上游明确禁止的未知字段应在派发前被拒。通过正式入口与实际 MCP Server 检查 HTTP 实收请求头及文件读取范围。本轮证据限定到参数与派发链路，完整任务评分独立。
+
+已核对上轮归档发现的 134 份不同工具 Schema。原始数组在回放中被拒，合法请求头对象及省略 `tail` 的参数通过。正式入口经真实 MCP Server 发送自定义头 `X-Example` 并成功读取指定首行。MiniMax 发出的自定义头也由目标 HTTP 服务回显。对话后续答复核验未通过，归档未形成最终答复。[轨迹回放](../../.tmp/mcp-upstream-contract-1111/replay.json) · [正式入口与模型验证](../../.tmp/mcp-upstream-contract-1111/verification.json)
+
 ### 5.3 选择 Toolathlon 传输
 
 先按 Toolathlon 的 Time 配置，以其锁定的 `mcp-server-time==0.6.2` 为首个候选，在隔离环境启动独立 stdio Server，并核对 `convert_time` 的发现和调用结果。由启动侧解析工作目录和变量。[Time 配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/configs/mcp_servers/time.yaml) · [依赖版本](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/pyproject.toml#L82)
@@ -150,6 +164,36 @@ V4 的真实反例中，Policy 已返回 `require_confirmation`，网关仍派�
 仅在用例确需复用聚合网关时处理旧式 HTTP+SSE。该网关通过 `GET /sse` 给出 `/messages` 地址，调用结果通过原 SSE 会话返回。现有 `http` 实现对单一地址发 POST 并读取响应体。候选是在通用协议层引入经验证的旧式 SSE 支持，或在评测环境提供兼容端点。先用现有客户端确认首个不兼容的协议边界，再用 V6 验收选定的适配。[网关路由](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/scripts/decoupled/container_tool_gateway.py#L344) · [MCP 传输规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
 
 网关现有远端调用配置了一次异常重试。写入用例若走该网关，先验证下游幂等、权威状态核对或评测部署能关闭该重试。文件移动回包丢失时，重新读取源与目标状态供后续判断，自动重发之前需要上述依据。[网关调用实现](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/scripts/decoupled/container_tool_gateway.py#L319)
+
+#### 5.3.1 聚合网关接入验证
+
+`find-alita-paper` 的上游网关已连接三个真实 Server。现行 MCP HTTP 客户端向 `/sse` 发送初始化 POST 得到 405，向 `/mcp` 发送同一请求得到 404。先在独立评测归档中验证 stdio 到旧式 SSE 的协议转接。转接仅交付请求和响应，既有 ToolGateway 继续拥有准入、审计与执行结果。上游任务环境拥有文件事实，独立上游评分器拥有结果判据。
+
+首个样本固定上游题面、模型环境和评分源码。仅映射任务所需的已核实读工具以及写入隔离工作区的工具，沿正式 Web 对话入口运行一次。先确认能力发现和零副作用的列目录调用，再启动模型。记录实际文件、最终答复与上游评分。该样本在原任务范围内验证传输和接入，可用工具及外部服务通过预检后才安排后续批次。
+
+本地文件任务预检复用上游预处理和聚合网关。每个任务独立创建容器，只挂载题面、任务配置、预处理、输入夹具和运行依赖。评分程序和参考工作区由另一个进程消费，工具容器无宿主 Docker 套接字。进入正式对话前核对已连接 Server 与任务声明一致，以及工具的实际输入和副作用。未通过预检的任务记录具体依赖并保持未执行。
+
+已通过评测转接验证列目录、检索、下载和移动文件。后续样本的网关启动、用户答复和上游评分分别见[扩展评测问题记录](../problems/toolathlon-verified.md)。
+
+#### 5.3.2 校园步行路线使用 SerpApi
+
+`upenn-campus-route` 的评分器通过 `google_map` 查六个校园地点之间的步行路线。Google Cloud 项目尚未开通结算。SerpApi 已对评分器中的书店到博物馆返回步行路线，距离 692 米、耗时 568 秒。[上游评分器](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/upenn-campus-route/evaluation/main.py) · [SerpApi 路线契约](https://serpapi.com/google-maps-directions-api)
+
+首轮接入该用例依赖的 `maps_directions`。评测侧复用上游的工具名、参数和路线结果结构，在独立容器内使用任务镜像已带的 MCP SDK 提供 SSE 服务。SerpApi 提供路线数据，适配器将距离、耗时和导航步骤转换为现有工具结果，评分器仍使用原有条件计算路线。网关和评分器在本次评测网络内使用同一份 `google_map` 配置覆盖，密钥只注入路线服务容器。没有指定出行方式时沿用上游默认驾车。服务请求失败、无匹配路线或缺少评分所需数据时返回工具错误。[上游路线工具](https://github.com/modelcontextprotocol/servers-archived/blob/main/src/google-maps/index.ts)
+
+验收固定为 `upenn-campus-route` 的书店到博物馆真实输入。先检查网关发现 `maps_directions` 且正式工具入口可以派发，再用原评分器的取步行时间函数读取相同路线。两端均须取得上游提供的距离和耗时。未定义的出行方式在派发前返回参数错误。若运行整例，固定上游题面、评分器与现有对话预算，保留模型生成的路线文件和评分。评分器构建矩阵最多发出 30 次有向路线查询。供应商变化随报告记录，结果属于 SerpApi 条件下的定向评测。
+
+2026-11-12 的定向运行中，正式工具入口与原评分器均取得 568 秒的步行耗时，非法出行方式被拒绝。真实对话生成五段路线的 JSON 文件，上游评分器通过 SerpApi 完成 30 次路线查询并通过文件评分。对话请求在 600 秒时超时，未取得最终答复，整例未通过。[路线预检](../../.tmp/ta-serpapi-1112/run-ef9790/upenn-campus-route/maps-preflight.json) · [运行报告](../../.tmp/ta-serpapi-1112/run-ef9790/upenn-campus-route/report.json)
+
+#### 5.3.3 SerpApi 地点与距离矩阵
+
+`trip-itinerary-generator` 的上游评分器按巴黎景点名称调用 `maps_search_places`，通过结果中的 `place_id` 调用 `maps_place_details`，并对行程中的相邻景点调用 `maps_distance_matrix`。真实 SerpApi 查询确认埃菲尔铁塔以单个地点结果返回，包含 Google Place ID，详情按星期给出营业时间。东京车站的星巴克查询返回多个地点，新加坡公交与洛杉矶驾车样本返回路线。[巴黎评分入口](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/trip-itinerary-generator/evaluation/maps_api.py) · [SerpApi 地点契约](https://serpapi.com/maps-place-results)
+
+沿用评测专用的 `google_map` 服务和凭据边界。地点搜索保留供方顺序并读取单地点或列表结果。列表中的营业状态是摘要，评分所需的营业时间从详情读取，按周一到周日输出。距离矩阵对每个有向起终点查询已接入的路线 API，按原顺序输出距离米数和耗时秒数。明确的无路线记为对应元素失败。服务拒绝或响应契约错误作为工具错误。单次矩阵最多 100 对，遵循旧 Google 距离矩阵 Web 服务的请求上限。新加坡用例要求列出沿途站点，路线步骤在供方返回上下车站时按顺序附带站名。[Google 距离矩阵限制](https://developers.google.com/maps/documentation/distance-matrix/usage-and-billing) · [SerpApi 路线契约](https://serpapi.com/google-maps-directions-api)
+
+使用巴黎原评分器的地点和距离函数验收已核实景点的地点 ID、周一与周二营业时间，以及相邻景点的步行距离。用真实的东京、新加坡和洛杉矶查询检查地点搜索、公交和驾车输入。东京上游评分器中的模拟地图结果仍按上游版本解释。此阶段验收地图依赖，整例评分及 Notion、邮件等其他服务按各用例实际运行状态记录。
+
+2026-11-12 的容器预检发现四项工具。巴黎原评分器读取七个景点的营业时间及埃菲尔铁塔到卢浮宫的步行距离。四个矩阵元素与逐对路线的距离和耗时一致，超过上限的请求被拒绝。东京地点搜索、新加坡沿途站点、洛杉矶驾车和宾大步行回归均通过。一次复验中原评分器收到无法按 JSON 读取的地点详情，同一适配器版本再次执行通过。[最终预检报告](../../.tmp/ta-serpapi-tools-1112/run-16b2fd/report.json) · [失败记录](../../.tmp/ta-serpapi-tools-1112/run-ce19c0/probe.stderr)
 
 ## 6. 现有测试工具与 Toolathlon 隔离
 
@@ -196,7 +240,7 @@ Toolathlon 的 `arrange-workspace` 配置包含文件系统、终端、PDF、Exc
 
 V4 恢复验证先执行两个独立样本。其一在只读挂载的临时工作区，以 `POST /api/tools/{name}/execute` 请求一个声明需要确认的移动，省略确认字段。若在工具网关拒绝或暂停，远端应无执行。若返回来自文件 Server 的只读错误，则判为网关已派发且确认边界未成立。其二展开上游真实档案，只映射 `list_directory`，以正式对话入口提交原题的中文表达和原始目录目标。核对未映射移动能力、前后文件摘要和上游目录评分。该对照应保持工作区原状。独立记录对话是否明确交代限制、实际模型请求和用量。两组各一次，模型对照使用现行默认预算。出现未授权派发即停止开放可写工作区，保留只读对照证据。 若 Windows 在保存模型响应原件时因输出路径超长失败，只缩短工作树内的归档目录，保留原失败身份，以同一输入、映射、模型和预算进行一次有界复验。
 
-`move_file` 一次只接受一对路径。初始档案的 22 个文件都需要移动，逐文件调用已超过当前默认的 12 次工具调用上限。完整写入样本须在授权边界验证后单独固定足够的评测预算。
+`move_file` 一次只接受一对路径。初始档案的 22 个文件都需要移动，早期直接逐文件调用已超过 Runtime 默认的 12 次工具调用上限。正式确认后的批量派发由工作区服务执行。模型的后续取证和答复仍消费[用例对话预算](../evals/04-running-and-release.md#对话预算)。
 
 ### 7.2 验收矩阵
 
@@ -210,6 +254,33 @@ V4 恢复验证先执行两个独立样本。其一在只读挂载的临时工�
 | V6 网关兼容 | 用所选上游版本启动真实网关，针对拟用端点完成连接、发现、只读调用、失败和关闭。 | 端到端协议交换、错误归因和清理均可核对。通过后才引入依赖此传输的写用例。该项是传输证据。 |
 
 每个用例在执行前固定入口、命令、样本、预算、停止条件与归档身份。首轮接线和隔离以一个正常样本及表中必要反事实为范围，写入用例独立预声明。按[评测模块规范](../../evals/AGENTS.md)保存上游提交、Server 版本或镜像摘要、脱敏配置、请求与动作声明、外部状态、评分版本、预算和结果。缺失 Server、泄漏、评分资料曝光或评分不可用时，停止依赖该环境的样本并按最早责任归因。用户结果、协议检查点和隔离检查点单独报告。正式发布资格由现有证据目录和门禁判断。
+
+### 7.3 PDF 资料与文件交付验证
+
+固定上游提交，选取 `imagenet` 和 `detect-revised-terms` 各一个样本。使用 `imagenet` 官方中文题面，并按 `detect-revised-terms` 的详细英文题面保留实质变更、引用原文和完整对应条文的条件。真实请求从 Conversation Web 入口进入。模型沿用当前 Toolathlon 配置的直接回答，关闭 Claim 和模型核验。
+
+PDF Server 使用上游任务镜像中已缓存的 `pdf-tools-mcp==0.1.4` 和上游锁修复包装脚本。仅映射元信息、读取、搜索及其分页。Filesystem Server 读取只读原件，写入独立的空输出目录。该目录仅用于本轮新文件交付。标准文件和评分脚本留在工具容器外。初始文件摘要、模型实际工具声明、远端调用和输出文件分别归档。
+
+首轮验收中两个用例依次各运行一次，单例 220,000 tokens，`imagenet` 最多 24 次工具调用，`detect-revised-terms` 最多 40 次。复验按[现行预算入口](../evals/04-running-and-release.md#对话预算)记录实际生效值。先完成真实发现、代表性 PDF 读取及原件写入拒绝探测，再调用模型。模型须生成 `survey.tex` 或 `revised_terms.csv` 并交付。上游评分器独立判定，额外输出、原件变化、环境错误和未到达阶段分别报告。比较身份记录输出挂载位置与本地辅助工具差异。
+
+首轮 imagenet 轨迹中的模板读取工具同时声明可空的 head 和 tail。模型先提交字符串，修复时又省略 tail，触发重复无效动作停止。保留首轮归档，允许一次有界复验，仅将模板读取映射切换为同一 Filesystem Server 的 read_multiple_files。固定题面、原件、模型、预算、输出路径和评分器，核对是否产生合规的模板调用与实际文件交付。
+
+法律条款评分器沿用原始源码。它的通用导入依赖宿主缺少的 termcolor 和上游全局配置。评分改在上游镜像的离线环境执行，加载上游示例配置。只复评本次已封存的产物，评分启动问题无需重跑模型。
+
+两例的实际模型请求均采用直接回答，未进入 Claim 或模型核验。三次运行的 PDF 读取和只读探针通过，原件摘要保持。
+
+- `imagenet` 首轮因模板工具参数连续不合规而停止，归档为 `.tmp/pi-013618/`。切换模板读取映射后，模型成功读取模板和论文。读取 `2212.09748v2.pdf` 第 6 至 7 页后，Web 返回 500，未生成 `survey.tex`。上游评分失败，归档为 `.tmp/pr-013921/`。真实 PDF Server 离线复现该响应含 6 个 NUL 字符，PostgreSQL 转为 JSONB 时返回 `22P05`。同批另一份 PDF 响应无 NUL，JSONB 写入对照通过，见 `.tmp/pdf-nul-probe/`。
+- `detect-revised-terms` 发起 9 次模型调用，实际消费 233,829 tokens。运行达到 220,000 tokens 门禁后返回 `limitation`，未生成 CSV。上游评分器在独立容器报告缺少文件。原运行和离线评分归档为 `.tmp/pd-013711/`。
+
+法律条款用例按用户要求扩大单例总 token 预算至 800,000，保留 40 次工具调用上限。旧样本在 9 次模型调用后仍处于取证阶段，本次为长材料与累计对话预留预算。从独立工作区重跑一次，固定原题、模型、原件、初始映射和上游评分器。继续用直接回答，关闭 Claim 和模型核验。若再触发同一预算门禁，保留失败并停止追加样本。
+
+800,000 tokens 组在第 8 个主循环后停止，实际消费 308,373 tokens、使用 20 次工具调用。该轨迹触发主循环轮数上限，评分器确认缺少 CSV，归档为 `.tmp/pt-103328/`。该运行已保存终态。以新样本复验轮数预算，将上限由 8 提至 24，保留 800,000 tokens、40 次工具调用及其他条件。本组各一次，达到任何有效停止条件后按实际结果记录。
+
+24 轮复验完成 18 轮、19 次模型调用和 30 次工具调用。第 18 轮模型响应计量后累计 856,213 tokens，其中输入 840,074 tokens，触发 800,000 tokens 门禁。未生成 CSV，独立评分确认缺少文件。题面、模型、初始文件摘要、工具映射及评分器摘要与原样本一致。复验归档为 `.tmp/pu-103645/`。
+
+用户明确要求继续提额。以新样本运行同一法律条款用例，总 token 预算为 2,000,000，主循环上限 36 轮，工具调用上限 64 次。上一轮后段多次请求累计输入超过 84 万 tokens，扩大三个运行额度以观察更长的完整取证与交付。固定题面、模型、工具映射、初始文件、评分器和关闭 Claim 与模型核验的配置。单例运行，按实际停止条件和独立文件评分记录结果。
+
+2,000,000 tokens 复验完成 29 轮、33 次模型调用和 53 次工具调用。实际消费 2,096,829 tokens，其中输入 2,057,838 tokens。第 29 轮响应计量后触发总 token 门禁，轮数和工具调用额度仍有余量。上游评分确认缺少 CSV。固定输入及评分器摘要与上一轮一致，归档为 `.tmp/pw-104232/`。
 
 ## 8. 实施顺序、迁移与状态
 
@@ -234,6 +305,8 @@ V4 准入探针使用 `d2dfc26` 和真实 Filesystem Server，向正式工具 AP
 工作区单文件批准、拒绝和断连各一个样本通过，归档为 `.tmp/wg-a/`、`.tmp/wg-r/` 和 `.tmp/wg-u/`。批准组实际移动一次，源目标内容摘要相同，答复交付确切位置。拒绝和断连组无远端写入，分别持久化 `rejected` 与 `unknown`，续跑返回对应的用户结果。三个样本均在续跑后重复提交同一决定并得到原回执。独立进程重放已完成的真实快照时，并发决定一项返回原回执，一项获运行锁冲突 409，后续重试返回原回执，MCP 实收为零。空数据库的并发审计初始化复验无 DDL 竞争异常，归档为 `.tmp/wg-rep2/`。
 
 V4 完整样本 `.tmp/wg-f/` 在一次正式批准后执行 16 项建目录和 22 项移动，22 份文件内容摘要保持。上游评分器确认 18 个目录正确，20 个文件位置匹配。`cv-gboeing.pdf` 与 `exam.xlsx` 的分类与评分标准不一致，评分退出 1。产品答复达到 12 次工具调用门禁后返回 `limitation`，模型实际消费 92,107 tokens。授权与执行检查通过，完整任务评分和最终交付未通过。
+
+2026-11-10，主工作区 `54f5b49` 以独立进程重跑完整样本。本次配置使用直接回答，关闭目标与回答模型核验。7 次实发模型请求只有意图提取和主循环，实际消费 73,056 tokens。用户收到 `answer`，正式确认与 38 项写入通过。上游评分仍退出 1，18 个目录全部匹配，22 个文件内容摘要保持，`cv-gboeing.pdf` 与 `exam.xlsx` 的位置偏差复现。证据位于主工作区 `.tmp/mt-010327/`。该运行同时改变回答方式和核验开关，结果按独立配置记录。
 
 V4 只读对照在真实初始档案上展开 22 个文件。正式工具 API 能列出 `/case`，未映射的移动被拒绝。真实对话的 5 次模型请求均未暴露移动，工具审计记录 3 次目录读取成功和 2 次拒绝或失败，其中容器根目录 `/` 读取被隔离边界拒绝。前后路径和内容摘要一致，上游评分器按未整理状态退出 1。对话因默认 32,000 tokens 门禁返回 `limitation`，实记 38,291 tokens，未生成交付答复。正向样本未运行。复验归档为 MCP 工作树 `.tmp/v4r-213257/readonly/`。
 

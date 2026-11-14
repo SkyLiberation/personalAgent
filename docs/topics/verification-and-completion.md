@@ -17,7 +17,7 @@ Verification 是 Agent 内部元能力：
 
 ## 当前核验覆盖与适用边界
 
-独立Python分析分别核验目标定义与回答交付。`task_context.kind`由Runtime绑定，`turns`保留完整原始用户问题；目标核验的events只含目标提交、目标判决及修订，回答核验只含回答、回答判决及修复后回答，各自按原时间跨轮续接。当前目标作为可纠正任务依据单独交接。两者使用专用提示和标准，将逐项报告归一为原任务总项，不接普通工具、来源审读或claims。目标通过只允许目标生效，回答仍需核验及Completion；失败沿原调用反馈，Journal保存唯一事实，主循环完整历史保持。压缩及验收见[ADR0047](../adr/0047-user-goal-verification-context.md)。
+Conversation 分别核验目标定义与普通回答交付。目标核验接收原用户要求、候选及对应修订。普通回答核验接收生效目标、实际稿件和可定位的引用证据。Journal 保存原提议、判决及修订。目标通过只允许目标生效，Completion 继续消费实际交付事实。[统一主循环规格](../optimization/to_verify/analysis-goal-maintenance.md#统一-conversation-主循环)
 
 2026-11-02按用户取消回答前强制读取及相关Prompt，当前完整goal仍逐次提供。精确命中失败缓存时，Runtime复用原语义回执，并将引用原判据与反馈的本次拒绝放在最新提议之后；不付费重判，也不再将该稿恢复为待交付稿。一次真实阶段修正后，新前三轮全部交付、独立[1,0,1]；第三问5次拒稿后的第6稿通过，历史接续及实际修复成立，第二问仍未通过独立评分。目标核验v7及其英文镜像未改；设计与边界由[Spec §9.7—§9.8](../optimization/to_verify/analysis-goal-maintenance.md#98-移除回答前强制读取并重新验证)拥有，原§27失败保留。早期Prompt失败见[历史记录 §12](../optimization/to_verify/verify_results/analysis-correctness.md#12-目标优先-prompt-的中英文修正)。
 
@@ -25,9 +25,7 @@ Verification 是 Agent 内部元能力：
 
 2026-10-23 已接入[可替换回答模块](../../src/personal_agent/application/conversation/answer_results.py)；2026-11-05 核验选择统一迁为[实验组 1 的 feature flags](../ablation/experiment.md)。writer 默认 `claims`，目标与结果核验默认均开启，下文描述开启时的行为。关闭核验不产生通过回执，仍检查真实引用、权限、执行及费用；未完整核验的采集不计完整产品 E2E 或发布证据。配置在 Journal 冻结且同对话不能切换；当前契约见 [ADR 0050](../adr/0050-verification-feature-flags.md)，旧 `required/none` 配置由其替换。
 
-当前普通回答通过冻结的 `ReviewCriteria.requires_review` 决定是否执行整稿模型核验；进入该工具后，会把通用来源支持标准追加到用户标准。研究则采用同版本统一核验，交付不再重复普通核验。工具授权、引用合法性、业务写入和 Completion 各有确定性边界，不能因为某条回答没有额外模型核验就省略。
-
-“所有流程都有验收责任”与“所有回答都另调一次模型核验”是不同要求。现行来源标准对计算答案造成过实际拒稿，完整请求审计仍待完成；适用性设计、外部实践及目标场景矩阵统一见[主循环与核验边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md#4-是否所有流程都需要答案核验)。该矩阵是候选，不改变本文的现行触发或标准。
+启用回答核验时，普通回答按当前 Goal 核验。外部研究沿同版本论断及来源核验。检索实验沿其结果文件与执行事实契约完成。各路径共用目标维护、工具治理和已提交事实。
 
 ## 决策所有权
 

@@ -64,3 +64,4 @@ class VerificationHistoryCheckpoint(BaseModel):
     kind: VerificationKind
     turns: tuple[VerificationTurnCompaction, ...] = Field(min_length=1)
     prompt_version: str | None = None
+    task_id: str | None = None

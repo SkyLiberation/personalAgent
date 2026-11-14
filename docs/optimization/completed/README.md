@@ -40,6 +40,7 @@
 | 研究独立评分器在开启思考时耗尽短输出额度 | [评分输出预算](research-grader-output-budget.md) |
 | 历史回答缺少当时已通过目标，核验交互整轮打包且通过报告重复展开 | [回答绑定当时目标与核验历史逐条呈现](verification-context-goal-binding.md) |
 | Runtime 拒绝反馈使用内部工具名、错误调用身份或过期修复条件 | [拦截反馈按当前声明给出修复](runtime-feedback-repair.md) |
+| Windows 上模型响应归档路径过长导致对话失败 | [模型原件归档路径压缩](model-archive-path.md) |
 
 本目录之外的 optimization 文档只保留完成文档的引用，不继续跟踪成功问题。
 

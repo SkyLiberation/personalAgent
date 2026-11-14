@@ -1,14 +1,4 @@
-"""Reading semantic verification receipts out of committed interaction facts.
-
-One concern remains here. The runtime owns when verification happens and what
-criteria it uses (see :mod:`interaction_intent`), so there is nothing left to admit
-about a model's verification behavior -- the model can no longer see the verifier,
-let alone call it, skip it, or choose its criteria. What is still needed is a
-typed read of what verification actually produced.
-
-The function is pure, so a receipt-shaped payload can be tested without a service
-instance.
-"""
+"""Read typed semantic verification receipts from committed interaction facts."""
 
 from __future__ import annotations
 

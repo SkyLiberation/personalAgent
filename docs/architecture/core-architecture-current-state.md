@@ -51,7 +51,7 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 6. 回答模块按部署提供普通完整提交或claim选证／写作操作。普通回答拒稿后沿原Loop继续取证或完整重提，不提供答案按段修订工具，见[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)。模型提交完整候选，运行系统持久化`SubmittedFinal`，再执行适用核验及领域文件检查，通过后交付同一稿件。模型协议见[ADR0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查见[ADR0037](../adr/0037-experiment-submission-first-delivery.md)。
 7. 运行系统按装配契约完成适用核验和 Completion，交付确切 `FinalMessage` 正文。用户授权的无语义核验诊断不产生通过回执，也不计完整产品 E2E；边界见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
 
-独立Python direct分析由Conversation约束每轮先维护目标；`maintain_goal`完整写入、`retain_goal`沿用及可选的`read_current_goal`共用原Journal目标事实。目标正文只保留一个`objective`字符串，不另存成果引用；每次主请求物化当前完整目标，读取仅供按需查看，不是回答或修复的前提，也不修改版本；目标提议先语义核验，通过后维护成功事实。现行契约与验证边界见[目标维护 Spec §9.9](../optimization/to_verify/analysis-goal-maintenance.md#99-单一目标正文与取消目标内成果引用)。
+Conversation 约束每个用户轮次先维护目标。`submit_goal_patch` 提交任务选择和版本化条目增量，`read_current_goal` 可按需读取生效快照。Journal 保存任务归属、执行控制和已接纳补丁。主循环、代码与回答核验从同一可见分支的选中任务恢复适用历史。启用目标核验时，通过后提交任务归属和增量。[任务切换上下文](../context/agent-loop.md#同一对话中的任务切换)
 
 当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
 
@@ -61,17 +61,17 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 
 ### 3.1 当前主循环的职责混合
 
-独立Python分析的direct路径在目标写入前核验任务定义，required路径在交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；每个回答事件从当时已接受目标操作恢复确切 passed 回执作为 `verified_goal`，跨轮及同轮目标修订不会覆盖旧回答。核验请求逐条呈现原话、提交及判决，通过报告在主循环与核验发送投影中精简，失败反馈完整。原Journal为唯一事实来源，准入和完成消费原报告，主循环原生调用配对保持。摘要按职责独立绑定，普通工具材料不交给核验，原claims与来源核验路径保持；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)，机制与限定证据见[固化方案](../optimization/completed/verification-context-goal-binding.md)。
+启用目标核验时在目标写入前核验任务定义，启用回答核验时在普通交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；每个回答事件从当时已接受目标操作恢复确切 passed 回执作为 `verified_goal`，跨轮及同轮目标修订不会覆盖旧回答。核验请求逐条呈现原话、提交及判决，通过报告在主循环与核验发送投影中精简，失败反馈完整。原Journal为唯一事实来源，准入和完成消费原报告，主循环原生调用配对保持。摘要按职责独立绑定，普通工具材料不交给核验，原claims与来源核验路径保持；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)，机制与限定证据见[固化方案](../optimization/completed/verification-context-goal-binding.md)。
 
 上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。原生协议已接入，直接回答装配的实际生成、连续交付及恢复范围见 [Loop 运行结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)；研究子流程的职责拆分仍是候选。
 
 claim 操作的适用性取决于 writer 装配、冻结标准、当前稿和已成功 Web 来源。来源出现使选证操作可用，写作仍由模型选择；周期 `ResearchService` 另有订阅、调度和投递生命周期。
 
-默认 required 核验装配下，普通最终答案只有 `ReviewCriteria.requires_review` 成立才调用整稿核验；研究交付消费同版本统一报告。普通核验器固定追加通用来源标准，现有计算样本已经出现范围和支持判断缺口，语义修复仍暂放，见[现状与候选](../optimization/to_verify/conversation-loop-boundaries.md)。完整研究子流程封装仍是候选；当前只替换回答提交模块，不新增第二套模型循环。
+启用回答核验时，普通最终答案按生效 Goal、实际稿件及引用证据检查。研究交付消费同版本统一报告。完整研究子流程封装仍是候选。
 
 ## 4. 后台持续运行边界
 
-当前 Conversation 只在请求内执行 Tool 或委托 Agent；GPT Researcher 是 `AgentGateway` 后的执行资源，不拥有第二套业务 Plan、Completion 或研究循环。明确要求响应结束后继续运行、稍后查询、暂停或调整的输入，会在交互意图派生后返回 typed limitation，并记录 `capability_missing`。
+当前 Conversation 只在请求内执行 Tool 或委托 Agent；GPT Researcher 是 `AgentGateway` 后的执行资源，不拥有第二套业务 Plan、Completion 或研究循环。明确要求响应结束后继续运行、稍后查询、暂停或调整的输入，经已接纳目标中的交付方式识别后返回 `limitation`。
 
 周期 Research、知识缺口提问和复习简报有各自的调度入口，由 Web Context 装配。它们执行已定义的业务任务，不意味着 Conversation 已支持任意目标的后台接续。
 
@@ -106,7 +106,7 @@ MCP 发现提供远端工具名和 Schema。部署映射声明本地名称、风
 
 模型适配的阅读入口按职责组织：`infra/structured_model.py` 拥有公开工厂、SDK 调用、超时、协议修复、重试与观测装配；`infra/model_response.py` 集中响应 envelope、流内容、原生动作调用和用量归一化。现有 Adapter 与计量包装器直接消费这些解析函数，业务准入仍由 Application 拥有。解析规则的局部修改从新模块及其 typed 契约进入，调用与恢复问题从原适配入口进入。
 
-Conversation普通主请求使用`auto`，优先处理工具调用。没有调用时，`AnswerResult`将完整合法的assistant正文转为`FinalMessage`候选；显式submit_final可携带沟通属性及引用。普通稿被拒后沿同一Loop完整重提，claims继续使用自己的业务编辑。候选沿同一`SubmittedFinal`、核验与Completion链交付，正文、Verifier原稿及回执digest使用同一原字符串。独立Python direct分析仍由主模型直接理解并行动，无前置criteria调用；每个用户轮次先提供目标维护工具并使用`required`（首次仅maintain_goal，已有目标再提供retain_goal），目标核验及真实成功回执成立后恢复完整工具面及`auto`；未维护时可用独立澄清操作向用户提问，或用 submit_final 提交限制或失败。测试模式按模型工具禁用名单关闭澄清。目标事实由原Journal保存，目标与Runtime反馈持续进入原上下文，协议及待验语义见[ADR0048](../adr/0048-conversation-goal-maintenance.md)。其他已有意图提取消费者使用prompted_json，原生typed输出请求使用required工具，修复沿用各自承载。原完整运行证据见[Loop Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)。
+Conversation 普通主请求使用 `auto`。没有工具调用时，`AnswerResult` 将完整合法的 assistant 正文转为 `FinalMessage` 候选。显式提交可以携带沟通状态和引用。稿件拒绝后沿同一循环修复。Conversation 在目标待维护阶段使用 `required`，提供增量、已有目标查询、澄清及受限结束动作。补丁接纳后，按执行控制开放业务工具及 `auto`。交付方式和验收条件来自已接纳目标。[主循环上下文](../context/agent-loop.md) · [Loop Spec](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)
 
 模型工厂以显式包装器组合单次调用准入、观测、用量和重试，实际顺序、SDK 流式 transport 与正式 SSE 的边界见[横切机制](cross-cutting.md#2-模型调用的实际组合)。模型配置见[生成式模型配置](../env.md#llm-配置)；JSON Object Adapter 把版本化 Schema instruction 与 Pydantic 校验绑定，不做运行时 transport 降级。网页搜索绑定与正文读取配置由[工具专题](../topics/tools.md)和[环境配置](../env.md)拥有。配置只证明部署选择，不证明服务健康或产品结果。
 

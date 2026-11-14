@@ -176,6 +176,7 @@ class MCPToolConfig(_StrictBase):
     business_role: str | None = None
     binding_group_ref: str | None = None
     resource_locator_arg: str | None = None
+    model_integer_string_fields: tuple[str, ...] = ()
     semantic_domains: tuple[str, ...] = Field(min_length=1)
     resource_types: tuple[str, ...] = Field(min_length=1)
     operations: tuple[CapabilityOperation, ...] = Field(min_length=1)

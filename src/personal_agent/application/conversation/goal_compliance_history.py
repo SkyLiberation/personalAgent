@@ -8,6 +8,7 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.contracts.tool_runtime import accepted_tool_request_digest
 from personal_agent.kernel.prompt_registry import PromptCatalog
+from .analysis_tasks import task_switch_turn
 
 from .errors import ConversationOperationConflict
 from .goal_models import CurrentAnalysisGoal
@@ -25,33 +26,6 @@ class ActionHistoryEvent:
     stdout_ref: ResourceRef | None
     is_dependency: bool
 
-    def context(self, *, compacted: bool) -> dict[str, object]:
-        proposal = ({"input_files": [item.model_dump(mode="json") for item in self.arguments.input_files]}
-                    if compacted else self.arguments.model_dump(mode="json"))
-        entry: dict[str, object] = {"kind": "action", "action_id": self.action_id, "proposal": proposal}
-        if self.review is not None:
-            entry["judgment"] = self.review.judgment.model_dump(mode="json", exclude={"action_id"})
-        if self.rejection is not None:
-            entry["rejection"] = {"message": self.rejection.message, "repair": self.rejection.required_repair}
-        if self.observation is not None:
-            observation: dict[str, object] = {"status": self.observation.status}
-            payload = self.observation.payload
-            if isinstance(payload.get("error"), str):
-                observation["error"] = payload["error"]
-            if self.stdout_ref is not None:
-                observation["stdout_ref"] = self.stdout_ref.model_dump(mode="json", include={"resource_id", "revision"})
-            if not compacted or self.is_dependency:
-                data = payload.get("data")
-                if isinstance(data, dict):
-                    for stream in ("stdout", "stderr"):
-                        preview = data.get(f"{stream}_preview")
-                        if isinstance(preview, str) and preview:
-                            observation[f"{stream}_preview"] = preview
-                            observation[f"{stream}_omitted_chars"] = data.get(f"{stream}_omitted_chars")
-            entry["observation"] = observation
-        return entry
-
-
 @dataclass(frozen=True)
 class AnswerHistoryEvent:
     submission: VerificationEvent
@@ -67,6 +41,7 @@ class GoalComplianceSection:
 @dataclass(frozen=True)
 class GoalComplianceTurn:
     number: int
+    run_ref: str
     goals: list[GoalComplianceSection]
     completed: bool
 
@@ -101,10 +76,14 @@ def project_goal_compliance_history(
         scope = ExecutionScope(principal=source.principal, execution_id=source.interaction_run_ref,
                                thread_id=source.conversation_id)
         decisions = tuple(record for record in source.model_decisions if record.turn_index is not None)
+        switch_turn = task_switch_turn(source)
         for index, record in enumerate(decisions):
+            if record.turn_index < switch_turn:
+                continue
             operation = operations.get(record.turn_index)
             if operation is not None:
-                active = CurrentAnalysisGoal(reference=operation.goal_ref, goal=operation.goal)
+                active = CurrentAnalysisGoal(reference=operation.goal_ref, goal=operation.goal,
+                                              execution_control=operation.execution_control)
                 if not goals or goals[-1].goal != active:
                     goals.append(GoalComplianceSection(active))
             for call in (record.assistant.payload.get("tool_calls") or ()) if record.assistant is not None else ():
@@ -144,7 +123,7 @@ def project_goal_compliance_history(
             _append_answer(goals, active, final, delivered=True)
         if current_turn and (not goals or goals[-1].goal != current):
             goals.append(GoalComplianceSection(current))
-        turns.append(GoalComplianceTurn(number, goals, source.final_message is not None))
+        turns.append(GoalComplianceTurn(number, source.interaction_run_ref, goals, source.final_message is not None))
     return tuple(turns)
 
 

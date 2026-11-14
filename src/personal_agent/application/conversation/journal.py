@@ -37,13 +37,18 @@ from personal_agent.application.python_execution.models import (
     PythonJournalView,
 )
 from .artifact_sources import trace_resource_refs
+from .analysis_tasks import select_goal_task
 from .tool_requests import WriteArtifactArgs
 
 from .errors import ConversationOperationNotFound, ConversationOperationConflict
-from .goal_models import goal_verification_action_id
+from .goal_changes import GoalPatchRejected, apply_goal_patch
+from .goal_maintenance import admit_goal_maintenance, current_analysis_goal
+from .goal_models import (
+    SUBMIT_GOAL_PATCH, AnalysisGoalRef, GoalMaintenanceInvocation, GoalPatchProposal, goal_verification_action_id,
+)
 from .verification_admission import observed_receipts, INTERACTION_VERIFICATION_CAPABILITY
 from .journal_lock import exclusive_run_lock
-from .model_history import validate_decision_extension, prior_analysis_turns
+from .model_history import validate_decision_extension, prior_analysis_turns, selected_analysis_turns
 from .workspace_changes import validate_workspace_progress
 from .models import (
     ActionGoalBinding, ActionGoalReview, ActionObservation,
@@ -146,7 +151,7 @@ class InMemoryInteractionJournal:
                 return trace
             sequence = len(invocation.response_refs)
             text = response.model_dump_json()
-            self._write_response_original(scope.execution_id, response.invocation_id, sequence, response.attempt_id, text)
+            self._write_response_original(scope.execution_id, response.invocation_id, sequence, text)
             reference = ModelResponseReference(invocation_id=response.invocation_id, attempt_id=response.attempt_id,
                 sequence=sequence, content_digest=sha256(text.encode("utf-8")).hexdigest())
             records[index] = invocation.model_copy(update={"response_refs": (*invocation.response_refs, reference),
@@ -195,7 +200,7 @@ class InMemoryInteractionJournal:
     def _read_request_original(self, run_ref, invocation_id):
         return self._model_request_originals[(run_ref, invocation_id)]
 
-    def _write_response_original(self, run_ref, invocation_id, sequence, attempt_id, text):
+    def _write_response_original(self, run_ref: str, invocation_id: str, sequence: int, text: str) -> None:
         originals = self._model_response_originals.setdefault((run_ref, invocation_id), [])
         if sequence < len(originals):
             if originals[sequence] != text:
@@ -266,8 +271,7 @@ class InMemoryInteractionJournal:
             with self._lock:
                 self._traces[trace.interaction_run_ref] = trace
 
-    @staticmethod
-    def _check_revision(trace, previous, expected_revision):
+    def _check_revision(self, trace, previous, expected_revision):
         if previous == trace:
             return
         expected = (
@@ -299,7 +303,10 @@ class InMemoryInteractionJournal:
                 raise ConversationOperationConflict("action goal reviews are immutable")
             if trace.goal_operations[:len(previous.goal_operations)] != previous.goal_operations:
                 raise ConversationOperationConflict("accepted goal operations are immutable")
-            for operation in trace.goal_operations[len(previous.goal_operations):]:
+            new_operations = trace.goal_operations[len(previous.goal_operations):]
+            if len(new_operations) > 1:
+                raise ConversationOperationConflict("one goal operation may be committed per decision")
+            for operation in new_operations:
                 caller = next((item for item in trace.model_decisions
                                if item.turn_index == operation.decision_turn), None)
                 if (operation.run_ref != trace.interaction_run_ref or caller is None or caller.assistant is None
@@ -309,6 +316,7 @@ class InMemoryInteractionJournal:
                                    and item.status == "accepted" for item in caller.dispositions)):
                     raise ConversationOperationConflict("goal operation is not bound to an accepted native call")
                 if operation.operation != "read":
+                    self._check_goal_commit(previous, operation, caller)
                     reference = operation.verification_ref
                     if not trace.feature_flags_binding.goal_verification:
                         if reference is not None:
@@ -321,7 +329,8 @@ class InMemoryInteractionJournal:
                         capability_names=frozenset({INTERACTION_VERIFICATION_CAPABILITY}))
                     if (reference is None or reference.kind != "tool_result" or reference.action_id != expected
                             or len(receipts) != 1 or receipts[0].checked_kind != "goal"
-                            or receipts[0].verdict != "passed" or receipts[0].verified_draft != operation.goal.objective):
+                            or receipts[0].verdict != "passed"
+                            or receipts[0].verified_draft != operation.verification_text()):
                         raise ConversationOperationConflict("goal operation lacks its exact passed verification")
             for accepted in previous.accepted_tool_requests:
                 current = next(
@@ -338,10 +347,36 @@ class InMemoryInteractionJournal:
                     or current.arguments != accepted.arguments
                     or current.request_digest != accepted.request_digest
                     or current.plan_step_id != accepted.plan_step_id
+                    or current.goal_ref != accepted.goal_ref
                 ):
                     raise ConversationOperationConflict(
                         "accepted tool request is immutable"
                     )
+
+    def _check_goal_commit(self, previous, operation, caller):
+        call = next((call for call in caller.assistant.payload.get("tool_calls", ())
+                     if call.get("id") == operation.call_id), None)
+        function = call.get("function", {}) if call else {}
+        if operation.patch is None or function.get("name") != SUBMIT_GOAL_PATCH:
+            raise ConversationOperationConflict("goal update must carry its original patch")
+        try:
+            original = GoalPatchProposal.model_validate_json(function["arguments"]).to_patch()
+        except (KeyError, ValidationError) as error:
+            raise ConversationOperationConflict("original goal patch is invalid") from error
+        if original != operation.patch:
+            raise ConversationOperationConflict("goal operation differs from the submitted patch")
+        branch = prior_analysis_turns(previous, self.task_traces(previous))
+        try:
+            task = select_goal_task(operation.patch, previous, branch)
+            candidate = apply_goal_patch(operation.patch, previous, task.current, previous=task.previous)
+        except GoalPatchRejected as error:
+            raise ConversationOperationConflict(f"goal patch commit rejected: {error.reason}") from error
+        expected = admit_goal_maintenance(
+            GoalMaintenanceInvocation(call_id=operation.call_id, arguments=operation.patch),
+            trace=previous, current=task.current, candidate=candidate, verification_ref=operation.verification_ref,
+        )
+        if operation != expected:
+            raise ConversationOperationConflict("goal snapshot differs from its version-bound patch")
 
     def update(
         self,
@@ -388,6 +423,7 @@ class InMemoryInteractionJournal:
         arguments: WriteArtifactArgs | ExperimentToolArgs | ExecutePythonArgs,
         plan_step_id: str | None,
         action_goal_binding: ActionGoalBinding | None = None,
+        goal_ref: AnalysisGoalRef | None = None,
     ):
         if isinstance(arguments, WriteArtifactArgs):
             tool_name, request_type = "write_artifact", AcceptedArtifactToolRequest
@@ -408,11 +444,13 @@ class InMemoryInteractionJournal:
                 arguments=arguments,
             ),
             plan_step_id=plan_step_id,
+            goal_ref=goal_ref,
         )
         if execution_scope.task_id != action_id:
             raise PermissionError("accepted action identity does not match its scope")
 
         def accept(latest):
+            self.check_tool_goal(latest, request)
             review = next((item for item in latest.action_goal_reviews if item.binding.action_id == action_id), None)
             if review is not None or action_goal_binding is not None:
                 if (review is None or review.binding != action_goal_binding
@@ -434,6 +472,7 @@ class InMemoryInteractionJournal:
                     or previous.arguments != request.arguments
                     or previous.request_digest != request.request_digest
                     or previous.plan_step_id != request.plan_step_id
+                        or previous.goal_ref != request.goal_ref
                 ):
                     raise ConversationOperationConflict(
                         "action_id is already bound to a different accepted request"
@@ -461,6 +500,21 @@ class InMemoryInteractionJournal:
             for item in updated.accepted_tool_requests
             if item.action_id == action_id
         )
+
+    def check_tool_goal(self, trace, request) -> None:
+        if request.goal_ref is None:
+            return
+        history = selected_analysis_turns(trace, self.task_traces(trace))
+        current = current_analysis_goal(trace, history)
+        if current is None or current.reference != request.goal_ref:
+            raise ConversationOperationConflict("tool request is bound to an obsolete goal")
+        if current.execution_control is not None and current.execution_control.mode != "running":
+            raise ConversationOperationConflict("current execution control disallows tool writes")
+        if request.plan_step_id is not None and not any(
+            step.step_id == request.plan_step_id and step.status == "in_progress"
+            for step in (trace.working_plan.steps if trace.working_plan is not None else ())
+        ):
+            raise ConversationOperationConflict("tool request is bound to an inactive plan step")
 
     @staticmethod
     def _accepted(trace, scope, action_id, request_digest=None):
@@ -591,6 +645,17 @@ class InMemoryInteractionJournal:
             raise ConversationOperationNotFound("分析运行尚未提交至Journal")
         return candidates
 
+    def task_traces(self, trace: InteractionTrace) -> tuple[InteractionTrace, ...]:
+        """Candidate Goal history within the original conversation and execution binding."""
+        candidates = (self.analysis_traces(trace) if trace.python_authorization_digest is not None else
+                      self.conversation_traces(trace.conversation_id, trace.principal))
+        return tuple(item for item in candidates if (
+            item.python_authorization_digest == trace.python_authorization_digest
+            and item.deployment_digest == trace.deployment_digest
+            and item.answer_result_binding == trace.answer_result_binding
+            and item.feature_flags_binding == trace.feature_flags_binding
+        ))
+
     def conversation_usage(self, trace: InteractionTrace) -> CommittedUsage:
         usages = tuple(item.usage for item in self.analysis_traces(trace))
         complete = all(item.provider_usage_complete for item in usages)
@@ -606,16 +671,15 @@ class InMemoryInteractionJournal:
         )
 
     def readable_resource_refs(self, trace: InteractionTrace) -> tuple[ResourceRef, ...]:
-        return tuple(dict.fromkeys(ref for item in self.analysis_traces(trace)
+        sources = (*selected_analysis_turns(trace, self.task_traces(trace)), trace)
+        return tuple(dict.fromkeys(ref for item in sources
                                    for ref in trace_resource_refs(
                                        item, include_goal_drafts=item.interaction_run_ref == trace.interaction_run_ref)))
 
-    def analysis_observations(self, trace: InteractionTrace) -> tuple[ActionObservation, ...]:
-        """Carry actual tool observations across the authorized analysis conversation."""
+    def task_observations(self, previous: tuple[InteractionTrace, ...]) -> tuple[ActionObservation, ...]:
+        """Recover owned tool observations for the selected task."""
         observations: list[ActionObservation] = []
-        for source in prior_analysis_turns(trace, self.analysis_traces(trace)):
-            if source.interaction_run_ref == trace.interaction_run_ref:
-                continue
+        for source in previous:
             owned = {item.action_id for item in source.accepted_tool_requests}
             owned.update(call_id for decision in source.model_decisions
                          if decision.assistant is not None
@@ -662,6 +726,8 @@ class InMemoryInteractionJournal:
                 or trace.python_profile_digest is None or trace.run_deadline_at is None
                 or trace.max_execution_seconds is None):
             raise PermissionError("Python execution is not authorized for this run")
+        if accepted.execution is None:
+            self.check_tool_goal(trace, accepted)
         return PythonJournalView(
             execution_scope=execution_scope, action_id=action_id,
             arguments=accepted.arguments, request_digest=request_digest,
@@ -697,6 +763,7 @@ class InMemoryInteractionJournal:
                 if accepted.command != command:
                     raise ConversationOperationConflict("Python command already differs")
                 return accepted
+            self.check_tool_goal(trace, accepted)
             if (command.execution_scope != execution_scope or command.action_id != action_id
                     or command.request_digest != accepted.request_digest
                     or command.deployment_digest != trace.python_profile_digest
@@ -936,46 +1003,6 @@ class InMemoryInteractionJournal:
                 for trace in self._traces.values()
             )
 
-    def working_plan_observations(
-        self,
-        conversation_id: str,
-        principal: AuthenticatedPrincipal,
-        working_plan: ConversationWorkingPlan,
-    ) -> tuple[ActionObservation, ...]:
-        """Project committed execution facts for the current foreground plan."""
-
-        with self._lock:
-            traces = tuple(self._traces.values())
-        candidates = sorted(
-            (
-                trace
-                for trace in traces
-                if trace.conversation_id == conversation_id
-                and trace.principal == principal
-                and trace.working_plan is not None
-                and trace.working_plan.plan_id == working_plan.plan_id
-            ),
-            key=lambda trace: (
-                trace.working_plan.revision,
-                trace.interaction_run_ref,
-            ),
-        )
-        observations: list[ActionObservation] = []
-        seen: set[tuple[str, str]] = set()
-        for trace in candidates:
-            for item in trace.inputs:
-                if (
-                    not isinstance(item, ActionObservation)
-                    or item.status != "succeeded"
-                ):
-                    continue
-                key = (item.capability_id, item.action_id)
-                if key in seen:
-                    continue
-                seen.add(key)
-                observations.append(item)
-        return tuple(observations)
-
     def conversation_evidence_refs(
         self,
         conversation_id: str,
@@ -1021,11 +1048,11 @@ class FileInteractionJournal(InMemoryInteractionJournal):
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def _original_directory(self, run_ref, invocation_id):
+    def _original_directory(self, run_ref: str, invocation_id: str) -> Path:
         self._validate_run_ref(run_ref)
         if not re.fullmatch(r"[0-9a-f]{32}", invocation_id):
             raise ConversationOperationConflict("模型调用原件身份不合法")
-        return self._root / run_ref / "model_invocations" / invocation_id
+        return self._root / run_ref / invocation_id
 
     @staticmethod
     def _write_immutable_original(target, text):
@@ -1051,25 +1078,22 @@ class FileInteractionJournal(InMemoryInteractionJournal):
     def _read_request_original(self, run_ref, invocation_id):
         return (self._original_directory(run_ref, invocation_id) / "request.json").read_text(encoding="utf-8")
 
-    def _write_response_original(self, run_ref, invocation_id, sequence, attempt_id, text):
+    def _write_response_original(self, run_ref: str, invocation_id: str, sequence: int, text: str) -> None:
         directory = self._original_directory(run_ref, invocation_id)
-        existing = list(directory.glob(f"{sequence:06d}.*.response.json"))
-        target = directory / f"{sequence:06d}.{attempt_id}.response.json"
-        if existing and (len(existing) != 1 or existing[0] != target):
-            raise ConversationOperationConflict("模型响应原件序号冲突")
-        self._write_immutable_original(target, text)
+        self._write_immutable_original(directory / f"{sequence}.json", text)
 
-    def _response_originals(self, run_ref, invocation_id):
+    def _response_originals(self, run_ref: str, invocation_id: str) -> tuple[ModelResponseRecord, ...]:
         directory = self._original_directory(run_ref, invocation_id)
+        response_names = {path.name for path in directory.glob("*.json")} - {"request.json"}
         result = []
         attempts = set()
-        for index, path in enumerate(sorted(directory.glob("*.response.json"))):
-            match = re.fullmatch(r"([0-9]{6})\.([0-9a-f]{32})\.response\.json", path.name)
-            if match is None or int(match[1]) != index or match[2] in attempts:
-                raise ConversationOperationConflict("模型响应原件序号重复或不连续")
-            record = ModelResponseRecord.model_validate_json(path.read_text(encoding="utf-8"))
-            if record.invocation_id != invocation_id or record.attempt_id != match[2]:
-                raise ConversationOperationConflict("模型响应原件身份与文件绑定不匹配")
+        for sequence in range(len(response_names)):
+            name = f"{sequence}.json"
+            if name not in response_names:
+                raise ConversationOperationConflict("模型响应原件序号不连续")
+            record = ModelResponseRecord.model_validate_json((directory / name).read_bytes())
+            if record.invocation_id != invocation_id or record.attempt_id in attempts:
+                raise ConversationOperationConflict("模型响应原件调用身份不匹配或尝试身份重复")
             attempts.add(record.attempt_id)
             result.append(record)
         return tuple(result)
@@ -1173,20 +1197,6 @@ class FileInteractionJournal(InMemoryInteractionJournal):
         for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
             self.get(run_dir.name)
         return super().plan_result_delivered(conversation_id, principal, working_plan)
-
-    def working_plan_observations(
-        self,
-        conversation_id: str,
-        principal: AuthenticatedPrincipal,
-        working_plan: ConversationWorkingPlan,
-    ) -> tuple[ActionObservation, ...]:
-        for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
-            self.get(run_dir.name)
-        return super().working_plan_observations(
-            conversation_id,
-            principal,
-            working_plan,
-        )
 
     def conversation_evidence_refs(
         self,

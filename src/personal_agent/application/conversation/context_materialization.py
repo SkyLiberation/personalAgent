@@ -10,11 +10,13 @@ from personal_agent.application.capture.web_source import (
     WebSearchOutput,
 )
 from personal_agent.application.conversation.models import (
+    OFFLOADED_OUTPUT_REFETCH,
     ActionObservation,
     ConversationMessage,
     DecisionFeedback,
     InteractionInput,
 )
+from personal_agent.application.conversation.observation_bounds import fit_observation_preview
 from personal_agent.capabilities.contracts.model import ModelActionDefinition
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
@@ -23,6 +25,30 @@ READ_ACTION_OUTPUT_CAPABILITY = "read_action_output"
 READ_ARTIFACT_CAPABILITY = "read_artifact"
 SEARCH_ACTION_OUTPUT_CAPABILITY = "search_action_output"
 ARTIFACT_OUTPUT_CAPABILITIES = frozenset({READ_ACTION_OUTPUT_CAPABILITY, READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY})
+
+
+def artifact_read_actions(
+    resource_id: str, actions: Sequence[ModelActionDefinition],
+) -> tuple[ModelActionDefinition, ...]:
+    return tuple(action for action in actions
+                 if action.kind == "tool"
+                 and action.target_name in {READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY}
+                 and resource_id in action.input_schema["properties"]["resource_id"].get("enum", ()))
+
+
+def _artifact_reading_guidance(
+    resource_id: str,
+    actions: Sequence[ModelActionDefinition],
+    *,
+    prompts: PromptCatalog,
+) -> str:
+    guidance = []
+    for action in artifact_read_actions(resource_id, actions):
+        template = ("conversation.service.artifact_repair_read" if action.target_name == READ_ARTIFACT_CAPABILITY
+                    else "conversation.service.artifact_repair_search")
+        guidance.append(prompts.render(template, tool=action.name, resource_id=resource_id))
+    return " ".join(guidance) or prompts.render(
+        "conversation.service.artifact_repair_unavailable", resource_id=resource_id)
 
 
 def _materialize_artifact_repair(
@@ -34,28 +60,44 @@ def _materialize_artifact_repair(
     ref = feedback.artifact_recovery_ref
     if ref is None:
         return feedback
-    guidance = []
-    for action in actions:
-        if action.kind != "tool" or action.target_name not in {
-            READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY,
-        }:
-            continue
-        resource = action.input_schema["properties"]["resource_id"]
-        if ref.resource_id not in resource.get("enum", ()):
-            continue
-        template = ("conversation.service.artifact_repair_read" if action.target_name == READ_ARTIFACT_CAPABILITY
-                    else "conversation.service.artifact_repair_search")
-        guidance.append(prompts.render(template, tool=action.name, resource_id=ref.resource_id))
-    repair = " ".join(guidance) or prompts.render(
-        "conversation.service.artifact_repair_unavailable", resource_id=ref.resource_id)
+    repair = _artifact_reading_guidance(ref.resource_id, actions, prompts=prompts)
     return feedback.model_copy(update={"required_repair": repair, "artifact_recovery_ref": None})
+
+
+def _observation_preview(payload: dict) -> str | None:
+    excerpt = payload.get("observation_excerpt")
+    if isinstance(excerpt, str) and excerpt:
+        return excerpt
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data = data.get("source_text" if data.get("format") == WEB_SOURCE_FORMAT else "text")
+    return data if isinstance(data, str) and data else None
+
+
+def _with_offloaded_preview(
+    compact_payload: dict,
+    preview: str | None,
+    actions: Sequence[ModelActionDefinition],
+    *,
+    previously_omitted: int | None,
+    prompts: PromptCatalog,
+) -> dict:
+    retrieval = compact_payload["retrieval"]
+    resource_id = retrieval["resource_ref"].get("resource_id")
+    if not isinstance(resource_id, str) or not resource_id:
+        return compact_payload
+    guide = _artifact_reading_guidance(resource_id, actions, prompts=prompts)
+    projected = {**compact_payload, "retrieval": {**retrieval, "read_more": guide}}
+    return fit_observation_preview(projected, preview or "", previously_omitted=previously_omitted)
 
 
 def materialize_analysis_user_requirements(
     messages: Sequence[ConversationMessage], *, prompts: PromptCatalog = DEFAULT_PROMPTS,
+    indices: Sequence[int] | None = None,
 ) -> str:
     """Quote user-owned sources without interpreting or storing another goal."""
-    users = [(index, message) for index, message in enumerate(messages) if message.role == "user"]
+    positions = range(len(messages)) if indices is None else indices
+    users = [(index, messages[index]) for index in positions if messages[index].role == "user"]
     if not users:
         return ""
     sources = []
@@ -77,14 +119,11 @@ def materialize_interaction_inputs(
     actions: Sequence[ModelActionDefinition] | None = None,
     prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[InteractionInput, ...]:
-    """Project committed observations into the smallest lossless model view.
+    """Project committed observations for the current model consumer.
 
-    The journal remains canonical and unchanged. Once an oversized observation
-    has an application-owned resource reference, repeatedly sending its lossy
-    head/tail excerpt adds input cost but cannot prove the omitted fact. The
-    model needs the reference, source index, and omission metadata to choose an
-    exact window through ``read_artifact``. Captured, failed, and merely
-    discovered sources must remain distinguishable without loading the body.
+    The main request supplies action declarations so an offloaded result can
+    carry a bounded preview and a usable route to the complete artifact.
+    Evidence-only projections retain the resource reference and omission facts.
     Read windows are already bounded evidence and remain visible verbatim.
 
     ``web_search`` stores both result rows and audit evidence in the canonical
@@ -95,6 +134,14 @@ def materialize_interaction_inputs(
 
     materialized: list[InteractionInput] = []
     for item in inputs:
+        if isinstance(item, DecisionFeedback) and item.reason_code == OFFLOADED_OUTPUT_REFETCH:
+            materialized.append(item.model_copy(update={
+                "message": prompts.get("conversation.service.artifact_refetch").template,
+                "repairable_fields": (),
+                "required_repair": "",
+                "artifact_recovery_ref": None,
+            }))
+            continue
         if isinstance(item, DecisionFeedback) and item.artifact_recovery_ref is not None:
             materialized.append(
                 _materialize_artifact_repair(item, actions, prompts=prompts) if actions is not None
@@ -158,6 +205,13 @@ def materialize_interaction_inputs(
             compact_payload["data"] = search_output.model_copy(
                 update={"results": ()},
             ).model_dump(mode="json")
+        if actions is not None:
+            omitted = item.payload.get("observation_excerpt_omitted_chars")
+            compact_payload = _with_offloaded_preview(
+                compact_payload, _observation_preview(item.payload), actions,
+                previously_omitted=omitted if isinstance(omitted, int) and omitted >= 0 else None,
+                prompts=prompts,
+            )
         materialized.append(item.model_copy(update={"payload": compact_payload}))
     return tuple(materialized)
 

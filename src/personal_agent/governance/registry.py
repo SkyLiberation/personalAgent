@@ -6,6 +6,7 @@ from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 import logging
 from typing import Any
 
+from jsonschema.validators import validator_for
 from langchain_core.tools import BaseTool
 
 from personal_agent.capabilities.contracts.interaction import (
@@ -117,6 +118,7 @@ class ToolExecutor:
                     description=tool.description or tool.name,
                     input_schema=tool_schema(tool),
                     strict=model_tool_strict(tool),
+                    model_integer_string_fields=(tool.extras or {}).get("model_integer_string_fields", ()),
                     read_only=not side_effects,
                     planning_safe=(
                         governance.risk_level == "low"
@@ -141,15 +143,7 @@ class ToolExecutor:
                 status="capability_missing",
                 message=f"Tool {name!r} is not currently available.",
             )
-        try:
-            if isinstance(tool.args_schema, type):
-                tool.args_schema.model_validate(arguments, context=self._prompts)
-        except Exception as exc:
-            return InteractionToolCallValidation(
-                status="invalid_arguments",
-                message=str(exc),
-            )
-        return InteractionToolCallValidation(status="accepted")
+        return self._validate_arguments(tool, arguments)
 
     def validate_workflow_call(
         self,
@@ -162,9 +156,17 @@ class ToolExecutor:
                 status="capability_missing",
                 message=f"Workflow tool {name!r} is not currently available.",
             )
+        return self._validate_arguments(tool, arguments)
+
+    def _validate_arguments(
+        self, tool: BaseTool, arguments: dict[str, object],
+    ) -> InteractionToolCallValidation:
+        schema = tool.args_schema
         try:
-            if isinstance(tool.args_schema, type):
-                tool.args_schema.model_validate(arguments, context=self._prompts)
+            if isinstance(schema, dict):
+                validator_for(schema)(schema).validate(arguments)
+            elif isinstance(schema, type):
+                schema.model_validate(arguments, context=self._prompts)
         except Exception as exc:
             return InteractionToolCallValidation(
                 status="invalid_arguments",

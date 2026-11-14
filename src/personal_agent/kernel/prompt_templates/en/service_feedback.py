@@ -84,16 +84,6 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template='The knowledge item was deleted.',
     ),
-    'conversation.service.intent_request_incomplete': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='The research-intent model call did not complete. Known usage has been preserved.',
-    ),
-    'conversation.service.intent_protocol_invalid': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='The structured research-intent output did not satisfy the protocol. Known usage has been preserved.',
-    ),
     'conversation.service.background_unavailable': PromptTranslation(
         source_version='2026-10-27.v1',
         version="2026-10-27.en.v1",
@@ -184,8 +174,8 @@ TRANSLATIONS = {
         template='This turn cannot end as `{disposition}` while the omitted portion of original `{resource_id}` is unread.',
     ),
     'conversation.service.artifact_refetch': PromptTranslation(
-        source_version='v1', version='en.v1',
-        template='The same request already produced offloaded original `{resource_id}`. Fetching it again cannot show the omitted content.',
+        source_version='v2', version='en.v2',
+        template='Duplicate tool call. Execution skipped.',
     ),
     'conversation.service.artifact_repair_read': PromptTranslation(
         source_version='v1', version='en.v1',

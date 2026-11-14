@@ -1,7 +1,6 @@
 """Project and bind a batch of actual Python proposals for goal compliance."""
 from collections.abc import Callable
 from dataclasses import dataclass
-import json
 
 from pydantic import create_model
 
@@ -9,7 +8,7 @@ from personal_agent.capabilities.contracts.model import (
     ModelCapacityCheck, ModelCapacityRefused, StructuredModelRequest, sealed_context_projection_ref,
 )
 from personal_agent.capabilities.contracts.verification import (
-    ActionGoalAssessment, ActionGoalDecision, ActionGoalJudgment, GoalComplianceAnswerContext,
+    ActionGoalAssessment, ActionGoalDecision, ActionGoalJudgment, CitedDraftUnit, GoalComplianceAnswerContext,
 )
 from personal_agent.capabilities.contracts.verification_prompt import (
     GOAL_COMPLIANCE_OPERATION, goal_compliance_answer_request, goal_compliance_messages, verification_judgment_text,
@@ -23,6 +22,7 @@ from personal_agent.application.python_execution.models import PROGRAM_MAX_BYTES
 
 from .goal_compliance_history import ActionHistoryEvent, GoalComplianceTurn, project_goal_compliance_history
 from .errors import ConversationOperationConflict
+from .citations import render_decision_feedback
 from .goal_models import CurrentAnalysisGoal
 from .models import (
     ActionGoalBinding, ActionGoalReview, ArtifactSourceInput, InteractionTrace,
@@ -34,10 +34,6 @@ ACTION_GOAL_PROMPT = "interaction_verification.action_goal"
 COMPLIANCE_PROMPT = "interaction_verification.compliance"
 _HISTORICAL_GOAL_EXCERPT = 600
 _RECENT_COMPLETE_TURNS = 2
-
-
-def _json(data: object) -> str:
-    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -68,10 +64,44 @@ class PreparedActionGoalRequest:
     compacted_through: int
 
 
+def _history_action_text(event: ActionHistoryEvent, *, compacted: bool, prompts: PromptCatalog) -> str:
+    parts = [prompts.render("interaction_verification.context.action_id", action_id=event.action_id)]
+    parts.extend(prompts.render("interaction_verification.context.input", binding_name=item.name, resource_id=item.resource_id)
+                 for item in event.arguments.input_files)
+    if not compacted:
+        parts.append(prompts.render("interaction_verification.context.code", code=event.arguments.code))
+    if event.review is not None:
+        judgment = event.review.judgment
+        parts.append(prompts.render("interaction_verification.context.judgment",
+            verdict=prompts.get(f"interaction_verification.context.action.{judgment.verdict}").template,
+            feedback=judgment.feedback))
+    if event.rejection is not None:
+        parts.append(render_decision_feedback(event.rejection, prompts=prompts))
+    if event.observation is not None:
+        parts.append(prompts.render("interaction_verification.context.observation",
+            status=prompts.get(f"conversation.context.state.{event.observation.status}").template))
+        payload = event.observation.payload
+        if isinstance(payload.get("error"), str):
+            parts.append(payload["error"])
+        if event.stdout_ref is not None:
+            parts.append(prompts.render("interaction_verification.context.stdout",
+                resource_id=event.stdout_ref.resource_id, revision=event.stdout_ref.revision))
+        data = payload.get("data")
+        if isinstance(data, dict) and (not compacted or event.is_dependency):
+            for stream in ("stdout", "stderr"):
+                preview = data.get(f"{stream}_preview")
+                if isinstance(preview, str) and preview:
+                    parts.append(prompts.render("interaction_verification.context.stream", stream=stream, text=preview))
+                    count = data.get(f"{stream}_omitted_chars")
+                    if isinstance(count, int) and count > 0:
+                        parts.append(prompts.render("conversation.context.tool.omitted", count=count))
+    return "\n\n".join(parts)
+
+
 def _render_turn(turn: GoalComplianceTurn, *, compacted: bool, prompts: PromptCatalog) -> str:
     groups = []
     for group in turn.goals:
-        objective = group.goal.goal.objective if group.goal is not None else prompts.get(
+        objective = group.goal.verification_text(turn.run_ref) if group.goal is not None else prompts.get(
             "interaction_verification.answer.goal_unavailable").template
         if compacted:
             objective = objective[:_HISTORICAL_GOAL_EXCERPT]
@@ -79,11 +109,13 @@ def _render_turn(turn: GoalComplianceTurn, *, compacted: bool, prompts: PromptCa
         for event in group.events:
             if isinstance(event, ActionHistoryEvent):
                 events.append(prompts.render(f"{COMPLIANCE_PROMPT}.history_action",
-                    action=_json(event.context(compacted=compacted))))
+                    action=_history_action_text(event, compacted=compacted, prompts=prompts)))
             else:
                 submission = event.submission
                 events.append(prompts.render(f"{COMPLIANCE_PROMPT}.history_answer", submission_id=submission.submission_id,
-                    disposition=submission.disposition, delivered=_json(event.delivered), draft=submission.content))
+                    disposition=submission.disposition, draft=submission.content,
+                    delivered=prompts.get("interaction_verification.context.delivered" if event.delivered
+                                          else "interaction_verification.context.not_delivered").template))
                 if submission.verdict is not None:
                     events.append(prompts.render("interaction_verification.history.judgment",
                         submission_id=submission.submission_id,
@@ -101,7 +133,7 @@ def _render_turn(turn: GoalComplianceTurn, *, compacted: bool, prompts: PromptCa
 def _render_history(turns: tuple[GoalComplianceTurn, ...], through: int, *, prompts: PromptCatalog) -> tuple[str, ...]:
     return tuple(_render_turn(turn, compacted=(turn.number <= through and turn.completed
                  and not turn.has_bound_dependency and turn is not turns[-1]), prompts=prompts)
-                 for turn in turns if turn.goals)
+                 for turn in turns if turn.goals or turn is turns[-1])
 
 
 def _capacity_measurement(request: StructuredModelRequest, measure_capacity: Callable) -> tuple[int, int, ModelCapacityRefused | None]:
@@ -141,6 +173,8 @@ def _fit_history(turns: tuple[GoalComplianceTurn, ...], through: int, render: Ca
 def answer_goal_context(goal: CurrentAnalysisGoal | None, draft: str, sources: tuple[InteractionTrace, ...], *,
                         prompts: PromptCatalog,
                         measure_capacity: Callable[[StructuredModelRequest], ModelCapacityCheck | None],
+                        cited_units: tuple[CitedDraftUnit, ...] = (),
+                        workspace_execution_facts: tuple[str, ...] = (),
                         ) -> tuple[GoalComplianceAnswerContext, int]:
     trace = sources[-1]
     events = verification_events(trace)
@@ -151,7 +185,9 @@ def answer_goal_context(goal: CurrentAnalysisGoal | None, draft: str, sources: t
         verified, unverified = pending.verified_goal, pending.unverified_goal
         objective = (verified.verified_draft if verified is not None else
                      unverified.content if unverified is not None else None)
-        if (goal is None or goal.goal.objective != objective
+        accepted = next((item for item in reversed(trace.goal_operations) if item.operation != "read"), None)
+        if (goal is None or accepted is None or accepted.goal_ref != goal.reference
+                or accepted.verification_text() != objective
                 or trace.feature_flags_binding.goal_verification != (verified is not None)):
             raise ConversationOperationConflict("answer verification requires the goal bound to the submitted draft")
     turns = project_goal_compliance_history(sources, current=goal, pending_ids=frozenset(),
@@ -159,7 +195,8 @@ def answer_goal_context(goal: CurrentAnalysisGoal | None, draft: str, sources: t
 
     def context_at(through: int) -> GoalComplianceAnswerContext:
         return GoalComplianceAnswerContext(rounds=_render_history(turns, through, prompts=prompts),
-            submission_id=pending.submission_id, disposition=pending.disposition)
+            submission_id=pending.submission_id, disposition=pending.disposition, cited_units=cited_units,
+            workspace_execution_facts=workspace_execution_facts)
 
     _, through = _fit_history(turns, max(source.goal_compliance_history_compacted_through for source in sources),
         lambda n: goal_compliance_answer_request(context_at(n), draft, prompts=prompts), measure_capacity)
@@ -178,30 +215,36 @@ def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingPythonRev
     actions = []
     source_budget = PROGRAM_MAX_BYTES
     for slot, pending in enumerate(batch, start=1):
-        files = []
+        parts = [prompts.render("interaction_verification.context.pending_slot",
+            slot=f"a{slot}", action_id=pending.binding.action_id)]
         for binding, ref in zip(pending.arguments.input_files, pending.binding.input_refs, strict=True):
-            file = {"name": binding.name, "resource_id": ref.resource_id, "revision": ref.revision}
+            parts.append(prompts.render("interaction_verification.context.input", binding_name=binding.name, resource_id=ref.resource_id))
             resource = metadata.get(ref)
             if resource is not None:
-                file.update(filename=resource.filename, content_type=resource.content_type)
-            if binding.name.lower().endswith(".py"):
-                if artifacts is None:
-                    file["source_status"] = "unavailable"
-                else:
-                    try:
-                        if resource is None:
-                            resource = artifacts.resource_item(ref, principal=ref.owner, owner=ref.owner)
-                        if resource.size_bytes > source_budget:
-                            file["source_status"] = "over_budget"
-                        else:
-                            source_code = artifacts.read_text(ref, principal=ref.owner, owner=ref.owner)
-                            source_budget -= resource.size_bytes
-                            file["source_code"] = source_code
-                    except (OSError, PermissionError, ValueError):
-                        file["source_status"] = "unavailable"
-            files.append(file)
-        actions.append({"slot": f"a{slot}", "action_id": pending.binding.action_id, "tool_name": "execute_python",
-                        "code": pending.arguments.code, "input_files": files})
+                parts.append(prompts.render("interaction_verification.context.input_version",
+                    revision=ref.revision, filename=resource.filename, media=resource.content_type or "—"))
+            else:
+                parts.append(prompts.render("interaction_verification.context.input_revision", revision=ref.revision))
+            if not binding.name.lower().endswith(".py"):
+                continue
+            source_text = None
+            status = "unavailable"
+            if artifacts is not None:
+                try:
+                    if resource is None:
+                        resource = artifacts.resource_item(ref, principal=ref.owner, owner=ref.owner)
+                    if resource.size_bytes > source_budget:
+                        status = "over_budget"
+                    else:
+                        source_text = artifacts.read_text(ref, principal=ref.owner, owner=ref.owner)
+                        source_budget -= resource.size_bytes
+                except (OSError, PermissionError, ValueError):
+                    pass
+            parts.append(prompts.render("interaction_verification.context.mounted_code",
+                binding_name=binding.name, code=source_text) if source_text is not None
+                else prompts.get(f"interaction_verification.context.source.{status}").template)
+        parts.append(prompts.render("interaction_verification.context.code", code=pending.arguments.code))
+        actions.append("\n\n".join(parts))
     turns = project_goal_compliance_history(sources, current=goal, input_refs=refs, prompts=prompts,
                                           pending_ids=frozenset(item.binding.action_id for item in batch))
     output = create_model(
@@ -209,7 +252,7 @@ def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingPythonRev
         **{f"a{slot}": (ActionGoalDecision, ...) for slot in range(1, len(batch) + 1)},
     )
 
-    pending_text = prompts.render(f"{ACTION_GOAL_PROMPT}.pending", actions=_json(actions))
+    pending_text = prompts.render(f"{ACTION_GOAL_PROMPT}.pending", actions="\n\n".join(actions))
 
     def render(through: int) -> StructuredModelRequest:
         rounds = _render_history(turns, through, prompts=prompts)

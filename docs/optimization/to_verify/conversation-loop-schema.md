@@ -229,7 +229,7 @@ REST 的 status 属于本地响应，安全 detail 保留 message、reason_code�
 
 每次完整模型响应先保存原件和实际费用，再记录输出解码／接纳结果，随后执行。既有 ModelDecisionRecord 需要覆盖“收到完整输出但未形成合法动作”的真实状态，不再只保存成功动作；复用现有 Journal 和 Artifact，不新建第二响应表或收费账本。合法 assistant/tool 交换按原 ID 配对；无合法 ID 时只记录原件与协议失败，不补造 ID 或结果。
 
-完整请求／响应只由原 Journal 保存一次，调用记录持有 typed 原件引用和 digest，不能把每次完整 messages／model_history／raw payload 嵌入之后每个全量 Trace revision。FileJournal 使用本 run 下具名 model_invocations 原件目录，InMemoryJournal 使用同 owner 的原件映射；这是既有 Journal 的技术后端，不是独立可写事实源。请求引用包含 invocation／operation／projection／请求 digest、输出类型及 schema digest、原修复策略；响应引用绑定 invocation／attempt／原件 digest 和原次序。读取经 Journal 校验并恢复 StoredModelRequest／ModelResponseRecord，模型不见文件位置。
+完整请求／响应只由原 Journal 保存一次，调用记录持有 typed 原件引用和 digest，不能把每次完整 messages／model_history／raw payload 嵌入之后每个全量 Trace revision。FileJournal 按运行和调用归档原件，InMemoryJournal 使用同 owner 的原件映射；这是既有 Journal 的技术后端，不是独立可写事实源。请求引用包含 invocation／operation／projection／请求 digest、输出类型及 schema digest、原修复策略；响应引用绑定 invocation／attempt／原件 digest 和原次序。读取经 Journal 校验并恢复 StoredModelRequest／ModelResponseRecord，模型不见文件位置。
 
 只有 structured 请求存在被消费的 output_type／输出 Schema。主 tool_calling 通过同轮 action_definitions 绑定，text 只返回文本；二者的请求摘要和恢复不调用占位 BaseModel 的 model_json_schema，也不为计量另造空业务 DTO。原 kind 与真实工具声明仍参与绑定。
 

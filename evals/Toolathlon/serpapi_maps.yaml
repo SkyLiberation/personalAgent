@@ -1,0 +1,6 @@
+type: sse
+name: google_map
+params:
+  url: "http://serpapi-maps:8000/sse"
+client_session_timeout_seconds: 120
+cache_tools_list: true

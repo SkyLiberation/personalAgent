@@ -198,8 +198,8 @@ PROMPTS = {
     ),
     "conversation.plan.step_binding_repair": PromptSpec(
         name="conversation.plan.step_binding_repair",
-        version="2026-10-27.v1",
-        template="新项省略或null step_id；保留当前全部有效ID及已绑定项职责。整批计划未改变。",
+        version="v2-list-control",
+        template="用当前清单中的 step_id 更新已有项。新项省略 step_id。保持已绑定步骤的描述，或另加新步骤。",
         owner="conversation",
     ),
     "conversation.experiment.submission_missing": PromptSpec(
@@ -252,9 +252,13 @@ PROMPTS = {
     ),
     "conversation.plan.step_binding_invalid": PromptSpec(
         name="conversation.plan.step_binding_invalid",
-        version="2026-10-27.v1",
-        template="完整计划更新被拒：未知ID={unknown}；漏项={omitted}；已绑定项改义={changed_bound}。",
+        version="v2-list-control",
+        template="清单未更新。未知步骤 ID 为 {unknown}，改动了已绑定执行的步骤为 {changed_bound}。",
         owner="conversation",
+    ),
+    "conversation.plan.goal_binding_invalid": PromptSpec(
+        name="conversation.plan.goal_binding_invalid", version="v1", owner="conversation",
+        template="每个未完成的计划步骤须填写其服务的当前有效目标条目 ID。请按最新目标修订步骤。",
     ),
     "conversation.experiment.citations_unbound": PromptSpec(
         name="conversation.experiment.citations_unbound",

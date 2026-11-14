@@ -5,7 +5,6 @@ from __future__ import annotations
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
-import re
 from typing import Annotated, Literal
 import unicodedata
 
@@ -13,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
+from personal_agent.kernel.decimal_integer import POSITIVE_DECIMAL_PATTERN, read_decimal_integer
 
 DRAFT_MAX_BYTES = 65_536
 DRAFT_MAX_EDITS = 32
@@ -21,10 +21,9 @@ DraftContentType = Literal["text/x-python", "application/json", "text/markdown"]
 DRAFT_SUFFIXES = {"text/x-python": ".py", "application/json": ".json", "text/markdown": ".md"}
 ContentDigest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
-_POSITIVE_DECIMAL = r"[1-9][0-9]*"
 TextPositionInput = (
     Annotated[int, Field(ge=1)]
-    | Annotated[str, Field(pattern=rf"^{_POSITIVE_DECIMAL}$")]
+    | Annotated[str, Field(pattern=rf"^{POSITIVE_DECIMAL_PATTERN}$")]
 )
 
 
@@ -86,9 +85,8 @@ class TextPosition(_ArtifactModel):
     @field_validator("line", "column", mode="before", json_schema_input_type=TextPositionInput)
     @classmethod
     def parse_position_input(cls, value: object) -> object:
-        if isinstance(value, str) and re.fullmatch(_POSITIVE_DECIMAL, value):
-            return int(value)
-        return value
+        number = read_decimal_integer(value, positive=True)
+        return number if number is not None else value
 
 
 class TextRange(_ArtifactModel):

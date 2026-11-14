@@ -419,6 +419,8 @@ PERSONAL_AGENT_E2E_NOTION_EXPECTED_TEXT=PERSONAL_AGENT_NOTION_E18_MARKER
 
 这些字段写入 tool 的 `extras["mcp_capability"]`，启动时转换为 `MCPCapability` 并进入 `CapabilityPortfolio`。Portfolio 保存静态定义与 `ExecutionCapabilityAvailability`；Conversation 按定义、可用性和曝光物化能力，调用阶段再由 Admission/Gateway 检查参数、作用域与 Policy。投影和授权的实际边界见 [Context](topics/context-engineering.md#visibility-的定义与分层)。
 
+MCP 工具参数使用 Server 提供的 `inputSchema`。已有映射中的 `allowed_request_headers` 与 `use_upstream_input_schema` 需移除。[`inputSchema` 参数契约](mcpDesign/README.md#524-沿用上游输入-schema)
+
 当前支持两类 transport：
 
 - `http`：使用 `endpoint`、`headers` 或 `authorization` 访问 JSON-RPC / Streamable HTTP MCP server。

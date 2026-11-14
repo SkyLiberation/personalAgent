@@ -19,18 +19,6 @@ PROMPTS = {
 }
 
 PROMPTS.update({
-    'conversation.interaction_mode': PromptSpec(name='conversation.interaction_mode', version="2026-10-27.v1", template='调用方交互模式（权威数据）：{interaction_mode}', owner="conversation"),
-    'conversation.intent.user_source_header': PromptSpec(name='conversation.intent.user_source_header', version="v2-history-user-md", template='## 历史用户要求\n\n用于解释本轮请求及恢复仍有效的条件。用户原始消息索引 message_index={index}，允许行号 1..{line_count}。下列 L 编号由 Runtime 添加，不属于用户原文：\n', owner="conversation"),
-    'conversation.intent.revision': PromptSpec(name='conversation.intent.revision', version='2026-10-27.v1-md1', template="""{intent_prompt}
-
-## 本次修订
-上次后台要求未通过来源准入。仅修订 background_continuation_requested、background_source、interaction_phase 和 phase_source；requirements 已冻结，修改不会生效。确需本次响应返回后独立工作时，引用最新用户消息中证明该要求的行；否则返回 false 和 background_source=null。上次实际提议：{proposal}。实际反馈：{feedback}.""", owner="conversation"),
-    'conversation.intent.background_revision.message': PromptSpec(name='conversation.intent.background_revision.message', version="2026-10-27.v1", template='后台继续运行要求缺少最新用户消息中的合法来源，或与交互相位冲突。', owner="conversation"),
-    'conversation.intent.background_revision.repair': PromptSpec(name='conversation.intent.background_revision.repair', version="2026-10-27.v1", template='确需响应返回后继续工作时返回 true 及最新用户消息的合法行引用；否则返回 false 和 background_source=null。后台要求只适用 ordinary，phase_source=null。', owner="conversation"),
-    'conversation.intent.ungrounded_criteria.message': PromptSpec(name='conversation.intent.ungrounded_criteria.message', version="2026-10-27.v1", template='本次验收条件无法恢复到合法用户原文，未接纳为审查标准。', owner="conversation"),
-    'conversation.intent.ungrounded_criteria.repair': PromptSpec(name='conversation.intent.ungrounded_criteria.repair', version="2026-10-27.v1", template='需要按明确要求审稿时，请用户明确验收条件；其他请求正常回答，不自述已通过核验。', owner="conversation"),
-    'conversation.intent.ungrounded_background.message': PromptSpec(name='conversation.intent.ungrounded_background.message', version="2026-10-27.v1", template='后台继续运行要求未能恢复到最新用户原文，没有启动后台任务。', owner="conversation"),
-    'conversation.intent.ungrounded_background.repair': PromptSpec(name='conversation.intent.ungrounded_background.repair', version="2026-10-27.v1", template='在当前对话继续工作；确需响应返回后独立继续时，请用户明确后台要求。', owner="conversation"),
     'conversation.model_action.tool_description': PromptSpec(name='conversation.model_action.tool_description', version="2026-10-27.v1", template='{description} 按当前 Schema 直接提交业务参数；计划进度由独立控制动作管理。', owner="conversation"),
     'conversation.model_action.agent_description': PromptSpec(name='conversation.model_action.agent_description', version="2026-10-27.v1", template='委派一个边界明确的子目标。{description}', owner="conversation"),
     'conversation.history.context_explanation': PromptSpec(name='conversation.history.context_explanation', version="2026-10-27.v1", template='派生工作摘要，只帮助继续任务；不是执行、来源或批准事实。原件可用 read_artifact／search_action_output 读取；历史快照不是论文来源。当前目标、工作清单、原稿和额度仍以本次独立输入为准。', owner="conversation"),

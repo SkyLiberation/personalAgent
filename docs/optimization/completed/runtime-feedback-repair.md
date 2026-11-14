@@ -4,11 +4,11 @@
 
 ## 原件和调用身份
 
-未读原件、重复抓取与历史快照拒绝都保留确切资源。主请求只列出工具声明中允许该资源的读搜动作。目标候选稿与历史快照用于恢复工作或修订目标，文件检查不会把它们变成业务证据。
+未读原件与历史快照拒绝保留确切资源。主请求只列出工具声明中允许该资源的读搜动作。历史重复抓取样本也曾使用该指引，当前契约见[Runtime 拦截反馈](../../context/runtime-feedback.md#91-已修改)。目标候选稿与历史快照用于恢复工作或修订目标，文件检查不会把它们变成业务证据。
 
 已提交的目标操作和已执行或接纳的工具共享调用身份检查。跨轮复用在派发前拒绝，原调用与本次拒绝分别配对。确需新操作时由原生协议绑定身份。原文稿的同轮恢复沿已有生产绑定处理。三处 UTF-8 文稿大小提示从校验阈值取值。
 
-第一批按真实[未读原件请求](../../../.tmp/claim-feedback-handoff-20261021/live/baseline/sdk/0008-request.json)和[重复抓取阶段](../../../.tmp/final-criterion-reference-20261002/target/temporary/e2e-server-mo2q_pkt/server-data/interaction_runs/irun_ea3216a9f07c4a02/0004.json)复现固定名称，再核对两种工具范围反事实和三处字节上限。当前源码复验 7/7。[归档报告](../../../.tmp/runtime-feedback-declarations-20261106/final-review-regression/report.json)
+第一批按真实[未读原件请求](../../../.tmp/claim-feedback-handoff-20261021/live/baseline/sdk/0008-request.json)和[重复抓取阶段](../../../.tmp/final-criterion-reference-20261002/target/temporary/e2e-server-mo2q_pkt/server-data/interaction_runs/irun_ea3216a9f07c4a02/0004.json)复现固定名称，再核对两种工具范围反事实和三处字节上限。当时源码复验 7/7。[归档报告](../../../.tmp/runtime-feedback-declarations-20261106/final-review-regression/report.json)
 
 ## 目标修复和知识确认
 

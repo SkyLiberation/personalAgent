@@ -43,7 +43,7 @@ Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/applicat
 
 ## 输入、结果与错误
 
-工具使用显式 Pydantic `ArgsSchema` 表达必填项、范围及字段说明。Conversation 在执行前校验工具名和参数；原生工具调用的形状合法后，仍须通过 Application 准入。
+内建工具使用 Pydantic `ArgsSchema`，MCP 工具沿用 Server 的 `inputSchema`。Conversation 在执行前校验工具名和参数。原生工具调用的形状合法后，仍须通过 Application 准入。[MCP 输入契约](../mcpDesign/README.md#524-沿用上游输入-schema)
 
 模型用 `tool_create_artifact` 新建草稿，顶层提供 `filename`、`content_type` 和 `content`。用 `tool_patch_artifact` 编辑已有草稿，顶层提供基稿 `base_resource_id` 和非空 `edits`。每项编辑直接提供 `start_line`、`start_column`、`end_line`、`end_column` 和 `new_text`。两种动作的调用名确定操作。目标维护阶段只开放当前可读草稿的补丁。
 

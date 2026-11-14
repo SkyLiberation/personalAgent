@@ -64,11 +64,22 @@ class ModelActionDefinition(BaseModel):
     description: str = ""
     input_schema: dict[str, Any]
     strict: bool = True
+    model_integer_string_fields: tuple[str, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _serialize_reading_contract(self, handler):
+        serialized = handler(self)
+        if not self.model_integer_string_fields:
+            # Preserve the sealed identity of declarations with the original read contract.
+            serialized.pop("model_integer_string_fields", None)
+        return serialized
 
     @model_validator(mode="after")
     def _requires_object_input(self) -> "ModelActionDefinition":
         if self.input_schema.get("type") != "object":
             raise ValueError("model action input_schema must have an object root")
+        if self.model_integer_string_fields and self.kind != "tool":
+            raise ValueError("only business tools can declare integer string fields")
         return self
 
 

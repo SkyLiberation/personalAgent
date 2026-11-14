@@ -21,10 +21,6 @@ from personal_agent.application.conversation.models import (
     WorkingPlanProposal,
     WorkingPlanStepProposal,
 )
-from personal_agent.application.conversation.interaction_intent import (
-    InteractionIntentProposal,
-    ReviewRequirement,
-)
 from personal_agent.application.conversation.journal import (
     FileInteractionJournal,
     InMemoryInteractionJournal,
@@ -63,8 +59,6 @@ __all__ = [
     "KnowledgeSaveArguments",
     "LoopBudgetPolicy",
     "ReviewCriteria",
-    "InteractionIntentProposal",
-    "ReviewRequirement",
     "ToolCallProposal",
     "WorkingPlanProposal",
     "WorkingPlanStepProposal",

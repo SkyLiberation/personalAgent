@@ -51,7 +51,7 @@
   "cases": [
     {
       "id": "evd_new_capability",
-      "task": "新增功能前，怎样从正式入口准备失败 baseline 和真实 target E2E？",
+      "task": "新增功能前，怎样复用已有证据建立 baseline 并选择 target 验收？",
       "expected": "EVD"
     },
     {
@@ -70,8 +70,8 @@
       "expected": "EVD"
     },
     {
-      "id": "evd_docs_and_e2e_first",
-      "task": "docs-first 与 e2e-first 如何约束设计项和优化项在落地前的验收准备？",
+      "id": "evd_docs_first_acceptance",
+      "task": "docs-first 如何约束设计项和优化项在落地前的验收准备？",
       "expected": "EVD"
     },
     {

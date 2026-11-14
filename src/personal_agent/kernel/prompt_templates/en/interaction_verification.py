@@ -34,14 +34,14 @@ Review only the content marked as pending at the end. Use the effective goal in 
 {stage}""",
     ),
     "interaction_verification.action_goal": PromptTranslation(
-        "v8-goal-compliance", "v8-goal-compliance-en.1",
+        "v10-goal-snapshot", "v10-goal-snapshot-en.1",
         """## Task
 
 Before execution, check each pending action for conflicts with explicit requirements that apply to it.
 
 ## Judgment
 
-- Use inline code together with source_code from bound files to reconstruct the actual program. A source_status value means the mounted script content is absent. This makes the judgment undetermined only if that script contains logic needed to judge the action. Raw dataset contents are not included.
+- Use inline code together with original source code from bound files to reconstruct the actual program. A a notice of unavailable source value means the mounted script content is absent. This makes the judgment undetermined only if that script contains logic needed to judge the action. Raw dataset contents are not included.
 - Read the complete program and trace its variables and data flow through computation, filtering, comparison, and visible output. Distinguish intermediate material used for exploration or preparation from results the program uses as deliverables. Broader inputs or computations are allowed unless the program uses them in a deliverable that conflicts with the objective. Partial progress, another valid method, or diagnostic work alone is allowed.
 - Identify the deliverable or comparison that this action actually implements, then find the requirements that still govern it. When the objective distinguishes the full input set, a selected subset, and a display range, trace which set each output, comparison, or summary consumes. If the objective requires selection before comparison, computing a difference or comparison over the full set is a visible process conflict even if the members happen to coincide at runtime. Apply this only when the restriction still governs the current action.
 - For a comparison with multiple operands, trace each one from the comparison back to its source and selection steps. Include each demonstrable conflict that affects the deliverable. Distinguish a missing selection step in the code from unknown real-world membership. Do not infer members from general knowledge. Failure to recompute potentially existing material or to produce the entire deliverable in this intermediate step does not itself establish a conflict.
@@ -68,11 +68,15 @@ Fill the Schema field for each proposed action using its slot, such as a1. Each 
     "interaction_verification.compliance.pending_answer": PromptTranslation(
         "v1", "v1-en.1", "#### Pending answer\n\nSubmission {submission_id}, disposition {disposition}\n\n{draft}",
     ),
+    "interaction_verification.compliance.answer_evidence": PromptTranslation(
+        "v2", "v2-en.1",
+        "##### Evidence for the pending answer\n\ncited_text contains original text and its source location. workspace_execution_facts contains the workspace operation statuses and paths committed by Runtime. Check the answer against the facts each source covers.\n\n{evidence}",
+    ),
     "interaction_verification.compliance.history_action": PromptTranslation(
         "v1", "v1-en.1", "##### Historical action, corresponding judgment, and execution observation\n\n{action}",
     ),
     "interaction_verification.compliance.history_answer": PromptTranslation(
-        "v1", "v1-en.1", "##### Historical answer\n\nSubmission {submission_id}, disposition {disposition}, delivered {delivered}\n\n{draft}",
+        "v1", "v1-en.1", "##### Historical answer\n\nSubmission {submission_id}, disposition {disposition}. {delivered}\n\n{draft}",
     ),
     "interaction_verification.action_goal.pending": PromptTranslation(
         "v1", "v1-en.1", "#### Proposed actions in this batch\n\n{actions}",
@@ -99,15 +103,29 @@ Fill the Schema field for each proposed action using its slot, such as a1. Each 
     'interaction_verification.history.goal_delta': PromptTranslation(
         'v1-goal-draft', 'v1-goal-draft-en.1',
         '## Actual changes from the effective goal to the candidate\n\nRuntime compared the complete texts. Use these changes to examine revisions and deletions; original user wording remains authoritative.\n\n```diff\n{delta}\n```'),
-    'interaction_verification.goal': PromptTranslation('v16-goal-draft', 'v16-goal-draft-en.1', """## Task
+    'interaction_verification.goal.task_review': PromptTranslation('v2-task-evidence', 'v2-task-evidence-en.1',
+        "## Proposed task for this turn\n\nRelationship: {action}\nEvidence from this turn: {evidence}\nTask request before selection: {current_task_request}\n\nFirst check the relationship against the current wording and deliverable. continue extends the current task, start opens an independent task, side_question is a one-turn detour, and resume returns to the selected earlier task. For start and side_question, the preceding task request only helps check the relationship. Check each substantive condition in the candidate, including precision, formatting, ordering, statistical methods and acceptance criteria. Conditions require support from current user wording, and older rules require an explicit reference in this turn. Leave optional implementation methods for execution. If the candidate makes such methods or old rules obligatory, mark not_satisfied and identify the condition and missing support. For later revisions, check the still-applicable requirements of the selected task."),
+    'interaction_verification.goal.clarification_resolution': PromptTranslation('v1', 'v1-en.1',
+        """## Application data: proposed clarification resolution
+
+clarification_id {clarification_id} identifies the question already delivered. Check that the current user excerpt answers or explicitly withdraws it. Identify the missing information if the excerpt does not resolve it.
+
+Original question
+{question}
+
+Current user excerpt
+{evidence}"""),
+    'interaction_verification.goal': PromptTranslation('v20-task-evidence', 'v20-task-evidence-en.1', """## Task
 
 Check whether the last goal submission faithfully defines the user's task for this turn. Review the task definition only; execution becomes available after acceptance. Do not assess completed work or a final answer.
 
-{criteria_json}
+{criteria_text}
 
 ## Input and judgment
 
 Original user messages and still-effective changes determine the requirements. The active goal, previous goal submissions, their verdicts, and actual revisions are correctable working records. Read them in original interaction order. Model-authored definitions and prior acceptance do not establish user requirements.
+
+The candidate items list the requirements and acceptance criteria applicable to this turn. Use the original wording to check applicability, criteria, and relationships. Check in particular whether the latest user explicitly authorized any relaxation or revocation of a constraint or release of execution_control. Report insufficient evidence when authorization is ambiguous. A request solely to pause or restrict execution can set control without adding task items.
 
 Compare current requirements and still-effective historical requirements, including objects, conditions, relationships, scopes and exceptions. Check whether each material change or deletion is supported by user wording, and inspect related statements in the complete candidate. Retain long-term requirements even when they need no execution in this turn; replace changed or revoked requirements only in their stated scope. Identify omissions, scope changes, substituted relationships and added obligations. Matching words, numbers, or topics does not establish agreement. Legitimate implementation methods may differ.
 
@@ -116,11 +134,11 @@ When the user requests actual results, the goal must correctly specify obtaining
 ## Output
 
 Return only Schema fields: a nonempty checks array of objects, each containing a concrete user requirement in requirement, status, and corresponding feedback. satisfied means the goal correctly expresses that requirement; not_satisfied means the task definition clearly omits or changes it; insufficient_evidence means an indispensable premise for judging the definition is missing. Feedback identifies the specific goal revision needed, without demanding execution first or writing the replacement goal. Do not substitute quality adjectives or section headings for requirements or output an overall score, aggregate verdict, or full reasoning trace. Review task definition only; do not add source-review, program-verification, or presentation-quality obligations."""),
-    'interaction_verification.answer': PromptTranslation('v6-goal-compliance', 'v6-goal-compliance-en.1', """## Task
+    'interaction_verification.answer': PromptTranslation('v9-goal-snapshot', 'v9-goal-snapshot-en.1', """## Task
 
 Before delivery, check whether the pending answer actually follows the applicable requirements.
 
-{criteria_json}
+{criteria_text}
 
 Compare any method, inputs, and precision the draft explicitly describes with the applicable goal. If the concrete method and a general compliance claim conflict, judge the concrete method.
 
@@ -128,7 +146,7 @@ Compare any method, inputs, and precision the draft explicitly describes with th
 
 Check each deliverable and the objects, conditions, relationships, scope, and exceptions that apply to it. Distinguish the scope of each object or stage. A heading, stated intention, or claim of completion cannot substitute for the requested content. Allow additions and methods consistent with the goal. Use history only to understand prior results referenced by the current goal and actual revisions. Earlier feedback adds no requirements.
 
-Check only the delivery visible in the answer. Authenticating external materials, establishing whether tools ran, and independently reproducing results are outside this review. Inability to check those matters is not grounds for rejection. Report visible omissions or discrepancies. Never ask for evidence, source materials, or execution records for verification. If the goal explicitly calls for a material or explanation as a deliverable, check whether the answer delivers that item.
+Check the answer against the acceptance criteria of the active items. If the user requested actual execution or an artifact, use the relevant runtime execution results and artifact records. Identify the specific gap when required evidence is missing. For a text-only deliverable, check the text directly. Authenticating external sources and independently reproducing results are outside this review.
 
 The answer disposition denotes a normal delivery. The clarification_required, limitation, and failed dispositions denote a clarification request, limitation, and failure explanation respectively. Check whether the answer clearly identifies the gap and what remains incomplete. Use the bound goal, if present, to interpret the matter being explained.
 
@@ -137,7 +155,7 @@ The answer disposition denotes a normal delivery. The clarification_required, li
 Return only a nonempty checks array with these fields in each check.
 
 - requirement identifies the applicable goal requirement or matter being explained.
-- status is satisfied when the answer meets the requirement and not_satisfied for a clear omission or conflict. Use insufficient_evidence only when a definition needed to judge delivery is missing from the bound goal.
+- status is satisfied when the answer meets the requirement and all required evidence is present, and not_satisfied for a clear omission or conflict. Use insufficient_evidence when a definition or necessary execution evidence is missing.
 - feedback identifies the corresponding content in the answer or the specific discrepancy to revise. If a goal definition is unclear, identify the missing definition."""),
     'interaction_verification.goal.criteria': PromptTranslation('v1', 'v1-en.1', 'The goal must faithfully define original and still-effective user requirements: correctly specify what to obtain and deliver, without requiring execution to have already finished.'),
     'interaction_verification.answer.criteria': PromptTranslation('v2', 'v2-en.1', 'Check each deliverable and applicable constraint in the goal bound to this answer against what the answer actually delivers.'),
@@ -189,3 +207,34 @@ List in findings each item that actually exceeds the evidence. All findings conc
 """,
     ),
 }
+
+
+TRANSLATIONS.update({
+    name: PromptTranslation("v1-readable-verification", "v1-readable-verification-en.1", template)
+    for name, template in {
+        'interaction_verification.context.failed': 'Verification did not pass. The receipt ID is `{receipt_id}`.',
+        'interaction_verification.context.criterion': '- Criterion “{criterion}”, judgment {status}. {feedback}',
+        'interaction_verification.context.status.satisfied': 'satisfied',
+        'interaction_verification.context.status.not_satisfied': 'not satisfied',
+        'interaction_verification.context.status.insufficient_evidence': 'insufficient evidence',
+        'interaction_verification.context.revision': 'Revision feedback\n{feedback}',
+        'interaction_verification.context.action_id': 'Historical Python call ID `{action_id}`.',
+        'interaction_verification.context.input': 'Input file `{binding_name}` is bound to resource_id `{resource_id}`.',
+        'interaction_verification.context.input_revision': 'Input file revision {revision}.',
+        'interaction_verification.context.input_version': 'Input revision {revision}, original filename `{filename}`, media type `{media}`.',
+        'interaction_verification.context.code': 'Original Python code for this call\n\n{code}',
+        'interaction_verification.context.mounted_code': 'Original code of mounted script `{binding_name}`\n\n{code}',
+        'interaction_verification.context.source.unavailable': 'The mounted script source could not be provided.',
+        'interaction_verification.context.source.over_budget': "The mounted script exceeds the review's source budget.",
+        'interaction_verification.context.judgment': 'The action review found {verdict}. {feedback}',
+        'interaction_verification.context.action.conflict': 'a clear conflict',
+        'interaction_verification.context.action.no_conflict': 'no conflict',
+        'interaction_verification.context.action.undetermined': 'insufficient information for a determination',
+        'interaction_verification.context.observation': 'The actual execution status was {status}.',
+        'interaction_verification.context.stdout': 'The stdout artifact has resource_id `{resource_id}`, revision {revision}.',
+        'interaction_verification.context.stream': 'Observed output preview ({stream})\n\n{text}',
+        'interaction_verification.context.delivered': 'This answer was delivered.',
+        'interaction_verification.context.not_delivered': 'No delivery was recorded for this draft.',
+        'interaction_verification.context.pending_slot': 'Pending Python call `{action_id}`; return its judgment in slot `{slot}`.',
+    }.items()
+})

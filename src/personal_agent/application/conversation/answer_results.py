@@ -149,8 +149,6 @@ class DirectAnswerResult:
             )
         return None
 
-    def needs_direct_verification(self, criteria, inputs) -> bool:
-        return self.verification_enabled and criteria.requires_review
 
 
 @dataclass(frozen=True)
@@ -310,7 +308,3 @@ class ClaimAnswerResult(DirectAnswerResult):
             message=self.prompts.render("conversation.answer.research_answer_not_approved"),
             required_repair=self.prompts.render("conversation.answer.research_completion_repair"),
         )
-
-    def needs_direct_verification(self, criteria, inputs) -> bool:
-        return (super().needs_direct_verification(criteria, inputs)
-                and current_claims(inputs) is None)

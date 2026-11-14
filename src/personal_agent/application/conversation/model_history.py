@@ -3,17 +3,19 @@ from collections.abc import Sequence
 import json
 
 from personal_agent.capabilities.contracts.model import (
-    ModelHistoryEntry, ModelRuntimeFeedback, ModelToolExchange, ModelToolResult, StructuredModelResponse,
+    ModelAssistantMessage, ModelHistoryEntry, ModelRuntimeFeedback, ModelToolExchange, ModelToolResult, StructuredModelResponse,
 )
 from personal_agent.kernel.prompt_registry import PromptCatalog
-from personal_agent.kernel.prompts import DEFAULT_PROMPTS
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS, create_prompt_catalog
 
-from .citations import CitableInput, render_citable_input
+from .citations import CitableInput, render_citable_input, render_decision_feedback
+from .analysis_tasks import AnalysisTaskHistory, task_message_indices, task_switch_turn
 from .errors import ConversationOperationConflict
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
 from .goal_maintenance import goal_tool_result
 from .goal_models import GOAL_PENDING_ACTION_REJECTED
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY
+from .working_plan import render_working_plan
 from .models import (
     ActionObservation, DecisionFeedback, InteractionTrace, ModelCallDisposition, ModelDecisionRecord,
 )
@@ -24,6 +26,15 @@ def input_identity(item) -> HistoryItemKey | None:
         return HistoryItemKey(kind=item.kind, action_id=item.action_id,
                               decision_turn=getattr(item, "decision_turn", None))
     return None
+
+
+def task_switch_input_indices(trace: InteractionTrace) -> frozenset[int]:
+    switch_turn = task_switch_turn(trace)
+    if not switch_turn:
+        return frozenset()
+    return frozenset(index for record in trace.model_decisions
+        if record.turn_index is not None and record.turn_index <= switch_turn
+        for index in decision_input_indices(trace, record))
 
 
 def goal_pending_rejection(trace: InteractionTrace, record: ModelDecisionRecord) -> DecisionFeedback | None:
@@ -132,28 +143,54 @@ def _disposition_content(disposition: ModelCallDisposition, prompts: PromptCatal
         if record is None:
             raise ConversationOperationConflict("accepted goal call has no committed operation")
         return goal_tool_result(record, prompts=prompts)
-    prompt = prompts.get("conversation.native_control." + disposition.status)
-    return json.dumps({"message": prompt.template, "disposition": disposition.model_dump(mode="json", exclude_none=True)},
-                      ensure_ascii=False)
+    return render_control_disposition(disposition, prompts=prompts)
+
+
+def render_control_disposition(disposition: ModelCallDisposition, *, prompts: PromptCatalog) -> str:
+    message = prompts.get("conversation.native_control." + disposition.status).template
+    if disposition.plan_id is not None:
+        message += "\n" + prompts.render("conversation.context.control.plan",
+            plan_id=disposition.plan_id, revision=disposition.plan_revision)
+        if disposition.working_plan_snapshot is not None:
+            message += "\n" + render_working_plan(disposition.working_plan_snapshot, prompts=prompts)
+        return message
+    if disposition.operation == "read_working_plan" and disposition.status == "accepted":
+        return prompts.get("conversation.plan.empty").template
+    if disposition.operation_ref is not None:
+        return message + "\n" + prompts.render("conversation.context.control.operation",
+            operation_ref=disposition.operation_ref)
+    return message
+
+
+def _submitted_arguments(assistant: ModelAssistantMessage, call_id: str, action_name: str) -> dict | None:
+    for call in assistant.payload.get("tool_calls") or ():
+        if call["id"] != call_id:
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict) or function.get("name") != action_name:
+            return None
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                value = json.loads(arguments)
+            except ValueError:
+                return None
+            return value if isinstance(value, dict) else None
+    return None
 
 
 def _paired_rejection_content(
-    feedback: CitableInput, call_ids: tuple[str, ...], prompts: PromptCatalog,
+    rejection: DecisionFeedback, assistant: ModelAssistantMessage, call_id: str, prompts: PromptCatalog,
 ) -> str:
-    rejection = feedback.observation
-    if isinstance(rejection, DecisionFeedback) and rejection.rejected_action_invocations:
-        unpaired = tuple(call for call in rejection.rejected_action_invocations if call.call_id not in call_ids)
-        repair = rejection.required_repair
-        # Older feedback can have field diagnostics and only a generic retry instruction.
-        if not unpaired and rejection.action_diagnostics and all(
-            diagnostic.error_type == "schema_type" and f"`{diagnostic.field_path}`" in repair
-            for diagnostic in rejection.action_diagnostics
-        ):
-            return repair
-        # The paired assistant message already contains the other original arguments.
-        feedback = feedback.model_copy(update={"observation": rejection.model_copy(
-            update={"rejected_action_invocations": unpaired})})
-    return render_citable_input(feedback, prompts=prompts)
+    unpaired = tuple(call for call in rejection.rejected_action_invocations if call.call_id not in assistant.call_ids)
+    repair = rejection.required_repair
+    if rejection.rejected_action_invocations and not unpaired and rejection.action_diagnostics and all(
+        diagnostic.error_type == "schema_type" and f"`{diagnostic.field_path}`" in repair
+        for diagnostic in rejection.action_diagnostics
+    ):
+        return repair
+    return render_decision_feedback(rejection.model_copy(update={"rejected_action_invocations": unpaired}),
+        prompts=prompts, submitted_arguments=_submitted_arguments(assistant, call_id, rejection.action_name))
 
 
 def project_model_history(
@@ -165,8 +202,15 @@ def project_model_history(
              if input_identity(item.observation) is not None}
     consumed: set[HistoryItemKey] = set()
     exchanges: list[ModelHistoryEntry] = []
+    switch_turn = task_switch_turn(trace)
     for record in trace.model_decisions:
-        if record.turn_index is None or not record.consumed or record.turn_index <= covered_through:
+        if record.turn_index is None or not record.consumed:
+            continue
+        if record.turn_index <= switch_turn:
+            consumed.update(input_identity(trace.inputs[index])
+                            for index in decision_input_indices(trace, record))
+            continue
+        if record.turn_index <= covered_through:
             continue
         if record.assistant is None:
             # A failed envelope has no legal call IDs; do not invent a native exchange.
@@ -192,8 +236,10 @@ def project_model_history(
             candidates = [item for item in visible if input_identity(item.observation) in own_keys]
             if candidates:
                 item = candidates[-1]
-                results.append(ModelToolResult(call_id=call_id,
-                    content=render_citable_input(item, prompts=prompts)))
+                content = (_paired_rejection_content(item.observation, record.assistant, call_id, prompts)
+                           if isinstance(item.observation, DecisionFeedback)
+                           else render_citable_input(item, prompts=prompts, native_tool_result=True))
+                results.append(ModelToolResult(call_id=call_id, content=content))
                 consumed.add(input_identity(item.observation))
             elif call_id in dispositions:
                 results.append(ModelToolResult(call_id=call_id,
@@ -201,9 +247,11 @@ def project_model_history(
             elif any(item.action_id == call_id for item in trace.accepted_tool_requests):
                 raise ConversationOperationConflict("原生工具调用仍缺少已接受执行的恢复结果")
             elif record.blocked_by is not None and record.blocked_by in keyed:
-                feedback = keyed[record.blocked_by]
+                feedback = keyed[record.blocked_by].observation
+                if not isinstance(feedback, DecisionFeedback):
+                    raise ConversationOperationConflict("原生调用的拒绝记录类型不正确")
                 results.append(ModelToolResult(call_id=call_id,
-                    content=_paired_rejection_content(feedback, record.assistant.call_ids, prompts)))
+                    content=_paired_rejection_content(feedback, record.assistant, call_id, prompts)))
                 consumed.add(record.blocked_by)
             else:
                 raise ConversationOperationConflict("原生工具调用缺少真实结果或拒绝，不能续接")
@@ -218,6 +266,23 @@ def project_model_history(
     return tuple(exchanges), tuple(item for item in visible if input_identity(item.observation) not in consumed)
 
 
+_PLAN_REVIEW_DELIVERIES = tuple(create_prompt_catalog(language).render("conversation.service.plan_review_ready")
+                                for language in ("zh", "en"))
+
+
+def _matches_analysis_delivery(trace: InteractionTrace, content: str) -> bool:
+    if trace.final_message is not None:
+        return trace.final_message.message == content
+    last = next((item for item in reversed(trace.model_decisions) if item.turn_index is not None), None)
+    waiting = next((item for item in last.dispositions if item.plan_waiting), None) if last else None
+    if waiting is None:
+        return False
+    # Older waiting plans used the localized fallback from the native action.
+    if waiting.plan_review_message is None:
+        return content in _PLAN_REVIEW_DELIVERIES
+    return waiting.plan_review_message == content
+
+
 def prior_analysis_turns(
     trace: InteractionTrace, candidates: Sequence[InteractionTrace],
 ) -> tuple[InteractionTrace, ...]:
@@ -228,15 +293,22 @@ def prior_analysis_turns(
         if (source.interaction_run_ref == trace.interaction_run_ref
                 or source.principal != trace.principal or source.conversation_id != trace.conversation_id
                 or source.python_authorization_digest != trace.python_authorization_digest
-                or source.final_message is None or end >= len(trace.messages)
+                or end >= len(trace.messages)
                 or source.messages != trace.messages[:end]
-                or trace.messages[end].role != "assistant"
-                or trace.messages[end].content != source.final_message.message):
+                or trace.messages[end].role != "assistant"):
+            continue
+        if not _matches_analysis_delivery(source, trace.messages[end].content):
             continue
         if end in matched:
             raise ConversationOperationConflict("会话历史存在同一轮的多个已结束运行，不能选择原生历史")
         matched[end] = source
     return tuple(matched[end] for end in sorted(matched))
+
+
+def selected_analysis_turns(
+    trace: InteractionTrace, candidates: Sequence[InteractionTrace],
+) -> tuple[InteractionTrace, ...]:
+    return AnalysisTaskHistory.from_turns(prior_analysis_turns(trace, candidates)).selected_turns(trace)
 
 
 def project_conversation_history(
@@ -248,6 +320,7 @@ def project_conversation_history(
     remaining = tuple(visible)
     checkpoint = candidate or active_history_checkpoint(trace, previous)
     coverage = {item.run_ref: item.through_turn for item in checkpoint.sources} if checkpoint else {}
+    indices = task_message_indices(trace, previous)
     for source in previous:
         # These Runtime facts are from an already scoped, exact predecessor.
         # Keep them on their original exchange, never in current pending feedback.
@@ -264,7 +337,7 @@ def project_conversation_history(
         remaining = tuple(item for item in original_visible
                           if is_runtime_feedback(item.observation) or item in projected)
         # The request's stable system prefix occupies position zero.
-        position = len(source.messages) + 1
+        position = indices.index(len(source.messages)) + 1
         exchanges.extend(item.model_copy(update={"before_message_index": position}) for item in history)
     history, remaining = project_model_history(trace, remaining, prompts=prompts,
         covered_through=coverage.get(trace.interaction_run_ref, 0))
@@ -273,9 +346,12 @@ def project_conversation_history(
 
 
 def history_summary_context(checkpoint: HistoryCompactionCheckpoint, prompts: PromptCatalog) -> str:
-    return prompts.render("conversation.history.summary_view", summary=checkpoint.working_summary,
-        resource_id=checkpoint.snapshot_ref.resource_id,
-        coverage=json.dumps([item.model_dump(mode="json") for item in checkpoint.sources], ensure_ascii=False))
+    coverage = "\n".join(prompts.render("conversation.context.history_coverage",
+        run_ref=item.run_ref, turn=item.through_turn,
+        delivery=prompts.get("conversation.context.history.delivered" if item.includes_final
+                             else "conversation.context.history.partial").template)
+        for item in checkpoint.sources)
+    return prompts.render("conversation.history.summary_view", summary=checkpoint.working_summary, coverage=coverage)
 
 
 def _with_prefix_summary(history, run_ref, checkpoint, prompts):
@@ -298,8 +374,12 @@ def active_history_checkpoint(
     trace: InteractionTrace, previous: Sequence[InteractionTrace],
 ) -> HistoryCompactionCheckpoint | None:
     """The most recent scoped projection covers all predecessor runs together."""
-    return next((source.history_compaction for source in (trace, *reversed(previous))
-                 if source.history_compaction is not None), None)
+    by_run = {source.interaction_run_ref: source for source in (*previous, trace)}
+    return next((checkpoint for source in (trace, *reversed(previous))
+                 if (checkpoint := source.history_compaction) is not None
+                 and checkpoint.run_ref in by_run
+                 and all(item.run_ref in by_run and item.through_turn >= task_switch_turn(by_run[item.run_ref])
+                         for item in checkpoint.sources)), None)
 
 
 def deferred_controls(decision) -> tuple[ModelCallDisposition, ...]:

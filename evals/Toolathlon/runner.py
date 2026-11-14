@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -19,24 +18,35 @@ from uuid import uuid4
 from dotenv import dotenv_values
 
 from evals.Toolathlon.time_case import ANSWER, MAPPING, QUESTION, SERVER_ID, TOOL, UPSTREAM_REVISION
+from personal_agent.kernel.config_models import InteractionLoopConfig
+from personal_agent.kernel.feature_flags import FeatureFlags, load_feature_flags, write_feature_flags
 
 
 _UVICORN = """
+import socket
 import sys
 import time
 from pathlib import Path
 from threading import Thread
 import uvicorn
-server = uvicorn.Server(uvicorn.Config(
-    'personal_agent.adapters.web.api:app', host='127.0.0.1', port=int(sys.argv[1]),
-))
 def shutdown():
     signal = Path(sys.argv[2])
     while not signal.exists():
         time.sleep(0.1)
     server.should_exit = True
-Thread(target=shutdown, daemon=True).start()
-server.run()
+
+with socket.socket() as listener:
+    listener.bind(('127.0.0.1', 0))
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(
+        'personal_agent.adapters.web.api:app', host='127.0.0.1', port=port,
+    ))
+    port_file = Path(sys.argv[1])
+    pending = port_file.with_suffix('.tmp')
+    pending.write_text(str(port), encoding='ascii')
+    pending.replace(port_file)
+    Thread(target=shutdown, daemon=True).start()
+    server.run(sockets=[listener])
 """
 
 _SYSTEM_ENV = (
@@ -48,6 +58,38 @@ _MODEL_ENV = (
     "STRUCTURED_MODEL", "STRUCTURED_OUTPUT_TRANSPORT", "STRUCTURED_EXTRA_BODY",
     "STRUCTURED_MODEL_CAPACITY",
 )
+INTERACTION_BUDGET_OPTIONS = {
+    "--model-budget": "max_total_tokens",
+    "--model-turns": "max_model_turns",
+    "--tool-calls": "max_tool_calls",
+}
+_INTERACTION_BUDGET_ENV = {
+    field: f"PERSONAL_AGENT_INTERACTION_{field.upper()}"
+    for field in INTERACTION_BUDGET_OPTIONS.values()
+}
+
+
+def _positive_int(value: str) -> int:
+    result = int(value)
+    if result < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
+
+
+def add_interaction_budget_arguments(parser: argparse.ArgumentParser) -> None:
+    for option, field in INTERACTION_BUDGET_OPTIONS.items():
+        parser.add_argument(option, dest=field, type=_positive_int)
+
+
+def configure_interaction_budget(env: dict[str, str], args: argparse.Namespace) -> InteractionLoopConfig:
+    values = {}
+    for field, name in _INTERACTION_BUDGET_ENV.items():
+        override = getattr(args, field)
+        if override is not None:
+            env[name] = str(override)
+        if name in env:
+            values[field] = int(env[name])
+    return InteractionLoopConfig(**values)
 
 
 class TimeRunReport(TypedDict, total=False):
@@ -109,11 +151,43 @@ def postgres_url(container_id: str) -> str:
     raise RuntimeError("Toolathlon Postgres did not become ready")
 
 
-def product_environment(output: Path, db_url: str, servers: list[dict], model_env: Path | None):
+_PDF_INTEGER_STRING_FIELDS = {
+    "read_pdf_pages": ("start_page", "end_page"),
+    "search_pdf_content": ("page_size",),
+}
+
+
+def _configure_pdf_integer_fields(tool: dict) -> dict:
+    namespace, _, operation = (tool.get("name") or "").partition(".")
+    fields = _PDF_INTEGER_STRING_FIELDS.get(operation)
+    if (
+        namespace in {"pdf", "pdf_tools"}
+        and fields
+        and tool.get("remote_name") in {operation, f"pdf-tools-{operation}"}
+    ):
+        return {"model_integer_string_fields": fields, **tool}
+    return tool
+
+
+def model_request_paths(output: Path) -> list[Path]:
+    return sorted((output / "product-data" / "interaction_runs").glob("*/*/request.json"))
+
+
+def product_environment(
+    output: Path, db_url: str, servers: list[dict], model_env: Path | None, *,
+    feature_flags: FeatureFlags | None = None,
+):
+    flags_path = (output / "feature_flags.toml").resolve()
+    flags = feature_flags or load_feature_flags()
+    write_feature_flags(flags_path, flags)
     env = {name: os.environ[name] for name in _SYSTEM_ENV if name in os.environ}
     if model_env is not None:
         values = dotenv_values(model_env)
         env.update({name: str(values[name]) for name in _MODEL_ENV if values.get(name)})
+        env.update({
+            name: value for name in _INTERACTION_BUDGET_ENV.values()
+            if (value := values.get(name)) is not None
+        })
         if not env.get("STRUCTURED_API_KEY") or not env.get("STRUCTURED_MODEL"):
             raise ValueError("Model env must specify STRUCTURED_API_KEY and STRUCTURED_MODEL")
     env.update(
@@ -122,7 +196,14 @@ def product_environment(output: Path, db_url: str, servers: list[dict], model_en
         PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
         PERSONAL_AGENT_DATA_DIR=str(output / "product-data"),
         PERSONAL_AGENT_POSTGRES_URL=db_url,
-        PERSONAL_AGENT_MCP_SERVERS=json.dumps({"enabled": True, "servers": servers}),
+        PERSONAL_AGENT_FEATURE_FLAGS_CONFIG=str(flags_path),
+        PERSONAL_AGENT_MCP_SERVERS=json.dumps({
+            "enabled": True,
+            "servers": [
+                {**server, "tools": [_configure_pdf_integer_fields(tool) for tool in server.get("tools", ())]}
+                for server in servers
+            ],
+        }),
         PERSONAL_AGENT_GITHUB_MCP_ENABLED="false",
         PERSONAL_AGENT_NOTION_MCP_ENABLED="false",
         PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED="false",
@@ -156,17 +237,21 @@ def wait_for_product(base: str, process: subprocess.Popen, timeout: float) -> bo
 
 @contextmanager
 def product(output: Path, env: dict[str, str]):
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        port = reservation.getsockname()[1]
+    port_file = output / "web.port"
     stop_signal = output / "stop-web"
     with (output / "web.log").open("wb") as log:
         process = subprocess.Popen(
-            (sys.executable, "-c", _UVICORN, str(port), str(stop_signal)),
+            (sys.executable, "-c", _UVICORN, str(port_file), str(stop_signal)),
             cwd=Path(__file__).resolve().parents[2],
             env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
         )
         try:
+            deadline = time.monotonic() + 15
+            while not port_file.exists():
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    raise RuntimeError(f"Product Web process did not bind a port. See {output / 'web.log'}.")
+                time.sleep(0.05)
+            port = int(port_file.read_text(encoding="ascii"))
             yield f"http://127.0.0.1:{port}", process
         finally:
             stop_signal.touch()
@@ -236,11 +321,6 @@ def run(args: argparse.Namespace, report: TimeRunReport) -> None:
                         }, timeout=90)
                     except HTTPError as error:
                         report["conversation_error"] = {"status": error.code, "detail": json.load(error)}
-                    request_files = sorted(
-                        (args.output / "product-data" / "interaction_runs").glob(
-                            "*/model_invocations/*/request.json"
-                        )
-                    )
                     report["journal_model_actions"] = [
                         {
                             "request": str(path.relative_to(args.output)),
@@ -251,7 +331,7 @@ def run(args: argparse.Namespace, report: TimeRunReport) -> None:
                                 )["action_definitions"]
                             ],
                         }
-                        for path in request_files
+                        for path in model_request_paths(args.output)
                     ]
         report["process_exit_code"] = process.returncode
         report["server_running_after_product_exit"] = running(time_server)

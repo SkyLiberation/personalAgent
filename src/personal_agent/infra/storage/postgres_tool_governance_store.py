@@ -16,6 +16,17 @@ from personal_agent.infra.storage.postgres_common import PostgresStoreBase
 _DUPLICATE_SIDE_EFFECT_MARKER = "已执行过或正在执行"
 
 
+def _strip_nul(value: Any) -> Any:
+    """Remove NUL from the audit copy for PostgreSQL text and JSONB."""
+    if isinstance(value, str):
+        return value.replace("\0", "")
+    if isinstance(value, list):
+        return [_strip_nul(item) for item in value]
+    if isinstance(value, dict):
+        return {key.replace("\0", ""): _strip_nul(item) for key, item in value.items()}
+    return value
+
+
 class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink):
     """Persist tool audit events and expose historical idempotency records."""
 
@@ -170,7 +181,7 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink):
 
     def record(self, event: ToolInvocationEvent) -> None:
         self.ensure_schema()
-        payload = event.model_dump(mode="json")
+        payload = _strip_nul(event.model_dump(mode="json"))
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -187,22 +198,22 @@ class PostgresToolGovernanceStore(PostgresStoreBase, ToolAuditSink):
                     """,
                     (
                         datetime.now(UTC),
-                        event.tool_name,
-                        event.tool_call_id,
-                        event.thread_id,
-                        event.step_id,
-                        event.run_id,
-                        event.user_id,
-                        event.execution_mode,
-                        event.risk_level,
+                        payload["tool_name"],
+                        payload["tool_call_id"],
+                        payload["thread_id"],
+                        payload["step_id"],
+                        payload["run_id"],
+                        payload["user_id"],
+                        payload["execution_mode"],
+                        payload["risk_level"],
                         event.requires_confirmation,
                         event.confirmed,
                         event.artifact_ok,
-                        event.error_kind,
-                        event.error,
+                        payload["error_kind"],
+                        payload["error"],
                         event.latency_ms,
                         event.attempts,
-                        event.side_effect_id,
+                        payload["side_effect_id"],
                         Jsonb(payload),
                     ),
                 )

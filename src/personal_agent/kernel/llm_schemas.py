@@ -94,7 +94,7 @@ def _model_visible_tool_schema(tool: BaseTool) -> dict[str, Any]:
     if tool.args_schema is None:
         raw_schema: dict[str, Any] = {}
     elif isinstance(tool.args_schema, dict):
-        raw_schema = tool.args_schema
+        return deepcopy(tool.args_schema)
     else:
         raw_schema = tool.args_schema.model_json_schema()
     schema = deepcopy(raw_schema or {"type": "object"})
