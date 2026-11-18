@@ -67,7 +67,7 @@ class GPTResearcherA2AClient:
             metadata["max_search_results"] = self.config.max_search_results
         if submission_key:
             metadata["submission_key"] = submission_key
-        result = self._rpc("message/send", {
+        return self._task_rpc("message/send", {
             "message": {
                 "role": "user",
                 "parts": [{"kind": "text", "text": topic}],
@@ -75,9 +75,6 @@ class GPTResearcherA2AClient:
             },
             "configuration": {"blocking": blocking},
         })
-        if not isinstance(result, dict):
-            raise A2AError("GPT Researcher A2A returned a non-object task result.")
-        return _research_response_from_task(result)
 
     def submit_research(
         self,
@@ -100,16 +97,10 @@ class GPTResearcherA2AClient:
         )
 
     def get_task(self, task_id: str) -> A2AResearchResponse:
-        result = self._rpc("tasks/get", {"id": task_id})
-        if not isinstance(result, dict):
-            raise A2AError("GPT Researcher A2A returned a non-object task result.")
-        return _research_response_from_task(result)
+        return self._task_rpc("tasks/get", {"id": task_id})
 
     def cancel_task(self, task_id: str) -> A2AResearchResponse:
-        result = self._rpc("tasks/cancel", {"id": task_id})
-        if not isinstance(result, dict):
-            raise A2AError("GPT Researcher A2A returned a non-object task result.")
-        return _research_response_from_task(result)
+        return self._task_rpc("tasks/cancel", {"id": task_id})
 
     def stream_task(self, task_id: str) -> Iterator[dict[str, Any]]:
         response = self.get_task(task_id)
@@ -121,7 +112,7 @@ class GPTResearcherA2AClient:
                 "state": response.state,
             }
 
-    def _rpc(self, method: str, params: dict[str, Any]) -> Any:
+    def _task_rpc(self, method: str, params: dict[str, Any]) -> A2AResearchResponse:
         request_id = f"gpt-researcher-{self._next_id}"
         self._next_id += 1
         payload = {
@@ -151,7 +142,10 @@ class GPTResearcherA2AClient:
         if isinstance(error, dict):
             message = str(error.get("message") or "GPT Researcher A2A request failed.")
             raise A2AError(message)
-        return decoded.get("result")
+        result = decoded.get("result")
+        if not isinstance(result, dict):
+            raise A2AError("GPT Researcher A2A returned a non-object task result.")
+        return _research_response_from_task(result)
 
 
 def _decode_json(raw: bytes) -> dict[str, Any]:

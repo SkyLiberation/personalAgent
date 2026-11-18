@@ -1,103 +1,16 @@
-# ADR 0007: Structured Output Transport Capability Isolation
+# ADR 0007：按部署能力选择结构化输出承载
 
-- 状态：Accepted；MiMo JSON Object 正式 target 已通过
-- 日期：2026-07-28
-- baseline：`data/e2e_traces/20260728T135746.012529Z-20360-ce914ffb`
-- target evidence：`data/e2e_traces/20260728T143217.175037Z-28784-bb0ed0e8`
-- 移除或完成门禁日期：2026-08-28
+2026-07-28 决定显式选择承载，2026-09-03 补充 MiMo JSON Object 的生产候选依据。现行请求级承载和配置见[模型重试](../topics/runtime.md#model-retry)与[环境说明](../env.md#provider-选择与参数绑定)。
 
-## Goal / Current Incorrect Behavior / Expected User-visible Result
+## 背景与决定
 
-同一 IP01 自然语言调查请求使用 OpenAI-compatible DeepSeek deployment 时，不应因 Provider
-接受但不执行 strict `json_schema` 而在 Plan/Replan/Verifier typed contract 上失败。最终用户
-结果仍是带来源、日期和局限的可读报告；Provider transport 通过不能替代该结果。
+IP01 基线中，服务端接受 strict `json_schema` 请求却未约束输出，结构化 Plan 在修复后仍缺字段。旧实现只在 HTTP 明确拒绝时降级，无法处理这种语义差异。
 
-## Business Expansion or Proven Constraint / Out of Scope
+由部署配置或请求契约明确选择承载。模型适配层负责请求格式、原响应与该模式的有限修复，业务输出类型负责结构校验。失败保持在同一承载并按契约报告，避免异常驱动的静默切换、字段猜补和按供应商名称推断能力。
 
-已证明约束是不同 Provider/model 对结构化输出协议支持不等价。范围仅隔离 structured-output
-transport。Out of Scope：修改 Planner/Verifier schema、补字段、放宽 Pydantic、增加业务重试、
-更改 Project 预算或把 transport error 伪装为完成。
+## 历史验证与退出
 
-## Simplest Baseline E2E / Executed Result / Root Cause
+- IP01 同题基线 `20260728T135746.012529Z-20360-ce914ffb` 在结构化边界失败。目标 `20260728T143217.175037Z-28784-bb0ed0e8` 消除了该次解析故障，后续证据修复仍暂停，未交付报告。Investigation 路径后来按 [ADR 0015](0015-withdraw-investigation-project.md)退出。
+- 2026-09-03，`mimo-v2.5 + json_object + thinking disabled` 的 `CONVERSATION-RESEARCH-DELIVERY-001` 正式目标交付 1/1，5 次工具执行成功，40,387 tokens。归档 `20260903T144509.930958Z-24312-8aa05f38`，追踪 SHA-256 为 `f86a9f228f84424b0e9c50e1d440e0bf6f4f7eafd8d5b6a1fedd26a6c98d6129`。这份证据支持该部署的候选，其他部署以各自的真实请求与评分为准。
 
-命令：
-
-```powershell
-$env:PERSONAL_AGENT_REQUIRE_LIVE_E2E='true'
-uv run pytest evals/e2e_quality/test_product_capability_outcomes.py::test_product_ip01_live_investigation_report --e2e-scope=release -q -s
-```
-
-baseline 用时 226.9 秒、约 33.4k token，终态 `paused/provider_unavailable`；一次 repair 后
-`_PlanDraft.requirement_mappings` 仍缺失。根因是旧 `OpenAIModelClient` 总先发送 strict
-`json_schema`，只在 HTTP 明确拒绝时降级；DeepSeek 接受请求但不执行 schema，异常分支无法发现。
-
-## Target E2E and Counterfactuals
-
-相同命令、入口、输入和预算下，target archive 用时 59.7 秒、可计 28,828 token；全部
-Plan/Replan/Verification typed parse 通过，`environment_failed=false`，且没有 schema repair。
-它仍因 evidence verification repair 与 frozen-work revision admission 暂停，未交付报告。
-
-反事实：strict Adapter 遇到不支持协议不得运行时降级；JSON Object 第二次仍无效必须失败；
-Adapter 不补字段、不截取多个不同 JSON 值。Tool Strategy 在两个 IP01 archive 中产生多 Tool
-或不同连续 JSON，未证明收益，已从最终设计删除。
-
-## Decision Ownership / Fact Owner and Write Path
-
-- `StructuredConfig.output_transport`：deployment capability profile 的唯一配置事实；
-- Composition Root：唯一 Adapter 选择点；
-- `StrictJsonSchemaAdapter` / `JsonObjectStructuredAdapter`：只拥有 transport request/response；
-- Pydantic output type：typed contract owner；
-- Planner、Verifier：开放业务语义 owner，不感知 Provider transport。
-
-运行中不得根据 parse error 修改全局 transport。Proposal、Execution Fact、Verification 与
-Completion owner 均未改变。
-
-## Required Production Capabilities and Missing-capability Delivery
-
-已有 `StructuredModelClient` Port、OpenAI-compatible SDK 调用、Pydantic parse、usage/trace 和
-Composition Root。扩展一个显式 profile 和 JSON Object Adapter；它发送 `json_object`、注入
-canonical schema、最多请求一次模型完整重写、聚合两次 latency/token，并 fail closed。
-
-## Affected Modules and Dependency Direction
-
-仅影响 `kernel/config_models.py`、`kernel/config_env.py`、`infra/structured_model.py`、Composition
-测试及 release fixture 配置物化。Application/Domain 仍只依赖 Model Port，依赖方向未改变。
-
-## Complexity Added, Removed and Rejected Alternatives
-
-新增一个枚举字段和一个 transport Adapter；同步删除 mutable `_structured_transport`、
-`json_schema -> json_object -> plain text` 异常驱动降级及对应测试。拒绝 Provider-name Adapter，
-因为变化源是 capability；拒绝增加 repair 次数或截取首个不同 JSON，因为会隐藏模型失败；
-拒绝保留 Tool Adapter，因为复杂 IP01 已证伪。
-
-## Removed Legacy Path / Risks / Exit
-
-旧隐式降级和 plain-text fallback 已删除。风险是 JSON Object 依赖 Prompt 约束，且当前 target
-尚未产生最终用户报告，因此本 ADR 不授权 merge/release。2026-08-28 前必须在同一自然目标上
-取得报告交付并通过关键反事实，或证明该 Adapter 被另一个已通过用户 E2E 的 deployment 消费；
-否则删除 JSON Object Adapter、profile 和本 ADR，改用具备原生 schema 能力的 deployment。
-
-当前工程验证：相关模型/config/catalog 测试 77 passed；完整低层套件 659 passed、4 warnings、
-242.52 秒；变更范围 Ruff、compileall 与 package DAG gate 均通过。这些不能替代失败的 IP01。
-
-## 2026-09-03 决策补充：MiMo JSON Object 生产候选
-
-MiMo 官方结构化输出文档现明确以 `response_format={"type":"json_object"}` 支持
-`mimo-v2.5` 与 Pro，并要求 Prompt 完整定义字段、层级和类型，再由应用侧执行 JSON Schema 校验。
-`CONVERSATION-FINAL-GENERATION-STABILITY-001` 的历史真实失败和同一 Final 输入诊断进一步显示：
-base/Pro 的 JSON Object Adapter 均交付两组 URL 且没有重复退化，而 Strict Adapter 的既有轨迹漏掉
-两组 URL。该证据只准入 MiMo JSON Object 生产候选，不把单样本写成普遍稳定性结论。
-
-当前实现由既有 `StructuredConfig.output_transport` 唯一选择 Adapter，不增加结构、fallback 或双写；
-JSON Object Adapter 注入注册的中文 Schema instruction，仍由同一 Pydantic 类型校验并只允许一次完整
-修复。通用 Strict Adapter 保留给显式支持原生 strict Schema 的其他 Provider。
-
-`CONVERSATION-RESEARCH-DELIVERY-001/tool-protocol-boundary-run-1` 已从正式 HTTP 入口执行：当前
-`mimo-v2.5 + json_object + thinking disabled` 配置下为 `1/1 passed`，三项比较与两组官方 URL 全部
-交付，5 次 Tool 执行均成功、零 DecisionFeedback，总计 `40,387` tokens，Conversation 用时
-`47.380s`。归档为
-`data/e2e_traces/product_baselines/conversation-research-delivery-001/target/
-20260903T144509.930958Z-24312-8aa05f38/`，trace checksum 为
-`f86a9f228f84424b0e9c50e1d440e0bf6f4f7eafd8d5b6a1fedd26a6c98d6129`。该结果关闭本次 MiMo
-transport 缺陷修复，不证明跨场景稳定率、成本收益、Graphiti/LangExtract 的独立 transport 或完整
-release matrix 已通过。
+原 2026-08-28 删除门禁属于 IP01 阶段的临时决定。后续采用依据为上面的 Conversation 目标。服务端能力或承载契约变化时，按实际请求重新核对。

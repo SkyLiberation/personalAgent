@@ -1,6 +1,6 @@
 # 开发踩坑复盘：统一结构化 Proposal 阻塞工具调用
 
-> 本文保留统一 Proposal 与工具参数错位的历史复盘。现行动作、工作清单控制与最终提交已按 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)、[ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)分开；研究 claim 主链见 [ADR 0032](../adr/0032-conversation-research-claims.md)。下文 G2、`L01` 和旧准入状态只对应当轮，最新问题与证据分别由 [Future](../future/design-optimization-backlog.md)和[评测盘点](../evals/02-current-case-inventory.md)维护。
+> 本文保留统一 Proposal 与工具参数错位的历史复盘。现行动作、工作清单控制与最终提交已按 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)、[ADR 0017](../adr/0017-separate-action-selection-from-final-delivery.md)分开；统一答复见 [ADR 0055](../adr/0055-unified-conversation-answer.md)。下文 G2、`L01` 和旧准入状态只对应当轮，最新问题与证据分别由 [Future](../future/design-optimization-backlog.md)和[评测盘点](../evals/02-current-case-inventory.md)维护。
 
 ## 1. 面试时先给结论
 

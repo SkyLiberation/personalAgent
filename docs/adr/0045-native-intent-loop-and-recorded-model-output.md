@@ -10,13 +10,13 @@
 
 ## 决定与责任
 
-按[统一 Loop Schema 设计](../optimization/to_verify/conversation-loop-schema.md)及[实际开源调用链比较](../agentRef/model-interaction-protocols.md)，主循环使用原生消息／工具调用，优先处理调用；没有调用时，完整可见正文也形成回答候选。`submit_final` 携带沟通意图、行引用等属性，与正文进入同一提交出口。2026-11-03按[ADR0049](0049-answer-regeneration-in-original-loop.md)取消普通回答专用按段修订，拒稿后由原循环重新生成完整稿。首版要求所有正文先调用 `submit_final`，已被第17轮反例否定。空准备动作与第二次普通成文已删除，claims继续以业务操作接入同稿出口。
+主循环使用原生消息及工具调用。合法调用按动作处理，纯正文可直接形成回答候选。首版强制所有正文先提交工具，被第 17 轮真实反例否定。空准备动作与第二次普通成文已删除。拒稿后由原循环补证或完整重提。现行结构化提交及旧 claim 路径退出由 ADR 0055 记录。[Loop 设计](../optimization/to_verify/conversation-loop-schema.md) · [开源机制对照](../agentRef/model-interaction-protocols.md) · [完整重提](0049-answer-regeneration-in-original-loop.md) · [统一答复](0055-unified-conversation-answer.md)
 
 模型决定语义、工具、代码及正文。Runtime 恢复身份／范围／版本，Admission 只接纳或拒绝，执行 owner 写事实，Verifier 与 Completion 各守原职责。原生终止和研究操作独占批次，执行前检查，不根据模型自述批准自己。
 
 内部typed结果按请求声明策略。意图判断及原grounding修订采用提示式JSON文本，不请求未经核实的API格式功能；其他native typed能力及非Loop默认profile保留。原类型、来源Admission及同模式有限修复不变。完整响应在解码前经 typed Port 记录者提交原 Journal／Artifact；稳定 invocation_id、逐次原件及 continuation 支持重启先解码付费输出、恢复有限修复次数。引用只选择当前合法身份，已有正文由 Runtime 恢复。安全错误在 Web／SSE 投影，不能混淆上游 HTTP、本地输出和 Runtime 故障。
 
-原生 typed 修复继续调用同一输出工具，JSON 消费者保留原承载。主回复支持正文，不放宽内部 Schema 或跳过 claims、计划审阅、核验及 Completion。流式 `role` 按结构字段聚合，持续失败事实写入原响应记录，先保存、再校验并用于恢复。缺少终止 `finish_reason` 的响应在保存后拒绝，EOF 不能代替结束事实。首版失败与计费保留，修订后的实际验证范围由上述 Loop 结果拥有。
+原生 typed 修复继续调用同一输出工具，JSON 消费者保留原承载。普通正文仍走适用的计划审阅、核验与 Completion。流式 `role` 按结构字段聚合，先保存响应再校验并用于恢复。缺少终止 `finish_reason` 时保留原件并拒绝该响应。首版失败和计费保留原身份。
 
 ## 取舍、复杂度与防护
 

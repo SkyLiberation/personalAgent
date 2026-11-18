@@ -43,7 +43,9 @@ from .models import (
     DRAFT_SUFFIXES,
     GeneratedArtifactPublication,
     MachineArtifactPublication,
+    TOOL_OUTPUT_ID_PATTERN,
     resolve_artifact_ref,
+    tool_output_directory,
     validate_display_filename,
 )
 from .storage import exclusive_artifact_lock, install_immutable
@@ -464,6 +466,37 @@ class ArtifactService:
         )
         return record.resource_ref
 
+    def write_tool_output(
+        self, *, execution_scope: ExecutionScope, capability_id: str, content: str,
+    ) -> ResourceRef:
+        """Install an immutable UTF-8 file in the owning session's output directory."""
+        scope = execution_scope
+        session = _digest(_canonical_bytes({
+            "owner": scope.principal.model_dump(mode="json"), "session": scope.thread_id,
+        }))[:24]
+        call = _digest(_canonical_bytes(scope.model_dump(mode="json")))[:32]
+        artifact_id = f"out_{session}_{call}"
+        file_bytes = content.encode("utf-8")
+        record = ArtifactRecord(
+            resource_ref=ResourceRef(resource_id=artifact_id, resource_type="artifact", owner=scope.principal),
+            filename=f"{call}.txt",
+            storage_name=f"{call}.txt",
+            content_type="text/plain",
+            source_type="generated",
+            size_bytes=len(file_bytes),
+            created_by_principal_id=scope.principal.principal_id,
+            artifact_kind="tool_output_file",
+            content_digest=_digest(file_bytes),
+            purpose="machine",
+            execution_scope=scope,
+            producer_ref=capability_id,
+        )
+        root = self._tool_output_root(session)
+        root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root.mkdir(mode=0o700, exist_ok=True)
+        self._commit_record(root, record, file_bytes)
+        return record.resource_ref
+
     def publish_machine(
         self,
         *,
@@ -606,7 +639,7 @@ class ArtifactService:
                 "InvariantViolation: Artifact commit bytes do not match metadata"
             )
         content_path = root / record.storage_name
-        metadata_path = root / f"{record.resource_ref.resource_id}.json"
+        metadata_path = content_path.with_suffix(".json")
         install_immutable(content_path, file_bytes)
         install_immutable(
             metadata_path, _canonical_bytes(record.model_dump(mode="json"))
@@ -629,13 +662,24 @@ class ArtifactService:
             limitations=snapshot.record.limitations,
         )
 
+    def _tool_output_root(self, session: str) -> Path:
+        data_dir = self.settings.data_dir.resolve()
+        root = data_dir / tool_output_directory(session)
+        if root.resolve() != root:
+            raise PermissionError("Tool output directory escapes its canonical location")
+        return root
+
     def _sidecar(self, artifact_id: str) -> Path:
-        if not re.fullmatch(r"art(?:g)?_[0-9a-f]+", artifact_id):
+        output = TOOL_OUTPUT_ID_PATTERN.fullmatch(artifact_id)
+        if output:
+            candidates = (self._tool_output_root(output[1]) / f"{output[2]}.json",)
+        elif re.fullmatch(r"art(?:g)?_[0-9a-f]+", artifact_id):
+            candidates = (
+                self.settings.data_dir / "uploads" / f"{artifact_id}.json",
+                self.settings.data_dir / "generated_artifacts" / f"{artifact_id}.json",
+            )
+        else:
             raise ValueError("invalid Artifact identity")
-        candidates = (
-            self.settings.data_dir / "uploads" / f"{artifact_id}.json",
-            self.settings.data_dir / "generated_artifacts" / f"{artifact_id}.json",
-        )
         existing = [path for path in candidates if path.exists()]
         if len(existing) > 1:
             raise RuntimeError(

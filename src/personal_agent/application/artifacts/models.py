@@ -6,6 +6,7 @@ from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from typing import Annotated, Literal
+import re
 import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -20,6 +21,7 @@ ArtifactPurpose = Literal["upload", "draft", "machine", "generated"]
 DraftContentType = Literal["text/x-python", "application/json", "text/markdown"]
 DRAFT_SUFFIXES = {"text/x-python": ".py", "application/json": ".json", "text/markdown": ".md"}
 ContentDigest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+TOOL_OUTPUT_ID_PATTERN = re.compile(r"out_([0-9a-f]{24})_([0-9a-f]{32})")
 
 TextPositionInput = (
     Annotated[int, Field(ge=1)]
@@ -48,6 +50,31 @@ def resolve_artifact_ref(
     if ref.resource_type != "artifact" or ref.owner != principal:
         raise PermissionError(prompts.render('artifacts.ref_owner_mismatch'))
     return ref
+
+
+def tool_output_directory(session_digest: str) -> str:
+    return f"tool-output/session-{session_digest}"
+
+
+def artifact_file_path(ref: ResourceRef) -> str:
+    """Project the file path available to model tools from the canonical reference."""
+    spill = TOOL_OUTPUT_ID_PATTERN.fullmatch(ref.resource_id)
+    if spill:
+        return f"{tool_output_directory(spill[1])}/{spill[2]}.txt"
+    return f"artifacts/{ref.resource_id}"
+
+
+def resolve_artifact_file(
+    file_path: str,
+    allowed_refs: tuple[ResourceRef, ...],
+    *,
+    principal: AuthenticatedPrincipal,
+    prompts: PromptCatalog = DEFAULT_PROMPTS,
+) -> ResourceRef:
+    visible = tuple(ref for ref in allowed_refs if artifact_file_path(ref) == file_path)
+    if not visible:
+        raise PermissionError(prompts.render('artifacts.ref_unavailable'))
+    return resolve_artifact_ref(visible[0].resource_id, visible, principal=principal, prompts=prompts)
 
 
 def validate_display_filename(filename: str) -> str:

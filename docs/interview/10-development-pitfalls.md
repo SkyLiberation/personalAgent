@@ -66,7 +66,7 @@
 
 **正文定位、引用合法和证据支持是三种判断，重复转录会让它们相互阻塞。** 历史协议让模型同次生成完整回答与逐字草稿引句，模型曾把来源原文填进定位字段，多次任务在语义核验前失败。增加预算不能解除这个交接责任。
 
-现行正文只生成一次，以段落或版本化片段关联引用，Runtime 恢复原文并校验实际可见坐标。研究新增引用的合法范围由当前选择约束；模型继续判断哪些原文适合支持断言。当前契约由 [ADR 0023](../adr/0023-native-answer-segments-and-visible-citations.md)、[ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)与[研究阶段契约](../adr/0032-conversation-research-claims.md)拥有。
+普通正文直接进入候选；需要绑定来源时，结构化提交引用实际读取的坐标，由 Runtime 恢复和核对原文。模型判断哪些内容能支持答复，由适用核验检查。见 [ADR 0055](../adr/0055-unified-conversation-answer.md)。
 
 | 历史候选 | 已取得结论 |
 | --- | --- |

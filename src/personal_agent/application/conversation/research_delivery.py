@@ -1,10 +1,10 @@
-"""Validate the submitted answer against actual experiment and Python execution facts."""
+"""Validate the submitted answer against actual experiment and Bash execution facts."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from personal_agent.application.python_execution.models import PythonInputManifest
+from personal_agent.application.bash_execution.models import BashInputManifest
 from personal_agent.application.retrieval_experiment.delivery import (
     DeliveryGap, DeliveryIncomplete, RetrievalExperimentCompletionService,
 )
@@ -67,13 +67,13 @@ class ResearchExperimentCompletionUseCase:
         submission = experiment_submission(trace, prompts=self.prompts)
         if trace.final_message is not None and trace.final_message != submission.final:
             raise DeliveryIncomplete(DeliveryGap(code="identity_mismatch", message=self.prompts.render("conversation.experiment.final_mismatch")))
-        self._validate_python_results(trace)
+        self._validate_bash_results(trace)
         self.experiments.validate(execution_scope=self.scope(trace), records=trace.experiment_records)
 
-    def _validate_python_results(self, trace: InteractionTrace) -> None:
+    def _validate_bash_results(self, trace: InteractionTrace) -> None:
         """核对原 Journal 的实际执行、输入身份与终态，不创建文件交付集合。"""
         for request in trace.accepted_tool_requests:
-            if request.tool_name != "execute_python":
+            if request.tool_name != "bash":
                 continue
             scope = request.execution_scope
             if (
@@ -81,11 +81,11 @@ class ResearchExperimentCompletionUseCase:
                 or scope.execution_id != trace.interaction_run_ref
                 or scope.thread_id != trace.conversation_id
             ):
-                raise PermissionError("Python接受请求不属于当前run及主体")
+                raise PermissionError("Bash接受请求不属于当前run及主体")
             command, execution, receipt = request.command, request.execution, request.receipt
             if command is None:
                 if execution is not None or receipt is not None:
-                    raise ValueError("Python实际执行缺少原冻结Command")
+                    raise ValueError("Bash实际执行缺少原冻结Command")
                 continue
             if (
                 command.execution_scope != scope
@@ -93,7 +93,7 @@ class ResearchExperimentCompletionUseCase:
                 or command.request_digest != request.request_digest
                 or command.deployment_digest != trace.deployment_digest
             ):
-                raise PermissionError("Python实际Command与原接受身份不同")
+                raise PermissionError("Bash实际Command与原接受身份不同")
             if (
                 execution is None
                 or execution.status in {"dispatching", "unknown"}
@@ -111,7 +111,7 @@ class ResearchExperimentCompletionUseCase:
                 or receipt.process_exit_code != execution.process_exit_code
                 or receipt.elapsed_seconds != execution.elapsed_seconds
             ):
-                raise ValueError("Python回执与冻结Command或实际进程事实不同")
+                raise ValueError("Bash回执与冻结Command或实际进程事实不同")
             if (
                 not execution.output_available
                 or receipt.stdout_ref is None
@@ -124,8 +124,8 @@ class ResearchExperimentCompletionUseCase:
                 receipt.status != execution.status
                 and not (execution.status == "succeeded" and receipt.status == "invalid_output")
             ):
-                raise ValueError("Python回执状态与实际进程终态不同")
-            manifest = PythonInputManifest(
+                raise ValueError("Bash回执状态与实际进程终态不同")
+            manifest = BashInputManifest(
                 command_digest=command.command_digest, program=command.program,
                 inputs=command.inputs, image_id=command.image_id, limits=command.limits,
             )
@@ -139,7 +139,7 @@ class ResearchExperimentCompletionUseCase:
                         or item.content_digest != identity.content_digest
                         or item.size_bytes != identity.size_bytes
                     ):
-                        raise ValueError("Python分析输入与实际冻结原件不同")
+                        raise ValueError("Bash分析输入与实际冻结原件不同")
                 snapshot = self.artifacts.read_snapshot(
                     receipt.input_manifest_ref, principal=trace.principal, owner=trace.principal,
                 )
@@ -149,5 +149,5 @@ class ResearchExperimentCompletionUseCase:
                 raise DeliveryIncomplete(DeliveryGap(
                     code="artifact_missing", message=self.prompts.render("conversation.experiment.input_originals_missing"),
                 )) from error
-            if PythonInputManifest.model_validate_json(snapshot.content) != manifest:
-                raise ValueError("Python输入清单与实际冻结Command不同")
+            if BashInputManifest.model_validate_json(snapshot.content) != manifest:
+                raise ValueError("Bash输入清单与实际冻结Command不同")

@@ -21,6 +21,8 @@
 | Trace、Observation、Review、Verifier、评测 | [验证与可观测](verification-and-observability.md) | 如何区分运行记录、语义验证和用户完成 |
 | 用户任务、公开题目、附件、初始数据、参考答案及终态评分 | [任务与用例数据](task-benchmarks.md) | 怎样选取可审计材料，并区分原题、改编场景及本工程真实 E2E |
 
+设计阶段的源码对照见[架构实践](architecture-practices.md)、[LLM 决策实践](llm-decision-practices.md)、[模型上下文生命周期](model-context-lifecycle.md)和[输出 Schema 的字段语义与场景设计](output-schema-design.md)。
+
 ## 2. 参考对象与能力类型
 
 这些对象用于覆盖不同机制类型，不构成综合排名。

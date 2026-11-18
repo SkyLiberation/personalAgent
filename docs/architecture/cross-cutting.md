@@ -25,7 +25,7 @@
 
 `AgentService` 从 typed `Settings.prompt_language` 取得不可变 `PromptCatalog`，显式装配到 Runtime、Graphiti、Conversation、工具及模型工厂。默认中文，英文资源由 `kernel.prompts.create_prompt_catalog` 注册；Application 拥有业务指令，Adapter 拥有结构化包装和修复指令。Schema 说明／标题在 Adapter 发出前投影，原校验模型、字段和历史事实不变。语言与 Provider 分别配置，不通过全局变量或模型品牌选择语言。资源、版本及拒绝规则由 [Prompt 模块规范](../../src/personal_agent/kernel/prompt_templates/AGENTS.md)拥有。
 
-工程自有长指令以 Markdown 标题和原段落组织，短反馈可直接为正文；主循环执行输入通过同一 Catalog 的具名包装呈现，内部载荷仍为原 typed facts 的 JSON。正文格式不改变工具协议、来源材料或历史；第三方独立提示继续由其原契约拥有。迁移及实际验证范围见[表达统一方案](../optimization/completed/prompt-markdown-presentation.md)。
+工程自有长指令以 Markdown 标题和原段落组织，短反馈可直接为正文。主循环通过同一 Catalog 呈现附件、原生工具回执和 Runtime 反馈。内部事实仍由原有 typed 契约维护。第三方独立提示由其原契约拥有。[主循环上下文](../context/agent-loop.md) · [历史表达迁移](../optimization/completed/prompt-markdown-presentation.md)
 
 工程生成的读取、搜索、截断、工具与拒绝反馈同样由对应 owner 消费实例 Catalog；原始用户／来源／历史正文和捕获输出不参与递归翻译。参数、冻结模型和模型输出的 Pydantic 校验通过既有 `ValidationInfo.context` 接收同一 typed Catalog，只选择原拒绝条件的文字，不改字段、Schema、分类或恢复次数。`CaptureService` 可接收 Catalog，未提供时按其 Settings 构造，并注入自己创建的默认 URL provider；Runtime 不事后修改外部依赖的语言状态。
 
@@ -57,6 +57,8 @@ HTTPX 观测状态附着在单次 Request 的 extensions，随 deadline 工作�
 Loop 已将逐响应记录和续接接入同一 Port：response_sink 在 typed 解码前交原 Journal 保存一次原件；before_send 只对新增物理发送执行原预算准入；continuation 先解码已付费原件。它们是具名记录／准入接口，不是通用业务 hook；包装器透明传递，不保存进程全局当前 run。主循环修复由 Application 唯一负责，内层原有限输出修复仍按请求计量；中性错误由 REST／SSE 统一安全投影。实现与未验收边界见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)。
 
 正式 [SSE 入口](../../src/personal_agent/adapters/web/routes/entry_stream.py)调用 `AgentService.converse()`，将 Conversation 已验收答案分块返回，协议见 [API](../api.md)。子 Agent 的事件流由 [AgentGateway](../../src/personal_agent/agents/gateway.py)承接。旧模型 token 流 Port 与包装器没有当前消费者，已退役，删除及行为保持证据见[完成记录](../optimization/completed/model-streaming-retirement.md)。
+
+主模型调用用 Turn 标识和 `invocation_id` 定位请求及响应原件。文件 Journal 内部沿用 `interaction_run_ref` 字段保存 Turn 标识。`step_no` 为轮内主决策顺序，响应记录与 HTTP 诊断各有 `attempt_id`。[生命周期 Spec](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
 
 生成式 Provider 在构造时由配置与[唯一策略工厂](../../src/personal_agent/infra/model_providers/__init__.py)选定，SDK 请求过程只调用注入的 `ModelProviderPolicy.prepare_chat_parameters()`。未显式声明时识别已知官方 hostname；自定义服务可以使用注册 ID。未注册 ID 在装配时明确拒绝，不能静默降为通用服务。配置加载器只向相同实际 provider/endpoint/model 的消费者继承 canonical 附加参数；独立绑定、显式空对象和非法 JSON 仍分别表示独立配置、清空与拒绝。不同图片模型及 `model_override` 不自动继承主模型参数，环境契约由[环境说明](../env.md#provider-选择与参数绑定)拥有。
 

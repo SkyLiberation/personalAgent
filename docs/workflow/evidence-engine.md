@@ -43,7 +43,7 @@ SourceDocument / EvidenceItem
 
 Research digest verification 把 `ResearchSource` 投影为 `EvidenceItem`，检查每个 digest claim 与 source binding。
 
-Research digest 的实际调用位于 [application/research/service.py](../../src/personal_agent/application/research/service.py)。Conversation 的 claims 与 Final 核验由独立结构化模型调用承担，当前链路见[核验专题](../topics/verification-and-completion.md)；已撤回 Investigation 不再是消费者。
+Research digest 的实际调用位于 [application/research/service.py](../../src/personal_agent/application/research/service.py)。Conversation 独立执行适用的回答核验，契约见[核验专题](../topics/verification-and-completion.md)；已撤回 Investigation 不再是消费者。
 
 Personal Knowledge 的 Claim、Evidence、conflict 和 scope 仍由 `KnowledgeService` 拥有。模型选择只读 `search_personal_knowledge` 后，Conversation 才把选择结果物化为有界 `tool_result`，而不是先运行一个子 RAG answer service。
 

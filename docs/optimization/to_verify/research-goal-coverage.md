@@ -1,6 +1,6 @@
 # 研究、最终回答与统一核验 Spec
 
-问题编号：`RESEARCH-GOAL-COVERAGE-001`。上位问题为 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有。本文是本问题唯一活动候选，当前生产事实见 [ADR 0032](../../adr/0032-conversation-research-claims.md)及[核验专题](../../topics/verification-and-completion.md)。
+问题编号：`RESEARCH-GOAL-COVERAGE-001`。本页保存 [ADR 0032](../../adr/0032-conversation-research-claims.md)及其研究核验候选的历史规格、用例和证据。[ADR 0055](../../adr/0055-unified-conversation-answer.md)撤回该 Conversation claim 链路；当前核验契约见[核验专题](../../topics/verification-and-completion.md)。
 
 ## 问题与责任边界
 

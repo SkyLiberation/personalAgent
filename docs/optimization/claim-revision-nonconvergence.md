@@ -2,7 +2,7 @@
 
 **当前推进以实际失败边界为单位，完整用户交付仍未通过。** 近期候选分别处理[具体来源归属](to_verify/answer-source-attribution.md)、[修订扩大列举范围](to_verify/final-revision-comparison.md)、[选证输出截断](to_verify/research-provider-output-default.md)和[已完成选证用量漏计](to_verify/research-selection-usage-commit.md)。2026-10-08 按当前稿独立核验与修订反馈分工开展隔离校准，预声明见下节；历史失败、未到达阶段和局部收益分别保留。
 
-当前生产契约由 [ADR 0032](../adr/0032-conversation-research-claims.md)、[ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)及[验证专题](../topics/verification-and-completion.md)拥有。已解决的寻址、参数、引用、报告消费、身份与计量问题统一见 [completed 索引](completed/README.md)。完整用户结果由[正式评测](../evals/02-current-case-inventory.md)拥有，下文各日期只解释对应历史轨迹。
+下文记录 [ADR 0032](../adr/0032-conversation-research-claims.md) 与 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md) 的历史轨迹、已验边界和原失败。[ADR 0055](../adr/0055-unified-conversation-answer.md)已替换旧链路。当前答复核验见[核验专题](../topics/verification-and-completion.md)，正式结果见[评测盘点](../evals/02-current-case-inventory.md)。
 
 ## 2026-10-08 当前稿独立核验的预声明
 
@@ -210,7 +210,7 @@ claim 候选先执行两份独立结构判据的固定输入资格，再执行�
 | --- | --- | --- |
 | `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：反馈修订扩大否定范围 | 第 5 版应用主体缺证，第 6 版 replacement 改为原文未指定配置主体；原文实际存在 You。 | [支持范围修订候选](to_verify/claim-supported-scope-repair.md) |
 | `CLAIM-WRITER-TYPED-OUTPUT-001`：首次空集合与字符串引用阻断入口 | 基线返回 503；唯一 Prompt 修正后的正式 target 建立 11 条 typed 论断并进入来源核验，用户结果仍因预算限制为 `0/1`。 | [typed 提交契约与未验证边界](to_verify/claim-writer-typed-output.md) |
-| `CLAIM-EVIDENCE-SELECTION-001`：先形成论断再为其选依据 | 候选曾在有界修正后撤回，2026-09-30 按用户要求恢复到唯一生产路径。整体收益按[正式评测](../evals/02-current-case-inventory.md)验收；引用继承由[完成记录](completed/claim-retained-references.md)独立拥有。 | [证据选择先于论断的候选及归档](to_verify/claim-evidence-selection.md)；[当前写作者指令](../../src/personal_agent/kernel/prompt_templates/research.py) |
+| `CLAIM-EVIDENCE-SELECTION-001`：先形成论断再为其选依据 | 候选曾在有界修正后撤回，2026-09-30 按用户要求恢复到唯一生产路径。整体收益按[正式评测](../evals/02-current-case-inventory.md)验收；引用继承由[完成记录](completed/claim-retained-references.md)独立拥有。 | [证据选择先于论断的候选及归档](to_verify/claim-evidence-selection.md)；当前写作者指令（旧版 `research.py`） |
 | `CLAIM-REVISION-PROGRESS-001`：未经核验的编辑持续累积 | 第 20 次反馈绑定第 40 版，之后 19 次合法编辑生成第 59 版，始终没有新的 `submit_claims`。运行系统保存版本和反馈，研究模型决定何时提交；编辑成功不能代替语义核验。 | [新版复验触发候选](to_verify/claim-revision-progress.md)；[执行记录](revision-feedback-loop.md#151-移除参数错误次数上限后的连续续接) |
 | `CLAIM-ASSERTION-REINTRODUCTION-001`：改写重新带入争议判断 | 当轮整项替换中，c7 曾删去 `"always"` 又写回；第 52 版收窄 `allowed_tools` 后，第 53 版重新写入成本和延迟判断。后续片段合并已取得范围外内容保真证据，片段内语义及整组完成仍待验收。 | [片段级有界修订候选](to_verify/claim-fragment-revision.md)；[第 52 版](../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v52.json)、[第 53 版](../../.tmp/claim-v40-no-parameter-cap-20260924/claims-v53.json) |
 | `CLAIM-EDIT-TARGET-TRANSCRIPTION-001`：正文编辑目标定位 | 事实、责任与成立判据由完成记录唯一维护。 | [Runtime 片段寻址](completed/claim-fragment-addressing.md) |

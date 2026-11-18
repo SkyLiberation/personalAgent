@@ -11,7 +11,7 @@ description: 用于本仓库编写、修改、重构代码及检查局部结构�
 
 - 从真实入口和调用方确认用户结果、业务事实、状态生命周期及唯一责任主体，再按[架构分析](../../../docs/devSpec/architecture-ownership.md#81-设计阶段的架构分析)确定模块、契约和装配位置。
 - 将同一业务责任的规则与状态放在一起，每项能力的准入、结果契约及投影有明确归属。同一 Aggregate 的相关操作可共享 Service；多个独立能力共用入口时，入口只负责路由与协调，不混装独立生命周期和写入责任。
-- 区分稳定业务规则、可替换算法、外部协议与横切技术职责，核对现有能力和 typed 契约是否合理适用，再决定复用、修正或替换；参考实现时按[方案比较原则](../reference-open-source-solutions/SKILL.md#3-将每项发现落成可实施对照)判断，不把少改代码置于职责和质量之上。调用方通过契约协作，不穿透内部状态或反向依赖编排；真实依赖边界的注入遵守 [COD](../../../docs/devSpec/code-structure.md#5-错误注入与命名)。
+- 区分稳定业务规则、可替换算法、外部协议与横切技术职责，核对现有能力和 typed 契约是否合理适用，再决定复用、修正或替换；参考实现时按 `reference-open-source-solutions` 的「将每项发现落成可实施对照」判断，不把少改代码置于职责和质量之上。调用方通过契约协作，不穿透内部状态或反向依赖编排；真实依赖边界的注入遵守 [COD](../../../docs/devSpec/code-structure.md#5-错误注入与命名)。
 
 ## 2. 隔离切面，保持业务主流程清楚
 
@@ -68,7 +68,7 @@ description: 用于本仓库编写、修改、重构代码及检查局部结构�
 ## 6. 走读与交付
 
 - 沿真实入口走读成功和关键失败路径，核对业务主流程、切面契约、规模和坏味道；迁移全部受影响调用方，删除被替代定义、装配及失效说明。
-- 按影响运行适用的[层级检查](../../../scripts/check_layers.py)、导入／类型等静态检查，并按 [EVD](../../../docs/devSpec/change-evidence.md#12-按实际影响选择证据)取得行为保持或产品变更证据。验证计划使用[方案推进分析](../analyze-proposal-progress/SKILL.md)，遵守根规范的单元测试停用要求。
+- 按影响运行适用的[层级检查](../../../scripts/check_layers.py)、导入／类型等静态检查，并按 [EVD](../../../docs/devSpec/change-evidence.md#12-按实际影响选择证据)取得行为保持或产品变更证据。验证计划使用 `analyze-proposal-progress`，遵守根规范的单元测试停用要求。
 - 报告实际职责与规模变化、查阅范围和协作成本、必要的模式取舍、已执行检查及未验证边界。只读质量评审仅报告有坐标和证据的问题，不自动实施修改。
 
-本技能拥有编码组织、拆分、坏味道处理和机制选择方法；[COD](../../../docs/devSpec/code-structure.md)拥有实现门禁，[ARC](../../../docs/devSpec/architecture-ownership.md)拥有事实归属与依赖边界。涉及架构定义或跨模块职责、依赖与装配调整时，使用[架构设计与维护](../design-project-architecture/SKILL.md)。
+本技能拥有编码组织、拆分、坏味道处理和机制选择方法；[COD](../../../docs/devSpec/code-structure.md)拥有实现门禁，[ARC](../../../docs/devSpec/architecture-ownership.md)拥有事实归属与依赖边界。涉及架构定义或跨模块职责、依赖与装配调整时，使用 `design-project-architecture`。

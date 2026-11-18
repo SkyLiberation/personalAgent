@@ -9,14 +9,9 @@ from pydantic import (
     field_validator, model_serializer, model_validator,
 )
 from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelHistoryEntry, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
-from personal_agent.capabilities.contracts.research import (
-    ResearchClaims,
-    ResearchReview,
-)
 from personal_agent.capabilities.contracts.verification import (
     ActionGoalJudgment,
     ConversationAnswerSegment,
-    ConversationEvidenceReference,
 )
 
 from personal_agent.application.knowledge_lifecycle.models import (
@@ -26,7 +21,6 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.feature_flags import FeatureFlags
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
-from personal_agent.application.conversation.observation_bounds import ReadWindowRequest
 from personal_agent.application.conversation.workspace_changes import WorkspaceChangeConfirmation, WorkspaceChangeOperation
 from personal_agent.application.artifacts.models import (
     ArtifactResourceItem,
@@ -37,11 +31,12 @@ from personal_agent.application.retrieval_experiment.models import (
     ExperimentToolArgs,
     ExperimentRecord,
 )
-from personal_agent.application.python_execution.models import (
-    ExecutePythonArgs,
-    PythonExecutionCommand,
-    PythonExecutionFact,
-    PythonExecutionReceipt,
+from personal_agent.application.bash_execution.models import (
+    BashArgs,
+    BashExecutionCommand,
+    BashExecutionFact,
+    BashExecutionReceipt,
+    BashWorkspaceFile,
 )
 from .tool_requests import WriteArtifactArgs
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey, VerificationHistoryCheckpoint
@@ -49,13 +44,13 @@ from .goal_models import AnalysisGoalRef, GoalItemId, GoalMaintenanceInvocation,
 
 
 ConversationInteractionMode = Literal["default", "auto"]
-ConversationInteractionPhase = Literal[
-    "ordinary", "review_plan", "deliver_final_result"
-]
 
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+SessionId = Annotated[str, Field(min_length=1)]
 
 
 _USER_MESSAGE_CONTENT = TypeAdapter(Annotated[str, Field(max_length=20_000)])
@@ -195,19 +190,6 @@ class KnowledgeSaveArguments(_StrictModel):
     selections: tuple[KnowledgeSaveSelection, ...] = Field(min_length=1)
 
 
-class ReadActionOutputArguments(ReadWindowRequest):
-    """What the model may choose when re-reading an offloaded action output.
-
-    Identity is deliberately absent. The artifact belongs to the interaction that
-    produced it, so the principal and scope come from the already-resolved request
-    context; a model-asserted user_id would be an unauthenticated claim.
-    """
-
-    resource_ref: ResourceRef = Field(
-        description="The retrieval.resource_ref carried by the excerpted observation."
-    )
-
-
 class ListPersonalKnowledgeArguments(_StrictModel):
     limit: int = Field(default=20, ge=1, le=50)
 
@@ -339,23 +321,6 @@ class EffectiveCapabilities(_StrictModel):
     agents: tuple[EffectiveAgentCapability, ...] = ()
 
 
-class ReviewCriteria(_StrictModel):
-    """Read-only delivery projection of the current accepted Goal."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    criteria: tuple[str, ...] = ()
-    interaction_phase: ConversationInteractionPhase = "ordinary"
-
-    @property
-    def requires_review(self) -> bool:
-        return bool(self.criteria)
-
-    @property
-    def plan_review_required(self) -> bool:
-        return self.interaction_phase == "review_plan"
-
-
 class ActionProtocolDiagnostic(_StrictModel):
     field_path: str
     error_type: str
@@ -466,16 +431,17 @@ class AcceptedExperimentToolRequest(_AcceptedToolRequest):
     arguments: ExperimentToolArgs
 
 
-class AcceptedPythonToolRequest(_AcceptedToolRequest):
-    tool_name: Literal["execute_python"] = "execute_python"
-    arguments: ExecutePythonArgs
-    command: PythonExecutionCommand | None = None
-    execution: PythonExecutionFact | None = None
-    receipt: PythonExecutionReceipt | None = None
+class AcceptedBashToolRequest(_AcceptedToolRequest):
+    tool_name: Literal["bash"] = "bash"
+    arguments: BashArgs
+    workspace_files: tuple[BashWorkspaceFile, ...] = ()
+    command: BashExecutionCommand | None = None
+    execution: BashExecutionFact | None = None
+    receipt: BashExecutionReceipt | None = None
 
 
 AcceptedToolRequest = Annotated[
-    AcceptedArtifactToolRequest | AcceptedExperimentToolRequest | AcceptedPythonToolRequest,
+    AcceptedArtifactToolRequest | AcceptedExperimentToolRequest | AcceptedBashToolRequest,
     Field(discriminator="tool_name"),
 ]
 
@@ -493,8 +459,6 @@ InteractionInput = (
     DecisionFeedback
     | ActionObservation
     | SubmittedFinal
-    | ResearchClaims
-    | ResearchReview
     | ArtifactSourceInput
 )
 
@@ -686,61 +650,6 @@ class ModelCallDisposition(_StrictModel):
         return self
 
 
-class ResearchInformationNeed(_StrictModel):
-    criterion_id: str = Field(pattern=r"^r[1-9][0-9]*$")
-    question: str = Field(min_length=1)
-    status: Literal["answered", "ready", "needs_evidence", "delivery_check"]
-    claim_ids: tuple[str, ...] = ()
-    references: tuple[ConversationEvidenceReference, ...] = ()
-    fit_reason: str = ""
-    gap: str = ""
-
-    @model_validator(mode="after")
-    def account_for_answer_or_gap(self):
-        if self.status == "answered" and not self.claim_ids:
-            raise ValueError(
-                "answered research requirement must identify current claims"
-            )
-        if self.status == "needs_evidence" and not self.gap.strip():
-            raise ValueError(
-                "research evidence gap must explain the necessary missing information"
-            )
-        if len(set(self.claim_ids)) != len(self.claim_ids):
-            raise ValueError("research requirement must not repeat claim identities")
-        return self
-
-
-class ResearchEvidenceSelection(_StrictModel):
-    next_step: Literal["write", "acquire", "limit"]
-    needs: tuple[ResearchInformationNeed, ...] = Field(min_length=1)
-    reason: str = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def write_requires_selected_evidence(self):
-        if self.next_step == "write" and not any(
-            need.references for need in self.needs
-        ):
-            raise ValueError(
-                "writing research claims requires selected returned evidence"
-            )
-        return self
-
-    @property
-    def references(self) -> tuple[ConversationEvidenceReference, ...]:
-        return tuple(reference for need in self.needs for reference in need.references)
-
-
-class InitialResearchInformationNeed(ResearchInformationNeed):
-    """No current claim exists to identify as an answered research requirement."""
-
-    status: Literal["ready", "needs_evidence", "delivery_check"]
-    claim_ids: tuple[str, ...] = Field(default=(), max_length=0)
-
-
-class InitialResearchEvidenceSelection(ResearchEvidenceSelection):
-    needs: tuple[InitialResearchInformationNeed, ...] = Field(min_length=1)
-
-
 class StoredModelRequest(_StrictModel):
     """Serializable original Port request; code type is restored only on schema match."""
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -818,7 +727,7 @@ class ModelDecisionRecord(_StrictModel):
     invocation_id: str = Field(min_length=1)
     operation: str = Field(min_length=1)
     request: ModelRequestReference
-    turn_index: int | None = Field(default=None, ge=1)
+    step_no: int | None = Field(default=None, ge=1, validation_alias=AliasChoices("step_no", "turn_index"))
     input_start: int = Field(ge=0)
     response_refs: tuple[ModelResponseReference, ...] = ()
     assistant: ModelAssistantMessage | None = None
@@ -828,15 +737,16 @@ class ModelDecisionRecord(_StrictModel):
     status: Literal["pending", "decoded", "invalid", "failed"] = "pending"
     diagnostics: str | None = None
     consumed: bool = False
-    research_selection: ResearchEvidenceSelection | None = None
-    research_claim_ref: ResourceRef | None = None
-    research_evidence_digest: ContentDigest | None = None
-    research_criteria_digest: ContentDigest | None = None
 
     @model_validator(mode="after")
     def _original_references_are_bound(self):
         if self.request.invocation_id != self.invocation_id or self.request.operation != self.operation:
             raise ValueError("model request reference is bound to another invocation")
+        if self.request.kind == "tool_calling":
+            if self.step_no is None and not (self.consumed and not self.response_refs):
+                raise ValueError("a main model decision must be registered as a Step")
+        elif self.step_no is not None:
+            raise ValueError("only a main model decision belongs to a Step")
         if len({ref.attempt_id for ref in self.response_refs}) != len(self.response_refs):
             raise ValueError("model response references repeat an attempt identity")
         if any(ref.invocation_id != self.invocation_id or ref.sequence != index
@@ -877,7 +787,7 @@ class InteractionTrace(_StrictModel):
     verification_history_compactions: tuple[VerificationHistoryCheckpoint, ...] = Field(default=(), max_length=2)
     revision: int = Field(default=1, ge=1)
     interaction_run_ref: str
-    conversation_id: str = Field(min_length=1)
+    conversation_id: SessionId
     principal: AuthenticatedPrincipal
     messages: tuple[ConversationMessage, ...]
     input_artifact_refs: tuple[ResourceRef, ...] = ()
@@ -885,7 +795,7 @@ class InteractionTrace(_StrictModel):
     experiment_records: tuple[ExperimentRecord, ...] = ()
     research_experiment_delivery: ResearchExperimentDelivery | None = None
     deployment_digest: ContentDigest | None = None
-    python_authorization_digest: ContentDigest | None = None
+    bash_authorization_digest: ContentDigest | None = None
     run_deadline_at: AwareDatetime | None = None
     max_execution_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     inputs: tuple[InteractionInput, ...] = ()
@@ -912,9 +822,40 @@ class InteractionTrace(_StrictModel):
                                                if key != "interaction_intent_classification"}
         return fields
 
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_pending_steps(cls, value):
+        if not isinstance(value, dict) or not isinstance(value.get("model_decisions"), (list, tuple)):
+            return value
+        records = []
+        latest_step_no = 0
+        for record in value["model_decisions"]:
+            if isinstance(record, dict):
+                request = record.get("request")
+                # Old snapshots first numbered a main request when its response arrived.
+                if ("step_no" not in record and "turn_index" in record and record["turn_index"] is None
+                        and not record.get("consumed") and isinstance(request, dict)
+                        and request.get("kind") == "tool_calling"):
+                    record = {**record, "turn_index": latest_step_no + 1}
+                step_no = record.get("step_no", record.get("turn_index"))
+                if isinstance(step_no, int):
+                    latest_step_no = step_no
+            records.append(record)
+        return {**value, "model_decisions": records}
+
     @property
-    def python_profile_digest(self) -> ContentDigest | None:
-        return self.python_authorization_digest or self.deployment_digest
+    def responded_steps(self) -> tuple[ModelDecisionRecord, ...]:
+        return tuple(record for record in self.model_decisions if record.step_no is not None and record.response_refs)
+
+    @property
+    def current_step_no(self) -> int:
+        """Step whose response owns the current decision, or zero before any response."""
+        return next((record.step_no for record in reversed(self.model_decisions)
+                     if record.step_no is not None and record.response_refs), 0)
+
+    @property
+    def bash_profile_digest(self) -> ContentDigest | None:
+        return self.bash_authorization_digest or self.deployment_digest
 
     @property
     def first_goal_operation(self) -> GoalOperationRecord | None:
@@ -925,17 +866,14 @@ class InteractionTrace(_StrictModel):
         kinds = tuple(item.kind for item in self.verification_history_compactions)
         if len(kinds) != len(set(kinds)):
             raise ValueError("verification history has duplicate responsibility checkpoints")
-        turns = [record.turn_index for record in self.model_decisions if record.turn_index is not None]
-        if turns != sorted(set(turns)) or any(
-            record.input_start > len(self.inputs) or (record.turn_index is not None and record.turn_index > self.usage.model_turns + 1)
-            for record in self.model_decisions
-        ):
-            raise ValueError("native decision history is out of order or outside committed run facts")
-        if self.python_authorization_digest is not None:
+        steps = [record.step_no for record in self.model_decisions if record.step_no is not None]
+        if steps != sorted(set(steps)) or any(record.input_start > len(self.inputs) for record in self.model_decisions):
+            raise ValueError("native decision history is out of order or outside committed interaction facts")
+        if self.bash_authorization_digest is not None:
             if self.deployment_digest is not None:
                 raise ValueError("同一运行不能同时绑定通用分析和检索部署")
             if self.run_deadline_at is None or self.max_execution_seconds is None:
-                raise ValueError("Python授权必须绑定截止及执行总额度")
+                raise ValueError("Bash授权必须绑定截止及执行总额度")
         return self
 
 
@@ -987,7 +925,6 @@ __all__ = [
     "PersonalKnowledgeEvidenceCitation",
     "PersonalKnowledgeEvidenceSnapshot",
     "PrepareKnowledgeDeleteArguments",
-    "ReviewCriteria",
     "ToolCallProposal",
     "TurnContextComposition",
     "WorkingPlanProposal",

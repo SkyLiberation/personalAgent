@@ -1,0 +1,3 @@
+interface:
+  display_name: "数据集 Agent 对照评测"
+  short_description: "优先使用官方智能体对照，隔离答案信息，对齐操作环境并追踪失败流程"

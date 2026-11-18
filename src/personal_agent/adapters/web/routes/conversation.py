@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from hashlib import sha256
+import json
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.conversation import (
@@ -17,7 +20,8 @@ from personal_agent.application.conversation import (
     ConversationTurnView,
     ConversationWorkingPlan,
 )
-from personal_agent.application.conversation.models import KnowledgeDeleteConfirmation
+from personal_agent.application.conversation.errors import ConversationTurnPending
+from personal_agent.application.conversation.models import InteractionTrace, KnowledgeDeleteConfirmation
 from personal_agent.application.conversation.workspace_changes import (
     Decision as WorkspaceDecision, Digest as WorkspaceDigest, WorkspaceChangeConfirmation, WorkspaceChangeReceipt,
 )
@@ -38,22 +42,35 @@ from personal_agent.adapters.web.routes.conversation_errors import (
 
 
 logger = logging.getLogger(__name__)
+TurnId = Annotated[str, Field(pattern=r"^(?:turn|irun)_[A-Za-z0-9_-]+$", max_length=128)]
 
 
 class ConversationTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     input_artifact_refs: tuple[ResourceRef, ...] = ()
-    conversation_id: str = Field(
+    session_id: str = Field(
         min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$"
     )
     messages: list[ConversationMessage] = Field(min_length=1, max_length=100)
-    interaction_run_ref: str | None = Field(
-        default=None, pattern=r"^irun_[A-Za-z0-9_-]+$"
-    )
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
     interaction_mode: ConversationInteractionMode = Field(
         default="default",
         description="Retained for existing callers. Plan review follows the user request and plan action.",
     )
+
+
+class ConversationTurnResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class PendingConversationTurn(BaseModel):
+    turn_id: TurnId
+    session_id: str
+    disposition: Literal["pending"] = "pending"
 
 
 class ConversationKnowledgeSaveDecisionRequest(BaseModel):
@@ -67,7 +84,6 @@ class ConversationKnowledgeSaveDecisionRequest(BaseModel):
 class WorkspaceChangeDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    conversation_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
     command_digest: WorkspaceDigest
     decision: WorkspaceDecision
 
@@ -78,8 +94,8 @@ class ConversationTurnResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     resources: tuple[ArtifactResourceView, ...] = ()
-    interaction_run_ref: str = ""
-    conversation_id: str
+    turn_id: TurnId
+    session_id: str
     disposition: Literal[
         "answer",
         "clarification_required",
@@ -95,6 +111,20 @@ class ConversationTurnResponse(BaseModel):
     working_plan: ConversationWorkingPlan | None = None
 
 
+class ConversationTurnTraceResponse(InteractionTrace):
+    interaction_run_ref: str = Field(serialization_alias="turn_id")
+    conversation_id: str = Field(serialization_alias="session_id")
+
+
+def submitted_turn_id(
+    principal: AuthenticatedPrincipal, session_id: str, client_request_id: str,
+) -> str:
+    identity = json.dumps(
+        [principal.tenant_id, principal.user_id, session_id, client_request_id], separators=(",", ":"),
+    )
+    return f"turn_{sha256(identity.encode('utf-8')).hexdigest()[:24]}"
+
+
 def conversation_turn_response(
     view: ConversationTurnView,
     *,
@@ -106,8 +136,8 @@ def conversation_turn_response(
             artifact_resource_view(resource, principal=principal, settings=settings)
             for resource in view.resources
         ),
-        interaction_run_ref=view.interaction_run_ref,
-        conversation_id=view.conversation_id,
+        turn_id=view.interaction_run_ref,
+        session_id=view.conversation_id,
         disposition=view.disposition,
         message=view.message,
         pending_confirmation=view.pending_confirmation,
@@ -121,17 +151,24 @@ def register_conversation_routes(
     settings: Settings,
     service: AgentService,
 ) -> None:
-    @app.post("/api/conversation/{interaction_run_ref}/workspace-changes/decision",
+    def require_turn(turn_id: str, principal: AuthenticatedPrincipal) -> InteractionTrace:
+        trace = service.conversation_trace(turn_id, principal=principal)
+        if trace is None:
+            raise ConversationOperationNotFound("conversation turn not found")
+        return trace
+
+    @app.post("/api/conversation/turns/{turn_id}/workspace-changes/decision",
               response_model=WorkspaceChangeReceipt)
     def decide_workspace_changes(
-        interaction_run_ref: str, body: WorkspaceChangeDecisionRequest, request: Request,
+        turn_id: TurnId, body: WorkspaceChangeDecisionRequest, request: Request,
     ) -> WorkspaceChangeReceipt:
         if getattr(request.state, "principal", None) is None:
             raise HTTPException(status_code=403, detail="工作区变更需要 Web 认证。")
         try:
             principal = resolve_requested_principal(request, settings, None)
+            trace = require_turn(turn_id, principal)
             return service.decide_workspace_changes(
-                conversation_id=body.conversation_id, interaction_run_ref=interaction_run_ref,
+                conversation_id=trace.conversation_id, interaction_run_ref=turn_id,
                 principal=principal, command_digest=body.command_digest, decision=body.decision,
             )
         except EntryPolicyDenied as exc:
@@ -143,18 +180,12 @@ def register_conversation_routes(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    @app.post(
-        "/api/conversation/turn",
-        response_model=ConversationTurnResponse,
-        response_model_exclude_none=True,
-    )
-    def conversation_turn(
-        body: ConversationTurnRequest,
+    def web_turn(
+        body: ConversationTurnRequest | ConversationTurnResumeRequest,
         request: Request,
-    ) -> ConversationTurnResponse:
-        # Decision Ownership Taxonomy: the complete caller-supplied conversation
-        # is the accepted semantic input. The model alone owns answer-vs-
-        # clarification semantics; this boundary only admits or rejects.
+        *,
+        turn_id: str | None = None,
+    ) -> ConversationTurnResponse | JSONResponse:
         try:
             require_entry_identity(request, settings)
             principal = resolve_requested_principal(
@@ -162,15 +193,33 @@ def register_conversation_routes(
                 settings,
                 body.user_id,
             )
-            view = service.converse(
-                conversation_id=body.conversation_id,
-                messages=body.messages,
-                interaction_run_ref=body.interaction_run_ref,
-                principal=principal,
-                source_platform="web",
-                interaction_mode=body.interaction_mode,
-                input_artifact_refs=body.input_artifact_refs,
-            )
+            submit_only = False
+            if isinstance(body, ConversationTurnRequest):
+                session_id, messages = body.session_id, body.messages
+                input_refs, interaction_mode = body.input_artifact_refs, body.interaction_mode
+                if body.client_request_id is not None:
+                    turn_id = submitted_turn_id(principal, session_id, body.client_request_id)
+                    submit_only = True
+            else:
+                if turn_id is None:
+                    raise ConversationOperationNotFound("conversation turn not found")
+                existing = require_turn(turn_id, principal)
+                session_id, messages = existing.conversation_id, list(existing.messages)
+                input_refs, interaction_mode = existing.input_artifact_refs, "default"
+            try:
+                view = service.converse(
+                    conversation_id=session_id,
+                    messages=messages,
+                    interaction_run_ref=turn_id,
+                    principal=principal,
+                    source_platform="web",
+                    interaction_mode=interaction_mode,
+                    input_artifact_refs=input_refs,
+                    submit_only=submit_only,
+                )
+            except ConversationTurnPending:
+                pending = PendingConversationTurn(turn_id=turn_id, session_id=session_id)
+                return JSONResponse(status_code=202, content=pending.model_dump(mode="json"))
             return conversation_turn_response(
                 view, principal=principal, settings=settings
             )
@@ -193,41 +242,54 @@ def register_conversation_routes(
                 status_code=500, detail=conversation_failure_detail(exc)
             ) from exc
 
-    @app.get("/api/conversation/runs/{interaction_run_ref}")
+    @app.post("/api/conversation/turns", response_model=ConversationTurnResponse,
+              response_model_exclude_none=True, responses={202: {"model": PendingConversationTurn}})
+    def conversation_turn(body: ConversationTurnRequest, request: Request):
+        return web_turn(body, request)
+
+    @app.post("/api/conversation/turns/{turn_id}/resume", response_model=ConversationTurnResponse,
+              response_model_exclude_none=True)
+    def resume_conversation_turn(turn_id: TurnId, body: ConversationTurnResumeRequest, request: Request):
+        return web_turn(body, request, turn_id=turn_id)
+
+    @app.get("/api/conversation/turns/{turn_id}", response_model=ConversationTurnTraceResponse)
     def conversation_trace(
-        interaction_run_ref: str,
+        turn_id: TurnId,
         request: Request,
         user_id: str | None = None,
     ):
         try:
+            require_entry_identity(request, settings)
             principal = resolve_requested_principal(request, settings, user_id)
-            trace = service.conversation_trace(
-                interaction_run_ref,
-                principal=principal,
-            )
+            service.authorize_entry(principal, "web", preflight=True)
+            trace = require_turn(turn_id, principal)
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ConversationOperationNotFound, PermissionError):
             raise HTTPException(status_code=404, detail="Resource not found.") from None
-        if trace is None:
-            raise HTTPException(status_code=404, detail="interaction run not found")
-        return trace
+        return ConversationTurnTraceResponse.model_validate(trace.model_dump())
 
     @app.post(
-        "/api/conversation/runs/{interaction_run_ref}/knowledge-save-decision",
+        "/api/conversation/turns/{turn_id}/knowledge-save-decision",
         response_model=ConversationKnowledgeSaveOperation,
     )
     def decide_conversation_knowledge_save(
-        interaction_run_ref: str,
+        turn_id: TurnId,
         body: ConversationKnowledgeSaveDecisionRequest,
         request: Request,
     ) -> ConversationKnowledgeSaveOperation:
         try:
+            require_entry_identity(request, settings)
             principal = resolve_requested_principal(request, settings, body.user_id)
+            service.authorize_entry(principal, "web", preflight=True)
             return service.decide_conversation_knowledge_save(
-                interaction_run_ref=interaction_run_ref,
+                interaction_run_ref=turn_id,
                 principal=principal,
                 decision=body.decision,
                 confirmation_ref=body.confirmation_ref,
             )
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ConversationOperationNotFound, PermissionError):
             raise HTTPException(status_code=404, detail="Resource not found.") from None
         except ConversationOperationConflict as exc:

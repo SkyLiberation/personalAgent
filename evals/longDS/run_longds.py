@@ -7,31 +7,33 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
-import mimetypes
 import os
 from pathlib import Path
 import secrets
 import shutil
-import socket
 import subprocess
-import sys
-from time import monotonic, sleep
+from time import monotonic
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from personal_agent.adapters.web.routes.artifacts import ArtifactResourceView
+from evals.conversation_http import (
+    ROOT, UNVERIFIED_FLOW, benchmark_feature_flags, local_attachments, product, submit_turn, turn_path,
+    upload_attachments, wait_for_product,
+)
+from evals.sdk_capture import redact_payload
 from personal_agent.adapters.web.routes.conversation import (
     ConversationTurnRequest,
     ConversationTurnResponse,
+    PendingConversationTurn,
 )
 from personal_agent.application.conversation import ConversationMessage
 from personal_agent.application.conversation.journal import FileInteractionJournal
-from personal_agent.application.python_execution.models import PythonExecutionAuthorization
-from personal_agent.infra.python_execution.deployment import PythonExecutionDeploymentConfig
+from personal_agent.application.bash_execution.models import BashExecutionAuthorization
+from personal_agent.infra.bash_execution.deployment import BashExecutionDeploymentConfig
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.feature_flags import write_feature_flags
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
@@ -39,12 +41,7 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.contracts.resource import ResourceRef
 
 from .longds_materials import json_bytes, prepare, seal, verify_preparation, verify_seal
-from .retrieval_capture_process import ActualWebProcess
-from .retrieval_acceptance_server import redact_payload
 from .retrieval_capture_audit import _digest, _wire_groups
-
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +98,7 @@ class LongDSRecoveryInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     next_user_turn: Literal[18] = 18
     principal: AuthenticatedPrincipal
-    conversation_id: str
+    session_id: str = Field(validation_alias=AliasChoices("session_id", "conversation_id"))
     messages: tuple[ConversationMessage, ...]
     input_artifact_refs: tuple[ResourceRef, ...]
     preparation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -110,14 +107,14 @@ class LongDSRecoveryInput(BaseModel):
     known_tokens: int = Field(ge=0)
 
 
-def _checkpoint(directory: Path, *, run_ref: str, messages: list[ConversationMessage],
+def _checkpoint(directory: Path, *, turn_id: str, messages: list[ConversationMessage],
                 references: tuple[ResourceRef, ...], materials: Path) -> None:
-    deployment = PythonExecutionDeploymentConfig.model_validate_json((directory / "python-deployment.json").read_bytes())
+    deployment = BashExecutionDeploymentConfig.model_validate_json((directory / "bash-deployment.json").read_bytes())
     authorization = deployment.authorization
     journal = FileInteractionJournal(directory / "server-data/interaction_runs")
-    trace = journal.get(run_ref)
+    trace = journal.get(turn_id)
     if (trace is None or trace.final_message is None or trace.final_message.disposition != "answer"
-            or trace.python_authorization_digest != authorization.authorization_digest
+            or trace.bash_authorization_digest != authorization.authorization_digest
             or trace.principal != authorization.authorized_principal
             or trace.conversation_id != authorization.conversation_id
             or len(messages) != 34 or tuple(messages[:-1]) != trace.messages
@@ -128,9 +125,9 @@ def _checkpoint(directory: Path, *, run_ref: str, messages: list[ConversationMes
     snapshot = directory / "checkpoint-17"
     snapshot.mkdir(exist_ok=False)
     shutil.copytree(directory / "server-data", snapshot / "server-data")
-    shutil.copyfile(directory / "python-deployment.json", snapshot / "python-deployment.json")
+    shutil.copyfile(directory / "bash-deployment.json", snapshot / "bash-deployment.json")
     shutil.copyfile(directory / "configuration.json", snapshot / "configuration.json")
-    recovery = LongDSRecoveryInput(principal=trace.principal, conversation_id=trace.conversation_id,
+    recovery = LongDSRecoveryInput(principal=trace.principal, session_id=trace.conversation_id,
         messages=tuple(messages), input_artifact_refs=references,
         preparation_sha256=sha256((materials / "preparation.json").read_bytes()).hexdigest(),
         source_digest=json.loads((directory / "repository.json").read_bytes())["source_digest"],
@@ -182,6 +179,7 @@ def _usage(sdk: Path) -> tuple[int, int, int]:
 def _source_paths() -> list[Path]:
     return [*ROOT.joinpath("src").rglob("*.py"),
             *Path(__file__).resolve().parent.glob("*.py"),
+            *(ROOT / "evals" / name for name in ("conversation_http.py", "sdk_capture.py", "web_process.py")),
             Path(__file__).with_name("longds_zh.json"), ROOT / "pyproject.toml"]
 
 
@@ -205,7 +203,7 @@ def _source_identity(directory: Path) -> None:
 
 
 def _environment(settings: Settings, directory: Path, *, principal: AuthenticatedPrincipal,
-                 api_key: str, port: int, authorization_file: Path | None) -> dict[str, str]:
+                 api_key: str, authorization_file: Path | None) -> dict[str, str]:
     parsed = urlsplit(settings.postgres_url or "")
     if not parsed.username or not parsed.password:
         raise ValueError("缺少既有本机评测数据库凭据")
@@ -213,8 +211,6 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
     database = urlunsplit((parsed.scheme, auth + "@127.0.0.1:16432", "/personal_agent_test", parsed.query, ""))
     env = os.environ.copy()
     env.update({
-        "PYTHON_DOTENV_DISABLED": "1",
-        "PYTHONPATH": os.pathsep.join((str(ROOT), str(ROOT / "src"))),
         "PERSONAL_AGENT_POSTGRES_URL": database,
         "PERSONAL_AGENT_DATA_DIR": str(directory / "server-data"),
         "PERSONAL_AGENT_API_KEYS": json.dumps({api_key: principal.model_dump(mode="json")}),
@@ -228,51 +224,48 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
         "PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX": "longds-" + uuid4().hex,
         "PERSONAL_AGENT_E2E_TRACE_DIR": str(directory / "e2e"),
         "PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR": str(directory / "product"),
-        "RETRIEVAL_E2E_SDK_DIRECTORY": str(directory / "sdk"),
-        "RETRIEVAL_E2E_HTTP_PORT": str(port),
-        "RETRIEVAL_E2E_PROCESS_FILE": str(directory / "server-process.json"),
         "PERSONAL_AGENT_ANSWER_RESULT": settings.answer_result.model_dump_json(),
         "PERSONAL_AGENT_FEATURE_FLAGS_CONFIG": str((directory / "feature_flags.toml").resolve()),
     })
-    for name in ("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG", "PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG", "PERSONAL_AGENT_ADMIN_API_KEYS",
+    for name in ("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG", "PERSONAL_AGENT_BASH_EXECUTION_CONFIG", "PERSONAL_AGENT_ADMIN_API_KEYS",
                  "RETRIEVAL_E2E_WRITE_AUDIT_CONFIGURATION", "RETRIEVAL_E2E_FAULT_CONFIGURATION",
                  "FEISHU_APP_ID", "FEISHU_APP_SECRET"):
         env.pop(name, None)
     if authorization_file is not None:
-        env["PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG"] = str(authorization_file)
+        env["PERSONAL_AGENT_BASH_EXECUTION_CONFIG"] = str(authorization_file)
     write_feature_flags(directory / "feature_flags.toml", settings.feature_flags)
     return env
 
 
 def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "target"] = "baseline",
-             user_turns: int = 2, python_image_id: str | None = None,
+             user_turns: int = 2, bash_image_id: str | None = None,
              docker_endpoint: str | None = None, recovery_checkpoint: Path | None = None,
              task_token_limit: int | None = None, stop_after_checkpoint: bool = False) -> LongDSCapture:
     prepared = verify_preparation(materials)
     total_turns = len(prepared.turns)
     if not 2 <= user_turns <= total_turns or (purpose == "baseline" and user_turns != 2):
         raise ValueError("baseline固定两轮；target须显式选择2至原题总轮数的连续前缀")
-    if (python_image_id is None) != (docker_endpoint is None):
+    if (bash_image_id is None) != (docker_endpoint is None):
         raise ValueError("分析镜像和Docker端点须同时显式提供")
-    if user_turns > 2 and python_image_id is None and recovery_checkpoint is None:
+    if user_turns > 2 and bash_image_id is None and recovery_checkpoint is None:
         raise ValueError("L2须使用已固定的通用分析环境")
     if task_token_limit is not None and (type(task_token_limit) is not int or task_token_limit <= 0):
         raise ValueError("任务停止阈值必须为显式正整数")
     if purpose == "baseline" and task_token_limit not in (None, 20_000_000):
         raise ValueError("L1固定20M任务额度")
     if (purpose == "target" and task_token_limit not in (None, 20_000_000)
-            and python_image_id is None and recovery_checkpoint is None):
-        raise ValueError("显式任务额度须绑定Python执行授权，不能只在用户轮次之间计量")
+            and bash_image_id is None and recovery_checkpoint is None):
+        raise ValueError("显式任务额度须绑定Bash 执行授权，不能只在用户轮次之间计量")
     if stop_after_checkpoint and (purpose != "target" or user_turns != total_turns or recovery_checkpoint is not None):
         raise ValueError("仅完整任务的原始运行可在第17轮真实完成后退出")
     effective_task_limit = task_token_limit if task_token_limit is not None else 20_000_000
     recovery = None
     if recovery_checkpoint is not None:
-        if purpose != "target" or user_turns != total_turns or python_image_id is not None:
+        if purpose != "target" or user_turns != total_turns or bash_image_id is not None:
             raise ValueError("恢复必须为完整target，且继承原许可而非提供新镜像")
         verify_seal(recovery_checkpoint)
-        original_authorization = PythonExecutionDeploymentConfig.model_validate_json(
-            (recovery_checkpoint / "python-deployment.json").read_bytes()).authorization
+        original_authorization = BashExecutionDeploymentConfig.model_validate_json(
+            (recovery_checkpoint / "bash-deployment.json").read_bytes()).authorization
         if task_token_limit is not None and task_token_limit != original_authorization.max_total_tokens:
             raise ValueError("恢复不能更换原任务额度")
         effective_task_limit = original_authorization.max_total_tokens
@@ -280,6 +273,7 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         if recovery.preparation_sha256 != sha256((materials / "preparation.json").read_bytes()).hexdigest():
             raise ValueError("恢复检查点与本次原题准备身份不同")
     settings = Settings.from_env()
+    settings = settings.model_copy(update={"feature_flags": benchmark_feature_flags(settings.feature_flags)})
     if recovery is not None and recovery.configuration_sha256 != sha256(json_bytes(_configuration(settings))).hexdigest():
         raise ValueError("恢复必须保持原模型、容量、预算和调用配置")
     for model in (settings.structured, settings.openai):
@@ -296,17 +290,18 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         if recovery.source_digest != json.loads((directory / "repository.json").read_bytes())["source_digest"]:
             raise ValueError("恢复必须使用原完整任务的相同代码版本")
         shutil.copytree(recovery_checkpoint / "server-data", directory / "server-data")
-        shutil.copyfile(recovery_checkpoint / "python-deployment.json", directory / "python-deployment.json")
-    unverified = not (settings.feature_flags.answer_verification and settings.feature_flags.goal_verification)
-    _write(directory / "outcome-contract.json", (
-        {"evidence_class": "unverified_flow_capture", "release_eligible": False,
-         "answer_result": settings.answer_result.model_dump(mode="json"),
-         "feature_flags": settings.feature_flags.model_dump(mode="json"),
-         "planned_user_turns": user_turns, "semantic_score": "separate_official_judge"}
-        if unverified else asdict(LONGDS_OUTCOME)
-    ))
+        shutil.copyfile(recovery_checkpoint / "bash-deployment.json", directory / "bash-deployment.json")
+    _write(directory / "outcome-contract.json", {
+        **asdict(LONGDS_OUTCOME),
+        "evidence_class": UNVERIFIED_FLOW, "release_eligible": False,
+        "answer_result": settings.answer_result.model_dump(mode="json"),
+        "feature_flags": settings.feature_flags.model_dump(mode="json"),
+        "planned_user_turns": user_turns, "semantic_score": "separate_official_judge",
+    })
     _write(directory / "configuration.json", _configuration(settings))
+    session_id = recovery.session_id if recovery is not None else "longds-" + uuid4().hex
     _write(directory / "input-identity.json", {
+        "session_id": session_id,
         "preparation_sha256": sha256((materials / "preparation.json").read_bytes()).hexdigest(),
         "checksums_sha256": sha256((materials / "checksums.json").read_bytes()).hexdigest(),
         "case_total_token_limit": effective_task_limit, "per_user_turn_timeout_seconds": 3600,
@@ -316,69 +311,45 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
     })
     principal = (recovery.principal if recovery is not None else
                  AuthenticatedPrincipal(tenant_id="longds-" + uuid4().hex, user_id="analyst"))
-    conversation_id = recovery.conversation_id if recovery is not None else "longds-" + uuid4().hex
-    authorization_file = directory / "python-deployment.json" if recovery is not None else None
+    authorization_file = directory / "bash-deployment.json" if recovery is not None else None
     if recovery is not None:
-        deployment = PythonExecutionDeploymentConfig.model_validate_json(authorization_file.read_bytes())
+        deployment = BashExecutionDeploymentConfig.model_validate_json(authorization_file.read_bytes())
         if (deployment.authorization.authorized_principal != principal
-                or deployment.authorization.conversation_id != conversation_id
+                or deployment.authorization.conversation_id != session_id
                 or datetime.now(UTC) >= deployment.authorization.expires_at):
             raise ValueError("原恢复授权不匹配或已经到期，不能重置许可")
-    if python_image_id is not None:
-        authorization = PythonExecutionAuthorization(
-            authorized_principal=principal, conversation_id=conversation_id,
+    if bash_image_id is not None:
+        authorization = BashExecutionAuthorization(
+            authorized_principal=principal, conversation_id=session_id,
             expires_at=datetime.now(UTC) + timedelta(seconds=user_turns * 3600),
             max_total_tokens=effective_task_limit, max_execution_seconds=user_turns * 3600,
-            image_id=python_image_id,
+            image_id=bash_image_id,
         )
-        deployment = PythonExecutionDeploymentConfig(authorization=authorization, endpoint=docker_endpoint)
-        authorization_file = directory / "python-deployment.json"
+        deployment = BashExecutionDeploymentConfig(authorization=authorization, endpoint=docker_endpoint)
+        authorization_file = directory / "bash-deployment.json"
         authorization_file.write_text(deployment.model_dump_json(indent=2), encoding="utf-8")
     api_key = secrets.token_urlsafe(32)
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    env = _environment(settings, directory, principal=principal, api_key=api_key, port=port,
+    env = _environment(settings, directory, principal=principal, api_key=api_key,
                        authorization_file=authorization_file)
     requested = answered = 0
     stop_reason = "not_started"
     failure = None
-    actual = None
     process = None
-    process_stopped = False
     started = monotonic()
     try:
-        with (directory / "server.log").open("wb") as log:
-            process = subprocess.Popen(
-                [sys.executable, "-B", "-m", "evals.longDS.retrieval_acceptance_server"],
-                cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
-            )
-            with httpx.Client(base_url=f"http://127.0.0.1:{port}",
+        with product(directory, env, sdk_directory=directory / "sdk", log_name="server.log") as (base, process):
+            if not wait_for_product(base, process, 45):
+                raise RuntimeError("正式 Web 进程启动失败")
+            with httpx.Client(base_url=base,
                               headers={"Authorization": "Bearer " + api_key}, timeout=30) as client:
-                deadline = monotonic() + 45
-                while monotonic() < deadline:
-                    if process.poll() is not None:
-                        raise RuntimeError("正式 Web 进程启动失败")
-                    try:
-                        if client.get("/api/health", timeout=1).status_code == 200:
-                            break
-                    except httpx.TransportError:
-                        pass
-                    sleep(0.1)
-                else:
-                    raise TimeoutError("正式 Web 健康检查超时")
-                actual = ActualWebProcess(process, directory / "server-process.json")
                 schema = client.get("/openapi.json")
                 schema.raise_for_status()
                 (directory / "openapi.json").write_bytes(schema.content)
-                references = list(recovery.input_artifact_refs) if recovery is not None else []
-                for item in (() if recovery is not None else prepared.inputs):
-                    content = (materials / "data" / item.filename).read_bytes()
-                    response = client.post("/api/artifacts/upload", files={
-                        "file": (item.filename, content, mimetypes.guess_type(item.filename)[0] or "application/octet-stream")}, timeout=3600)
-                    response.raise_for_status()
-                    view = ArtifactResourceView.model_validate_json(response.content)
-                    references.append(view.resource.resource_ref)
+                data = materials / "data"
+                references = recovery.input_artifact_refs if recovery is not None else upload_attachments(
+                    base, local_attachments((data / item.filename for item in prepared.inputs), directory=data),
+                    manifest=directory / "fixture-uploads.json", api_key=api_key,
+                )
                 _write(directory / "initial-attachments.json", [ref.model_dump(mode="json") for ref in references])
                 messages = list(recovery.messages) if recovery is not None else []
                 first = recovery.next_user_turn if recovery is not None else 1
@@ -389,18 +360,27 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                         break
                     messages.append(ConversationMessage(role="user", content=turn.user_message(language=prepared.language)))
                     request = ConversationTurnRequest(
-                        conversation_id=conversation_id, interaction_run_ref="irun_" + uuid4().hex,
-                        messages=list(messages), interaction_mode="auto", input_artifact_refs=tuple(references))
+                        session_id=session_id, client_request_id=uuid4().hex,
+                        messages=list(messages), interaction_mode="auto", input_artifact_refs=references)
                     prefix = directory / f"turn-{turn.turn_id:02}"
                     _write(prefix.with_suffix(".request.json"), request.model_dump(mode="json"))
                     requested += 1
-                    response = client.post("/api/conversation/turn", json=request.model_dump(mode="json"), timeout=3600)
+                    response = submit_turn(base, request, timeout=3600, api_key=api_key)
                     prefix.with_suffix(".response.json").write_bytes(response.content)
                     _write(prefix.with_suffix(".http.json"), {"status_code": response.status_code})
-                    trace = client.get(f"/api/conversation/runs/{request.interaction_run_ref}")
-                    prefix.with_suffix(".trace.json").write_bytes(trace.content)
                     response.raise_for_status()
-                    result = ConversationTurnResponse.model_validate_json(response.content)
+                    result = (PendingConversationTurn if response.status_code == 202 else
+                              ConversationTurnResponse).model_validate_json(response.content)
+                    trace = client.get(turn_path(result.turn_id))
+                    prefix.with_suffix(".trace.json").write_bytes(trace.content)
+                    trace.raise_for_status()
+                    trace_identity = trace.json()
+                    if (result.session_id != session_id or trace_identity["session_id"] != session_id
+                            or trace_identity["turn_id"] != result.turn_id):
+                        raise ValueError("正式响应和查询返回的会话或轮次身份不匹配")
+                    if isinstance(result, PendingConversationTurn):
+                        stop_reason = "turn_pending"
+                        break
                     if result.disposition != "answer":
                         stop_reason = "terminal_" + result.disposition
                         break
@@ -408,8 +388,8 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                     messages.append(result.message)
                     stop_reason = "planned_turns_finished"
                     if turn.turn_id == 17 and recovery is None:
-                        _checkpoint(directory, run_ref=request.interaction_run_ref, messages=messages,
-                                    references=tuple(references), materials=materials)
+                        _checkpoint(directory, turn_id=result.turn_id, messages=messages,
+                                    references=references, materials=materials)
                         if stop_after_checkpoint:
                             stop_reason = "checkpoint_17_completed"
                             break
@@ -418,27 +398,16 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         stop_reason = "entry_or_environment_failure"
         _write(directory / "failure.json", {"exception_type": failure, "requested_turns": requested,
                                             "potential_inflight_usage": isinstance(error, httpx.TimeoutException)})
-    finally:
-        if actual is not None:
-            try:
-                actual.stop(deadline=monotonic() + 20)
-                process_stopped = actual.poll() is not None
-            finally:
-                actual.close()
-        elif process is not None:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=20)
-            process_stopped = process.poll() is not None
     physical, used, unknown = _usage(directory / "sdk")
     result = LongDSCapture(
-        evidence_class="unverified_flow_capture" if unverified else "unscored_product_capture",
+        evidence_class=UNVERIFIED_FLOW,
         answer_result=settings.answer_result,
         purpose=purpose, planned_user_turns=user_turns - (17 if recovery is not None else 0),
         preceding_source_turns=17 if recovery is not None else 0,
         requested_turns=requested, answered_turns=answered, unexecuted_turns=total_turns - requested - (17 if recovery is not None else 0),
         stop_reason=stop_reason, exception_type=failure, physical_model_requests=physical,
-        known_tokens=used, unknown_usage_attempts=unknown, actual_process_stopped=process_stopped,
+        known_tokens=used, unknown_usage_attempts=unknown,
+        actual_process_stopped=process is not None and process.stopped,
         wall_seconds=monotonic() - started)
     _write(directory / "report.json", result.model_dump(mode="json"))
     seal(directory)
@@ -456,7 +425,7 @@ def main() -> None:
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--purpose", choices=("baseline", "target"), default="baseline")
     run.add_argument("--user-turns", type=int, choices=range(2, 51), default=2)
-    run.add_argument("--python-image-id")
+    run.add_argument("--bash-image-id")
     run.add_argument("--docker-endpoint")
     run.add_argument("--recovery-checkpoint", type=Path)
     run.add_argument("--task-token-limit", type=int)
@@ -468,7 +437,7 @@ def main() -> None:
                           "bytes": sum(x.bytes for x in result.inputs), "model_calls": 0}))
     else:
         result = baseline(args.materials, args.output, purpose=args.purpose,
-                          user_turns=args.user_turns, python_image_id=args.python_image_id,
+                          user_turns=args.user_turns, bash_image_id=args.bash_image_id,
                           docker_endpoint=args.docker_endpoint, recovery_checkpoint=args.recovery_checkpoint,
                           task_token_limit=args.task_token_limit, stop_after_checkpoint=args.stop_after_checkpoint)
         print(result.model_dump_json())

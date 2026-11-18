@@ -6,7 +6,7 @@
 
 用户明确要求接入实验组 1 并默认开启目标与结果核验。已有 TOML 尚无运行消费者；旧 `AnswerResultConfig.verification` 仅控制回答，目标 Journal 强制要求核验通过，无法表达 B 臂。
 
-以 typed feature flags 统一拥有两类核验的部署选择，默认开启。在原 Settings、Runtime、Conversation、回答模块和 Journal 中接入，不复制 Agent。删除旧回答核验配置，writer 选择保持独立。
+以 typed feature flags 统一拥有两类核验的部署选择，默认开启。在原 Settings、Runtime、Conversation、回答模块和 Journal 中接入，不复制 Agent。删除旧回答核验配置。可替换 writer 后续由 [ADR 0055](0055-unified-conversation-answer.md)撤回，两类核验的独立配置保持。
 
 ## 责任与防护
 

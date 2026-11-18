@@ -19,10 +19,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Literal
 
-from personal_agent.governance.policy.invariants import (
-    is_high_risk_side_effect_action,
-    react_autonomy_blocked,
-)
+from personal_agent.governance.policy.invariants import react_autonomy_blocked
 from personal_agent.kernel.contracts.policy import PolicyDecision, PolicyInput
 
 logger = logging.getLogger(__name__)
@@ -44,7 +41,7 @@ class PolicyRules:
     deny_tools: frozenset[str] = field(default_factory=frozenset)
     # 显式封禁的权限域（如 "memory:delete"）。
     deny_scopes: frozenset[str] = field(default_factory=frozenset)
-    # 是否对所有高风险动作强制要求确认（默认开启）。
+    # 保留部署配置字段；现行调用确认由请求的 requires_confirmation 决定。
     require_confirmation_for_high_risk: bool = True
 
 class PolicyEngine:
@@ -54,7 +51,7 @@ class PolicyEngine:
 
     1. Explicit deny overrides (user / source / tool / scope).
     2. ReAct autonomy guard — block high-risk / side-effecting tools.
-    3. High-risk confirmation gate — unconfirmed high-risk side effects pause.
+    3. Call confirmation gate — unconfirmed calls marked as requiring confirmation pause.
     4. Memory ownership — read/write/delete across user boundaries denied.
     5. Default allow.
     """
@@ -121,7 +118,7 @@ class PolicyEngine:
     def _evaluate_call(
         self, request: PolicyInput, *, kind: Literal["tool", "agent"]
     ) -> PolicyDecision:
-        if not self._is_high_risk_side_effect(request):
+        if not request.requires_confirmation:
             return PolicyDecision.allow(rule=f"{kind}.default")
         if request.confirmed:
             return PolicyDecision.allow(rule=f"{kind}.high_risk_confirmed")
@@ -147,17 +144,6 @@ class PolicyEngine:
                 rule="react.blocked_side_effect",
             )
         return None
-
-    def _is_high_risk_side_effect(self, request: PolicyInput) -> bool:
-        if request.requires_confirmation:
-            return True
-        if not self._rules.require_confirmation_for_high_risk:
-            return False
-        return is_high_risk_side_effect_action(
-            risk_level=request.risk_level,
-            requires_confirmation=request.requires_confirmation,
-            side_effects=request.side_effects,
-        )
 
     # -- memory decisions ---------------------------------------------------
 

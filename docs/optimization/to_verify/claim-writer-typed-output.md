@@ -6,7 +6,7 @@
 
 2026-09-28 原中文任务经正式 HTTP 入口、生产 Composition Root、真实模型和工具运行，结果 `0/1`，约 213 秒后返回 503。[原始模型响应](../../../.tmp/evidence-first-20260928/baseline/model-calls/27908/0008-response.json)提交 `create_claims` 且 `claims=[]`；一次[结构修复响应](../../../.tmp/evidence-first-20260928/baseline/model-calls/27908/0010-response.json)改成多条论断，却把 `references` 写成坐标字符串数组。既有 Schema 已要求 `claims` 非空、引用对象包含 `evidence_id`，两次均被 typed parser 拒绝。首轮模型的可见推理表示需要继续读资料，但不能仅凭推理断定提示是唯一原因。[基线 Trace](../../../.tmp/evidence-first-20260928/baseline/evidence/conversation-research-delivery-001/baseline/20260928T095242.832246Z-7448-4ba3bce0/CONVERSATION-RESEARCH-DELIVERY-001.1.trace.json)和服务日志保留原始入口失败。
 
-研究写作者拥有在现有资料下继续取证、创建非空论断或如实停止的模型决策；typed Schema 拥有结构拒绝，运行系统不补写论断或替换引用。旧 [Prompt](../../../src/personal_agent/kernel/prompt_templates/research.py) 的“没有集合时用 create_claims”没有明确区分“尚无集合”和“尚无足够依据”，引用说明也只给出坐标形式。
+研究写作者拥有在现有资料下继续取证、创建非空论断或如实停止的模型决策；typed Schema 拥有结构拒绝，运行系统不补写论断或替换引用。旧 Prompt（旧版 `research.py`） 的“没有集合时用 create_claims”没有明确区分“尚无集合”和“尚无足够依据”，引用说明也只给出坐标形式。
 
 ## 已接入的最小修正与连续证据
 

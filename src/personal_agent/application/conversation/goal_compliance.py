@@ -1,4 +1,4 @@
-"""Project and bind a batch of actual Python proposals for goal compliance."""
+"""Project and bind a batch of actual Bash proposals for goal compliance."""
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -13,12 +13,10 @@ from personal_agent.capabilities.contracts.verification import (
 from personal_agent.capabilities.contracts.verification_prompt import (
     GOAL_COMPLIANCE_OPERATION, goal_compliance_answer_request, goal_compliance_messages, verification_judgment_text,
 )
-from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.contracts.tool_runtime import accepted_tool_request_digest
 from personal_agent.kernel.prompt_registry import PromptCatalog
-from personal_agent.application.artifacts.models import resolve_artifact_ref
-from personal_agent.application.python_execution.models import PROGRAM_MAX_BYTES, ExecutePythonArgs
+from personal_agent.application.bash_execution.models import PROGRAM_MAX_BYTES, BashArgs, BashWorkspaceFile
 
 from .goal_compliance_history import ActionHistoryEvent, GoalComplianceTurn, project_goal_compliance_history
 from .errors import ConversationOperationConflict
@@ -37,25 +35,25 @@ _RECENT_COMPLETE_TURNS = 2
 
 
 @dataclass(frozen=True)
-class PendingPythonReview:
+class PendingBashReview:
     binding: ActionGoalBinding
-    arguments: ExecutePythonArgs
+    arguments: BashArgs
+    files: tuple[BashWorkspaceFile, ...]
 
     @classmethod
-    def create(cls, scope: ExecutionScope, arguments: ExecutePythonArgs,
-               allowed_refs: tuple[ResourceRef, ...], goal: CurrentAnalysisGoal,
-               *, prompts: PromptCatalog) -> "PendingPythonReview":
+    def create(cls, scope: ExecutionScope, arguments: BashArgs,
+               files: tuple[BashWorkspaceFile, ...], goal: CurrentAnalysisGoal,
+               *, prompts: PromptCatalog) -> "PendingBashReview":
         action_id = scope.task_id
         if not action_id:
-            raise ConversationOperationConflict("Python goal review requires an action scope")
-        refs = tuple(resolve_artifact_ref(item.resource_id, allowed_refs, principal=scope.principal,
-                                          prompts=prompts) for item in arguments.input_files)
+            raise ConversationOperationConflict("Bash goal review requires an action scope")
+        refs = tuple(file.resource_ref for file in files)
         return cls(ActionGoalBinding(
             action_id=action_id, goal_ref=goal.reference, input_refs=refs,
             request_digest=accepted_tool_request_digest(execution_scope=scope, action_id=action_id,
-                                                       tool_name="execute_python", arguments=arguments),
+                                                       tool_name="bash", arguments=arguments),
             prompt_version=prompts.get(ACTION_GOAL_PROMPT).version,
-        ), arguments)
+        ), arguments, files)
 
 
 @dataclass(frozen=True)
@@ -66,10 +64,8 @@ class PreparedActionGoalRequest:
 
 def _history_action_text(event: ActionHistoryEvent, *, compacted: bool, prompts: PromptCatalog) -> str:
     parts = [prompts.render("interaction_verification.context.action_id", action_id=event.action_id)]
-    parts.extend(prompts.render("interaction_verification.context.input", binding_name=item.name, resource_id=item.resource_id)
-                 for item in event.arguments.input_files)
     if not compacted:
-        parts.append(prompts.render("interaction_verification.context.code", code=event.arguments.code))
+        parts.append(prompts.render("interaction_verification.context.code", code=event.arguments.command))
     if event.review is not None:
         judgment = event.review.judgment
         parts.append(prompts.render("interaction_verification.context.judgment",
@@ -203,7 +199,7 @@ def answer_goal_context(goal: CurrentAnalysisGoal | None, draft: str, sources: t
     return context_at(through), through
 
 
-def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingPythonReview, ...],
+def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingBashReview, ...],
                         sources: tuple[InteractionTrace, ...], *, prompts: PromptCatalog,
                         artifacts: InteractionArtifactPort | None = None,
                         measure_capacity: Callable[[StructuredModelRequest], ModelCapacityCheck | None],
@@ -217,15 +213,22 @@ def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingPythonRev
     for slot, pending in enumerate(batch, start=1):
         parts = [prompts.render("interaction_verification.context.pending_slot",
             slot=f"a{slot}", action_id=pending.binding.action_id)]
-        for binding, ref in zip(pending.arguments.input_files, pending.binding.input_refs, strict=True):
+        for binding in pending.files:
+            ref = binding.resource_ref
             parts.append(prompts.render("interaction_verification.context.input", binding_name=binding.name, resource_id=ref.resource_id))
             resource = metadata.get(ref)
+            if resource is None and artifacts is not None and not binding.name.startswith("tool-output/"):
+                try:
+                    resource = artifacts.resource_item(ref, principal=ref.owner, owner=ref.owner)
+                except (OSError, PermissionError, ValueError):
+                    pass
             if resource is not None:
                 parts.append(prompts.render("interaction_verification.context.input_version",
                     revision=ref.revision, filename=resource.filename, media=resource.content_type or "—"))
             else:
                 parts.append(prompts.render("interaction_verification.context.input_revision", revision=ref.revision))
-            if not binding.name.lower().endswith(".py"):
+            filename = resource.filename if resource is not None else binding.name
+            if not filename.lower().endswith((".py", ".sh")):
                 continue
             source_text = None
             status = "unavailable"
@@ -243,7 +246,7 @@ def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingPythonRev
             parts.append(prompts.render("interaction_verification.context.mounted_code",
                 binding_name=binding.name, code=source_text) if source_text is not None
                 else prompts.get(f"interaction_verification.context.source.{status}").template)
-        parts.append(prompts.render("interaction_verification.context.code", code=pending.arguments.code))
+        parts.append(prompts.render("interaction_verification.context.code", code=pending.arguments.command))
         actions.append("\n\n".join(parts))
     turns = project_goal_compliance_history(sources, current=goal, input_refs=refs, prompts=prompts,
                                           pending_ids=frozenset(item.binding.action_id for item in batch))
@@ -271,7 +274,7 @@ def action_goal_request(goal: CurrentAnalysisGoal, batch: tuple[PendingPythonRev
     return PreparedActionGoalRequest(request, through)
 
 
-def bind_action_goal_assessment(batch: tuple[PendingPythonReview, ...],
+def bind_action_goal_assessment(batch: tuple[PendingBashReview, ...],
                                 assessment: ActionGoalAssessment) -> tuple[ActionGoalReview, ...]:
     reviews = []
     for slot, item in enumerate(batch, start=1):

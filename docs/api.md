@@ -283,31 +283,35 @@ LangGraph checkpoint。
 
 ## Conversation
 
+下文记录 Turn 接口。首段切换资源身份，沿用调用方提交的消息。服务端历史与事务存储的后续设计见 [Session、Turn 与 Step 生命周期](optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)。
+
 普通用户目标使用 canonical Conversation contract。模型从当前 EffectiveCapabilities 选择粗粒度
 业务能力；文件摄取等有独立交互的产品功能仍可进入明确 Personal Knowledge API，不由关键词 Router 猜测。
 
-### `POST /api/conversation/turn`
+### `POST /api/conversation/turns`
 
 请求示例：
 
 ```json
 {
-  "conversation_id": "personal knowledge-1",
+  "session_id": "personal-knowledge-1",
   "messages": [
     {"role": "user", "content": "总结我已经保存的知识"}
   ],
-  "interaction_run_ref": null,
+  "client_request_id": "question-1",
   "user_id": "default"
 }
 ```
 
-Web 响应由 `ConversationTurnResponse` 定义，包含 `interaction_run_ref`、`conversation_id`、
+Web 响应由 `ConversationTurnResponse` 定义，包含 `turn_id`、`session_id`、
 `disposition` 和一条 assistant `message`。需要确认的知识或工作区动作返回 `pending_confirmation`。
 `disposition` 可能为 `answer`、`clarification_required`、`confirmation_required`、`plan_ready`、
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
 
-用户要求先审阅时，`plan_ready` 返回待审 `working_plan`。同一运行重试可取得原待审计划。请求继续接受 `interaction_mode` 字段，清单是否暂停由用户要求和计划工具的 `wait_for_user` 决定。[工作清单工具](context/local-tools.md#5-conversation-直接声明的本地动作)
+同一主体在同一 Session 重用 `client_request_id` 时，消息和有序原件引用必须一致，差异返回 409。Turn 已登记时，重复提交返回已保存的答复、确认事项或其他结果。暂时没有可交付结果时返回 202、`disposition="pending"` 和原 `turn_id`，可用 `/resume` 显式恢复。首个请求还未登记 Turn 且占有 Session 写锁时返回 409，客户端可用相同输入与请求标识重试。省略客户端标识时每次提交创建新 Turn。
+
+用户要求先审阅时，`plan_ready` 返回待审 `working_plan`；恢复原 Turn 可取得原待审计划。请求继续接受 `interaction_mode` 字段，清单是否暂停由用户要求和计划工具的 `wait_for_user` 决定。[工作清单工具](context/local-tools.md#5-conversation-直接声明的本地动作)
 
 Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、reason_code、failure_stage、retryable；可得时附 provider_status_code／provider_response_complete。模型输出协议无效投影本地 502，请求超时 504，实际临时过载 503，本地实现或持久化异常 500；明确输入校验、权限和冲突仍沿各自契约。**本地 HTTP 状态不是上游实际状态。** 例如完整模型响应无法按当前输出协议消费时：
 
@@ -325,7 +329,7 @@ Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、rea
 
 缺少上游状态时省略该字段，不以本地 502 代填。此投影不含模型原文、内部异常栈或密钥，依据见 [ADR 0045](adr/0045-native-intent-loop-and-recorded-model-output.md)。
 
-请求可附 `input_artifact_refs`（默认为空），仅接受当前认证主体拥有的确切 Artifact 引用。首次调用前校验；同 run 恢复要求主体、会话、`messages` 与有序引用全部一致。
+请求可附 `input_artifact_refs`（默认为空），仅接受当前认证主体拥有的确切 Artifact 引用。首次调用前校验，恢复使用该 Turn 已冻结的消息与引用。
 
 响应的 `resources` 每项为 `{resource, download_url}`：`resource` 是原 Artifact 元数据，`download_url` 是正式下载路径，上传响应复用同一包装。内部 `ConversationTurnView` 保持原元数据类型，文件引用不包含宿主路径。鉴权关闭且主体非默认用户时，URL 带编码后的 `user_id`；鉴权开启时由请求凭据确定主体。
 
@@ -337,9 +341,9 @@ Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、rea
 - `prepare_conversation_knowledge_save`：冻结 exact user span；
 - `prepare_knowledge_delete`：准备 lifecycle delete command，确认前零副作用。
 
-### `POST /api/conversation/{interaction_run_ref}/workspace-changes/decision`
+### `POST /api/conversation/turns/{turn_id}/workspace-changes/decision`
 
-工作区会话在适用部署中返回 `kind=workspace_changes`、`command_digest` 和有序的 `changes`。已认证用户提交原 `conversation_id`、`command_digest` 和 `decision`（`approve` 或 `reject`）。响应包含该摘要、整体状态和按批准顺序记录的执行结果。相同决定重复提交返回原回执，并发处理或决定冲突时返回 409，其他主体或错误摘要返回 404。客户端取得回执后，用原消息、原会话和原运行引用再次调用 `POST /api/conversation/turn`。执行成功时模型消费实际回执并继续交付，拒绝或结果未知时展示对应状态。
+工作区会话在适用部署中返回 `kind=workspace_changes`、`command_digest` 和有序的 `changes`。已认证用户提交原 `command_digest` 和 `decision`（`approve` 或 `reject`），服务端从 Turn 定位所属 Session。响应包含摘要、整体状态和按批准顺序记录的执行结果。相同决定重复提交返回原回执，并发处理或决定冲突时返回 409，其他主体或错误摘要返回 404。取得回执后调用原 Turn 的恢复入口。执行成功时模型消费实际回执并继续交付，拒绝或结果未知时展示对应状态。
 
 配置入口允许名单时，对话、SSE 和直接工具 API 的未授权请求在执行前返回 403。认证与工作区部署配置见 [MCP 接入 Spec](mcpDesign/README.md#523-工作区变更确认与接续)。
 
@@ -347,7 +351,7 @@ Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、rea
 
 SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，在一次 turn 完成后将最终文本分块发送为 answer delta；当前不是模型 token 原生流。
 失败时 `event: error` 的 data 使用同一安全错误对象；响应头已发送后不改变 HTTP 状态。界面显示该 message，真实网络断开才显示通用中断文案。
-最终 `done` 事件包含 `disposition`、`interaction_run_ref`、`conversation_id`，以及适用时的
+最终 `done` 事件包含 `disposition`、`turn_id`、`session_id`，以及适用时的
 `pending_confirmation`。该入口不创建后台调查或 Task/GoalGraph，也不提供旧计划步骤和
 checkpoint snapshot。
 
@@ -359,8 +363,8 @@ data: {
   "reply": "...",
   "answer": "...",
   "disposition": "answer | clarification_required | limitation | failed",
-  "interaction_run_ref": "...",
-  "conversation_id": "..."
+  "turn_id": "...",
+  "session_id": "..."
 }
 ```
 
@@ -369,13 +373,15 @@ data: {
 Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/step_id/options` 形态不再
 属于该入口。
 
-### Conversation trace 与知识保存确认
+### Turn 查询、恢复与知识保存确认
 
-- `GET /api/conversation/runs/{interaction_run_ref}` 读取当前 authenticated principal 拥有的已提交
-  Interaction trace；认证关闭的本地环境可用 `user_id` query 模拟该 principal。跨 scope、未知 run
-  或缺少可信 owner 的旧 snapshot 统一返回 `404`，响应不泄露原始消息；
-- `POST /api/conversation/runs/{interaction_run_ref}/knowledge-save-decision` 接受或拒绝已冻结的
-  exact-span 保存 Command；path 中的 `interaction_run_ref` 与 authenticated principal 定位唯一
+- `GET /api/conversation/turns/{turn_id}` 读取当前主体拥有的已提交 Turn，包括主决策的
+  `step_no`。该操作受 Web 入口权限和轮次归属约束。认证关闭且策略未限制主体的本地环境可用
+  `user_id` 查询参数选择测试主体。跨作用域、未知 Turn 或缺少可信 owner 的旧快照返回 `404`。
+- `POST /api/conversation/turns/{turn_id}/resume` 恢复原 Turn，请求体只含可选的 `user_id`。服务端读取
+  已冻结的消息、原件引用和执行绑定。正在执行时按会话锁返回冲突，已交付则返回原结果。
+- `POST /api/conversation/turns/{turn_id}/knowledge-save-decision` 接受或拒绝已冻结的
+  exact-span 保存 Command；路径中的 `turn_id` 与认证主体定位唯一
   operation，confirm 还必须提供 `confirmation_ref`。内部 digest 由服务端从 Command 读取。
 
 ### Artifact 原件与成果内容
@@ -387,7 +393,7 @@ Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/
 旧 `POST /api/entry/upload`、`GET /api/entry/runs` 和
 `POST /api/entry/runs/{run_id}/resume` 已删除并返回 `404`。文件上传使用
 `POST /api/knowledge/ingest-upload`，原件上传使用上述 Artifact 入口；Conversation 恢复事实由 Interaction journal 与公开
-`interaction_run_ref` 合约拥有，不再暴露 LangGraph run snapshot。
+`turn_id` 合约拥有，不再暴露 LangGraph run snapshot。
 
 ---
 

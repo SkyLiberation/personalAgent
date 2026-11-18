@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.application.python_execution.models import Digest
+from personal_agent.application.bash_execution.models import Digest
 from personal_agent.capabilities.contracts.model import (
     ModelTransportDiagnostics, ProviderExceptionFrame, ProviderFailureDiagnostics,
 )

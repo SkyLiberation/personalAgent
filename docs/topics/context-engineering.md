@@ -100,9 +100,9 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 
 独立分析的主决策另从同一 Journal 恢复用户原话，本轮单列。原话用于理解当前请求和核对变更依据。原话、当前生效 Goal 和原生工具历史分别投影。[每轮接续顺序](../context/agent-loop.md#2-每轮接续顺序)
 
-原生工具历史由 [model_history.py](../../src/personal_agent/application/conversation/model_history.py)从 Journal 决策及已物化、可见的事实派生。完整 assistant／思考字段和 ID 配对的结果共同进入同一 Model Port；相同工具正文从 Typed execution inputs 去重。独立 direct 分析还匹配同一授权下已结束运行的原用户前缀和实际终答，将历史交换插入对应最终答复之前；当前轮继续在末尾续接。布局只由请求中的 `before_message_index` 表达，Adapter 校验范围、顺序及 host／model，不增加可写历史副本。工具引用按 `evidence_id|原文` 单份展示，完整 typed 记录和引用绑定保持，文件 owner 由 Runtime 恢复。控制接纳有独立 canonical 事实，反馈按决策轮归属，后轮复用 ID 不改写旧成功。当前压缩可见集仍控制哪些结果能够重放，受保护成员保留整组；原件由 Journal／Artifact 保存。契约由 [ADR 0042](../adr/0042-native-model-tool-continuation.md)拥有，已成立的机制及证据边界见[固化记录](../optimization/completed/conversation-tool-history.md)。
+原生工具历史由 [model_history.py](../../src/personal_agent/application/conversation/model_history.py)从 Journal 决策及已物化、可见的事实派生。完整 assistant／思考字段和 ID 配对的结果共同进入同一 Model Port，工具产物路径随原回执提供。后续轮次匹配同一任务的原用户前缀和实际终答，将历史交换插入对应最终答复之前。当前轮继续在末尾续接。布局只由请求中的 `before_message_index` 表达，Adapter 校验范围、顺序及 host／model。工具引用按 `evidence_id|原文` 单份展示，完整 typed 记录和引用绑定保持，文件 owner 由 Runtime 恢复。控制接纳有独立 canonical 事实，反馈按决策轮归属，后轮复用 ID 不改写旧成功。压缩可见集控制结果重放，原件由 Journal／Artifact 保存。契约见 [ADR 0042](../adr/0042-native-model-tool-continuation.md)，当前布局见[主循环上下文](../context/agent-loop.md#33-移除主请求的前置执行输入)。
 
-仍采用提取标准的主循环要求区从冻结 `ReviewCriteria.criteria` 只读物化；独立 direct 分析不产生该区块。稳定通用 system 在前，完整会话随后；适用要求区以“用户要求的辅助理解”标题和原句编号清单放在本次 Typed execution inputs system 末段。没有执行输入时追加同角色的独立要求消息，空标准不产生区块。条目保留原语言、顺序和限定，不调用模型重写；内部 typed 标准及核验身份不变。Model Adapter 在其后继续追加原生 assistant/tool 历史，因此不声称要求区位于整个请求最末端。早期实现及质量边界见[SEM 首批记录](../optimization/to_verify/longtask-semantic-consistency.md#9-context-首批实施与真实用例观察)。
+早期曾从冻结 `ReviewCriteria.criteria` 派生“用户要求的辅助理解”，相关证据见 [SEM 首批记录](../optimization/to_verify/longtask-semantic-consistency.md#9-context-首批实施与真实用例观察)。现行主循环从用户原话和当前有效目标恢复任务要求。[主循环输入责任](../context/agent-loop.md#1-目标与输入责任)
 
 ### 整体窗口与历史增长的当前边界
 
@@ -151,7 +151,7 @@ Action 和 Final 在同一可见输入上生成 `CitableInput`，全部引用统
 
 当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_id`。文件选择只提交现有 ID，Runtime 从当前获准集合绑定完整 ResourceRef，见 [工具契约](tools.md#搜索读取与内部核验)。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`CitableInput.executed_query` 是请求内执行说明；引用恢复只使用排除查询字段的来源投影，位置规则由上节引用契约拥有。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
 
-查询说明由 `materialize_citation_context` 放入 `Typed execution inputs`，最新 Verification 继续按原规则保留。局部交接成果见[完成文档](../optimization/completed/query-execution-handoff.md)；曾提出的历史消息重排、独立反馈分区与扩源指令已撤回，取舍及限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
+查询说明由 `materialize_citation_context` 提取，随原生工具回执交给主模型。局部交接成果见[完成文档](../optimization/completed/query-execution-handoff.md)，历史取舍及限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
 
 ### 上下文构成度量
 
@@ -165,7 +165,7 @@ Conversation 从原 Interaction Journal 恢复消息、工作清单和已提交�
 
 ## 有证据的对话上下文
 
-个人知识由模型按需选择 `search_personal_knowledge` 后，以只读证据进入同一 Conversation；外部工具返回实际执行结果和可见来源。普通交付与同版本研究 claims、最终回答按各自路径消费这些事实；研究只保留当前完整版本和适用反馈，不再经过独立汇总。检索资源和组件评测的边界见[检索专题](retrieval-reasoning.md)，产品检查点见[Grounded Answer 链路](../workflow/capture-ask-model-flow.md)。
+个人知识由模型按需选择 `search_personal_knowledge`，以只读证据进入 Conversation；外部工具返回实际执行结果与可见来源。主模型按同一答复协议消费两类材料，并可在结构化提交时选择其实际读取的引用。检索与组件评测见[检索专题](retrieval-reasoning.md)，产品链路见 [Grounded Answer](../workflow/capture-ask-model-flow.md)。
 
 ## 上下文腐化防护
 

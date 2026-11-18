@@ -147,7 +147,7 @@ V4 的真实反例中，Policy 已返回 `require_confirmation`，网关仍派�
 
 #### 5.2.4 沿用上游输入 Schema
 
-Toolathlon 的 `fetch.fetch_json` 曾在第二轮传入上游允许的 `Accept` 对象，仍被本地严格化封闭的请求头 Schema 拒绝。`filesystem.read_file` 也曾因省略上游允许缺省的 `tail` 被拒绝。[原始用例与轨迹](../problems/toolathlon-verified.md#预检受阻的-14-个用例重跑)
+Toolathlon 的 `fetch.fetch_json` 曾在第二轮传入上游允许的 `Accept` 对象，仍被本地严格化封闭的请求头 Schema 拒绝。`filesystem.read_file` 也曾因省略上游允许缺省的 `tail` 被拒绝。[原始 Schema 对照](../../.tmp/ta14-rerun-1111/schema-projection.json) · [原始输入回放](../../.tmp/mcp-upstream-contract-1111/replay.json)
 
 LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并把调用参数送给 MCP 会话。MCP Server 声明输入约束并验证收到的调用。personalAgent 的 MCP 装配同样采用发现的 Schema。模型工具定义、动作解码、准入预检查和派发前校验消费这份契约。服务方工具声明使用 `strict: false`，保留上游的字段可选性和开放对象。权限、域名和确认仍由现有 ToolGateway 执行。[LangChain 装配与调用](https://github.com/langchain-ai/langchain-mcp-adapters/blob/52a4535f3eb4b98f386836e4d9b8c4cadf99afca/langchain_mcp_adapters/tools.py#L419-L485) · [MCP 工具规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) · [OpenAI 工具严格模式](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)
 
@@ -173,7 +173,7 @@ LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并
 
 本地文件任务预检复用上游预处理和聚合网关。每个任务独立创建容器，只挂载题面、任务配置、预处理、输入夹具和运行依赖。评分程序和参考工作区由另一个进程消费，工具容器无宿主 Docker 套接字。进入正式对话前核对已连接 Server 与任务声明一致，以及工具的实际输入和副作用。未通过预检的任务记录具体依赖并保持未执行。
 
-已通过评测转接验证列目录、检索、下载和移动文件。后续样本的网关启动、用户答复和上游评分分别见[扩展评测问题记录](../problems/toolathlon-verified.md)。
+已通过评测转接验证列目录、检索、下载和移动文件。包含 Goal 的运行样本见[问题与证据](../problems/toolathlon/research-loop-problems.md)。
 
 #### 5.3.2 校园步行路线使用 SerpApi
 
@@ -194,6 +194,22 @@ LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并
 使用巴黎原评分器的地点和距离函数验收已核实景点的地点 ID、周一与周二营业时间，以及相邻景点的步行距离。用真实的东京、新加坡和洛杉矶查询检查地点搜索、公交和驾车输入。东京上游评分器中的模拟地图结果仍按上游版本解释。此阶段验收地图依赖，整例评分及 Notion、邮件等其他服务按各用例实际运行状态记录。
 
 2026-11-12 的容器预检发现四项工具。巴黎原评分器读取七个景点的营业时间及埃菲尔铁塔到卢浮宫的步行距离。四个矩阵元素与逐对路线的距离和耗时一致，超过上限的请求被拒绝。东京地点搜索、新加坡沿途站点、洛杉矶驾车和宾大步行回归均通过。一次复验中原评分器收到无法按 JSON 读取的地点详情，同一适配器版本再次执行通过。[最终预检报告](../../.tmp/ta-serpapi-tools-1112/run-16b2fd/report.json) · [失败记录](../../.tmp/ta-serpapi-tools-1112/run-ce19c0/probe.stderr)
+
+#### 5.3.4 百度地图接入预检
+
+目标是在当前 Toolathlon 评测中验证百度地图能否提供原题需要的境外数据。沿用 §5.3.2 和 §5.3.3 已验证的 SerpApi 样本作为对照。百度官方 Python MCP 源码将境外地点检索、地点详情、地理编码和路线分别派发给境外 Web API。地点检索需要地区，路线先将文本地址转成坐标，再按出行方式查询。其批量算路使用仅覆盖中国大陆的接口，境外矩阵可沿用当前适配器的逐对查询方式。[百度官方实现](https://github.com/baidu-maps/mcp/blob/aca9b28924112106e261786abc2dadfc1b39dda4/src/baidu-map/python/src/mcp_server_baidu_maps/map.py#L181-L425) · [批量算路覆盖范围](https://lbsyun.baidu.com/docs/webapi?title=routematrix%2Froutchtout)
+
+| 需求 | 真实输入和通过条件 |
+| --- | --- |
+| BMAP-1 地点检索与详情 | 巴黎埃菲尔铁塔可从检索结果取得地点 ID 和地址，详情可确定周一到周日的营业时间。东京站日本桥口的星巴克可检索到对应门店。 |
+| BMAP-2 境外路线 | 埃菲尔铁塔到卢浮宫、宾大书店到宾大博物馆有有效步行距离和耗时，洛杉矶自然历史博物馆到 UCLA 有有效驾车距离和耗时。新加坡 Mobility Gallery 到樟宜机场可取得地铁路线及沿途站点，包含经过及换乘的车站。 |
+| BMAP-3 统一评测契约 | BMAP-1 和 BMAP-2 成立后，在现有地图服务边界完成四项 `maps_*` 转换。先用现有地图预检的原评分器和路线样本验收，再允许两方 Agent 与实时查图的评分器在同一轮共用百度后端。 |
+
+百度提供地点与路线事实，适配器负责字段、坐标及单位转换，评分器保留原判据。首轮隔离预检使用 `BAIDU_MAP_AK`，最多 15 次只读 Web API 查询，采集实际响应字段。缺凭据、认证失败或境外服务未开通时停止请求并记录；上游缺失的营业时间或沿途站点须如实记录。原型及报告归档至 `.tmp/baidu-maps-1117/`。待真实响应满足前两项后再实施评测装配。每组成对结果记录其地图供应商。
+
+2026-11-17 的匿名对照向境外检索接口提交巴黎样本。百度返回 HTTP 200 和业务状态 101，提示缺少 AK。将获授权的服务端 AK 注入当前进程环境后，从仓库根运行 `.\.venv\Scripts\python.exe .tmp/baidu-maps-1117/probe.py` 采集真实回包。尚无证据判定 BMAP-1 和 BMAP-2。[匿名对照报告](../../.tmp/baidu-maps-1117/run-23fee025/report.json)
+
+同日更新 IP 白名单后，国内地点检索由 210 转为 0，确认当前 AK 与白名单可用。境外地点检索、地理编码和步行路线仍返回 240。步行路线直接传巴黎坐标，独立验证了路线接口的拒绝。境外地点详情等后续步骤尚未执行。需为同一应用开通境外地点检索、地点详情、地理编码和路线权限，再复跑 BMAP-1 和 BMAP-2。统一评测装配待两项通过后进行。[白名单修正前](../../.tmp/baidu-maps-1117/permissions-ec6c64aa/report.json) · [权限复验](../../.tmp/baidu-maps-1117/permissions-c09f0044/report.json) · [巴黎样本复验](../../.tmp/baidu-maps-1117/run-3ab8c576/report.json) · [百度业务状态码](https://lbsyun.baidu.com/faq/api?title=webapi/appendix) · [百度境外服务开通说明](https://lbsyun.baidu.com/index.php?title=模板:FAQ-abroad)
 
 ## 6. 现有测试工具与 Toolathlon 隔离
 
@@ -218,11 +234,53 @@ Runner 为每个样本建立独立的工作区、产品进程、端口、会话�
 
 ### 6.1 同工具条件对照
 
+#### Toolathlon 配对运行的 MCP 清单
+
+`apply-phd-email` 的上一轮网关发现了 `merge_pdfs`。官方 Agent 直接合并三份原件，附件通过逐字节检查。本 Agent 的映射只开放 PDF 读取和搜索，随后用 Terminal 重建的附件未通过。任务预检当时只检查每个服务至少有一项工具已映射。[网关工具清单](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/apply-phd-email/personal/tools.json) · [本 Agent 评分](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/apply-phd-email/personal/grader.log)
+
+Toolathlon 配对入口按任务网关发现结果和评测显式权限生成一份 MCP 工具清单，首个分支归档，另一分支使用该清单并核对自己的网关定义。清单作为本 Agent 的 MCP 注册配置，也限制官方 Agent 网关客户端的发现和执行。用例可以选择共同的工具集合，官方和本工程各自的内置运行控制继续沿自己的链路工作。任务工作区内的 `merge_pdfs` 按现有工作区写入映射接入。采用同一份清单可保留真实上游工具及产品授权，省去为官方分支另外维护一套清单。
+
+首个用例固定 `apply-phd-email` 原题、隔离的本机测试邮件、原始 PDF、模型和上游评分器。用旧归档重放工具发现，确认原本地映射缺少合并能力。随后双方各执行一次，在实际模型请求中核对共同工具清单，并按原评分器检查发送的附件是否逐字节匹配。模型选择何种合法工具由真实运行决定，报告独立记录合并调用、邮件结果、正式答复和整题成绩。
+
+定向复验中，双方的 MCP 模型工具集合均匹配共用清单，`merge_pdfs` 成功执行，测试邮件的附件通过上游逐字节检查。运行方式和用例结果见[配对入口](../evals/04-running-and-release.md#toolathlon-共用-mcp-工具清单)与[对比记录](../problems/toolathlon/agent-comparison.md#apply-phd-email-的同工具复验)。
+
 先实施独立环境、显式 MCP 映射和实际工具面记录。正式要求同工具条件对照时，由组合根注入一份通用部署能力限制，套件持有具体清单。普通用户请求没有选择该部署限制的权力。使用稳定能力身份，对 MCP 以 Server 与远端工具身份映射到 canonical 工具名，对本地工具和子智能体分别声明。
 
 Conversation 在 `EffectiveCapabilities` 投影处将部署限制与既有身份、资源及政策求交集。这个交集同时供能力说明和实际动作声明使用。调用准入消费同一限制，覆盖直接由 Application 提供的业务动作，以及涉及同一受限能力的委派或间接入口。工具结果读取与适用的计划、核验、完成控制按实际职责列入对应关系。面向评测的部署限定测试身份和正式任务入口。若允许其他工具执行 API，实际执行同样检查其适用范围。
 
 启动时检查 `/api/capabilities/inventory` 中的 Server 和注册映射。运行中保存实际模型请求的动作声明，并按阶段与同一限制核对。一个动作当轮还受既有策略和阶段条件影响，因此检查允许集合及当轮应出现的动作。执行审计用于判断拒绝是否早于远端调用。两项结果分别归档。
+
+### 6.2 Toolathlon 本地 Bash
+
+#### 可比的执行环境
+
+`canvas-arrange-exam` 的正式归档显示，官方 Python 在 Toolathlon 项目环境中用 `openpyxl` 就地写入 9 行。本 Agent 识别出相同的 9 门课，但通用镜像缺少 `openpyxl`，且 Bash 的附件快照与 MCP、评分器所读的可写工作区分离。该题声明的 MCP 服务为 Canvas、邮件、记忆和 Terminal，Excel 是题目材料，单凭服务名无法推导工作区执行依赖。[官方轨迹](../../.tmp/tac1114/runs/canvas-arrange-exam/official/traj_log.json) · [本 Agent 报告](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/canvas-arrange-exam/personal/report.json)
+
+采用 DeepSeek Harness 的职责划分。MCP Client 根据部署参数连接、发现和注册工具。Bash 按会话工作区执行，Linux 本地实现授予该目录写权限。评测环境负责提供项目依赖，MCP 工具描述不承担软件安装。Toolathlon 的固定任务镜像已装配上游锁定依赖。Bash 复用同一镜像及其中的包。评测接入从已就绪的网关将位于 root 私有目录的 Python 解释器放到卷中的只读运行时目录，继续以非 root 执行。相比维护按用例或服务名推断的包表，这一做法同时覆盖 MCP 服务和题目文件使用同一项目环境的情况。[MCP 连接](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/mcp/mcp-client/src/transport.ts#L31) · [工作区权限](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/sandbox/sandbox-local/src/profiles.ts#L17) · [上游镜像](../../toolServer/Toolathlon/Dockerfile#L91)
+
+Runner 为本题预备一个 Docker 卷。MCP 网关在卷内初始化题目工作区，批准的 Bash 进程挂载该卷的可写子目录，并从独立卷只读挂载预备的运行时。两者使用同一工作区路径，评分器通过网关导出同一份可写文件。绑定的题目原件由上游初始化一次，评测器直接提交原题。独立输入使用只读挂载。工作区卷、运行时卷、路径、镜像及 MCP Server 身份随会话许可绑定到命令摘要。组合根校验绑定的 MCP Server 已启用。命令以非 root 身份执行，工作区之外的写入限制由 Docker 执行。[Bash 工作区决定](../adr/0056-bash-workspace.md) · [Docker 卷子目录](https://docs.docker.com/engine/storage/volumes/#mount-a-volume-subdirectory)
+
+`huggingface-upload` 的共用工具复验表明，官方 Python 继承任务容器网络，本 Agent 的 Bash 加载了同一 SDK 但域名解析失败，随后由 Terminal MCP 完成推送。按照 DeepSeek Harness 分别配置文件和网络权限的做法，Toolathlon 配对入口直接使用已就绪任务网关的完整容器 ID，为本 Agent 当前 Turn 的 Bash 容器授权相同的网络命名空间。Docker 在保留 Bash 容器及其挂载、进程和资源边界的前提下接入网关网络，也适用网关的回环地址。网关容器 ID 随现有工作区许可进入命令摘要，复用容器时检查网络绑定。没有显式网络绑定的配置使用禁网模式。网关不可用时由 Docker 启动失败并沿现有回执反馈。[上一次复验](../../.tmp/mcp-parity-1117/huggingface-paired/huggingface-upload/personal/report.json) · [DeepSeek Harness 文件和网络权限](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/apps/cli/reference/README.zh.md#L83) · [Docker 容器网络](https://docs.docker.com/engine/network/#container-networks)
+
+先在两个实际调用 Bash 的 Turn 中用同一任务网关探测。基线禁网，目标配置可读同一回环服务并通过只读 HTTPS 请求访问 Hugging Face。两个 Turn 均核对当前工作区可写、相邻目录不可见、冻结输入和运行时不可写、命令保持非 root，另核对完全缺少网络绑定的控制组。探测通过后，固定两边的共用 MCP 工具清单、原题和评分器，串行重跑 `huggingface-upload`。报告分别记录工具网络能力、上游评分和正式答复。评分下载发生 TLS 中断时，可以固定本轮远端提交并沿用原评分器串行下载补评分。
+
+真实容器探测重现了旧配置无法访问任务网关回环服务。加入绑定后，受限 Bash 使用与网关相同的网络命名空间，回环和 Hugging Face HTTPS 检查均返回 200。独立 PID 命名空间、文件隔离和禁网控制均通过。[变更前探测](../../.tmp/hf-bash-network-1117/red.json) · [变更后探测](../../.tmp/hf-bash-network-1117/green.json)
+
+`huggingface-upload` 通过正式 HTTP 入口复跑。本 Agent 在 Bash 内访问 Hugging Face 并通过 SDK 上传，双方最终评分均确认远端文件全部匹配，并各自返回正式答复。[配对结果](../problems/toolathlon/agent-comparison.md#huggingface-upload-的同工具复验) · [运行代码身份](../../.tmp/hf-bash-network-1117/paired/identity.json)
+
+`yahoo-analysis` 的旧运行中，Bash 缺少 `yfinance` 且网络解析失败，Terminal 的独立 Python 环境也无法导入依赖。当前配对入口已复用官方任务镜像、项目依赖、共享工作区及网关网络。继续用该入口检查本题的实际环境，先在受限 Bash 内核对 `yfinance`、`pandas`、Python 版本、题目原件可读、工作区可写及与网关相同的网络命名空间，再通过原生 `yfinance` 读取评级历史。镜像和依赖由现有 `BashSandbox.from_fixture_image()` 绑定，缺项在该环境装配边界处理。[旧本 Agent 报告](../../.tmp/ta-rerun-1117/window-20261117-014857-963603/yahoo-analysis/personal/report.json)
+
+环境检查通过后，固定原题、共用 MCP 清单、现有模型和每边 1,200 秒预算，串行运行双方各一次。分别检查模型实际使用的依赖、数据源、最终文件及上游评分。若环境检查已满足，直接复用当前实现。环境通过与整例评分分别记录，评级接口的机构去重继续按其实际语义解释。原型和新报告放入 `.tmp/ya18-*`，与旧结果保持独立身份。
+
+2026-11-18 的真实容器预检通过。官方项目 Python 和非 root Bash 均为 Python 3.12.11、`yfinance 0.2.62`、`pandas 2.2.3`，读到的指南和模板摘要一致，工作目录及网络命名空间一致。Bash 直接读取 NVDA 的 987 行评级历史，包含 59 家机构，并成功写入由网关读回的文件。本次环境检查复用既有统一装配。[环境预检](../../.tmp/ya18-20261118/environment/report.json)
+
+随后通过统一入口完成双方各一次 `yahoo-analysis` 原题。两边使用相同的 22 项 MCP 工具清单，实际模型请求的工具集合全部匹配。本 Agent 用 Bash 中的 `yfinance` 读取逐条评级并写入结果文件，两边均通过原评分器并返回正式答复。[本轮身份](../../.tmp/ya18-20261118/paired/identity.json) · [最新对比](../problems/toolathlon/agent-comparison.md#yahoo-analysis-的同环境复验)
+
+通过共用 HTTP 入口提交原题，沿用已有功能配置及评分器。选定 `canvas-arrange-exam`，先用封存的初始 Excel 检查非 root Python 能导入锁定版本、同一工作区能被 Bash 写入并由网关读回、卷外写入被拒绝。再执行一次原题，验收评分器读取 9 行并通过，记录是否有正式答复。LongDS 使用自身声明的环境，复用同一 HTTP 和 Bash 入口。上线范围随真实样本的验证结果确定。
+
+隔离检查使用本题初始 Excel。非 root Bash 导入 `openpyxl 3.1.5` 并保存表格，网关从同一路径读回修改。Bash 看不到工作区卷的相邻目录，写入只读运行时或冻结输入目录均被拒绝。无 MCP 工作区绑定的 Bash 用原镜像成功读取只读附件，写入仍被拒绝。[Bash 回执](../../.tmp/mcp-sandbox-1117/shared-probe/execution/result.json) · [网关读回](../../.tmp/mcp-sandbox-1117/shared-probe/gateway-readback.txt) · [独立附件回执](../../.tmp/mcp-sandbox-1117/unbound-probe/execution/result.json)
+
+正式复验中 8 次 Bash 执行成功。模型读取记忆与模板，写回同一份工作簿，并在约 149 秒返回正式答复。评分器读取到 9 行完全匹配和 1 行多余数据，整题未通过。模型用记忆分数正确排除了免考的 ENG101，但把 1 月 14 日已考完的 CS101 留在 1 月 16 日的剩余考试表中。工作区交付验证通过，剩余考试的筛选判定仍未通过。[正式复验](../../.tmp/mcp-sandbox-1117/run/canvas-arrange-exam/personal/report.json) · [评分日志](../../.tmp/mcp-sandbox-1117/run/canvas-arrange-exam/personal/grader.log)
 
 ## 7. 场景推演与验收
 
@@ -234,7 +292,7 @@ Conversation 在 `EffectiveCapabilities` 投影处将部署限制与既有身份
 
 Toolathlon 的 `arrange-workspace` 配置包含文件系统、终端、PDF、Excel 和若干宿主辅助动作。其预处理将初始档案展开到工作区，评分器对比最终目录和文件路径集合。首个写入候选以同一份初始档案运行中文改编任务，向用户提供同一目标目录结构。上游文件 Server 配置使用未固定版本的 npm 包。V4 前先选定并锁定实际包版本，核对列举、创建目录和移动文件所需的工具、Schema、覆盖行为及副作用，再固定映射。[上游任务配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/task_config.json) · [文件 Server 配置](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/configs/mcp_servers/filesystem.yaml) · [预处理](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/preprocess/main.py) · [目录评分](https://github.com/hkust-nlp/Toolathlon/blob/9be8d8fe07a497b18ee61e3f2ae694e9797f39eb/tasks/finalpool/arrange-workspace/evaluation/check_local.py)
 
-1. Runner 启动任务环境并放入初始文件。用户经 `POST /api/conversation/turn` 提交“请按下面的目录结构整理我的工作区文件”，附上任务提供的目标结构。
+1. Runner 启动任务环境并放入初始文件。用户经 `POST /api/conversation/turns` 提交“请按下面的目录结构整理我的工作区文件”，附上任务提供的目标结构。
 2. 真实模型读目录、判断文件归属并提出变更。Runner 核对冻结清单符合测试用户授权的范围，以用户身份通过正式入口确认。产品逐项执行，模型根据真实回执决定后续动作和交付。Runner 在容器外保留评分器与标准结果。
 3. 产品按自身完成契约交付。评分器独立检查目录和文件路径集合。必要隔离反例检查其他工作区和评分资料不可读写。对移除移动映射的控制组，记录未提供移动能力、工具拒绝或零写入的实际证据。模型报告完成与真实终态单独计分。
 
@@ -257,7 +315,7 @@ V4 恢复验证先执行两个独立样本。其一在只读挂载的临时工�
 
 ### 7.3 PDF 资料与文件交付验证
 
-固定上游提交，选取 `imagenet` 和 `detect-revised-terms` 各一个样本。使用 `imagenet` 官方中文题面，并按 `detect-revised-terms` 的详细英文题面保留实质变更、引用原文和完整对应条文的条件。真实请求从 Conversation Web 入口进入。模型沿用当前 Toolathlon 配置的直接回答，关闭 Claim 和模型核验。
+固定上游提交，选取 `imagenet` 和 `detect-revised-terms` 各一个样本。使用 `imagenet` 官方中文题面，并按 `detect-revised-terms` 的详细英文题面保留实质变更、引用原文和完整对应条文的条件。真实请求从 Conversation Web 入口进入。当时的 Toolathlon 配置使用直接回答并关闭模型核验。现行采集复用[共用 HTTP 链路](../evals/04-running-and-release.md#conversation-评测共用入口)。
 
 PDF Server 使用上游任务镜像中已缓存的 `pdf-tools-mcp==0.1.4` 和上游锁修复包装脚本。仅映射元信息、读取、搜索及其分页。Filesystem Server 读取只读原件，写入独立的空输出目录。该目录仅用于本轮新文件交付。标准文件和评分脚本留在工具容器外。初始文件摘要、模型实际工具声明、远端调用和输出文件分别归档。
 

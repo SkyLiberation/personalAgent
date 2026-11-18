@@ -22,9 +22,9 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.adapters.web.routes.conversation import ConversationTurnResponse
+from personal_agent.application.conversation import ConversationMessage
 from personal_agent.application.conversation.journal_lock import exclusive_run_lock
-from personal_agent.application.python_execution.models import Digest
+from personal_agent.application.bash_execution.models import Digest
 
 from .longds_judge_config import (
     JUDGE_SOURCE_SHA256, PROMPT_SHA256, TOKEN_LIMIT,
@@ -32,6 +32,13 @@ from .longds_judge_config import (
 )
 from .longds_materials import json_bytes, seal, verify_preparation, verify_seal
 from .retrieval_capture_audit import ObservedProviderCompletion
+
+
+class CapturedTurnResult(BaseModel):
+    """Read the result used by the judge from either sealed HTTP response format."""
+
+    disposition: Literal["answer", "clarification_required", "confirmation_required", "plan_ready", "limitation", "failed"]
+    message: ConversationMessage
 
 
 class LongDSJudgement(BaseModel):
@@ -208,7 +215,7 @@ def qualify(judge: MeteredJudge, *, materials: Path, negative_capture: Path) -> 
     verify_preparation(materials)
     verify_seal(negative_capture)
     reference = json.loads((materials / "evaluator-private/task.json").read_bytes())[0]
-    actual = ConversationTurnResponse.model_validate_json((negative_capture / "turn-01.response.json").read_bytes())
+    actual = CapturedTurnResult.model_validate_json((negative_capture / "turn-01.response.json").read_bytes())
     output = judge.root / "qualification"
     output.mkdir(exist_ok=False)
     source = Path(__file__).read_bytes()
@@ -272,9 +279,9 @@ def score(judge: MeteredJudge, *, materials: Path, capture: Path, name: str,
         if not path.is_file():
             continue
         http = json.loads((capture / f"turn-{turn.turn_id:02}.http.json").read_bytes())
-        if not 200 <= http["status_code"] < 300:
+        if http["status_code"] != 200:
             continue
-        actual = ConversationTurnResponse.model_validate_json(path.read_bytes())
+        actual = CapturedTurnResult.model_validate_json(path.read_bytes())
         if actual.disposition != "answer":
             continue
         ref = references[turn.turn_id - 1]

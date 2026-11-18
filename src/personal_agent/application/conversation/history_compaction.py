@@ -16,10 +16,11 @@ from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from personal_agent.kernel.contracts.resource import ResourceRef
 
-from .artifact_search import SearchActionOutputArguments
-from .artifact_sources import input_resource_refs
+from personal_agent.application.artifacts.models import artifact_file_path
+from .file_search import GrepFileArguments
+from .artifact_sources import input_resource_refs, tool_result_artifact_refs
 from .citations import CitableInput
-from .context_materialization import ARTIFACT_OUTPUT_CAPABILITIES, READ_ARTIFACT_CAPABILITY, artifact_read_actions
+from .context_materialization import FILE_READ_CAPABILITIES, READ_FILE_CAPABILITY, file_read_actions
 from .errors import ConversationOperationConflict
 from .history_models import (
     HistoryCompactionCheckpoint, HistorySummary,
@@ -74,11 +75,11 @@ def _source_arguments(assistant: ModelAssistantMessage | None, action_id: str) -
     return None
 
 
-def _snapshot_search_keyword(content: str, snapshot_id: str, observation: ActionObservation) -> str | None:
+def _snapshot_search_keyword(content: str, snapshot_path: str, observation: ActionObservation) -> str | None:
     # The call ID also occurs in the assistant message. Match the receipt's JSON prefix.
     keyword = snapshot_json({"action_id": observation.action_id, "capability_id": observation.capability_id})[:-1]
     try:
-        SearchActionOutputArguments(resource_id=snapshot_id, keyword=keyword)
+        GrepFileArguments(file_path=snapshot_path, keyword=keyword)
     except ValidationError:
         return None
     matches = re.finditer(re.escape(keyword), content, flags=re.IGNORECASE)
@@ -263,7 +264,7 @@ class HistoryCompactor:
         exported = []
         for item in checkpoint.sources:
             source = by_run.get(item.run_ref)
-            if source is None or not any(record.turn_index == item.through_turn for record in main_decisions(source)):
+            if source is None or not any(record.step_no == item.through_turn for record in main_decisions(source)):
                 raise ConversationOperationConflict(self._prompts.render("conversation.history.decision_missing"))
             if item.includes_final and source.final_message is None:
                 raise ConversationOperationConflict(self._prompts.render("conversation.history.source_invalid"))
@@ -313,9 +314,11 @@ class HistoryCompactor:
         if validated is None:
             return HistoryProjection(inputs=tuple(visible), summary="", recovery="")
         checkpoint = validated.checkpoint
-        snapshot_id = checkpoint.snapshot_ref.resource_id
-        snapshot_readers = artifact_read_actions(snapshot_id, actions)
+        snapshot_path = artifact_file_path(checkpoint.snapshot_ref)
+        snapshot_readers = file_read_actions(actions)
         sources = self._sources(trace)
+        published = {source.interaction_run_ref: tool_result_artifact_refs(source) for source in sources}
+        visible_artifacts = set(input_resource_refs(item.observation for item in visible))
         coverage = {item.run_ref: item for item in checkpoint.sources}
         covered: dict[tuple, tuple[str, ModelDecisionRecord, int]] = {}
         protected = set()
@@ -328,7 +331,7 @@ class HistoryCompactor:
             if item is None:
                 continue
             for record in main_decisions(source):
-                if record.turn_index > item.through_turn:
+                if record.step_no > item.through_turn:
                     continue
                 for ordinal, index in enumerate(decision_input_indices(source, record)):
                     observation = source.inputs[index]
@@ -340,7 +343,7 @@ class HistoryCompactor:
         result = []
         artifact_sources = []
         positions = snapshot_result_positions(validated.content, validated.exported) if snapshot_readers else {}
-        snapshot_reader = next((action for action in snapshot_readers if action.target_name == READ_ARTIFACT_CAPABILITY), None)
+        snapshot_reader = next((action for action in snapshot_readers if action.target_name == READ_FILE_CAPABILITY), None)
         for item in visible:
             observation = item.observation
             key = covered_observation_key(observation) if isinstance(observation, (ActionObservation, DecisionFeedback)) else None
@@ -354,38 +357,39 @@ class HistoryCompactor:
                 continue
             run_ref, record, ordinal = covered[key]
             refs = input_resource_refs((observation,))
-            position = positions.get((run_ref, record.turn_index, ordinal))
-            if (not refs and (position is None or not item.citations
-                              or observation.capability_id in ARTIFACT_OUTPUT_CAPABILITIES)):
+            outputs = tuple(ref for ref in published[run_ref].get(observation.action_id, ())
+                            if ref in visible_artifacts and ref not in refs)
+            position = positions.get((run_ref, record.step_no, ordinal))
+            if (not refs and not outputs and (position is None or not item.citations
+                              or observation.capability_id in FILE_READ_CAPABILITIES)):
                 continue
             arguments = _source_arguments(record.assistant, observation.action_id)
             argument_context = (self._prompts.render("conversation.context.history_arguments", arguments=arguments)
                                 if arguments is not None else "")
-            source = dict(run_ref=run_ref, turn=record.turn_index, action_id=observation.action_id,
+            source = dict(run_ref=run_ref, turn=record.step_no, action_id=observation.action_id,
                           source_tool=observation.capability_id)
-            for ref in refs:
-                readers = artifact_read_actions(ref.resource_id, actions)
-                if readers:
+            if snapshot_readers:
+                for ref in (*refs, *outputs):
                     artifact_sources.append(self._prompts.render("conversation.context.history_artifact",
-                        **source, resource_id=ref.resource_id,
-                        readers=", ".join(reader.name for reader in readers), arguments=argument_context))
-            if refs or position is None:
+                        **source, file_path=artifact_file_path(ref),
+                        readers=", ".join(reader.name for reader in snapshot_readers), arguments=argument_context))
+            if refs or position is None or not item.citations or observation.capability_id in FILE_READ_CAPABILITIES:
                 continue
             label = self._prompts.render("conversation.context.history_source", **source)
             if snapshot_reader is not None:
                 artifact_sources.append(self._prompts.render("conversation.context.history_inline_read",
-                    source=label, resource_id=snapshot_id, reader=snapshot_reader.name,
+                    source=label, file_path=snapshot_path, reader=snapshot_reader.name,
                     line=position.line, column=position.column, arguments=argument_context))
                 continue
-            keyword = _snapshot_search_keyword(validated.content, snapshot_id, observation)
+            keyword = _snapshot_search_keyword(validated.content, snapshot_path, observation)
             if keyword is not None:
                 artifact_sources.append(self._prompts.render("conversation.context.history_inline_search",
-                    source=label, resource_id=snapshot_id, reader=snapshot_readers[0].name,
+                    source=label, file_path=snapshot_path, reader=snapshot_readers[0].name,
                     keyword=keyword, arguments=argument_context))
 
         if snapshot_readers:
             artifact_sources.append(self._prompts.render("conversation.context.history_snapshot",
-                resource_id=snapshot_id, readers=", ".join(reader.name for reader in snapshot_readers)))
+                file_path=snapshot_path, readers=", ".join(reader.name for reader in snapshot_readers)))
         recovery = (self._prompts.render("conversation.history.result_locations", locations="\n".join(artifact_sources))
                     if artifact_sources else "")
         return HistoryProjection(inputs=tuple(result), summary=self._summary_context(checkpoint), recovery=recovery)
@@ -448,7 +452,7 @@ class HistoryCompactor:
         contents = self._prompts.render("conversation.context.history_input",
             question=trace.messages[-1].content,
             goal=goal_context(trace, sources[:-1], prompts=self._prompts),
-            delivery=delivery, history=new_history, snapshot_id=snapshot_ref.resource_id)
+            delivery=delivery, history=new_history, snapshot_id=artifact_file_path(snapshot_ref))
         if previous is not None:
             contents = self._prompts.render("conversation.context.history_previous_summary",
                 summary=previous.working_summary) + "\n\n" + contents

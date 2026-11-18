@@ -6,7 +6,7 @@
 
 personalAgent 是一个受治理的知识智能体。模型负责开放世界语义判断，确定性系统负责权限、准入、状态迁移和不变量；执行系统产生事实，Verifier 判断目标是否语义满足，Completion 门禁检查必需结果契约是否齐全。
 
-目标与结果核验默认开启，由 Settings 读取 typed feature flags，经 AgentRuntime 注入原回答模块和 Conversation，在 Journal 的运行及对话边界固定。关闭仅用于已登记的机制消融装配，接纳事实和未核验目标不会伪装为语义通过；具体契约由[实验组 1](../ablation/experiment.md)与 [ADR 0050](../adr/0050-verification-feature-flags.md)拥有。
+目标与回答核验默认开启，由 Settings 读取 typed feature flags、AgentRuntime 注入 Conversation、Journal 绑定运行及会话。关闭核验仍需实际接纳事实，也不会产生语义通过回执。开关契约见 [ADR 0050](../adr/0050-verification-feature-flags.md)。
 
 ```text
 用户目标 + 可见 Context + 已提交 Observation
@@ -41,19 +41,19 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 
 普通用户只需表达目标，不需先选择 Tool 或 Workflow。Web、CLI 和飞书最终复用 `AgentService.converse()` 与 `ConversationService`。已知的业务操作可以直接进入对应 Application Use Case，但必须复用同一 canonical 写入口。
 
-`ConversationService` 的每轮运行依次完成：
+`ConversationService` 在一次对话运行内反复决策和处理结果，直至返回交付、待确认、澄清或限制结果，或遇到运行错误。主链包括：
 
 1. 恢复已提交消息、当前工作项清单和可重读执行结果。
 2. 从注册定义、服务可用性和曝光规则生成 `EffectiveCapabilities`；能力投影与调用授权的区别见 [Context](../topics/context-engineering.md#visibility-的定义与分层)。
 3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
-6. 回答模块按部署提供普通完整提交或claim选证／写作操作。普通回答拒稿后沿原Loop继续取证或完整重提，不提供答案按段修订工具，见[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)。模型提交完整候选，运行系统持久化`SubmittedFinal`，再执行适用核验及领域文件检查，通过后交付同一稿件。模型协议见[ADR0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，检索实验的领域检查见[ADR0037](../adr/0037-experiment-submission-first-delivery.md)。
-7. 运行系统按装配契约完成适用核验和 Completion，交付确切 `FinalMessage` 正文。用户授权的无语义核验诊断不产生通过回执，也不计完整产品 E2E；边界见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
+6. 模型以完整正文或 `control_submit_final` 提交同一类 `FinalMessage`。Runtime 保存 `SubmittedFinal`，执行适用核验及领域检查后交付同一稿件。拒稿后，原循环可继续取证或完整重提。提交规格见 [ADR 0055](../adr/0055-unified-conversation-answer.md)，检索实验的领域检查见 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)。
+7. 运行系统按装配契约完成适用核验和 Completion，交付确切 `FinalMessage` 正文。用户授权的无语义核验诊断不产生通过回执，也不计完整产品 E2E；边界见 [ADR 0050](../adr/0050-verification-feature-flags.md)。
 
 Conversation 约束每个用户轮次先维护目标。`submit_goal_patch` 提交任务选择和版本化条目增量，`read_current_goal` 可按需读取生效快照。Journal 保存任务归属、执行控制和已接纳补丁。主循环、代码与回答核验从同一可见分支的选中任务恢复适用历史。启用目标核验时，通过后提交任务归属和增量。[任务切换上下文](../context/agent-loop.md#同一对话中的任务切换)
 
-当前相位、研究接入和重试契约分别由 [Runtime](../topics/runtime.md)、[核验专题](../topics/verification-and-completion.md)和 [ADR 0032](../adr/0032-conversation-research-claims.md)拥有。
+相位、提交与重试见 [Runtime](../topics/runtime.md)，判据与交付边界见[核验专题](../topics/verification-and-completion.md)。
 
 当前[职责分离设计](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)将非读取目标操作接到目标定义核验，将最终交付接到回答核验。两者复用原执行网关与回执，使用独立提示、判据及同职责历史；目标通过不代表交付完成。
 
@@ -61,13 +61,21 @@ Conversation 约束每个用户轮次先维护目标。`submit_goal_patch` 提�
 
 ### 3.1 当前主循环的职责混合
 
-启用目标核验时在目标写入前核验任务定义，启用回答核验时在普通交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；每个回答事件从当时已接受目标操作恢复确切 passed 回执作为 `verified_goal`，跨轮及同轮目标修订不会覆盖旧回答。核验请求逐条呈现原话、提交及判决，通过报告在主循环与核验发送投影中精简，失败反馈完整。原Journal为唯一事实来源，准入和完成消费原报告，主循环原生调用配对保持。摘要按职责独立绑定，普通工具材料不交给核验，原claims与来源核验路径保持；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)，机制与限定证据见[固化方案](../optimization/completed/verification-context-goal-binding.md)。
+启用目标核验时在目标写入前核验任务定义，启用回答核验时在普通交付前核验实际回答。`task_context.kind`由Runtime绑定，`turns`按用户轮次保留完整原话，events只含本职责的提议及对应判决、修订；每个回答事件从当时已接受目标操作恢复确切 passed 回执作为 `verified_goal`，跨轮及同轮目标修订不会覆盖旧回答。核验请求逐条呈现原话、提交及判决，通过报告在主循环与核验发送投影中精简，失败反馈完整。原Journal为唯一事实来源，准入和完成消费原报告，主循环原生调用配对保持。摘要按职责独立绑定，普通工具材料不交给核验；契约见[ADR0047](../adr/0047-user-goal-verification-context.md)，机制与限定证据见[固化方案](../optimization/completed/verification-context-goal-binding.md)。
 
-上述主链是责任说明，当前实现尚未把这些责任完整隔离。`answer_results.py` 提供可替换的直接／claim 操作定义、提交解释和同稿接纳；`ConversationService` 继续驱动请求、Journal、研究适用性与部分 Context 物化。原生协议已接入，直接回答装配的实际生成、连续交付及恢复范围见 [Loop 运行结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)；研究子流程的职责拆分仍是候选。
+上述主链是责任说明，当前实现尚未完整隔离各职责。`answer_results.py` 解释完整正文及结构化提交；`ConversationService` 仍驱动请求、适用核验、Journal 和部分 Context 物化。原生协议的生成、交付及恢复证据见 [Loop 运行结果](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)。
 
-claim 操作的适用性取决于 writer 装配、冻结标准、当前稿和已成功 Web 来源。来源出现使选证操作可用，写作仍由模型选择；周期 `ResearchService` 另有订阅、调度和投递生命周期。
+网页及其他工具回执供主模型写作，不切换交付协议。周期 `ResearchService` 另有订阅、调度和投递生命周期。
 
-启用回答核验时，普通最终答案按生效 Goal、实际稿件及引用证据检查。研究交付消费同版本统一报告。完整研究子流程封装仍是候选。
+### 3.2 会话、运行与主决策的现状
+
+**Session** 由认证主体和 `session_id` 确定。Journal 用这两个值加锁和查询，Conversation 按任务和确切消息分支选择历史。旧快照的 `conversation_id` 保存的是同一 Session 标识。
+
+**Turn** 由 `InteractionTrace` 持有。新输入创建 `turn_id`，查询、确认和恢复使用原标识。Conversation 校验主体、会话、输入和适用执行绑定。文件 Journal 内部的 `interaction_run_ref` 仍承载同一身份，原有摘要不因接口换名而重算。
+
+**Step** 对应 Turn 中的一次主模型决策。Journal 在登记请求原件时分配 `step_no`，逻辑调用用 `invocation_id` 定位；重试消费原调用身份。历史和压缩从原决策记录读取顺序和对应结果。`ConversationWorkingPlanStep` 表达业务工作项。[代码坐标](code-map.md#2-从功能进入代码) · [生命周期 Spec](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
+
+现行主循环依赖客户端提交的消息前缀来选择前驱。服务端 Session 接管历史的替换设计及现有归档对照见[生命周期 Spec](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)。
 
 ## 4. 后台持续运行边界
 
@@ -116,6 +124,8 @@ GPT Researcher 在独立进程中运行，不会继承主工程的 `STRUCTURED_O
 
 PostgreSQL 保存业务 Aggregate 认可的 canonical facts、必要 journal、queue/lease 和幂等执行事实。Artifact Store 保存大结果；其他状态只保存带责任主体和作用域的资源引用。
 
+Conversation 的交互记录和模型原件由组合根注入的 `FileInteractionJournal` 保存。对话历史、压缩输入和用户返回视图从各自的原记录投影。待确认命令及副作用回执沿所属业务入口恢复。[Conversation 恢复坐标](code-map.md#2-从功能进入代码)
+
 恢复必须重放已冻结的 Command 和执行事实，不得重新调用模型生成 Command，也不得重复外部副作用。幂等 digest、submission key、Receipt 和 journal 只在确有审批、跨请求恢复或外部结果关联时使用。
 
 Trace、event、receipt 和评测归档记录事实，不改变生产决策。发布资格只由匹配代码身份、配置样本组、评测器、追踪记录和 checksum 的证据建立。
@@ -129,7 +139,7 @@ Trace、event、receipt 和评测归档记录事实，不改变生产决策。�
 ## 10. 当前证据边界
 
 - Conversation、Memory、Tool 和多种治理机制已有各自限定范围的实际证据，不能拼成“所有智能体能力都已交付”。
-- Conversation 的任意目标后台持续调查当前不是产品能力；普通 Conversation 的研究链路已接入代码，完整用户结果仍须按对应证据验收。
+- Conversation 的任意目标后台持续调查当前不是产品能力；普通 Conversation 使用工具资料完成答复，外部资料任务的完整用户结果按对应证据验收。
 - 定向 E2E、Offline Eval 和历史回归只支持已声明范围；当前发布资格须绑定目标代码与完整产品矩阵。单元测试按 [QLT](../devSpec/quality-security.md#1-测试职责与覆盖)停用。
 
 证据结论、命令和归档坐标不在本文重复维护，统一见：

@@ -917,7 +917,7 @@ Conversation 可以根据已取得资料、已尝试方向及未解决问题判�
 | 最新覆盖拒绝 | 标题仍是“本稿未通过：尚未完整读取来源”，随后列出尚有 5851／5651 行未完整返回，并提醒未读内容可能有依据 | 正文也明确“不要求为回答任何问题都读完整份文档”，且实验反馈明确要求扩源。标题与前半段仍突出未读数量，可能让模型把结论支持问题改写成读取完成问题；这是待验证的问题定义偏移 |
 | 当前 Plan 与搜索工具说明 | Plan 的 `grounding` 自述已提取权限等关键陈述；`0021` 还自述已有更充分证据。`web_search` 说明已有上下文能回答时无需继续搜索 | Plan 已明确标为数据，完成也可重开，不能说它硬性禁止扩源。风险在于模型继续认可旧自评，以此触发原本合理的“足够即可停止”条件 |
 
-最早的明确续读文字并不只由注册 Prompt 产生：[`service.py`](../../src/personal_agent/application/conversation/service.py) 第 2383 行附近直接附加英文 `read_more`，同文件第 2120 行附近生成旧重复抓取反馈。工具说明由 [`web_search.py`](../../src/personal_agent/kernel/prompt_templates/web_search.py) 与 [`conversation.py`](../../src/personal_agent/kernel/prompt_templates/conversation.py)拥有；读取说明由 [`artifact_reading.py`](../../src/personal_agent/application/conversation/artifact_reading.py)返回。审计不能只搜 Prompt 注册目录。
+最早的明确续读文字并不只由注册 Prompt 产生：[`service.py`](../../src/personal_agent/application/conversation/service.py) 第 2383 行附近直接附加英文 `read_more`，同文件第 2120 行附近生成旧重复抓取反馈。工具说明由 [`web_search.py`](../../src/personal_agent/kernel/prompt_templates/web_search.py) 与 [`conversation.py`](../../src/personal_agent/kernel/prompt_templates/conversation.py)拥有；读取说明由 [`artifact_reading.py`](../../src/personal_agent/application/conversation/file_reading.py)返回。审计不能只搜 Prompt 注册目录。
 
 #### 消息位置与反馈优先级
 

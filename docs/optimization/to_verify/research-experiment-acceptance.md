@@ -85,7 +85,7 @@ R-01—R-09 对应 SciFact 实验契约，R-10 的自主计算可复用到其他
 
 ### 2.1 初始世界与正式入口
 
-统一从 `POST /api/conversation/turn` 进入，经过生产 Composition Root、真实模型、决策、执行、适用 Verification 及 Completion。固定身份、会话、`interaction_mode="auto"` 及预分配 run 引用；`auto` 只自动准入工作清单，执行权限另检查。原件经获准只读资源取得，不能用会摄入知识的上传路由代替附件。
+统一从 `POST /api/conversation/turns` 进入，经过生产 Composition Root、真实模型、决策、执行、适用 Verification 及 Completion。固定身份、会话、`interaction_mode="auto"` 及可重复提交的 `client_request_id`；`auto` 只自动准入工作清单，执行权限另检查。原件经获准只读资源取得，不能用会摄入知识的上传路由代替附件。
 
 准备器只提供原件、许可资源和环境；测试器提交自然请求、控制预声明外部中断并评分，不为模型串联实验、注入理想反馈或补写成果。执行前封存模型／Provider、工具、数据与代码身份、资源、单次窗口及输出预留、总额度、轮次／工具上限、重试、时限及停止条件；复现随机性、并列排序和容差一并固定。预算未固定时不执行整例，不编造资源数字。失败、重试、恢复均保留成本，生成端与评分端分开记。
 

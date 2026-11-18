@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from threading import Lock, RLock
 
-from .errors import ConversationOperationConflict
+from .errors import ConversationWriterBusy
 
 
 class _RunLock:
@@ -24,7 +24,7 @@ def exclusive_run_lock(key: str, path: Path | None):
     with _registry_guard:
         state = _registry.setdefault(key, _RunLock())
     if not state.lock.acquire(blocking=False):
-        raise ConversationOperationConflict(
+        raise ConversationWriterBusy(
             "interaction run is already being processed"
         )
     stream = None
@@ -47,7 +47,7 @@ def exclusive_run_lock(key: str, path: Path | None):
                     fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as error:
                 if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-                    raise ConversationOperationConflict(
+                    raise ConversationWriterBusy(
                         "interaction run is already being processed"
                     ) from error
                 raise

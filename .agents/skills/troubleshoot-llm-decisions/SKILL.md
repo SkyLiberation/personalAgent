@@ -1,6 +1,6 @@
 ---
 name: troubleshoot-llm-decisions
-description: 用于本仓库 LLM 决策错误排障，包括 JSON 字段类型不符、工具选择异常、输入遗漏、语义误判和反馈未生效。不用于从零设计决策、普通方案说明或仅查询运行状态。
+description: 用于本仓库 LLM 决策错误及模型调用异常排障，包括 JSON 字段类型不符、工具选择异常、输入遗漏、语义误判、反馈未生效和 Prompt 缓存命中骤降。不用于从零设计决策、普通方案说明或仅查询运行状态。
 ---
 
 # LLM 决策问题排障
@@ -21,17 +21,18 @@ description: 用于本仓库 LLM 决策错误排障，包括 JSON 字段类型�
 | --- | --- |
 | 只能使用 `json_object`，整数位收到 `"3"` 等字符串 | 读取[整数字符串的读取边界转换](../../../docs/experience/json-object-integer-string.md)。核对该字段是否允许无损解析，再转换并严格校验；原始输出必须为整数的契约不走此路径 |
 | `MiniMax` 声明 `tool_choice=required` 后仍返回正文、无工具调用 | 读取[required 的历史有效性边界](../../../docs/experience/minimax-tool-choice-required.md)，核对实际出站与原始响应，不由本地配置推定服务端约束生效 |
-| JSON 不完整、字段缺失、分支或工具参数形状错误 | 按[实际协议与修复出口](../design-llm-decisions/SKILL.md#44-核对实际协议与修复出口)核对截断、Schema、适配和校验反馈；整数字符串经验不覆盖补字段、补默认值或猜业务参数 |
-| 模型没有取得必要事实，或历史、摘要、工具结果丢失／失真 | 按[实际输入审计](../../../docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)定位构造链，再用[输入与阶段交接方法](../design-llm-decisions/SKILL.md#3-让必要信息真正进入模型输入)修正 |
-| 必要依据已进入请求，但模型选错目标、动作或判断分支 | 按[LLM 决策设计](../design-llm-decisions/SKILL.md)核对本次责任、字段语义和相邻边界；依据仍不清楚时按[同轨迹推理与中立追问](../../../docs/devSpec/context-memory-retrieval.md#121-利用-think-与中立追问核对决策依据)定位 |
-| 模型决定正确，但没有执行、真实结果未回传或反馈后未修正 | 按[运行支持与纠错](../design-llm-decisions/SKILL.md#5-runtime-怎样支持纠错和完成)核对准入、调用绑定、结果回传及下一次实际请求，分别归因模型选择与执行事实 |
+| MiniMax 主循环的 Prompt 缓存命中低或突然下降 | 读取[MiniMax 主循环缓存命中骤降](../../../docs/experience/minimax-prompt-cache-prefix.md)。核对相邻实发请求的首条 System Prompt、前置执行输入、工具 Schema 和历史顺序，用回包的输入缓存 token 验证 |
+| JSON 不完整、字段缺失、分支或工具参数形状错误 | 按 `design-llm-decisions` 的「核对实际协议与修复出口」核对截断、Schema、适配和校验反馈；整数字符串经验不覆盖补字段、补默认值或猜业务参数 |
+| 模型没有取得必要事实，或历史、摘要、工具结果丢失／失真 | 按[实际输入审计](../../../docs/devSpec/context-memory-retrieval.md#12-system-prompt-与-context-的设计及问题分析)定位构造链，再用 `design-llm-decisions` 的「让必要信息真正进入模型输入」修正 |
+| 必要依据已进入请求，但模型选错目标、动作或判断分支 | 按 `design-llm-decisions` 核对本次责任、字段语义和相邻边界；依据仍不清楚时按[同轨迹推理与中立追问](../../../docs/devSpec/context-memory-retrieval.md#121-利用-think-与中立追问核对决策依据)定位 |
+| 模型决定正确，但没有执行、真实结果未回传或反馈后未修正 | 按 `design-llm-decisions` 的「Runtime 怎样支持纠错和完成」核对准入、调用绑定、结果回传及下一次实际请求，分别归因模型选择与执行事实 |
 
-其他症状先搜索[经验索引](../../../docs/experience/README.md)，再沿实际消费链定位。没有匹配经验时，核对当前服务方官方契约和本地实现后提出候选方法；确需参考开源实现时使用[参考开源方案](../reference-open-source-solutions/SKILL.md)，不凭框架名或搜索摘要推定机制。
+其他症状先搜索[经验索引](../../../docs/experience/README.md)，再沿实际消费链定位。没有匹配经验时，核对当前服务方官方契约和本地实现后提出候选方法；确需参考开源实现时使用 `reference-open-source-solutions`，不凭框架名或搜索摘要推定机制。
 
 ## 3. 选择修正并验证对应边界
 
 说明匹配依据、适用前提、最小修正及其消费者。区分表示转换、语义重决策和执行恢复；确定性转换只处理契约已允许且含义唯一的表示差异，业务缺值或选择错误交回负责的决策环节。
 
-实施前按[变更证据要求](../../../docs/devSpec/change-evidence.md#12-按实际影响选择证据)取得准入并更新唯一设计；经验文档不直接授权生产补丁。验证围绕原失败与必要反事实展开，涉及前置模型决定时消费同轨迹实际输出。具体重复次数与验收由[方案推进规则](../analyze-proposal-progress/SKILL.md#3-方案验证与重复次数)拥有；同一阻塞有界修正后仍未解除时按[重复阻塞复审](../../../docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)处理。
+实施前按[变更证据要求](../../../docs/devSpec/change-evidence.md#12-按实际影响选择证据)取得准入并更新唯一设计；经验文档不直接授权生产补丁。验证围绕原失败与必要反事实展开，涉及前置模型决定时消费同轨迹实际输出。具体重复次数与验收由 `analyze-proposal-progress` 的「方案验证与重复次数」拥有；同一阻塞有界修正后仍未解除时按[重复阻塞复审](../../../docs/devSpec/change-evidence.md#72-重复阻塞先复审方案再继续)处理。
 
 按“失败与证据 → 命中方法与修正位置 → 实际验证及剩余条件”报告，只读分析明确候选状态。新增可复用经验时写入 `docs/experience` 并更新其索引及本表，保留适用条件、依据和验证边界，不复制生产契约或临时日志。仅维护本 skill 或经验文档时执行文档与技能检查，不调用产品模型或单元测试。

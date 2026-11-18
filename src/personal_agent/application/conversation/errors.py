@@ -87,6 +87,14 @@ class ConversationOperationConflict(RuntimeError):
     pass
 
 
+class ConversationWriterBusy(ConversationOperationConflict):
+    pass
+
+
+class ConversationTurnPending(RuntimeError):
+    """A submitted turn is recorded but has no result to return yet."""
+
+
 class ConversationInputError(ValueError):
     """An explicitly rejected caller input, distinct from Runtime invariants."""
 

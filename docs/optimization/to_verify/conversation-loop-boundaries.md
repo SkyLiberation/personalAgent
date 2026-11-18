@@ -1,14 +1,16 @@
 # Conversation 主循环与能力边界 Spec
 
-问题编号：`CONVERSATION-LOOP-BOUNDARIES-001`。架构设计草案，2026-10-16 起草，2026-10-24 更新；准入由[Future 队列](../../future/design-optimization-backlog.md)拥有。主体整理仍为设计候选；研究必需容量边界、§3.12 拒绝事实反馈及 §3.15 原生动作对象载荷已进入最小实现，完整验收未完成。当前实现从[架构主链](../../architecture/core-architecture-current-state.md#31-当前主循环的职责混合)进入；本文唯一拥有主循环整理及 Context 治理候选，既有研究产物及核验契约继续由 [ADR 0032](../../adr/0032-conversation-research-claims.md)拥有。
+问题编号：`CONVERSATION-LOOP-BOUNDARIES-001`。架构设计草案，准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有。现行实现见[架构主链](../../architecture/core-architecture-current-state.md#31-当前主循环的职责混合)。本页保留主循环组织、容量治理、反馈和生命周期的设计及证据。
 
 2026-10-24 的 Schema 统一重设由[独立唯一正文](conversation-loop-schema.md)拥有，源码已替换，真实生成与完整 E2E 待验收。本文涉及两步提交、旧阶段和模型类型的段落说明改前实现；不作为当前 wire 契约，当前传输统一见 [ADR 0045](../../adr/0045-native-intent-loop-and-recorded-model-output.md)及 [Runtime](../../topics/runtime.md)。
 
+[ADR 0055](../../adr/0055-unified-conversation-answer.md)撤回独立 Conversation claim 研究流程、选证和统一研究报告。下列依赖该流程的旧设计、代码坐标和验收只用于解释历史基线，不进入现行主循环实施计划。容量治理、计划、动作、检索实验交付及生命周期仍按各自契约推进。
+
 ## 1. 目标、范围与依据
 
-**目标是让 Conversation 协调普通对话、研究和业务动作，研究模块封装自己的多步过程，各路径复用同一套运行治理与交付边界。** 用户不需选择内部 Workflow；研究可以调用工具、补证、修订及交付，知识保存、删除与周期订阅仍走原业务写入口。统一运行主干不等于全系统只能有一个物理循环。
+**目标是让 Conversation 协调对话、工具和业务动作，并沿统一协议提交和交付答复。** 用户不需选择内部 Workflow；研究可以调用工具、补证、修订及交付，知识保存、删除与周期订阅仍走原业务写入口。统一运行主干不等于全系统只能有一个物理循环。
 
-本轮静态审计确认，`ConversationService` 从研究模块导入 25 个符号，`respond()` 同时编排选证、研究编辑、研究核验、普通交付、工具与工作清单；`_decide()` 又负责研究输入与输出协议。它们有独立变化原因：改变研究编辑协议需理解运行预算与提交路径，修改普通最终交付又会经过研究批准分支。问题依据是这些交叉职责及真实消费者，行数只用于定位。
+2026-10-16 的旧版本静态审计确认，`ConversationService` 从研究模块导入 25 个符号，`respond()` 同时编排选证、研究编辑、研究核验、普通交付、工具与工作清单；`_decide()` 又负责研究输入与输出协议。它们有独立变化原因：改变研究编辑协议需理解运行预算与提交路径，修改普通最终交付又会经过研究批准分支。问题依据是这些交叉职责及真实消费者，行数只用于定位。
 
 可重复定位命令：
 
@@ -30,16 +32,16 @@ rg -n 'in_research_mode|_research_selection_request|validate_research_selection|
 
 | 编号 | 需求与可观察约束 | 验收 |
 | --- | --- | --- |
-| L-01 共享运行治理 | Conversation 及其研究子流程沿原调用链使用身份、预算、准入、模型调用、执行事实提交和恢复边界；模块内部可以循环，不另建运行总账或恢复事实源 | C1、C2 |
-| L-02 能力内聚 | 研究模块集中组织选证、补证、编辑、统一核验及修订，解释报告适用性并返回已批准回答；公共推进代码依赖模块交接契约，不枚举研究编辑动作、拼研究 Prompt 或决定内部阶段 | C1、C2 |
+| L-01 共享运行治理 | Conversation 沿同一链路使用身份、预算、准入、模型调用、执行事实提交和恢复边界，不另建运行总账或恢复事实源 | C1、C2 |
+| L-02 能力内聚（历史） | 独立研究写作及其拆分候选已按 ADR 0055 撤回 | 原 C1、C2 仅保留历史身份 |
 | L-03 执行归属 | Model Port、ToolExecutor、AgentGateway 和业务用例分别落实调用；计划控制、语义建议与副作用事实保持分离 | C2、C3 |
-| L-04 唯一交付责任 | 普通回答与研究共用 `FinalMessage` 和正文段契约，各自保留生成及工作协议；统一交付入口检查必需执行事实，仅在契约要求时消费独立语义核验依据，返回确切候选，不重新成文 | C2、C3 |
+| L-04 唯一交付责任 | 模型用完整正文或带属性提交形成同一类 `FinalMessage`，由统一入口执行适用核验与领域检查后返回确切候选 | C2、C3 |
 | V-01 按契约检查交付 | 每种输出声明适用结构、权限、执行事实和结果要求的责任主体；独立语义核验由已准入任务契约与系统策略确定，不要求所有任务配置核验器，生成模型也不能自行豁免必需检查 | V1、V2 |
 | V-02 判据按对象适用 | 普通计算、来源回答、审稿和业务执行采用各自已有事实与标准；外部来源支持不机械要求所有对话都检索网页 | V1、V2 |
 | V-03 核验与评测分工 | 生产核验约束当前候选交付，离线评分测量质量；评测分数不回写生产批准，拦截次数不替代用户结果 | V2 |
 | L-05 行为保持可分离 | 第一阶段只迁移职责，正式入口、实际模型请求、Schema、顺序、权限、状态、失败和恢复行为保持；核验适用性改变在独立阶段验证 | C2、C3 |
 | L-06 扩展机制分工 | 能力模块在组合根显式装配，middleware 包装明确调用边界，生命周期 hook 只消费已提交事实；关键准入和完成不会因可选扩展缺失被跳过 | C4 |
-| L-07 结束信号明确 | 普通回答经最终提交形成候选，研究经同稿有效核验形成已批准候选；二者进入同一交付入口，通过适用检查后保存并返回。工具成功、准备交付、等待用户及预算停止分别解释，不自动等同于成功完成 | C2、C3 |
+| L-07 结束信号明确 | 候选须通过适用检查才可保存和交付。工具成功、准备交付、等待用户及预算停止分别解释，不自动等同于成功完成 | C2、C3 |
 | L-08 直接提交候选 | 普通回答通过原生 `submit_final` 提交实际正文，删除准备及另一次普通成文；内部 FinalMessage、核验及完成边界保持，wire 契约与反例由[统一设计](conversation-loop-schema.md)拥有 | F1、F2 |
 | L-09 整体目标统筹 | 主 Agent 根据原目标、可见能力、真实进展及反馈选择下一步，子能力只承担明确子任务；子结果返回后继续核对整体交付，必要时修订工作清单，不能把固定能力串联、工具成功或子级停止冒充完成 | C5，及实际产品场景的用户结果验收 |
 | L-10 长任务 Context | 每次实际模型调用按该模型／Provider 的整体容量构造输入；历史增长时选择、外置或按真实压力反复压缩，保留原目标、必要事实及可恢复原件，后续仍完成原交付；压缩不重置任务额度 | C6 及研究场景 E3；独立语义变更，不混入行为保持重构 |
@@ -58,16 +60,15 @@ Conversation 协调入口
     ├─ 普通对话 → 构造 Context → 模型决定动作或提交回答
     ├─ 工作清单控制 → 原计划准入与状态 owner
     ├─ 工具／委托／业务动作 → 原执行网关或用例 → 真实 Observation
-    ├─ 研究子流程 → 内部组织选证、取证、编辑、核验及修订 → 完整候选或明确停止
     └─ 最终候选 → 统一交付入口 → 按契约选择检查 → Completion → 用户
 
 各路径共享：Model Port、执行网关、权限过滤、预算、Journal、Artifact、计量、观测
 业务写入口：Knowledge / Lifecycle / 周期 Research 等原用例
 ```
 
-这里的协调入口属于 Conversation Application。研究内部可以有自己的推进循环，模型、工具与事实提交仍经过现有受治理依赖；不先抽成跨业务通用引擎，也不为子流程另建 Runtime。`AgentRuntime` 继续装配真实依赖；周期 Research 的调度和业务结果具有自己的生命周期，不因名称相同并入 Conversation 研究。
+Conversation Application 拥有对话协调和提交；执行者各自产生工具及业务事实。AgentRuntime 装配依赖，周期 Research 保持自己的调度与结果生命周期。
 
-实现时依据已接纳任务与现有事实进入普通路径或研究能力入口，不增加一次“选择内部 Workflow”的模型路由。进入研究后，由研究模块决定如何沿既有协议继续补证、写作、核验或修订；共享执行协作落实其请求并记录事实。模块通过明确的 typed 输入与注入依赖工作，不反向调用主循环私有方法。交付入口按结果契约消费对应 owner 的必要判断，不复制研究批准或事务完成规则。
+实现时依据已接纳目标、计划与执行状态确定可用工具和交付条件。主模型决定是否继续取证或提交，交付入口消费适用核验与领域检查。
 
 #### 主 Agent 怎样统筹能力
 
@@ -206,6 +207,8 @@ LongDS 首轮正式基线发现，局部 Artifact 正文会被旧自动研究条
 
 ### 3.3 研究怎样接入
 
+以下是 ADR 0055 之前的旧链路及其验收设计。
+
 **普通回答和研究共用最终交付与退出条件；研究在交付前必须取得当前完整稿的有效核验。** 普通模型提交 `FinalMessage` 形成候选；研究 writer 把最终回答写入 `ResearchClaims.final_answer`，统一核验通过后由 Runtime 恢复这份确切正文并构造 `FinalMessage`。随后二者都进入同一交付检查，保存后 `return`；研究不再经过一次独立汇总、普通整稿核验或再次成文。
 
 #### 统一交付结构，分别组织工作协议
@@ -229,7 +232,7 @@ LongDS 首轮正式基线发现，局部 Artifact 正文会被旧自动研究条
 
 统一结构不代表统一批准规则。`FinalMessage` 的存在或其 `disposition="answer"` 只表示提交了回答，不能自行证明研究通过；交付入口仍读取原 owner 的判断。研究投影必须保持已批准正文及引用，不成为另一份可独立修改的研究稿，也不把 claims、资料、核验报告或 `verified=True` 塞进最终消息作为自证。
 
-首版沿用现有位置：共用最终消息由 [Conversation models](../../../src/personal_agent/application/conversation/models.py)拥有，正文与引用类型由 [verification contracts](../../../src/personal_agent/capabilities/contracts/verification.py)拥有，研究事实及报告由 [research contracts](../../../src/personal_agent/capabilities/contracts/research.py)拥有，研究协作由原 `research.py` 内聚。不为展示结构新增消息继承体系或搬动契约；后续职责整理把研究 Prompt、编辑及报告适用性集中到研究协作者，公共交付代码不展开研究字段。
+首版沿用现有位置：共用最终消息由 [Conversation models](../../../src/personal_agent/application/conversation/models.py)拥有，正文与引用类型由 [verification contracts](../../../src/personal_agent/capabilities/contracts/verification.py)拥有，研究事实及报告由 research contracts（旧版 `research.py`）拥有，研究协作由原 `research.py` 内聚。不为展示结构新增消息继承体系或搬动契约；后续职责整理把研究 Prompt、编辑及报告适用性集中到研究协作者，公共交付代码不展开研究字段。
 
 #### 研究何时可以成功结束
 
@@ -237,7 +240,7 @@ LongDS 首轮正式基线发现，局部 Artifact 正文会被旧自动研究条
 2. 该完整版本具有适用的统一核验报告，报告没有发现问题；版本、实际来源、读取状态及核验协议符合现行绑定条件。旧版本的通过不能批准新稿。
 3. 交付确切正文并通过其余适用门禁；必需确认或产物读取等条件未满足时，仍返回具体反馈继续工作。
 
-前两项由 [accepted_research 与报告适用性](../../../src/personal_agent/application/conversation/research.py)解释，成功候选到统一出口的交接由 [respond](../../../src/personal_agent/application/conversation/service.py)核对。核验通过并不直接跳过 Runtime 的其余检查，也不需要再问模型“是否要结束”。
+前两项由 accepted_research 与报告适用性（旧版 `research.py`）解释，成功候选到统一出口的交接由 [respond](../../../src/personal_agent/application/conversation/service.py)核对。核验通过并不直接跳过 Runtime 的其余检查，也不需要再问模型“是否要结束”。
 
 #### 普通回答和研究怎样共用运行治理
 
@@ -327,6 +330,8 @@ Composition Root：构造原业务服务、能力模块、Port 包装器和观�
 研究实验需要真实计算及候选构造能力。[研究 Spec](research-experiment-protocol.md#22-模型怎样构造并验证候选)推荐复用 `read_artifact`、新增 create／patch 两种操作的 `write_artifact` 和一个受控 Python 执行入口，具体[文本契约](program-artifact-contract.md#1-程序产物读写工具契约)由该 Spec 拥有。固定基线与评分归实验业务，模型在隔离边界内实现／修订候选；读、搜索及 Context 同步接纳已提交产物的获准引用，不按算法增加工具。当前没有完整可复用的写入／执行链，须正式装配并验收；不先抽通用作业、持久 Notebook 或插件平台。主 Loop 及 Completion 职责保持。
 
 ### 3.6 研究模块的装配契约
+
+以下装配候选随 Conversation claim 撤回，仅供历史对照。
 
 **研究模块是代码职责边界；Research Sub-agent 是这个模块可以采用的执行方式。** 父 Agent 委派有界研究任务，研究执行者在本次任务上下文中拥有模型决策循环，自主选择取证、写作或修订并返回结果，这种完整委托就是研究子 Agent 模式。子 Agent 可以与父级同进程、使用同一模型和受治理依赖；独立进程、单独数据库、持久子会话或后台执行均不是定义条件。Tool 是可供模型选择的调用入口，也能包装固定流程，单凭工具封装或内部存在多次模型调用不能判为子 Agent。实际开源调用与上下文组织见[源码比较](../../agentRef/multi-agent-and-delegation.md)。
 
@@ -482,6 +487,10 @@ Model Port 的 `ModelCapacityCheck` 唯一定义上述记录，区分 `requested
 同 run 可以发生多次压缩，不设置 5 次或其他独立次数上限。每次由新的实际窗口压力、尚未完成的工作及原额度共同决定；压缩次数不是进展或完成条件。后一次摘要消费上一份有效摘要及新增闭合历史，覆盖关系继续定位到最初原件；常驻输入只保留最新有效摘要和未覆盖历史，不叠加全部旧摘要。原目标、执行事实、预算和当前稿每次仍从原 owner 重建，不能仅靠“摘要的摘要”传递。持续遗忘、无新覆盖或必需事实已无法装入时停止复压并重审边界，不能为完成任务不断挤掉必要信息。
 
 #### 摘要契约、原件恢复与提交
+
+##### 计划工具历史与压缩接续
+
+[计划工具历史与压缩接续的实现和验证](../completed/working-plan-context.md)
 
 实施入口放在 `application/conversation/` 的具名历史 Context 协作者，负责选择、摘要及请求视图；现有请求构造者消费其 typed 投影，Model Port 继续调用模型，原 Journal 继续提交。只有实际调用链需要时才抽出 `history_compaction.py`，不建设第二个 Agent 循环、任务记忆库、全局 middleware 或 Provider 专用压缩后端。
 
@@ -703,7 +712,7 @@ uniform-action-object-group-1 已按预声明停止：2／20逻辑项、2物理�
 
 ### 3.15 显式业务载荷映射的审查候选
 
-历史状态（2026-10-21）：生产候选已实现，有限真实阶段通过；完整用户结果未验收。该包装与 payload_field 协议现已由 [ADR 0043](../../adr/0043-direct-code-agent-tool-parameters.md) 及 [Python Spec §3.7](python-data-analysis-tool.md#37-code-agent-直接参数的接入与验证2026-10-24) 替换，以下只保留旧决定及证据身份。原问题不是模型选错 BM25／dense，而是模型面仍要求携带无业务内容的 `action` 参数封装。实际两项 `operation`／`request` 已表达全部业务输入；直接把旧非法 payload 补成合法执行会越过协议，所以不能在 Admission 中补 `action` 或支持两种形状。以下按依赖顺序保留预声明与实际证据，当前迁移决定由本节末及 [ADR 0036](../../adr/0036-explicit-native-action-payload.md)拥有。
+历史状态（2026-10-21）：生产候选已实现，有限真实阶段通过，完整用户结果未验收。原问题是模型需要携带无业务内容的 `action` 参数封装，实际 `operation` 和 `request` 已表达全部业务输入。旧 `arguments` 包装和 `payload_field` 的决定、生产回放及证据保存在本节。后续直接参数决定见 [ADR 0043](../../adr/0043-direct-code-agent-tool-parameters.md)及 [Python Spec §3.7](python-data-analysis-tool.md#37-code-agent-直接参数的接入与验证2026-10-24)。
 
 推荐审查一个明确、唯一的编码契约：保持 §3.14 的外层 `arguments:type=object`；仅对已有真实失败的 `retrieval_experiment`，模型在其中直接表达 `ExperimentAction`。其 canonical `ExperimentToolArgs` 只有 `action`，显式声明 `payload_field=action` 的结构映射。其他 Tool 保持 identity，包括 `write_artifact` 的原 `arguments.request`；该工具实际为 `WriteArtifactArgs.request`，此前将两者都写成 `action` 的描述错误，已删除。
 
@@ -797,13 +806,92 @@ E1 v5 已结束并[封存](../../../.tmp/research-capability-20261020/t5/e1-v5-f
 
 先用真实归档阶段输入对照重构前后的余额、准入与预算正文。校验普通及耗尽路径、真实动作批次在额度不足时的分配、已提交响应优先恢复及 Python 执行预留边界。默认模型提示的正文、工具、消息顺序和请求版本保持一致。回放范围内存在无法解释的差异时停止对应接入。记录原比较命令、样本及未覆盖项。验收不运行单元测试。
 
-低 token 余额提示是独立的模型输入变更。**LOOP-BUDGET-1** 在至少一轮主决策完成后生效。开启 `low_budget_warning` 时，下一轮可发起的主请求若仍有 token 余额且严格低于有效额度的 10%，在第一条 system 消息附加通用提醒，请模型尽快产出用户要求的目标产物并总结实际结果。比例分母使用当前已提交用量与模型可见余额之和，保留 Python 授权对有效额度的限制。仓库配置为新运行开启提醒，既有 Journal 继续使用原绑定。关闭实验臂保持原正文和请求版本。
+低 token 余额提示由 **LOOP-BUDGET-1** 约束。开启 `low_budget_warning` 时，至少一轮主决策已完成，下一轮可发起且仍有 token 余额、严格低于有效额度的 10%，在当前步骤的预算说明后附加通用交付提醒。比例分母为已提交用量与模型可见余额之和，计入 Python 授权对有效额度的限制。既有 Journal 使用原绑定。
+
+**LOOP-BUDGET-2 请求前缀（2026-11-16）**。Toolathlon `academic-pdf-report` 的 63 次主决策回包记录 0.53% 输入缓存命中。62 对相邻请求中 60 对在首条系统消息的预算行先发生变化，47 对工具声明相同的请求均如此。[原始请求差异](../../../.tmp/toolathlon-cache-20261116/prefix-analysis.json) MiniMax 按前缀匹配，起始处改变使后续重复上下文失去可复用前缀。[服务方缓存契约](https://platform.minimax.io/docs/api-reference/text-prompt-caching#important-notes)
+
+Conversation 构造主请求时，把最新预算、适用秒数和低余额提醒移入当前 Step Context，并用既有历史消息位置契约把它放在全部保留工具交换与反馈之后。该区块是预算组件的只读投影，由应用层标明运行系统来源，使用同一模型请求和归档。移除系统模板的实时预算参数，保留现有余额算法、提示开关、工具定义与发起准入。工具声明和计划的变化仍可能改变前缀。相比在消息头部另加系统区块，此落点允许此前完全相同的消息继续组成前缀；相比把旧预算逐轮写入历史，它无需新增存储或向模型保留过期操作数据。
+
+验收分两层。先用原样阶段归档和生产适配器核对消息顺序、工具和历史保真，以及中英文预算、截止与提醒条件。固定同一 `academic-pdf-report` 第 58、59 轮请求，对每种预算位置先发上一轮，再用 MiniMax 对下一轮计分。模型、端点、历史、工具和预算值固定，两臂采用同一输出上限，仅执行模型调用，最多四次，输入预算 1,050,000 token。通过条件为两臂响应可计量、候选测量轮的实际缓存命中 token 多于基线。完整用例沿用该题的正式 Web 入口、上游评分器及原配置，复用已封存历史基线，候选从空会话连续运行一次，最多 64 轮、128 次工具调用、800 万累计 token 和 1,200 秒等待。报告缓存、终态和上游评分，保留原评分。已确认的服务异常或额度停止单列。若请求位置不符合契约或同输入对照无缓存收益，重新审查候选位置，保留已封存证据。
+
+已接入主决策。中英文共 14 项离线请求检查通过，覆盖有无截止、首轮、低余额、恰好 10%、零余额和关闭提醒。四次 MiniMax 回放共用 950,880 token。第 59 轮从 185 / 238,078（0.08%）升到 236,806 / 238,390（99.34%）。原生历史与工具声明逐项核对一致。四次回放将输出上限固定为 256，证据覆盖请求布局与缓存收益。[离线请求检查](../../../.tmp/step-budget-20261116/step-context-offline.json) · [接口回包用量](../../../.tmp/step-budget-20261116/replay/usage.json)
+
+同题整例的历史基线为 63 次主决策、39,991 / 7,496,084（0.53%）。候选实跑得到 52 次主决策，52 次实发均核对 Step Context 的末尾位置，缓存为 2,357,642 / 2,541,699（92.76%）。历史基线在累计预算终态结束，候选遇到 9 次 arXiv 或网页抓取超时并达到 1,200 秒 HTTP 等待上限。两次运行均无正式答复，上游评分均为 0 / 6 篇论文信息完整。原题、模型、核验开关、硬预算和上游版本已核对。历史源码另有未被两次轨迹调用的 A2A 实现差异。受不同轨迹和运行环境影响，整例对照只记录观察值。缓存因果结论取固定请求的对照。[整例统计](../../../.tmp/step-budget-20261116/case-comparison.json) · [候选评分](../../../.tmp/step-budget-20261116/target/academic-pdf-report/personal/grader.log)
+
+默认开启目标和回答核验时，经正式 Web 入口提交 Toolathlon Time 的中文问题，实际交付东京上午 10 点。3 次主决策实发均在请求末尾携带预算，其中 1 次位于工具历史之后。目标核验与回答核验各实发一次，均未带 Step Context。[默认主链路实发验证](../../../.tmp/step-budget-20261116/mainline-time/report.json)
 
 已接入。现有真实快照的余额、模型预算正文摘要、拒绝和真实批次分配对照 11/11 一致。恢复一个已支付且已越过 token 上限的真实响应时，原响应标识、用量和回执引用保持，新增实发 0 次。正式 Time 用例完成 MCP 接线及远端转换，Web 对话超过 32,000 token 后返回 `limitation`，没有交付答案。低余额真实阶段回放的输入构造检查 6/6 通过。单次 MiniMax 实发确认仅在第一条系统消息增加提示，消息总数仍为 52，29 个工具定义和模型参数保持。该次回放共 109,853 tokens，未执行后续工具或整体交付。证据见 [重构回放](../../../.tmp/br-1110/after.json)、[已付费恢复](../../../.tmp/br-1110/paid-recovery/report.json)、[Time 正式请求](../../../.tmp/brt-113345/report.json)及[提示实发对照](../../../.tmp/br-1110/warning-wire-diff.json)。提示对交付质量或成本的影响尚待比较。
 
 Toolathlon 的 `detect-revised-terms` 要求比较五份判决 PDF 和一份新法 PDF。历史 `pw-104232` 在 2,000,000 tokens 下以 `limitation` 结束。其第 26 至 29 次完整阶段请求及首轮用于离线对照。原工作树 `v41-round-budget-reminder` 的 5 个完整阶段及 3 个条件对照均通过，另一次 MiniMax 实发在上一轮只有拒绝反馈时收到提醒，随后仍继续搜索。早期 `v40` 的完整 Toolathlon 样本未进入 10% 触发区，产物评分未通过。两类证据分别保存在 `.tmp/low-token-budget-reminder/round-stage-recorded/` 和 `.tmp/low-token-budget-reminder/target/`，不作为当前整例通过证据。
 
 合并后的预算组件通过 10/10 个离线检查，含 5 个完整真实阶段与 5 个确定性对照。上一轮只有拒绝反馈且余额低于 10% 时提醒生效，首次主决策、恰好 10%、零余量和关闭开关均省略提醒。去掉新增提醒后，原消息、工具定义与原生历史逐字一致，关闭臂请求版本保持。结果封存于 `.tmp/main-budget-integration-20261110/replay-result.json`，合并验证没有发起新模型请求。
+
+### 3.20 Session、Turn 与 Step 生命周期
+
+**状态（2026-11-17）**。首段身份切换已接入 REST、SSE 响应、评测、主决策与 Bash 执行。当前仍由客户端提交 `messages`，由文件 Journal 保存轮次。服务端历史、SQLite 存储及存量迁移待实施。[现行架构](../../architecture/core-architecture-current-state.md#32-会话运行与主决策的现状) · [ADR 0054](../../adr/0054-session-run-step-journal.md)
+
+#### 问题与目标
+
+切换前，REST 提交使用 `/api/conversation/turn`，查结果和知识保存决策使用 `/api/conversation/runs/{interaction_run_ref}`。两者处理同一份 `InteractionTrace`，主模型决策序号也称为 `turn_index`。同一轮在接口和记录中出现了多种称呼，评测的用例会话与轮次也缺少独立标识。
+
+历史问题依旧存在。LongDS 的真实第 17、18 轮中，客户端提交完整消息可找到第 17 轮，单独提交第 18 轮原始输入则找不到前驱。该差异出现在模型调用前。task2 第四轮曾误删第二轮同号的四份核验回执，说明局部动作引用必须带上所属轮次。[LongDS 基线](../../../.tmp/session-run-step-20261115/history-baseline.json) · [task2 反例](analysis-goal-maintenance.md#919-保留完整核验历史后的-task2-全量连续运行)
+
+| 编号 | 行为规格 |
+| --- | --- |
+| L-12 会话接续 | Session 由认证主体和 `session_id` 定位。用户只提交当前输入，服务端从该 Session 的可见分支读取历史。不同主体使用同一字面标识时只接续各自历史。 |
+| L-13 轮次与恢复 | 新输入在 Session 中创建 Turn，冻结输入、附件、历史前驱及执行绑定。确认、断连或进程重启沿原 `turn_id` 续接。终态查询或重复请求返回原结果，身份或绑定失配时拒绝。 |
+| L-14 步骤推进 | 每次主模型决策在请求前登记一个 Step。技术重试沿用原 Step；消费反馈后发起下一次主决策时分配下一 Step。同一个 Turn 可以有多个 Step，也可在首次决策前因前置条件结束。 |
+| L-15 评测与 Bash | Toolathlon 每次用例执行先分配独立 Session，再提交题面创建首个 Turn。回放或续跑同一执行时保留原身份。Bash 容器按 Turn 延迟创建，跨该 Turn 的 Step 复用，每条命令独立启动进程。 |
+
+#### 从 DeepSeek Harness 采用的边界
+
+DeepSeek Harness 的 `session/prompt` 按 `sessionId` 查找或创建 Session，再交付用户输入。Agent Loop 在 Session 的有序记录中先写 `turn/start`，每次主决策前写 `step/start`，分别在退出边界记录结束。SDK 的 `run()` 提交消息后，从该消息的接收事件开始收集，等 Session 空闲后返回。这里采用 Session 中的 Turn 和 Step 身份；一次 REST 请求、SSE 连接或客户端等待区间没有额外的持久化资源身份。[提交入口](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/sdk/server/src/server.ts#L132) · [Agent Loop](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent-loop/src/agent.ts#L246) · [SDK 等待](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/sdk/client/src/api.ts#L146)
+
+本项目保留业务完成和确认的责任边界。Session 空闲和连接断开都不能证明 Turn 已完成。用户批准冻结命令属于原 Turn 的控制动作。澄清答复或新需求作为新的自然语言输入，开启同一 Session 的后继 Turn。
+
+#### 事实归属
+
+| 对象 | 权威事实 | 责任 |
+| --- | --- | --- |
+| **Session** | 认证主体、`session_id`、Turn 的顺序和归属 | Conversation 接收输入，Journal 在事务中创建或找到 Session，分配 Turn 序号。历史物化使用已选分支和已有可见性规则。 |
+| **Turn** | `turn_id`、所属 Session、序号、本次输入、已冻结前驱和执行绑定、用量、终态结果 | Conversation 驱动原决策、授权、执行、核验和交付链路。Journal 保存本轮事实。Bash 容器是该轮的执行资源。 |
+| **Step** | `(turn_id, step_no)`、逻辑主模型调用和处理结果引用 | 主循环在派发前登记。用 `invocation_id` 定位原件，传输尝试用 `attempt_id`。同一步的工具请求与回执按原动作身份配对。核验与压缩的独立调用按各自职责记录。 |
+
+沿用一个事务型 Conversation Journal，按 [ADR 0054](../../adr/0054-session-run-step-journal.md) 使用本机 SQLite。锁顺序为 Session 到 Turn，短事务提交幂等绑定、历史前驱、Step 原件引用和终态。模型和外部派发仍在事务外，原始大正文由 Artifact 保管。新 Turn 的前驱一经冻结，较早 Turn 后续发布的结果不会重写它。已知副作用按原幂等和授权边界核对。Verification 和 Completion 仍对实际交付负责。
+
+#### 正式入口与评测
+
+| 操作 | 新契约 |
+| --- | --- |
+| 提交新输入 | `POST /api/conversation/turns` 接受 `session_id`、`client_request_id`、当前输入和附件引用，返回 `session_id`、`turn_id` 及当前结果或状态。未存在的 Session 与首个 Turn 一起提交。同一主体、Session、请求标识和冻结输入重复提交时读取原 Turn 的结果或确认事项，无可交付结果时返回 202。首段文件 Journal 在 Session 写锁已占用且 Turn 尚未登记时返回可重试的 409，冻结输入不符时拒绝。 |
+| 查询与恢复 | `GET /api/conversation/turns/{turn_id}` 只读查询原 Turn，`POST /api/conversation/turns/{turn_id}/resume` 从已提交事实恢复。服务端从 Turn 查回 Session，核对认证主体、原执行绑定和入口权限。恢复无需重传消息；已结束则返回原结果，待确认仍走原决定入口。跨进程执行由原 Session→Turn 锁串行。执行中重复提交只读取原身份与状态，未决副作用不能因恢复而再派发。 |
+| 用户决定 | 工作区与知识保存决策路由挂在 `/api/conversation/turns/{turn_id}` 下，沿原 Command 摘要、授权和幂等契约。允许后续执行时恢复同一 Turn。 |
+| 其他入口 | SSE、CLI、飞书复用相同启动和恢复用例。SSE 在首次提交前绑定客户端请求标识，断连重连沿原 Turn 收取结果。飞书用原事件身份做幂等绑定。 |
+
+Toolathlon 的 Runner 为每次用例执行生成独立 `session_id`，同一个值进入 Bash 部署授权、首个请求和归档。批准操作恢复原 Turn。新的用户输入创建同一 Session 的下一 Turn。原题、工具集合和评分器由现有评测负责。[Toolathlon 比较入口](../../../evals/Toolathlon/compare/suite.py)
+
+Bash 执行适配器通过现有 `ExecutionScope.execution_id` 接收 `turn_id`。普通输入、Toolathlon 共享工作区和部署网络许可仍由现有授权决定。Toolathlon 的任务卷由该次用例环境管理，同一 Turn 的 Bash 命令和评分器继续消费同一份交付文件。Turn 终态释放容器，可恢复暂停保留原身份、期限和未决执行处理。[Bash 生命周期及历史验收](python-data-analysis-tool.md#在同一-turn-内复用-bash-容器)
+
+#### 迁移与验收
+
+实施先切换身份链，REST、流式响应、评测与 Bash 执行统一使用 Turn，主决策序号改用 `step_no` 并在请求前登记。该纵向切片沿用当前消息输入与文件 Journal；客户端发送的 `messages` 冻结在同一个 Turn。下一阶段切换事务型 Journal 和服务端历史物化，统一 Web、CLI、飞书与评测的当前输入契约，再删除客户端前缀匹配。Conversation 旧运行路由随 REST 切换删除。检索实验和运行时基础设施中有独立职责的 Run 不纳入替换。
+
+迁移器读取原归档，旧 Run 标识的原值就是相应 Turn 的标识。认证主体、会话、输入和前驱校验后再导入。授权、命令及回执继续按原规范载荷验证摘要，保持原件及摘要备份。待决副作用先按原协议对账。前驱无唯一解、原件失配或副作用未知时停止该 Session 切换。写入新副作用前可由备份回退，写入后先对账再处理回退。若核实存在需要旧接口的外部消费者，按 [REL](../../devSpec/migration-release.md#1-迁移与兼容边界)登记范围和退出日期后再实施切换。
+
+| 验收 | 实际用例及通过条件 |
+| --- | --- |
+| L-12 | 回放 LongDS 第 17、18 轮。只提交第 18 轮输入时仍按原顺序找到第 17 轮可见输入和答复。异主体、异 Session 拒绝。正式 Web SSE 的第二轮只提交新输入，实际答复使用前轮事实。 |
+| L-13 | 回放已付费响应和真实工作区批准、拒绝与断连归档。重复提交取得同一 Turn，恢复读取原输入、响应、用量和回执。异主体或绑定失配时零写入、零派发，批准或断线重试不重复副作用。 |
+| L-14 | 复用 task2 第四轮第 7 至 11 次实际请求及 Toolathlon 压缩检查点。四份同号反馈仍归属原 Turn 和 Step，已保存响应落回原 Step，下一主决策取得后继序号。 |
+| L-15 | 回放 Canvas 8 条、LongDS 2 条正式轨迹的 Bash 命令，分别验证同 Turn 只创建一个容器、命令进程独立、输出和可写位置保持。用两个 Toolathlon 用例执行身份验证 Session 及卷相互隔离，含一次确认恢复和同 Session 后续新 Turn 的边界对照。接入后由现有 Canvas 官方评分与普通附件哈希复验用户结果。 |
+
+首段 Web 验收用真实模型从附件计算正确的 SHA-256。记录 4 个主决策 Step，2 条 Bash 命令共用一个容器。登记前的并发提交返回 409，登记后未结束的重复提交返回同一 Turn 的 202；完成后的重复提交及显式恢复返回同一结果，用量和 Journal 版本保持一致。修改输入返回 409，跨主体访问返回 404。SSE 的结束事件交付正确回答，REST 可以按事件中的 `turn_id` 读取对应 Step。[REST](../../../.tmp/turn-v1/rest-final/report.json) · [SSE](../../../.tmp/turn-v1/sse/report.json)
+
+Toolathlon Time 读取和工作区批准、拒绝三例通过，使用各自的 Session。待批准及已批准或拒绝的重复提交读回原 Turn，拒绝后新的自然输入建立同一 Session 的新 Turn。Canvas 真归档的 6 项 Step 局部回放覆盖派发前登记、重试、保存响应恢复、后继编号与压缩位置。task2 的 4 组历史核验回执保持原轮次归属。正式服务端历史和 SQLite 迁移仍待验收。[Time 读取](../../../.tmp/turn-v1/time/report.json) · [工作区批准](../../../.tmp/turn-v1/workspace-keyed/report.json) · [工作区拒绝](../../../.tmp/turn-v1/workspace-reject/report.json)
+
+切换后的 Canvas 原题提交正式答复和工作簿，官方评分匹配 9/9 门课程。Journal 保存 47 个连续 Step。19 条 Bash 命令使用 19 个不同 Exec，均在同一容器中完成。评分器从任务网关导出共享工作簿，Turn 结束后 Docker 已回收 Bash 容器。[正式用例](../../../.tmp/tv1canvas/canvas-arrange-exam/personal/report.json) · [官方评分](../../../.tmp/tv1canvas/canvas-arrange-exam/personal/grader.log) · [容器与 Step 检查](../../../.tmp/turn-v1/canvas-report.json)
+
+历史隔离 Journal 已复建 LongDS 第 1 至 18 轮并在重开数据库后逐条恢复第 18 轮历史。另用 29 个旧 Run 复建历史，58 份目标输入摘要与原记录一致。已付费响应按原 Step 恢复，原请求和响应逐字节一致。这些归档记录原隔离 Journal 的局部机制。[历史回放](../../../.tmp/session-run-step-20261114/after-simplification.json) · [隔离 Journal 结果](../../../.tmp/session-run-step-20261115/candidate-report.json)
 
 ## 4. 是否所有流程都需要答案核验
 

@@ -7,14 +7,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from personal_agent.application.python_execution.models import PythonExecutionAuthorization
+from personal_agent.application.bash_execution.models import BashExecutionAuthorization
 
 from .journal import InMemoryInteractionJournal
 from .models import (
     ActionProposal, CommittedUsage, DecisionFeedback, InteractionTrace, LoopBudgetPolicy,
     RunExecutionBudget, ToolCallProposal,
 )
-from .python_authorization import require_python_authorization
+from .bash_authorization import require_bash_authorization
 
 
 class RemainingInteractionBudget(BaseModel):
@@ -36,12 +36,12 @@ def deadline_elapsed(deadline_at: datetime | None) -> bool:
 class ConversationBudget:
     limits: LoopBudgetPolicy
     journal: InMemoryInteractionJournal
-    python_authorization: PythonExecutionAuthorization | None = None
+    bash_authorization: BashExecutionAuthorization | None = None
 
     def remaining_model_tokens(self, trace: InteractionTrace, usage: CommittedUsage) -> int:
         remaining = self.limits.max_total_tokens - usage.total_tokens
-        if trace.python_authorization_digest is not None:
-            authorization = require_python_authorization(trace, self.python_authorization)
+        if trace.bash_authorization_digest is not None:
+            authorization = require_bash_authorization(trace, self.bash_authorization)
             consumed = self.journal.conversation_usage(trace).total_tokens
             consumed += max(0, usage.total_tokens - trace.usage.total_tokens)
             remaining = min(remaining, authorization.max_total_tokens - consumed)

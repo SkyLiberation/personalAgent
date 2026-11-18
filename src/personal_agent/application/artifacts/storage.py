@@ -55,7 +55,7 @@ def install_immutable(path: Path, content: bytes) -> None:
         if path.read_bytes() != content:
             raise RuntimeError("InvariantViolation: immutable Artifact file differs")
         return
-    temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    temporary = path.parent / f".{uuid4().hex}.tmp"
     try:
         with temporary.open("xb") as stream:
             stream.write(content)

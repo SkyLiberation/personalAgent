@@ -20,17 +20,36 @@ from .models import (
 )
 
 
-def render_working_plan(plan: ConversationWorkingPlan, *, prompts: PromptCatalog, active_only: bool = False) -> str:
-    steps = "\n".join(prompts.render(
+def _render_step(step: ConversationWorkingPlanStep, prompts: PromptCatalog) -> str:
+    return prompts.render(
         "conversation.context.plan_step", step_id=step.step_id,
         status=prompts.get(f"conversation.context.state.{step.status}").template,
         description=step.description,
-    ) for step in plan.steps if not active_only or step.status in {"pending", "in_progress"})
+    )
+
+
+def render_working_plan(plan: ConversationWorkingPlan, *, prompts: PromptCatalog) -> str:
+    steps = "\n".join(_render_step(step, prompts) for step in plan.steps)
     grounding = (prompts.render("conversation.context.plan_basis", grounding=plan.grounding)
                  if plan.grounding else "")
-    empty = "conversation.plan.no_active_steps" if active_only else "conversation.plan.empty"
     return prompts.render("conversation.plan_context", goal=plan.goal, grounding=grounding,
-                          steps=steps or prompts.get(empty).template)
+                          steps=steps or prompts.get("conversation.plan.empty").template)
+
+
+def render_working_plan_recovery(plan: ConversationWorkingPlan, *, prompts: PromptCatalog) -> str:
+    """Project enough of the current Journal plan to continue without its receipt."""
+    pending = "\n".join(_render_step(step, prompts) for step in plan.steps if step.status == "pending")
+    active = next((step for step in plan.steps if step.status == "in_progress"), None)
+    return prompts.render(
+        "conversation.plan.recovery",
+        identity=prompts.render("conversation.context.control.plan", plan_id=plan.plan_id, revision=plan.revision),
+        goal=plan.goal,
+        pending=pending or prompts.get("conversation.plan.recovery.none").template,
+        completed=sum(step.status == "completed" for step in plan.steps),
+        active=_render_step(active, prompts) if active else prompts.get("conversation.plan.recovery.none").template,
+        next_step=prompts.render("conversation.plan.recovery.resume", step_id=active.step_id)
+        if active else prompts.get("conversation.plan.recovery.choose").template,
+    )
 
 
 def supersede_pending_working_plan(

@@ -45,7 +45,7 @@ from personal_agent.application.retrieval_experiment.contracts import (
     FrozenExperiment,
     canonical_digest,
 )
-from personal_agent.infra.python_execution.sandbox import SandboxLimits, run_program
+from personal_agent.infra.bash_execution.sandbox import SandboxLimits, run_program
 from personal_agent.application.retrieval_experiment.rules import (
     recipe as _recipe,
     freeze_experiment,

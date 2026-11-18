@@ -42,7 +42,7 @@
 
 后续两个 Memory 用例回答不同问题：`MEMORY-RETRIEVAL-SCALE-001` 证明固定 500 条候选窗口会漏掉 1,020 条事实中的尾部目标，查询级 `search_claims` target 能返回 `SCALE-TARGET-1000-7Q9X`；`MEMORY-WORKING-REAL-001` 在真实 GitHub 跨轮重启任务中为 target `5/5`、关闭绑定 Observation 消费的消融 `0/5`。后者只有无 Provider 故障样本的额外原始读取可计入机制因果，不能把外部失败算作 Memory 收益。
 
-外部研究已由同一模型提交 claims 与最终回答，统一核验通过后交付确切正文，当前契约见 [ADR 0032](../adr/0032-conversation-research-claims.md)。2026-10-16 原目标正式续验达到既定用户结果并通过独立评分，该用例关闭；此前失败保持原身份。其余既定边界与完整发布矩阵分别判断，唯一台账见[正式研究结果](../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)，贡献判断见[研究与反馈复盘](10-development-pitfalls.md#14-核验优化不能代替研究能力优化)。
+旧外部研究曾使用 claims 与最终回答的统一核验（[ADR 0032](../adr/0032-conversation-research-claims.md)）；现按 [ADR 0055](../adr/0055-unified-conversation-answer.md)走统一答复。2026-10-16 原目标正式续验达到既定用户结果并通过独立评分，该用例关闭；此前失败保持原身份。其余既定边界与完整发布矩阵分别判断，唯一台账见[正式研究结果](../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)，贡献判断见[研究与反馈复盘](10-development-pitfalls.md#14-核验优化不能代替研究能力优化)。
 
 ## 4. 复杂循环与诊断用例的边界
 

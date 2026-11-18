@@ -12,7 +12,7 @@
 
 配置文件唯一拥有当前布尔值。本文的两臂取值定义实验方案，不是第二份可写配置。关闭核验不产生 passed 回执，也不等于核验无问题。目标关闭但回答开启时，回答输入使用当时已接纳、明确标为未核验的目标快照；默认开启时仍要求真实通过回执。开关在新进程启动时读取，并在同一对话及运行中固定。
 
-现行目标、回答核验分别见[目标核验上下文](../context/goal-verifier.md)、[回答核验上下文](../context/goal-compliance-verifier.md)，主循环见 [Agent loop 上下文](../context/agent-loop.md)。配置读取入口为 [feature_flags.py](../../src/personal_agent/kernel/feature_flags.py)，经 Runtime 注入[回答模块](../../src/personal_agent/application/conversation/answer_results.py)，由 [Conversation Service](../../src/personal_agent/application/conversation/service.py) 的 `_verify_goal_maintenance`、`_verify_before_send` 及原研究写作链实际消费。
+现行目标、回答核验分别见[目标核验上下文](../context/goal-verifier.md)、[回答核验上下文](../context/goal-compliance-verifier.md)。[feature_flags.py](../../src/personal_agent/kernel/feature_flags.py)读取配置，经 Runtime 注入由 [Conversation Service](../../src/personal_agent/application/conversation/service.py)实际消费。
 
 ## 2. 实验组 1：目标核验和回答核验同时接入的组合消融
 
@@ -26,6 +26,8 @@
 比较变量为上述两个开关的联合状态，仅能评价组合机制的贡献，不能据此单独归因目标核验或回答核验。本组固定关闭低预算提示。后续若需分辨各自贡献，再独立登记相应实验组。
 
 ### 接入规格（2026-11-05）
+
+本节保留当轮接入及验证身份。其中 claims writer 已由 [ADR 0055](../adr/0055-unified-conversation-answer.md)撤回；实验组 1 的两类核验仍可在统一答复上比较。
 
 本轮实现实验组 1 的配置消费，不评价两类核验的收益。已定位缺口：`Settings.from_env → AgentRuntime → ConversationService` 不读取 TOML，目标写入与 Journal 又强制要求通过回执；仅修改配置无法运行 B 臂。配置接入与关闭路径属于本轮行为变更，默认开启继续使用现有核验链。
 
@@ -70,11 +72,13 @@
 
 2026-11-06 提交前核对发现，全关臂的[真实请求](../../.tmp/feature-flags-20261105/target-off/sdk/26b597370fe64731a4cd3411b34e5577.http.request.json)同时收到未核验策略和主任务固定的必经目标核验指令。主任务正文现引用当次目标上下文的策略。复用全开与全关的真实阶段，中英文四份主请求的策略检查均通过。开关和历史成绩保持原身份。[审查复验](../../.tmp/runtime-feedback-repair-20261106/review-final/report.json)
 
-2026-11-13 在统一主循环上定向复跑一个 Toolathlon Redis 升级样本，采用 B 臂的核验取值并开启低预算提示。样本独立归档，完整收益比较仍待执行。[配置、评分与对话结果](../problems/toolathlon-verifierd.md#统一主循环关闭核验复验)
+2026-11-13 在统一主循环上定向复跑一个 Toolathlon Redis 升级样本，采用 B 臂的核验取值并开启低预算提示。样本独立归档，完整收益比较仍待执行。[配置、评分与对话结果](../problems/toolathlon/research-loop-problems.md#工具接入和执行结果)
+
+2026-11-14 的 Toolathlon 双 Agent 复跑也采用 B 臂的核验取值，并保留低预算提示。对照的是两套 Agent 的完整运行，仓库默认配置按原值继续使用。[对照批次归档](../../.tmp/tac1114/summary.json)
 
 ## 实验组 2：低 token 余额提示
 
-编号 `ABLATION-002`。唯一变量是 `features.low_budget_warning`。关闭臂沿用原主模型输入，开启臂在至少一轮主决策完成、下一轮可发起且有效 token 余量大于零并严格低于 10% 时，附加通用交付提醒。两臂使用相同任务材料、已提交事实、模型、工具、硬预算和核验配置。运行绑定沿用现有规则。已通过真实阶段的提示构造及一次模型实发核对。手写的独立开关 TOML 需显式给出 `low_budget_warning`。比较依据及验收见[预算治理设计](../optimization/to_verify/conversation-loop-boundaries.md#319-对话预算治理的装配边界)。目前没有交付质量或成本收益结论。
+编号 `ABLATION-002`。唯一变量是 `features.low_budget_warning`。两臂都展示当前 Step Context 的预算。开启臂在至少一轮主决策完成、下一轮可发起且有效 token 余量大于零并严格低于 10% 时，在同一区块附加通用交付提醒。两臂使用相同任务材料、已提交事实、模型、工具、硬预算和核验配置。运行绑定沿用现有规则。旧版提醒已核对真实阶段构造及一次模型实发。手写的独立开关 TOML 需显式给出 `low_budget_warning`。比较依据及验收见[预算治理设计](../optimization/to_verify/conversation-loop-boundaries.md#319-对话预算治理的装配边界)。目前没有交付质量或成本收益结论。
 
 ## 实验组 3：前置意图分类
 

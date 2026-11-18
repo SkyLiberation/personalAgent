@@ -2,7 +2,7 @@
 
 本目录按具体优化问题保留尚未充分证明、尚未覆盖或仅取得局部证据的方案，防止方案随会话与失败实验丢失。它不是第二份产品准入队列；产品准入仍由 [Future 队列](../../future/design-optimization-backlog.md)拥有，记录生命周期由[优化规则](../README.md#待验证方案与失效方案的保留规则)拥有。
 
-本目录同时保存生产候选与尚有证据价值的历史方案。生产接入不等于用户结果通过；历史章节的“当前”只对应其代码身份，不能据此恢复已停用机制。当前行为见 [ADR 0032](../../adr/0032-conversation-research-claims.md)及[验证专题](../../topics/verification-and-completion.md)，拆分、复合识别和独立文档缺项识别按 [ADR 0033](../../adr/0033-claim-deletion-and-document-absence-pause.md)停用。
+本目录同时保存生产候选与有证据价值的历史方案。现行答复和核验见 [ADR 0055](../../adr/0055-unified-conversation-answer.md)及[核验专题](../../topics/verification-and-completion.md)。旧 Conversation claim 的选证、写作、编辑及研究报告专属候选均已撤回，历史样本和通过边界保留。
 
 已解决问题统一见 [completed 索引](../completed/README.md)，本目录只维护仍待验证的方案入口。
 
@@ -14,15 +14,9 @@
 | --- | --- | --- |
 | Prompt 语言及生成／评分配置替换 | [封存输入与验证](verify_results/prompt-language-mimo.md) | [语言与 MiMo 配置 Spec](prompt-language-selection.md)；已固化的工程提示与动态反馈见[完成记录](../completed/english-owned-feedback.md) |
 | `CONVERSATION-LOOP-BOUNDARIES-001`：模型交互 Schema、原生动作、交付与恢复 | [完整运行结果及适用边界](conversation-loop-schema.md#16-完整运行结果与实际边界) | [统一交互契约](conversation-loop-schema.md)、[终答职责收窄候选](conversation-loop-schema.md#17-终答入口的框架分析与职责收窄候选) |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析与长程分析状态 | [LongDS 设计与事实依据](longds-analysis.md#longds-长程数据分析-spec) | [执行目标维护 Spec](analysis-goal-maintenance.md)；此前约束呈现及核验尝试见[长程语义记录](longtask-semantic-consistency.md)，原件成文和 claim 消融分别推进 |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析与长程分析状态 | [LongDS 设计与事实依据](longds-analysis.md#longds-长程数据分析-spec) | [执行目标维护 Spec](analysis-goal-maintenance.md)；此前约束呈现及核验尝试见[长程语义记录](longtask-semantic-consistency.md)，原件成文独立推进 |
 | `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主 Python 数据分析 | [执行链与成文边界](verify_results/research-experiment.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python 数据分析工具 Spec](python-data-analysis-tool.md) |
-| `RESEARCH-GOAL-COVERAGE-001`：用户事实覆盖及 claim 增量贡献 | [统一链正式结果](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证) | [复核标注与实际修订比较](research-goal-coverage.md#当前推荐复核标注再比较实际修订)、[统一核验 Spec](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计) |
 | `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入物化的费用与延迟 | [预算事实](research-input-budget.md) | [预算复审与待证收益](research-input-budget.md) |
-| `ANSWER-NORMATIVE-SCOPE-001`：真实范围反馈与修订 | [来源核验已固化边界](../completed/source-proof-boundary-isolation.md) | [范围校准与真实反馈消费](normative-context-acquisition.md#用户确认范围后的-c7-实际修订验收) |
-| `ANSWER-ENUMERATION-SCOPE-001`：反馈修订扩大列举范围且最终核验漏判 | [真实连续修订反例](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [当前稿独立核验与修订反馈分工](final-revision-comparison.md) |
-| `RESEARCH-SELECTION-USAGE-COMMIT-001`：后置写作或选证输出失败造成已完成用量漏计 | [正式用量差额](../research-selection-usage-commit.md) | [已完成选证用量的及时提交](research-selection-usage-commit.md) |
-| `RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`：单次输出截断阻断正式研究 | [正式选证失败](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) | [研究请求采用服务方默认输出额度](research-provider-output-default.md) |
-| `ANSWER-NORMATIVE-SCOPE-001`：多来源稿的指代导致具体页面归属错误 | [真实来源错配](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | [最终稿具体来源归属](answer-source-attribution.md) |
 
 独立新业务选型不再作为当前前置待办；[场景比较及未采纳会议规格](non-research-task-directions.md)保留取舍与来源，不单独推进日历接入。
 
@@ -49,8 +43,17 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `CONVERSATION-LOOP-BOUNDARIES-001`：主循环、研究协作与核验适用性边界 | [当前主循环职责混合](../../architecture/core-architecture-current-state.md#31-当前主循环的职责混合) | [主循环与核验边界 Spec](conversation-loop-boundaries.md) |
+| `CONVERSATION-LOOP-BOUNDARIES-001`：主循环、答复与核验适用性边界 | [当前主循环职责混合](../../architecture/core-architecture-current-state.md#31-当前主循环的职责混合) | [主循环与核验边界 Spec](conversation-loop-boundaries.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001`：模型服务失败的具体诊断在异常转换中丢失 | [原研究 E2E 429 与失败边界](model-provider-diagnostics.md#失败事实与最早责任) | [有界诊断交接](model-provider-diagnostics.md) |
+
+## 旧 Conversation 研究链证据
+
+下列方案只解释原实现及归档，不作为现行生产候选。原指标见[历史消融](../../ablation/claim-verifier.md)，正式结果见[当轮评测记录](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)。
+
+| 具体问题 | 原事实入口 | 历史方案 |
+| --- | --- | --- |
+| 选证计量、截断和输入成本 | [旧选证用量](../research-selection-usage-commit.md)、[原输入成本](research-input-budget.md) | [计量方案](research-selection-usage-commit.md)、[输出额度](research-provider-output-default.md) |
+| 终稿列举边界及来源归属 | [列举范围变化](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)、[真实来源错配](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | [独立终稿核验](final-revision-comparison.md)、[归属候选](answer-source-attribution.md) |
 | `RESEARCH-GOAL-COVERAGE-001`：用户所问事实被相关格式和取证限制替代 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[实际覆盖漏放与候选](research-goal-coverage.md) | [逐项用户事实覆盖](research-goal-coverage.md) |
 | `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：缺证修订扩大声明 | 同上；支持范围反馈被改写成更广否定的真实修订；引用交接见[完成记录](../completed/claim-atomic-evidence-revision.md) | [支持范围约束](claim-supported-scope-repair.md) |
 | `CLAIM-WRITER-TYPED-OUTPUT-001`：首次研究提交的空集合与字符串引用导致 503 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式入口失败与局部修正](claim-writer-typed-output.md) | [研究写作者 typed 提交契约](claim-writer-typed-output.md) |

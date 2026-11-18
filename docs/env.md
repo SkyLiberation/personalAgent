@@ -1,6 +1,6 @@
 # 环境变量
 
-回答结果模块由 `PERSONAL_AGENT_ANSWER_RESULT` 的 JSON 配置装配，例如 `{"writer":"direct"}`；合法 writer 为 `direct`、`claims`，默认 `claims`。目标和结果核验统一由 [`config/feature_flags.toml`](../config/feature_flags.toml) 的 `features.goal_verification`、`features.answer_verification` 控制，默认均开启。`PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 可指定另一份 TOML；未指定时从进程工作目录的 `config/feature_flags.toml` 读取。文件缺失、格式错误、未知键、缺项或非布尔值时启动失败。旧 JSON 的 `verification` 字段已移除，继续传入会被拒绝。
+部署可通过 `PERSONAL_AGENT_ANSWER_RESULT` 的 JSON 配置开启回答测试模式，例如 `{"test_mode":true}`；默认 `false`，且只接受 `test_mode` 字段。目标和回答核验由 [`config/feature_flags.toml`](../config/feature_flags.toml) 的 `features.goal_verification`、`features.answer_verification` 控制，默认均开启。`PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 可指定另一份 TOML；未指定时从进程工作目录的 `config/feature_flags.toml` 读取。文件缺失、格式错误、未知键、缺项或非布尔值时启动失败。
 
 开关在进程启动时读取，经 Runtime 注入并在 Journal 的运行及对话边界绑定。修改配置后使用新进程和独立会话；恢复不能切换实验臂。关闭核验不生成通过事实，不提供完整核验或发布资格；两类核验的适用范围、关闭语义和比较条件由[实验组 1](ablation/experiment.md)拥有，决定见 [ADR 0050](adr/0050-verification-feature-flags.md)。
 
@@ -52,13 +52,11 @@ token 边界按已提交用量检查，最后一次模型请求可能使实际�
 已有应用进程需要重启以重新加载配置；未配置上述环境变量时，代码默认仍为 8 轮、12 次工具和 32,000 tokens。
 历史评测继续保留原配置身份，新 profile 不等同于答案质量已验收。
 
-## 通用 Python 执行许可
+## 通用 Bash 执行许可
 
-`PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG` 指向显式部署 JSON，包含 `authorization` 与 Docker `endpoint`；其结构由 `PythonExecutionDeploymentConfig` 校验。许可约束主体、专用对话、固定镜像及执行限制、绝对到期和任务总额度，详细字段及失败行为由 [Python Spec §3.5](optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配)拥有。
+`PERSONAL_AGENT_BASH_EXECUTION_CONFIG` 指向通过 `BashExecutionDeploymentConfig` 校验的部署 JSON。文件包含 `authorization` 与 Docker `endpoint`。许可限定主体、会话、镜像 ID、执行额度和到期时间。
 
-Runtime 复用现有 `execute_python`，未匹配主体／对话的请求不会获得该工具。与 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 同时配置时拒绝启动；无这两种配置时不装配 Python。重启须提供原授权身份，同一对话的新 run 聚合原实际消费，不因新 run 获赠总额度。普通 per-run 预算继续适用，模型调用前再取任务剩余量；在途调用的实际用量仍如实记录。通用分析保持普通 Final／适用核验，不绑定检索冻结和 test。
-
-固定镜像的构建及版本检查见 [`scripts/python_execution/README.md`](../scripts/python_execution/README.md)。配置和代码已接入，真实 target 结果由[研究 Spec](optimization/to_verify/verify_results/longds-analysis.md#1-本轮执行计划与固定配置)和[评测盘点](evals/02-current-case-inventory.md)分别记录，配置存在不等于通过验收。
+匹配许可的对话取得 `bash` 并聚合历轮已消费额度。它与 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 互斥。检索实验环境可基于其既有部署身份装配 Bash。镜像构建见[脚本目录](../scripts/bash_execution/README.md)，工作区及执行契约见 [Bash Spec](optimization/to_verify/python-data-analysis-tool.md#bash-替换脚本执行工具)。
 
 ## 飞书配置
 
@@ -228,8 +226,6 @@ instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首�
 诊断输出额度独立声明，不通过 `extra_body` 覆盖调用方的 typed 输出预算。已有应用进程需
 重新加载配置才能使用切换后的模型；配置不代表所有生成式 Adapter 已通过真实集成验收。
 正式 Conversation 意图识别及其既有修订请求共用 32,768 输出上限，Action/Final 调用方也指定 32,768，额度均包含思考与正文；Conversation 语义核验调用也指定 32,768；具体构造和职责见[核验专题](topics/verification-and-completion.md)。这些额度修正用于避免已复现的思考截断，不代表完整链路预算或答案质量已验收。正式入口的预算诊断和独立组件请求分别记录于[连续链路证据](evals/02-current-case-inventory.md#mimo-thinking-连续链路与意图输出预算)与[MiMo thinking 组件诊断](evals/02-current-case-inventory.md#mimo-thinking-成文与对话反问诊断)，不能混算。
-
-2026-10-02 按用户要求，Conversation 研究选证、来源支持与覆盖核验改用服务方默认输出额度。`StructuredModelRequest.max_tokens=None` 表示采用服务方默认值；调用意图与准入授权保留同一空值，Adapter 省略 `max_completion_tokens` 和 `max_tokens`，结构修复继续沿用原请求的额度选择。显式整数额度仍由既有准入上限校验。MiMo [官方 API 文档](https://mimo.mi.com/docs/en-US/api/chat/openai-api)标注 `mimo-v2.6-flash` 默认额度为 131,072 tokens，包含思考与正文；代码通过省略参数采用默认值。thinking、请求超时与累计运行预算继续由既有配置控制。本次按用户要求暂不运行测试，实际服务方默认额度及截断恢复效果待验证，见[对应候选](optimization/to_verify/research-provider-output-default.md)。
 
 旧后台调查路径在正式 20 样本中为 `0/20 delivered`，且没有证明独立生命周期不可替代的
 需求 baseline，因此相关服务、队列和配置已经撤回。当前 Conversation 同类研究请求重跑也为

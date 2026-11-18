@@ -5,58 +5,29 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 import time
 from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TypedDict
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import httpx
 from dotenv import dotenv_values
 
 from evals.Toolathlon.time_case import ANSWER, MAPPING, QUESTION, SERVER_ID, TOOL, UPSTREAM_REVISION
+from evals.conversation_http import (
+    UNVERIFIED_FLOW, benchmark_feature_flags, effective_structured_model, product, request,
+    submit_turn, wait_for_product,
+)
+from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest
 from personal_agent.kernel.config_models import InteractionLoopConfig
 from personal_agent.kernel.feature_flags import FeatureFlags, load_feature_flags, write_feature_flags
 
 
-_UVICORN = """
-import socket
-import sys
-import time
-from pathlib import Path
-from threading import Thread
-import uvicorn
-def shutdown():
-    signal = Path(sys.argv[2])
-    while not signal.exists():
-        time.sleep(0.1)
-    server.should_exit = True
-
-with socket.socket() as listener:
-    listener.bind(('127.0.0.1', 0))
-    port = listener.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(
-        'personal_agent.adapters.web.api:app', host='127.0.0.1', port=port,
-    ))
-    port_file = Path(sys.argv[1])
-    pending = port_file.with_suffix('.tmp')
-    pending.write_text(str(port), encoding='ascii')
-    pending.replace(port_file)
-    Thread(target=shutdown, daemon=True).start()
-    server.run(sockets=[listener])
-"""
-
 _SYSTEM_ENV = (
     "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
     "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "DOCKER_HOST", "DOCKER_CONTEXT",
-)
-_MODEL_ENV = (
-    "STRUCTURED_PROVIDER", "STRUCTURED_API_KEY", "STRUCTURED_BASE_URL",
-    "STRUCTURED_MODEL", "STRUCTURED_OUTPUT_TRANSPORT", "STRUCTURED_EXTRA_BODY",
-    "STRUCTURED_MODEL_CAPACITY",
 )
 INTERACTION_BUDGET_OPTIONS = {
     "--model-budget": "max_total_tokens",
@@ -94,10 +65,14 @@ def configure_interaction_budget(env: dict[str, str], args: argparse.Namespace) 
 
 class TimeRunReport(TypedDict, total=False):
     scenario: str
+    session_id: str
     toolathlon_revision: str
     containers: dict[str, str]
     image_id: str
     model: str | None
+    evidence_class: str
+    release_eligible: bool
+    feature_flags: dict[str, bool]
     mapped_remote_tools: list[dict[str, str]]
     started: bool
     mcp_connectors: list[dict[str, Any]]
@@ -176,26 +151,25 @@ def model_request_paths(output: Path) -> list[Path]:
 def product_environment(
     output: Path, db_url: str, servers: list[dict], model_env: Path | None, *,
     feature_flags: FeatureFlags | None = None,
+    bash_deployment: Path | None = None,
 ):
-    flags_path = (output / "feature_flags.toml").resolve()
-    flags = feature_flags or load_feature_flags()
-    write_feature_flags(flags_path, flags)
+    if model_env is not None and not model_env.is_file():
+        raise FileNotFoundError(model_env)
+    values = dotenv_values(model_env) if model_env is not None else {}
     env = {name: os.environ[name] for name in _SYSTEM_ENV if name in os.environ}
-    if model_env is not None:
-        values = dotenv_values(model_env)
-        env.update({name: str(values[name]) for name in _MODEL_ENV if values.get(name)})
-        env.update({
-            name: value for name in _INTERACTION_BUDGET_ENV.values()
-            if (value := values.get(name)) is not None
-        })
-        if not env.get("STRUCTURED_API_KEY") or not env.get("STRUCTURED_MODEL"):
-            raise ValueError("Model env must specify STRUCTURED_API_KEY and STRUCTURED_MODEL")
+    env.update({name: value for name, value in values.items() if value is not None})
+    flags_path = (output / "feature_flags.toml").resolve()
+    source_flags = Path(env.get("PERSONAL_AGENT_FEATURE_FLAGS_CONFIG", "config/feature_flags.toml"))
+    flags = benchmark_feature_flags(feature_flags or load_feature_flags(source_flags))
+    write_feature_flags(flags_path, flags)
     env.update(
-        PYTHONUTF8="1",
-        PYTHON_DOTENV_DISABLED="1",
-        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
         PERSONAL_AGENT_DATA_DIR=str(output / "product-data"),
         PERSONAL_AGENT_POSTGRES_URL=db_url,
+        PERSONAL_AGENT_API_KEYS="",
+        PERSONAL_AGENT_ADMIN_API_KEYS="",
+        PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX="toolathlon-" + uuid4().hex,
+        PERSONAL_AGENT_BASH_EXECUTION_CONFIG=str(bash_deployment.resolve()) if bash_deployment else "",
+        PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG="",
         PERSONAL_AGENT_FEATURE_FLAGS_CONFIG=str(flags_path),
         PERSONAL_AGENT_MCP_SERVERS=json.dumps({
             "enabled": True,
@@ -208,59 +182,15 @@ def product_environment(
         PERSONAL_AGENT_NOTION_MCP_ENABLED="false",
         PERSONAL_AGENT_GPT_RESEARCHER_A2A_ENABLED="false",
         PERSONAL_AGENT_FEISHU_ENABLED="false",
+        PERSONAL_AGENT_REVIEW_DIGEST_ENABLED="false",
         PERSONAL_AGENT_REVIEW_DIGEST_SCHEDULER_ENABLED="false",
         PERSONAL_AGENT_KNOWLEDGE_GAP_SCHEDULER_ENABLED="false",
         PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED="false",
         PERSONAL_AGENT_LANGSMITH_ENABLED="false",
+        PERSONAL_AGENT_WEB_SEARCH_API_KEY="",
+        PERSONAL_AGENT_URL_CAPTURE_PROVIDER="builtin",
     )
     return env
-
-
-def request(base: str, path: str, payload: dict | None = None, *, timeout: float = 3) -> Any:
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = Request(base + path, data=data, headers={"Content-Type": "application/json"})
-    with urlopen(req, timeout=timeout) as response:
-        return json.load(response)
-
-
-def wait_for_product(base: str, process: subprocess.Popen, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            return False
-        try:
-            return request(base, "/api/health")["status"] == "ok"
-        except URLError:
-            time.sleep(0.2)
-    raise RuntimeError("Product Web process did not become ready")
-
-
-@contextmanager
-def product(output: Path, env: dict[str, str]):
-    port_file = output / "web.port"
-    stop_signal = output / "stop-web"
-    with (output / "web.log").open("wb") as log:
-        process = subprocess.Popen(
-            (sys.executable, "-c", _UVICORN, str(port_file), str(stop_signal)),
-            cwd=Path(__file__).resolve().parents[2],
-            env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-        )
-        try:
-            deadline = time.monotonic() + 15
-            while not port_file.exists():
-                if process.poll() is not None or time.monotonic() >= deadline:
-                    raise RuntimeError(f"Product Web process did not bind a port. See {output / 'web.log'}.")
-                time.sleep(0.05)
-            port = int(port_file.read_text(encoding="ascii"))
-            yield f"http://127.0.0.1:{port}", process
-        finally:
-            stop_signal.touch()
-            try:
-                process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-                raise RuntimeError("Product did not shut down gracefully") from None
 
 
 def server(container_id: str, server_id: str, mapping: dict) -> dict:
@@ -278,6 +208,8 @@ def invoke(base: str) -> dict:
 
 
 def run(args: argparse.Namespace, report: TimeRunReport) -> None:
+    session_id = "toolathlon-" + uuid4().hex
+    report["session_id"] = session_id
     with ExitStack() as resources:
         database = resources.enter_context(container(
             args.postgres_image, "-p", "127.0.0.1::5432", "-e", "POSTGRES_PASSWORD=toolathlon",
@@ -298,7 +230,11 @@ def run(args: argparse.Namespace, report: TimeRunReport) -> None:
         env = product_environment(args.output, db_url, servers, args.model_env)
         report["containers"] = {"time": time_server, "postgres": database}
         report["image_id"] = docker("image", "inspect", args.time_image, "--format", "{{.Id}}")
-        report["model"] = env.get("STRUCTURED_MODEL")
+        report["model"] = None
+        if args.model_env is not None:
+            report["evidence_class"] = UNVERIFIED_FLOW
+            report["release_eligible"] = False
+            report["feature_flags"] = load_feature_flags(Path(env["PERSONAL_AGENT_FEATURE_FLAGS_CONFIG"])).model_dump()
         report["mapped_remote_tools"] = [
             {"server_id": entry["server_id"], "remote_name": tool["remote_name"], "local_name": tool["name"]}
             for entry in servers for tool in entry["tools"]
@@ -314,13 +250,15 @@ def run(args: argparse.Namespace, report: TimeRunReport) -> None:
                     report["after_disconnect"] = invoke(base)
                     report["restarted_implicitly"] = running(time_server)
                 if args.model_env is not None:
-                    try:
-                        report["conversation"] = request(base, "/api/conversation/turn", {
-                            "conversation_id": "toolathlon-" + uuid4().hex, "user_id": "toolathlon",
+                    report["model"] = effective_structured_model(args.output)
+                    response = submit_turn(base, ConversationTurnRequest.model_validate({
+                            "session_id": session_id, "user_id": "toolathlon",
                             "messages": [{"role": "user", "content": QUESTION}],
-                        }, timeout=90)
-                    except HTTPError as error:
-                        report["conversation_error"] = {"status": error.code, "detail": json.load(error)}
+                        }), timeout=90)
+                    if response.is_success:
+                        report["conversation"] = response.json()
+                    else:
+                        report["conversation_error"] = {"status": response.status_code, "detail": response.json()}
                     report["journal_model_actions"] = [
                         {
                             "request": str(path.relative_to(args.output)),
@@ -406,7 +344,7 @@ def main() -> int:
     report: TimeRunReport = {"scenario": args.scenario, "toolathlon_revision": UPSTREAM_REVISION}
     try:
         run(args, report)
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError, httpx.HTTPError) as error:
         report["environment_error"] = str(error)
     report["protocol_and_lifecycle_passed"] = passed(report)
     path = args.output / "report.json"

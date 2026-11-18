@@ -44,7 +44,7 @@ class Settings(_StrictBase):
     url_capture_provider: Literal["firecrawl", "builtin"] = "builtin"
     action_diagnostics_reveal_field_names: bool = False
     retrieval_experiment_config_path: Path | None = None
-    python_execution_config_path: Path | None = None
+    bash_execution_config_path: Path | None = None
     answer_result: AnswerResultConfig = Field(default_factory=AnswerResultConfig)
     feature_flags: FeatureFlags = Field(default_factory=load_feature_flags)
 

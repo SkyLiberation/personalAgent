@@ -12,7 +12,7 @@
 
 | 需求 | 正式入口与结果 | 通过判据及反事实 |
 | --- | --- | --- |
-| `PAI-1` | 同进程两个 `create_app()` 应用分别使用独立库和数据目录。用户在第一个应用 POST `/api/conversation/turn`：“请帮我计算 17 加 25，直接告诉我结果。” | 经过真实模型及 canonical Conversation，HTTP 200、disposition 为 answer、最终文本给出 42 或四十二；保存完整真实 run 与用量。用户结果与审计检查点分别计分 |
+| `PAI-1` | 同进程两个 `create_app()` 应用分别使用独立库和数据目录。用户在第一个应用 POST `/api/conversation/turns`：“请帮我计算 17 加 25，直接告诉我结果。” | 经过真实模型及 canonical Conversation，HTTP 200、disposition 为 answer、最终文本给出 42 或四十二；保存完整真实 run 与用量。用户结果与审计检查点分别计分 |
 | `PAI-2` | owner 读取同次 run 成功，另一认证用户读取被拒绝；普通用户没有审计管理权限 | owner GET 200，其他用户 GET 404，普通用户查策略审计 403；owner 读取不产生 scope 拒绝记录 |
 | `PAI-3` | 管理员在第一个应用查到同次 run 的拒绝，第二个应用不得返回该记录 | 正式管理员 API 比对 run、resource、action、effect、rule 和认证 principal；所属应用恰一次对应拒绝，另一个为零；日志不替代查询结果 |
 | `PAI-4` | baseline 若证明全局绑定是最早责任，则移除全局槽与 setter，向三个调用点显式绑定所属 Runtime 的 recorder | typed 事件、全部生产消费者迁移、旧入口删除；保持字段、日志、指标、allow 的 audit_required 跳过和可选 sink 异常隔离；同一 E2E target 及静态门禁通过 |

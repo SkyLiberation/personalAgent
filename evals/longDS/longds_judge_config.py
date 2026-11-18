@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter, model_validator
 
-from personal_agent.application.python_execution.models import Digest
+from personal_agent.application.bash_execution.models import Digest
 from personal_agent.infra.model_providers import build_provider_policy
 from personal_agent.kernel.config_models import ModelCapacityConfig
 from personal_agent.kernel.model_provider import ModelProvider, resolve_model_provider

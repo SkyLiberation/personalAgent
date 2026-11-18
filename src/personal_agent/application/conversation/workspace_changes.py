@@ -176,7 +176,7 @@ class WorkspaceChangeService:
             if len(paths) != len(set(paths)) or change in changed:
                 raise ValueError("工作区清单含重复操作或相同源目标")
             changed.add(change)
-        traces = self._journal.conversation_traces(trace.conversation_id, trace.principal)
+        traces = self._journal.session_runs(principal=trace.principal, session_id=trace.conversation_id)
         for previous in traces:
             for operation in previous.workspace_changes:
                 if operation.command.binding_digest != self.binding.digest:
@@ -191,7 +191,7 @@ class WorkspaceChangeService:
                                  thread_id=trace.conversation_id, task_id=action_id),
             binding_digest=self.binding.digest,
             arguments=arguments,
-            decision_turn=trace.usage.model_turns,
+            decision_turn=trace.current_step_no,
             plan_step_id=plan_step_id,
         )
         return WorkspaceChangeOperation(command=command)
@@ -271,7 +271,7 @@ class WorkspaceChangeService:
                     )),
                     execution_order=(*trace.execution_order, command.scope.task_id),
                     model_decisions=tuple(
-                        record.model_copy(update={"consumed": True}) if record.turn_index == command.decision_turn
+                        record.model_copy(update={"consumed": True}) if record.step_no == command.decision_turn
                         else record for record in trace.model_decisions
                     ),
                 )

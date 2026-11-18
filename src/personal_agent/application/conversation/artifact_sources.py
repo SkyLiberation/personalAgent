@@ -40,31 +40,39 @@ def trace_goal_draft_refs(trace: InteractionTrace, *, base: AnalysisGoalRef | No
     return tuple(sorted(refs, key=lambda ref: ref.resource_id))
 
 
+def tool_result_artifact_refs(trace: InteractionTrace) -> dict[str, tuple[ResourceRef, ...]]:
+    """Files published by each tool's committed receipt."""
+    refs = {}
+    for accepted in trace.accepted_tool_requests:
+        if accepted.tool_name == "write_artifact" and accepted.receipt is not None:
+            refs[accepted.action_id] = (accepted.receipt.resource_ref,)
+        elif accepted.tool_name == "bash" and accepted.receipt is not None:
+            receipt = accepted.receipt
+            refs[accepted.action_id] = tuple(ref for ref in (
+                receipt.program_ref, receipt.input_manifest_ref, receipt.stdout_ref, receipt.stderr_ref,
+            ) if ref is not None)
+    for record in trace.experiment_records:
+        receipt = record.receipt
+        if receipt is not None:
+            frozen_refs = (receipt.frozen_ref,) if receipt.frozen_ref is not None else ()
+            refs[record.action_id] = (*receipt.result_refs, *receipt.diagnostic_refs, *frozen_refs)
+    return refs
+
+
 def trace_resource_refs(trace: InteractionTrace, *, include_goal_drafts: bool = True) -> tuple[ResourceRef, ...]:
     refs = list(input_resource_refs(trace.inputs))
     refs.extend(operation.draft_ref for operation in trace.goal_operations if operation.draft_ref is not None)
     refs.extend(trace.input_artifact_refs)
     if trace.history_compaction is not None:
         refs.extend((*trace.history_compaction.prior_snapshot_refs, trace.history_compaction.snapshot_ref))
+    published = tool_result_artifact_refs(trace)
     for accepted in trace.accepted_tool_requests:
-        if accepted.tool_name == "write_artifact" and accepted.receipt is not None:
-            refs.append(accepted.receipt.resource_ref)
-        elif accepted.tool_name == "execute_python":
-            if accepted.command is not None:
-                refs.append(accepted.command.program.resource_ref)
-            if accepted.receipt is not None:
-                refs.extend((accepted.receipt.program_ref, accepted.receipt.input_manifest_ref))
-                if accepted.receipt.stdout_ref is not None:
-                    refs.append(accepted.receipt.stdout_ref)
-                if accepted.receipt.stderr_ref is not None:
-                    refs.append(accepted.receipt.stderr_ref)
+        if accepted.tool_name == "bash" and accepted.command is not None:
+            refs.append(accepted.command.program.resource_ref)
+        if accepted.tool_name != "retrieval_experiment":
+            refs.extend(published.get(accepted.action_id, ()))
     for record in trace.experiment_records:
-        if record.receipt is None:
-            continue
-        refs.extend(record.receipt.result_refs)
-        refs.extend(record.receipt.diagnostic_refs)
-        if record.receipt.frozen_ref is not None:
-            refs.append(record.receipt.frozen_ref)
+        refs.extend(published.get(record.action_id, ()))
     if not include_goal_drafts:
         drafts = set(trace_goal_draft_refs(trace))
         return tuple(dict.fromkeys(ref for ref in refs if ref not in drafts))

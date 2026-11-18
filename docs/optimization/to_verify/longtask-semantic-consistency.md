@@ -6,7 +6,7 @@
 
 当前目标是在持续修改条件的分析任务中，遵循有效用户要求交付正确结果。正式分析路径由主模型理解并回答，不再输出 criteria，执行 §7.5；当前已验证运行的 Runtime 核验仍停用。2026-11-01 用户恢复目标核验范围后的隔离接入试验未准确识别目标错误，未正式启用，见[目标维护 Spec §9.6](analysis-goal-maintenance.md#96-当前执行目标接入既有目标核验)。此前只接目标核验的代码与 [ADR 0047](../../adr/0047-user-goal-verification-context.md)保持，但其首次资格未通过；原八次 Q0 属于同时改造来源与 claims 的旧范围，不证明当前输入优化有效或无效，旧结果见[验证记录 §9](verify_results/analysis-correctness.md#9-目标核验接入与-q0-资格结果)。核验反馈与实际修订链留待用户恢复该范围后验证。
 
-首版覆盖现有独立 Python 授权绑定的专用分析对话，使用正式 `POST /api/conversation/turn`、同一主体及对话、调用方提交的完整实际历史。该入口最多接受 100 条消息；消息由当前请求冻结，不假定服务端另有完整会话库。单条消息 SSE、飞书最近 20 条历史及更大输入不自动纳入已验证范围。
+首版覆盖现有独立 Python 授权绑定的专用分析对话，使用正式 `POST /api/conversation/turns`、同一主体及 Session、调用方提交的完整实际历史。该入口最多接受 100 条消息；消息由当前请求冻结，不假定服务端另有完整会话库。单条消息 SSE、飞书最近 20 条历史及更大输入不自动纳入已验证范围。
 
 [本地调用链审计](../../../.tmp/longtask-semantic-design-20261026/code-audit.json)确认 direct 核验没有原会话，也不会自动读取所用程序及输出；要求投影只保留 Intent 模型改写的字符串。这是核验输入的交接缺口，不证明主 Agent 的错误由原话丢失造成。[task2 审计 F1](../../../.tmp/longds-analysis-20261026/task2-audit.json)确认第 2 轮的 Intent 没有加入 top5 定义，主 Agent 在原规则已进入请求后自行缩小比较集合；修复必须验证核验识别及后续实际修订，不能只证明原文到达。
 
@@ -241,7 +241,7 @@ v3 中文第六轮返回 `not_satisfied`，但仍采纳七国范围，要求把�
 
 架构与最小性：对照现行 Conversation Application，原消息及冻结条件继续由 `InteractionTrace/Journal` 唯一保存，模型拥有解释。Service 传入按主体、对话筛选的实际历史；Intent 模块只读匹配与物化，Catalog 拥有中英文正文。匹配同时核对当前原消息前缀和前一轮实际最终答复，排除其他分支与当前 run；多份精确匹配记录均以其身份提供，不按随机 run ID 判断哪份正确；无匹配不编造历史。仍为一次 Intent、原 `InteractionIntentProposal`、原来源准入和冻结恢复，无新状态、字段、工具、模型阶段或业务写入口。目标 Verifier v1、claims、来源审读及全局 JSON 适配保持；六个既有文件承担生产变化，替换旧正文，不留实验开关，无主链协议或权限变化，不新增 ADR。
 
-复用 [LLM 决策实践](../../../.agents/skills/design-llm-decisions/references/open-source-practices.md)的清楚任务、真实输入和实际消费者，以及 [smolagents／OpenHands](../../agentRef/verification-and-observability.md#8-独立核验的价值与标准来源)的原任务与实际历史分工。不移植额外 Agent 或 Goal 状态，参考不证明本例修复。该候选同时改变任务说明、Markdown 包装和上轮解释交接，只评价组合，不单独归功于某个标题。
+复用 [LLM 决策实践](../../agentRef/llm-decision-practices.md)的清楚任务、真实输入和实际消费者，以及 [smolagents／OpenHands](../../agentRef/verification-and-observability.md#8-独立核验的价值与标准来源)的原任务与实际历史分工。不移植额外 Agent 或 Goal 状态，参考不证明本例修复。该候选同时改变任务说明、Markdown 包装和上轮解释交接，只评价组合，不单独归功于某个标题。
 
 比较身份 `.tmp/ci29/`，编辑前已封存源码 baseline 和用户工作树。原用户英文题目、会话、上轮真实运行、当前实际执行依据及确切稿件固定。通过生产函数生成并准入新 Intent，随后将实际 criteria 原样交现有目标工具；初始上轮条件来自该历史阶段，不声称候选已经连续改写全部前五轮。不注入参考答案、Judge、参考程序或理想反馈。本次是连续真实阶段 Offline Eval，不冒充 Product E2E、writer 修订或完整 task2 修复。
 
@@ -286,7 +286,7 @@ v3 中文第六轮返回 `not_satisfied`，但仍采纳七国范围，要求把�
 
 最小改动：仅在 Service 的既有分析路径取消前置提取、上一轮条件及辅助要求区消费，将原目标理解职责合入具名中英文主循环资源。原模型接口、工具协议、执行治理、AnswerResult、Completion、单一目标核验代码和其他研究消费者保持；Runtime 本次配置 none。没有新增模型阶段、持久状态、类型或第三方依赖。中文为正式运行 Prompt，英文镜像同步注册，不跨语言外推语义效果。
 
-参考采用 [LLM 决策实践 §4](../../../.agents/skills/design-llm-decisions/references/open-source-practices.md#4-任务理解不自动形成前置调用)中已核对的 Hermes 与 DeepSeek Harness：主循环依据真实消息和工具结果完成理解与行动，不固定先抽取 criteria。本工程继续保留既有授权、容量、Artifact、反馈及恢复边界，不移植其他 Agent 或框架，也不以减少调用推定语义改善。
+参考采用 [LLM 决策实践 §4](../../agentRef/llm-decision-practices.md#4-任务理解不自动形成前置调用)中已核对的 Hermes 与 DeepSeek Harness：主循环依据真实消息和工具结果完成理解与行动，不固定先抽取 criteria。本工程继续保留既有授权、容量、Artifact、反馈及恢复边界，不移植其他 Agent 或框架，也不以减少调用推定语义改善。
 
 验证身份 `.tmp/u630/`，编辑前源码与用户工作树封存为 before。修改后先做 Catalog、lint、层次、文档及差异检查，再冻结新源码，通过原正式 HTTP 采集器连续运行 task2 原始前六轮。固定上一轮 MiniMax-M3.1-Flash／adaptive＋medium、32,768 输出、1M 配置窗口、8,192 协议预留及通用 Docker 镜像；每轮仍为原 40 次主决策、256 工具、4 Agent、3600 秒。本次新任务总限 10M 已知 tokens，独立评分另限 300,000；上一阶段 2,675,270 及更早费用原样另计。按自主决策 §3.1 单次完整六轮验收，不改为局部十次回放；语义不通过仍完成其余已授权轮次，不补样替换，不在冻结运行中改 Prompt。服务、权限、环境或预算停止按原 EVD 归因，不输入旧答案续跑。
 

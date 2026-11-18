@@ -11,10 +11,15 @@ from pathlib import Path
 import runpy
 import shutil
 import subprocess
-from urllib.error import HTTPError
+from uuid import uuid4
+
+import httpx
 
 from evals.Toolathlon import runner
 from evals.Toolathlon.confirmation_probe import mapping, snapshot
+from evals.Toolathlon.workspace_inputs import upload_local_workspace_attachments
+from evals.conversation_http import UNVERIFIED_FLOW, effective_structured_model, submit_turn
+from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest
 
 
 REVISION = "9be8d8fe07a497b18ee61e3f2ae694e9797f39eb"
@@ -148,6 +153,8 @@ print(json.dumps({"passed": bool(passed), "detail": detail}))
     return json.loads(result.splitlines()[-1])
 
 def _run(args, report: dict) -> bool:
+    session_id = "toolathlon-" + uuid4().hex
+    report["session_id"] = session_id
     case = CASES[args.scenario]
     task = args.upstream / "tasks/finalpool" / args.scenario
     revision = subprocess.check_output(("git", "-C", str(args.upstream), "rev-parse", "HEAD"), text=True).strip()
@@ -180,23 +187,21 @@ def _run(args, report: dict) -> bool:
             resources, workspace, deliverables, wrapper, args.output, text_reader=case.text_reader,
         )
         report["mappings"] = {server["server_id"]: server["tools"] for server in servers}
-        env = runner.product_environment(
-            args.output, runner.postgres_url(database), servers, args.model_env,
-            feature_flags=runner.FeatureFlags(goal_verification=False, answer_verification=False),
-        )
+        env = runner.product_environment(args.output, runner.postgres_url(database), servers, args.model_env)
         budget = runner.configure_interaction_budget(env, args)
         env.update(
-            PERSONAL_AGENT_ANSWER_RESULT='{"writer":"direct"}',
             PERSONAL_AGENT_E2E_TRACE_DIR=str(args.output / "e2e"),
             PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR=str(args.output / "product"),
         )
         report.update(
-            model=env["STRUCTURED_MODEL"], token_budget=budget.max_total_tokens,
+            token_budget=budget.max_total_tokens,
             model_turn_limit=budget.max_model_turns, tool_call_limit=budget.max_tool_calls,
+            evidence_class=UNVERIFIED_FLOW, release_eligible=False,
         )
         with runner.product(args.output, env) as (base, process):
             if not runner.wait_for_product(base, process, 120):
                 raise RuntimeError("Product Web process exited before startup.")
+            report["model"] = effective_structured_model(args.output)
             sample = next(iter(sorted(workspace.glob("*.pdf"))))
             report["pdf_preflight"] = _tool(base, "pdf.read_pdf_pages", {
                 "pdf_file_path": f"/case/{sample.name}", "start_page": 1, "end_page": 1,
@@ -209,13 +214,16 @@ def _run(args, report: dict) -> bool:
                 and snapshot(workspace) == initial and snapshot(deliverables) == {}
             )
             if report["preflight_passed"]:
-                try:
-                    report["turn"] = runner.request(base, "/api/conversation/turn", {
-                        "user_id": USER, "conversation_id": "toolathlon-" + args.scenario,
+                refs = upload_local_workspace_attachments(base, workspace, args.output, user_id=USER)
+                response = submit_turn(base, ConversationTurnRequest.model_validate({
+                        "user_id": USER, "session_id": session_id,
                         "messages": [{"role": "user", "content": question}],
-                    }, timeout=600)
-                except HTTPError as error:
-                    report["turn_error"] = {"status": error.code, "detail": json.load(error)}
+                        "input_artifact_refs": refs,
+                    }), timeout=600)
+                if response.is_success:
+                    report["turn"] = response.json()
+                else:
+                    report["turn_error"] = {"status": response.status_code, "detail": response.json()}
     report["remote_calls"] = _record_calls(args.output)
     report["model_trace"] = _record_model(args.output)
     report["input_unchanged"] = snapshot(workspace) == initial
@@ -242,7 +250,7 @@ def main() -> int:
     report = {"scenario": args.scenario}
     try:
         report["passed"] = _run(args, report)
-    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, httpx.HTTPError) as error:
         report.update(passed=False, environment_error=f"{type(error).__name__}: {error}")
     finally:
         (args.output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

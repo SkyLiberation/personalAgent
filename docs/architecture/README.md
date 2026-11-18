@@ -8,7 +8,8 @@
 | --- | --- | --- |
 | 定义、设计或维护架构并判断业务适配 | [架构设计与维护 skill](../../.agents/skills/design-project-architecture/SKILL.md)、[ARC](../devSpec/architecture-ownership.md) | skill 提供业务驱动的设计与维护方法，ARC 拥有事实、分层及准入门禁 |
 | 理解系统与用户目标的执行链 | [当前核心架构](core-architecture-current-state.md) | 全局职责、决策与执行交接、产品边界 |
-| 区分当前主循环与待整理边界 | [现状混合点](core-architecture-current-state.md#31-当前主循环的职责混合)、[主循环边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md) | 现状与候选分开；候选说明研究、交付及核验适用性，不代表已实现 |
+| 定位 Session、Turn 与主决策步骤 | [当前生命周期坐标](core-architecture-current-state.md#32-会话运行与主决策的现状)、[Session、Turn 与 Step 替换规格](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)、[ADR 0054](../adr/0054-session-run-step-journal.md) | 架构正文说明现行实现，Spec 定义由服务端 Session 驱动的后续切换 |
+| 区分当前主循环与待整理边界 | [现状混合点](core-architecture-current-state.md#31-当前主循环的职责混合)、[主循环边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md) | 现状与候选分开；候选说明交付、核验适用性与上下文治理，不代表已实现 |
 | 定位修改位置、Port 和装配点 | [代码地图与依赖](code-map.md) | 实际包职责、功能入口、物理布局与架构约束的差异 |
 | 隔离日志、计量、重试等横切关注点 | [横切机制与 AOP](cross-cutting.md)、[编码质量 skill](../../.agents/skills/write-quality-code/SKILL.md#2-隔离切面保持业务主流程清楚)、[COD 横切约束](../devSpec/code-structure.md#51-横切关注点与显式组合) | 架构正文维护现有实现与装配，skill 拥有机制选择方法，COD 拥有强制边界 |
 | 切换或扩展模型 Provider | [模型调用组合](cross-cutting.md#2-模型调用的实际组合)、[配置绑定](../env.md#provider-选择与参数绑定) | 独立 provider 策略、显式工厂注入及实际模型绑定 |

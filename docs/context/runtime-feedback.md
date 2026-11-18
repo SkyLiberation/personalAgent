@@ -13,7 +13,7 @@
 
 Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工具调用中两次把同一页码传为字符串。第 11 轮的实际请求带有上一轮配对的整数示例，模型仍原样重试。最早失败点是 Application 的动作解码，MCP 未收到这两次调用。已有反馈能解释拒绝，复审后用字段级读取契约处理含义唯一的表示差异。PydanticAI 固定版本的 Toolset 装配字段验证器，ToolManager 在执行前读取已验证参数。本工程采用该边界分工，继续限制可转换的字段及表示。[Toolset 装配](https://github.com/pydantic/pydantic-ai/blob/922ee561846333665a5bd5391e175b4b20867667/pydantic_ai_slim/pydantic_ai/toolsets/function.py#L779-L789) · [ToolManager 参数读取](https://github.com/pydantic/pydantic-ai/blob/922ee561846333665a5bd5391e175b4b20867667/pydantic_ai_slim/pydantic_ai/tool_manager.py#L566-L579)
 
-本地工具映射可逐字段允许规范十进制整数字符串。Toolathlon 的 PDF 页范围读取允许 `start_page` 和 `end_page`，PDF 内容搜索允许 `page_size`。`university-course-selection` 的真实调用曾以字符串 `"40"` 提交该页大小，上游声明为可选整数。模型收到的整数声明和原始响应均保留。动作解码在形成 Proposal 前把已允许字段的标准整数字符串读为整数，沿用已有提示所用的 18 位限制。保留 Schema 已接受的原生整数和可空值。小数、布尔、非标准字符串、缺失必填字段与超出 Schema 约束的值仍走原拒绝与反馈。Application 仅从本次已封存的动作定义读取许可。Admission、权限判断与 MCP 继续消费原内部契约的参数。[原始失败](../problems/toolathlon-verified.md#预检受阻的-14-个用例重跑)
+本地工具映射可逐字段允许规范十进制整数字符串。Toolathlon 的 PDF 页范围读取允许 `start_page` 和 `end_page`，PDF 内容搜索允许 `page_size`。`university-course-selection` 的真实调用曾以字符串 `"40"` 提交该页大小，上游声明为可选整数。模型收到的整数声明和原始响应均保留。动作解码在形成 Proposal 前把已允许字段的标准整数字符串读为整数，沿用已有提示所用的 18 位限制。保留 Schema 已接受的原生整数和可空值。小数、布尔、非标准字符串、缺失必填字段与超出 Schema 约束的值仍走原拒绝与反馈。Application 仅从本次已封存的动作定义读取许可。Admission、权限判断与 MCP 继续消费原内部契约的参数。[原始运行](../../.tmp/ta14-rerun-1111/batch-01/university-course-selection/report.json)
 
 工具动作解码、类型修复提示和文稿坐标共用 Kernel 的十进制整数字符串读取函数。工具解码和修复提示沿用有符号整数及 18 位限制，文稿坐标沿用正整数表示。调用方继续拥有字段许可和数值约束，统一函数只识别并读取数字表示。[共用读取函数](../../src/personal_agent/kernel/decimal_integer.py) · [Toolathlon 映射装配](../../evals/Toolathlon/runner.py)
 
@@ -25,7 +25,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 
 ## 1. 反馈进入 Context 的位置
 
-- **协议拒绝发生在执行前。** 整批未执行。有合法调用身份时，原调用及配对工具结果进入下一次主循环请求。原交换无法配对时，通过执行输入附上拒绝信息，并在适用分支保留被拒原响应。目标待维护时遇到未声明动作，改用原决策位置的单条系统消息，给出实际被拒名称、整批状态和当次允许动作。[原生历史投影](../../src/personal_agent/application/conversation/model_history.py) · [主请求构造](../../src/personal_agent/application/conversation/service.py)
+- **协议拒绝发生在执行前。** 整批未执行。有合法调用身份时，原调用及配对工具结果进入下一次主循环请求。原交换无法配对时，在当前运行的原生交换后发出独立 Runtime 反馈，并在适用分支保留被拒原响应。目标待维护时遇到未声明动作，改用原决策位置的单条系统消息，给出实际被拒名称、整批状态和当次允许动作。[原生历史投影](../../src/personal_agent/application/conversation/model_history.py) · [主请求构造](../../src/personal_agent/application/conversation/service.py)
 - **业务准入可逐项拒绝。** 同批其他获准动作仍可能执行。被拒项、同批实际结果和未接纳的控制动作各自沿原调用回传。需要单独确认的知识操作混入其他业务动作时，运行系统在派发前拒绝整批业务动作。[动作准入与派发](../../src/personal_agent/application/conversation/service.py)
 - **执行与核验反馈跟随实际观察。** 工具失败、资料不可用和核验退回可以进入主循环的执行输入或原交互后的系统反馈。仍然有效的失败及其修复按原时间顺序继承。任务核验开启时，目标核验与回答核验各自接收本职责的判决及后续修复。[上下文模式](agent-loop.md#3-角色历史与压缩边界) · [核验反馈组装](../../src/personal_agent/application/conversation/verification_context.py)
 - **适配层修复使用原请求及同次被拒响应。** 结构化输出修复将原响应与校验信息放入下一次模型请求。有原生调用时保留配对，无合法调用身份时保留可用的原响应数据。主循环关闭适配层的自动动作修复额度，应用层负责该循环的动作纠正。[模型适配](../../src/personal_agent/infra/structured_model.py) · [主循环请求](../../src/personal_agent/application/conversation/service.py)
@@ -72,7 +72,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | 读取、搜索、知识查询、一般工具或子 Agent 未装配或当前不可用 | 指明实际工具或 Agent 名称，要求选择可用能力或如实说明限制。部分专用知识入口只给出说明限制的出口。 |
 | 澄清调用混入其他动作或问题参数不合法 | 整批拒绝。确需用户补充时，单独调用澄清并填写一个具体问题。测试模式尝试调用已禁用的澄清时，按未声明工具退回并提示使用当前可用动作。 |
 | 专用知识动作、文件读搜或已登记工具参数校验失败 | 保留原调用和异常详情，要求只改参数以满足本次声明的 Schema。可修复程度取决于具体异常是否写出字段、错误值及约束。 |
-| 文件引用不在当前任务输入或已提交回执允许的集合 | 要求使用当前输入或已提交回执提供的确切 `resource_id`。 |
+| 文件引用不在当前任务输入或已提交回执允许的集合 | 要求使用当前输入或已提交回执提供的确切 `file_path`。 |
 | 相同抓取请求已有外置结果，又重复抓取 | 按原调用 ID 配对返回「重复工具调用，本次未执行。」 |
 | 当前交互已有成功的个人知识检索或知识清单，又重复调用 | 要求消费当前成功的检索或清单结果继续工作。 |
 | 保存知识或准备删除知识与其他动作并发提出 | 给出实际动作数量，单独重提已配对的知识操作，等待用户确认。 |
@@ -94,14 +94,13 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | --- | --- |
 | 已提交的附件或原件无法恢复 | 给出具体资源引用，说明原件不可用且未替换。使用仍可用原件继续，恢复后再读，或如实说明缺失。 |
 | 工具长结果被外置，或保存原件失败 | 限长回执、可用原件和失败原因见[工具输出超限的处理](tool.md#2-外置原件并返回限长回执)。 |
-| 试图交付，但本轮先前抓取的卸载输出没有被取回 | 指出当前不能以所提方式结束，并给出未读原件 ID。按下一次请求实际声明的动作提示用 `keyword` 搜索或按 `start_line` 读取。没有可用动作时说明边界。 |
 | 读取或搜索的资源 ID 不可用、重复绑定、越权或快照版本不匹配 | 返回文件不在可读集合、对应多个确切引用、归属不符或快照不匹配。原调用提供请求 ID。找不到版本、原件不存在或原件不是可读 UTF-8 时返回对应异常，部分存储错误仅附异常类型和文字。 |
 | 文件读取起始行或列越界 | 坐标预检先返回 “text position is beyond EOF” 或 “text position is beyond the line or inside a newline”。模型可见原请求位置，异常未带总行数或该行实际长度。带总行数的专用模板在此越界路径未被使用。 |
 | 读取容量不足以同时返回正文和续读参数 | 报告输出容量不足，未说明可执行的调整或替代读取方式。 |
 | 搜索命中位置超出原文、分页偏移超出匹配数、单条记录超容量 | 分别报告位置或分页错误。单条记录过大时给出按原资源读取的出口。偏移越界未返回实际命中数或可用起点。 |
 | 读取或搜索成功但只返回局部窗口，或可编辑文稿匹配范围被截断 | 说明实际返回行列、续读参数、原文范围及是否截断。搜索命中可用于读取起点。匹配过多可缩小关键词。零命中和当前窗口结束均不证明全文已读。 |
 | 文件检查或文稿写入被拒 | 检查历史快照、不可见资源及缺接受记录按各自错误返回。写入错误还包括文件名与媒体类型不符、大小超限、补丁基稿不属于允许集合、基稿格式不支持、位置越界、范围交叠或重复插入。反馈使用实际异常及原调用，大小相关文字给出 UTF-8 字节上限。 |
-| Python 执行被拒或已执行但失败 | 缺授权、请求绑定不一致、输入所有者或长度不符、预算耗尽等返回实际原因。实际执行回执给出状态、退出码或诊断、程序和输入清单及可用输出引用。输出达到捕获上限、无效 UTF-8 或无法恢复时分别说明实际保留的字节和可读性。未知终态需核对原执行。 |
+| Bash 命令执行失败或被拒 | 原生工具消息带回 stdout、stderr 和退出码，超时与输出截断按进程事实标记。授权、预算或工作区快照失败时返回实际错误。工具回执关联原输出文件。 |
 | 网页读取或搜索失败 | 按实际结果返回访问限制、无正文、上游抓取失败、临时网络错误或未交付结果。网页读取错误由工具声明、原 URL 与错误详情共同提供判断依据。搜索服务的动态错误沿工具失败回传。 |
 | 图谱检索未装配或不可用，或指定的笔记、研究运行不可访问 | 分别回传“图谱未配置或未启用”“图谱检索不可用”、实际图谱错误、“未找到该用户可访问的笔记”或“未找到该用户的 Research run”。原调用提供被查 ID。反馈本身不提供替代材料或新的合法 ID。 |
 | MCP 工具被允许调用，但包含未声明参数，或远端返回不合法结果 | 额外参数反馈列出实际字段。远端标记失败时只说明该工具返回错误结果。输出结构不符时附失败位置及具体校验错误，结构化内容与 JSON 文本不同时指出二者冲突。 |
@@ -112,7 +111,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | 冻结或最终检索实验违反业务边界 | 反馈区分只能冻结开发结果、查询事实覆盖不足、输入排名不符、基线输入不可信、候选源码或配置身份不一致、最终数据快照变化、开发与最终查询重叠、实现或模型不符及候选身份不符。 |
 | 检索实验环境或执行状态异常 | 回传部署、输入快照、私有评分或文本投影身份变化、时钟或期限错误等具体异常。返回回执时保留实际状态和诊断入口。终态未知时说明原预留额度仍保留。交付还要检查原执行、冻结与结果事实，缺口见下节。 |
 
-[工具执行与读搜](../../src/personal_agent/application/conversation/service.py) · [读取窗口](../../src/personal_agent/application/conversation/artifact_reading.py) · [搜索窗口](../../src/personal_agent/application/conversation/artifact_search.py) · [读搜文案](../../src/personal_agent/kernel/prompt_templates/reading_feedback.py) · [文稿约束](../../src/personal_agent/application/artifacts/text_coordinates.py) · [Python 回执](../../src/personal_agent/tools/execute_python.py) · [工具网关](../../src/personal_agent/governance/gateway.py) · [权限判定](../../src/personal_agent/governance/policy/engine.py)
+[工具执行与读搜](../../src/personal_agent/application/conversation/service.py) · [读取窗口](../../src/personal_agent/application/conversation/file_reading.py) · [搜索窗口](../../src/personal_agent/application/conversation/file_search.py) · [读搜文案](../../src/personal_agent/kernel/prompt_templates/reading_feedback.py) · [文稿约束](../../src/personal_agent/application/artifacts/text_coordinates.py) · [Bash 回执](../../src/personal_agent/tools/bash.py) · [工具网关](../../src/personal_agent/governance/gateway.py) · [权限判定](../../src/personal_agent/governance/policy/engine.py)
 
 [网页读取](../../src/personal_agent/tools/web_read.py) · [图谱检索](../../src/personal_agent/tools/graph_search.py) · [知识读取](../../src/personal_agent/tools/knowledge_lifecycle.py) · [研究运行读取](../../src/personal_agent/tools/research_management.py) · [MCP 输出检查](../../src/personal_agent/tools/mcp.py) · [Agent 执行](../../src/personal_agent/agents/gateway.py) · [实验执行](../../src/personal_agent/application/retrieval_experiment/service.py) · [实验边界](../../src/personal_agent/application/retrieval_experiment/rules.py)
 
@@ -120,27 +119,21 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 
 | 出现场景 | 模型收到的反馈及处理出口 |
 | --- | --- |
-| 普通回答没有非空可见正文，或响应形态不符合当前回答模块 | 返回具体解码错误，要求用当前模块接收的完整正文或合法原生动作重提。研究模块需要沿当前选证及论断操作提交。 |
-| 提交不支持的回答操作、缺少当前研究版本或使用错误基稿 | 返回相应操作或版本错误，要求按当前 Schema 与合法基稿 ID 重提。整次操作保持未应用。 |
+| 回答没有非空可见正文，或提交参数不合法 | 返回具体的解码或参数错误，模型可用完整正文或当轮声明的 `control_submit_final` 重提。 |
 | 普通答案、核验前稿件或报告中的引用不合法 | 指出不可见引用、缺行、无效范围或来源缺失。指向原提交，要求选用已返回原文或补读后重新提交完整稿件及引用。 |
-| 研究选证不完整、条目重复、引用不属于当前材料或关联了错误论断 | 返回实际错误，要求覆盖所有验收项且每项恰好一次，只关联当前论断及已返回引用。 |
-| 研究选证或写作模型决定证据不足、返回行动阶段 | 将其实际原因交给主循环，要求用当前可用动作取证，取得新材料后重新选证并沿当前版本提交。具体缺口依赖模型输出中的原因。 |
-| 研究编辑被拒 | 返回已有集合被重新创建、基准版本不匹配、论断或回答段 ID 不在当前版本、删除最后一条论断、片段范围无效、改空论断或引用不在已绑定证据集等具体原因。要求使用当前完整版本、精确片段和可见引用，原集合保持。 |
-| 研究已保存但未提交完整最终回答 | 提醒沿当前版本提交完整答案或继续取证。仅修改回答时使用当次声明的重核动作。 |
-| 待交付研究答案与当前可交付版本不一致 | “只能交付当前完整研究版本的确切回答，并满足本次装配的核验契约。”要求沿当前版本修订或补证。反馈没有具体区分稿件不一致与缺少当前合格回答。 |
 | 来源核验发现证据不足以支持稿件中的声明 | 返回被拒稿、被检查段及实际发现，给出补充已读引用、继续取证或修订结论的出口。来源判决失败无法直接证明原文不存在。 |
 | 普通或任务回答核验未通过 | 返回实际判决、逐项结果及修订反馈。主循环保留对应稿件并重提修复。复用同一失败回执时另记本次拒绝，附原回执身份和实际修订意见。 |
 | 核验结果未按当前验收编号恰好覆盖每一项 | 报告无法生成核验回执。普通回答侧可收到该失败工具结果。目标侧若拿不到与稿件匹配的真实回执，会以依赖不可用结束。 |
 | 检索实验或 Python 报告交付不完整 | 返回实际缺口列表及相关引用，要求补齐已定位的执行、材料或报告缺口。包括报告未提交或还有反馈、提交身份不符、最终答案与报告不同、引用不合法、Python 执行未决、输入或输出原件不可恢复。检索实验还覆盖真实成功记录、最终评测缺失或歧义、冻结和文件缺失、候选源码缺失、开发实验不全、选中身份不符、数据集分区、基线及选中结果、全量覆盖和逐查询事实。 |
 
-[回答模块](../../src/personal_agent/application/conversation/answer_results.py) · [研究编辑和核验](../../src/personal_agent/application/conversation/research.py) · [来源引用](../../src/personal_agent/application/conversation/citations.py) · [核验工具](../../src/personal_agent/tools/interaction_verifier.py) · [报告完成检查](../../src/personal_agent/application/conversation/research_delivery.py) · [实验缺口](../../src/personal_agent/application/retrieval_experiment/delivery.py)
+[回答模块](../../src/personal_agent/application/conversation/answer_results.py) · [来源引用](../../src/personal_agent/application/conversation/citations.py) · [核验工具](../../src/personal_agent/tools/interaction_verifier.py) · [报告完成检查](../../src/personal_agent/application/conversation/research_delivery.py) · [实验缺口](../../src/personal_agent/application/retrieval_experiment/delivery.py)
 
 ## 7. 状态回执与终止边界
 
 - **接纳或准备成功。** 目标读取回传当前版本和条目。目标维护回传实际接纳的快照，按开关提供真实判决或明确未核验。通过的核验保留类型、状态、身份和对应提交。计划接纳及知识命令准备分别报告真实状态。[目标回执](../../src/personal_agent/application/conversation/goal_maintenance.py) · [通过反馈投影](../../src/personal_agent/application/conversation/citations.py)
 - **用户确认和直接结束。** 等待计划确认、准备保存或删除、用户取消或确认后的执行结果，由用户交互或实际执行回执承载。明确不支持后台继续、运行时限或总预算耗尽、重复同类错误达到停止条件、服务方不可用、容量拒绝、记录恢复失败及无法恢复的核验依赖，按各自边界结束或报告失败。没有发起后续模型调用的分支不判为反馈注入缺失。[服务停止分支](../../src/personal_agent/application/conversation/service.py) · [运行消息](../../src/personal_agent/kernel/prompt_templates/service_feedback.py)
 - **历史压缩拒绝。** 来源、快照、覆盖范围或决策身份不匹配，原件导出失败，摘要为空、截断或没有缩减，来源变化与激活冲突，以及没有安全旧前缀，均按历史恢复或容量失败处理。摘要不激活，仍按原记录处理。[摘要处理](../../src/personal_agent/application/conversation/history_compaction.py)
-- **保留代码与当前路径。** 旧 `read_action_output` 窗口函数中的“读取参数过长，请缩短字面关键词”没有当前模型派发调用点。控制动作延期文案仍可渲染，当前源码没有生成该延期状态的调用点。通用网关的无待执行工具调用、仅内部流程使用的工具错误，以及订阅维护、更新笔记或重试运维任务等有专门暴露边界的反馈，按实际消费者区分。只有进入模型请求的内容才适用入模反馈审查。[工具入口](../../src/personal_agent/application/conversation/service.py) · [控制回执](../../src/personal_agent/application/conversation/model_history.py) · [能力暴露](../../src/personal_agent/governance/registry.py)
+- **内部反馈。**控制动作延期文案仍可渲染，当前源码没有生成该延期状态的调用点。通用网关的无待执行工具调用、仅内部流程使用的工具错误，以及订阅维护、更新笔记或重试运维任务等有专门暴露边界的反馈，按实际消费者区分。只有进入模型请求的内容才适用入模反馈审查。[工具入口](../../src/personal_agent/application/conversation/service.py) · [控制回执](../../src/personal_agent/application/conversation/model_history.py) · [能力暴露](../../src/personal_agent/governance/registry.py)
 
 ## 8. 表述审查
 
@@ -154,15 +147,14 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | 一批提交多个工作计划，或目标维护、回答提交混入其他动作 | 解码器已知道“最多一个计划”或“必须独占”，转交时使用“动作集合不符合声明的交互协议”或通用目标修复要求。对应分支没有字段诊断。 | **具体原因在交接中丢失。** 原批次能说明模型做了什么，反馈仍需说明应拆批还是只保留一个计划。 |
 | 输出修复的校验诊断超过 2,000 字符 | 仅拼接校验文字前 2,000 字符。修复提示仍要求纠正反馈列出的全部错误。 | **长诊断分支信息不全。** 截断可能去掉后续错误位置或约束，反馈没有给出裁剪范围。 |
 | 读取行列或搜索分页越界 | “text position is beyond EOF”“text position is beyond the line or inside a newline”或“搜索结果分页偏移超出匹配记录数”。原调用提供错误值，反馈未提供相应的合法边界。 | **缺合法范围。** 读取可给实际总行数或行长度，搜索可给匹配记录数及可用偏移。 |
-| 研究答案未满足当前可交付版本 | “只能交付当前完整研究版本的确切回答，并满足本次装配的核验契约。” | **缺具体差异。** 反馈未区分提交稿与已核验稿不一致、当前没有合格稿等条件，因而没有明确应重提哪一稿或先完成哪项核验。 |
 | 抽取的验收条件缺合法用户原文 | 提示“本次验收条件无法恢复到合法用户原文”，要求用户明确验收条件。当前反馈不附未接纳的具体条件或来源位置。 | **缺被拒对象。** 模型无法从这条反馈定位哪项条件需要澄清。 |
 | 后台要求无合法来源 | 一方面要求在当前对话继续，另一方面提示确有需要时请用户明确后台要求。当前服务对明确后台要求走不支持的结束分支。 | **出口描述缺能力边界。** 反馈应让模型知道补充说明可以澄清用户意图，但当前部署仍只能在对话内执行。 |
 | MCP 远端响应标记为错误 | “MCP tool {工具身份} returned an error result.” 该分支未交接远端错误内容，也未说明可采取的下一步。 | **只给失败状态。** 需要按实际响应给出可公开的原因及合法处理，远端无可用细节时说明这一事实。 |
 | 工具、读搜、Agent 或核验返回通用失败 | 分支仅转发异常文字或“工具未执行”“工具执行失败”等兜底消息。工具网关也有仅给“稍后再试”或执行超时秒数的文案。 | **按实际失败检查。** 具体异常可与原动作合用。只有兜底句或缺少合法下一步时，无法指导修复。 |
 
-[目标字节校验](../../src/personal_agent/application/conversation/goal_models.py) · [动作诊断投影](../../src/personal_agent/application/conversation/model_actions.py) · [协议修复截断](../../src/personal_agent/infra/structured_model.py) · [准入及延期处理](../../src/personal_agent/application/conversation/service.py) · [坐标预检](../../src/personal_agent/application/artifacts/text_coordinates.py) · [搜索范围](../../src/personal_agent/application/conversation/artifact_search.py) · [研究交付条件](../../src/personal_agent/application/conversation/answer_results.py)
+[目标字节校验](../../src/personal_agent/application/conversation/goal_models.py) · [动作诊断投影](../../src/personal_agent/application/conversation/model_actions.py) · [协议修复截断](../../src/personal_agent/infra/structured_model.py) · [准入及延期处理](../../src/personal_agent/application/conversation/service.py) · [坐标预检](../../src/personal_agent/application/artifacts/text_coordinates.py) · [搜索范围](../../src/personal_agent/application/conversation/file_search.py) · [检索实验交付](../../src/personal_agent/application/conversation/research_delivery.py)
 
-有具体修复路径的例子包括目标待维护时的未知动作拒绝、未读结果的具体资源回读、计划步骤绑定错误、引用缺行和已有产物后的依赖委托。它们分别提供实际名称及可用动作、资源及读取方式、错误步骤及合法 ID、缺失坐标及可见范围，或真实产物引用及下一步。语义核验的动态意见仍按每份报告判断。结构中存在修订字段只能证明承载可用，具体性取决于该次意见的内容。
+有具体修复路径的例子包括目标待维护时的未知动作拒绝、计划步骤绑定错误、引用缺行和已有产物后的依赖委托。它们分别提供实际名称及可用动作、错误步骤及合法 ID、缺失坐标及可见范围，或真实产物引用及下一步。语义核验的动态意见仍按每份报告判断。结构中存在修订字段只能证明承载可用，具体性取决于该次意见的内容。
 
 已复核 2026-11-04 归档的实发请求 `0d1533f8ad754b6e9c0cb4d5dc8e0266.http.request.json`。第 4 条消息是与原目标调用配对的工具反馈，包含目标未通过、逐项结果、实际修订意见及修复要求。该归档用于确认这次反馈的实际承载。当前文稿及开关分支按工作树源码审查，其余未触发分支保留为静态结论。[归档与证据范围](../optimization/completed/verification-context-goal-binding.md#决定性证据与边界)
 
@@ -174,7 +166,6 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 
 | 出现场景 | 原问题 | 当前做法 |
 | --- | --- | --- |
-| 未读原件就结束 | 反馈固定使用能力内部名和英文文案。真实请求声明的调用名带 `tool_` 前缀。 | 主循环从下一次请求的工具声明筛选允许该资源的动作，交回原件 ID 和可用动作。 |
 | 相同请求再次抓取 | `pw-104232` 第 19 轮的三条拒绝都指定了本地读搜工具。 | 当前请求只保留重复和未执行的事实，与被拒调用配对。模型从已有上下文和当前声明决定下一步。 |
 | 创建文稿、提交补丁或生成补丁后正文超过限制 | 三处错误文案另写固定数字 `65536`。 | 判断与文案都读取 `DRAFT_MAX_BYTES`。已用 UTF-8 边界反事实核对原有通过、失败和文字。 |
 

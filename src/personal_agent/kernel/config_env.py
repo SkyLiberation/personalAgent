@@ -216,9 +216,9 @@ def settings_from_env(settings_cls: type):
             else None
         ),
         prompt_language=os.getenv("PERSONAL_AGENT_PROMPT_LANGUAGE", "zh"),
-        python_execution_config_path=(
-            Path(os.environ["PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG"])
-            if os.getenv("PERSONAL_AGENT_PYTHON_EXECUTION_CONFIG")
+        bash_execution_config_path=(
+            Path(os.environ["PERSONAL_AGENT_BASH_EXECUTION_CONFIG"])
+            if os.getenv("PERSONAL_AGENT_BASH_EXECUTION_CONFIG")
             else None
         ),
         openai=OpenAIConfig(

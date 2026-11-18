@@ -77,8 +77,8 @@ def register_entry_stream_route(app: FastAPI, *, settings: Settings, service: Ag
                 "reply": answer,
                 "answer": answer,
                 "disposition": result.disposition,
-                "interaction_run_ref": result.interaction_run_ref,
-                "conversation_id": result.conversation_id,
+                "turn_id": result.interaction_run_ref,
+                "session_id": result.conversation_id,
                 "pending_confirmation": (
                     result.pending_confirmation.model_dump(mode="json")
                     if result.pending_confirmation is not None

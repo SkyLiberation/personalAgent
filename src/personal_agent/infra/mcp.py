@@ -186,38 +186,46 @@ class MCPJsonRpcClient:
                 ) from exc
             if not expect_response:
                 return {}
-            deadline = time.monotonic() + self.config.timeout_seconds
-            while True:
-                if process.poll() is not None:
-                    stderr = self._joined_stderr_tail()
-                    detail = f" stderr: {stderr}" if stderr else ""
-                    raise MCPError(
-                        f"MCP server {self.server_id} exited with code {process.returncode}.{detail}"
-                    )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise MCPError(
-                        f"MCP server {self.server_id} timed out waiting for {method}."
-                    )
-                try:
-                    response_line = self._stdout_queue.get(timeout=remaining)
-                except queue.Empty as exc:
-                    raise MCPError(
-                        f"MCP server {self.server_id} timed out waiting for {method}."
-                    ) from exc
-                if response_line is None:
-                    raise self._stdio_disconnected()
-                if not response_line.strip():
-                    continue
-                try:
-                    decoded = json.loads(response_line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(decoded, dict):
-                    continue
-                if decoded.get("id") != request_id:
-                    continue
-                return self._result_from_response(decoded, method)
+            return self._await_stdio_response(process, method, request_id)
+
+    def _await_stdio_response(
+        self,
+        process: subprocess.Popen[str],
+        method: str,
+        request_id: int,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + self.config.timeout_seconds
+        while True:
+            if process.poll() is not None:
+                stderr = self._joined_stderr_tail()
+                detail = f" stderr: {stderr}" if stderr else ""
+                raise MCPError(
+                    f"MCP server {self.server_id} exited with code {process.returncode}.{detail}"
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MCPError(
+                    f"MCP server {self.server_id} timed out waiting for {method}."
+                )
+            try:
+                response_line = self._stdout_queue.get(timeout=remaining)
+            except queue.Empty as exc:
+                raise MCPError(
+                    f"MCP server {self.server_id} timed out waiting for {method}."
+                ) from exc
+            if response_line is None:
+                raise self._stdio_disconnected()
+            if not response_line.strip():
+                continue
+            try:
+                decoded = json.loads(response_line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(decoded, dict):
+                continue
+            if decoded.get("id") != request_id:
+                continue
+            return self._result_from_response(decoded, method)
 
     def _ensure_process(self) -> subprocess.Popen[str]:
         if self._closed:

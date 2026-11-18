@@ -9,13 +9,11 @@ Prompt Registry 拥有可复用的版本化模板；业务事实、权限、执�
 | `structured.system`、`structured.repair.system` | JSON 输出的 Schema 说明与有界修复；具体承载由请求指定，意图提取使用 `prompted_json`，其他已迁移的内部 typed 能力使用原生输出工具 |
 | `conversation.interaction_intent` | `derive_interaction_intent` 的初次判断与后台来源修订共用正文／版本；提取相位和显式条件，区分当前任务与响应后后台要求，原消息仍拥有完整目标 |
 | `conversation.action` | Conversation 的原生消息／动作相位；可见正文或动作均由同一循环解释，Admission/Gateway 拥有准入与执行 |
-| `conversation.working_plan.description`、`conversation.answer.direct.delivery`、`conversation.research_entry.explicit` | 计划进度、普通 assistant 正文及带沟通／引用属性的原生提交；业务身份由 Runtime 绑定 |
+| `conversation.working_plan.description`、`conversation.answer.submit_description`、`conversation.answer.citation_repair` | 计划进度、带沟通状态和可选引用的原生提交，以及实际坐标校验失败后的修复反馈 |
 | `structured.native_tool.repair.system` | 原生typed输出的有界修复，继续调用本次输出工具修正参数；JSON消费者仍使用原`structured.repair.system`，不混用承载 |
-| `conversation.research_delivery_policy` | claims 选证／写作的适用操作和同稿出口，不引入第二循环 |
-| `conversation.plan_context`、`conversation.requirements` | 从当前清单及冻结验收条件物化只读 Context |
+| `conversation.plan_context`、`conversation.plan.recovery`、`conversation.requirements` | 物化计划工具回执、Step Context 的计划接续信息及冻结验收条件 |
 | `conversation.history_compaction` | HistoryCompactor 将闭合旧历史生成工作摘要，原 Journal／Artifact 保留事实与原文；当前接入及真实消费的证据边界见 [Context](topics/context-engineering.md#整体窗口与历史增长的当前边界) |
-| `conversation.time_budget_snapshot` | 有运行截止时，向主决策说明输入构造时的剩余秒数；无截止不注入，硬停止仍由运行系统执行 |
-| `conversation.research.support` | 一次检查当前完整 claims、实际最终回答与原用户目标；八类反馈交给原研究模型，空报告绑定当前输入 |
+| `conversation.context.budget`、`conversation.time_budget_snapshot`、`conversation.low_budget_warning` | 在主决策末尾的 Step Context 展示当次额度、适用的剩余秒数和低余额提醒。预算组件执行硬停止。 |
 | `interaction_verification.*` | 普通整稿核验；实际主体、条件、强度和否定范围与已提交原文对照 |
 | `web_search.description`、`web_read.description` | 工具的发现与正文读取契约；选择与回答来自当前用户任务 |
 | `conversation.read_artifact.description`、`conversation.search_output.description` | 实际正文坐标、读取覆盖、搜索续页及超长行边界 |
@@ -24,15 +22,13 @@ Prompt Registry 拥有可复用的版本化模板；业务事实、权限、执�
 | `evidence_rerank.system/user` | 显式装配的 LLM reranker 只排序已有 evidence ID |
 | `graphiti.custom_extraction` | Graphiti 抽取适配；知识准入仍由 Personal Knowledge 拥有 |
 
-Conversation 的主要消费者位于 [service.py](../src/personal_agent/application/conversation/service.py)、[model_actions.py](../src/personal_agent/application/conversation/model_actions.py)及 [research.py](../src/personal_agent/application/conversation/research.py)。分层与实际模型请求的构造边界见 [Runtime](topics/runtime.md)、[Context](topics/context-engineering.md)与[核验专题](topics/verification-and-completion.md)。注册项是否被消费须从调用链核实，注册本身不代表生产接入。
+Conversation 的主要消费者位于 [interaction_prompt.py](../src/personal_agent/application/conversation/interaction_prompt.py)、[service.py](../src/personal_agent/application/conversation/service.py)及 [model_actions.py](../src/personal_agent/application/conversation/model_actions.py)。分层与实际模型请求的构造边界见 [Runtime](topics/runtime.md)、[Context](topics/context-engineering.md)与[核验专题](topics/verification-and-completion.md)。注册项是否被消费须从调用链核实。
 
-## 研究相位的协作
+## 答复提交与领域交付
 
-普通外部研究选证读取原会话、冻结验收项、当前研究及实际返回资料，选择下一步取证或写作；初稿 Schema 不允许声明已有 claim 回答。研究 writer 负责 claims 与最终回答，已有段落用当前 aN 引用由 Runtime 恢复，改写段落才生成新文字。准入原子检查版本和引用，claims 修改未同时提供新回答时清空旧回答。
+中英文 `conversation.action` 指示模型默认直接输出回答正文。需要声明限制、失败或绑定实际读取的来源时，按 `control_submit_final` 的当次 Schema 提交。两种输入由 Runtime 恢复为同一类候选，适用反馈沿原主循环接续。[ADR 0055](adr/0055-unified-conversation-answer.md)
 
-部署绑定的检索实验由 `conversation.research_entry.explicit` 说明原生提交与文件检查，不进入下述 claims 及语义核验链；引用绑定保留。领域范围见 [ADR 0037](adr/0037-experiment-submission-first-delivery.md)，模型协议按 [ADR 0045](adr/0045-native-intent-loop-and-recorded-model-output.md)。
-
-统一核验实际完整版本的来源支持、回答与 claims 的一致性，以及仅基于最终回答的目标满足。缺失回答由 Runtime 拦截；有发现则原研究模型修订或补证，无发现则 Completion 检查当前版本和确切正文后交付。旧 Coverage、synthesis、研究 Final 及反向重开均已删除；普通回答保持原核验路径。当前职责由[核验专题](topics/verification-and-completion.md)拥有，规格和验证边界见[统一 Spec](optimization/to_verify/research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)。
+部署绑定的检索实验由领域提示说明提交与文件检查，沿同一输入协议交回候选。领域范围见 [ADR 0037](adr/0037-experiment-submission-first-delivery.md)。
 
 ## 修改与验收
 

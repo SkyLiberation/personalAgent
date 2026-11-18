@@ -8,4 +8,4 @@
 | `ARCHIVE-2` 原件与恢复语义保持 | 完整尝试 ID 保存在响应原件和 Trace 引用中。Journal 经原锁和原子重命名写入，读取时按连续整数序号恢复并核对身份及摘要。用真实快照重开后，引用和字节一致。缺号、重复尝试、同序号不同内容均被拒绝。补记已写入但未提交引用的响应时，只计费一次。 |
 | `ARCHIVE-3` 评测消费者跟随新布局 | 两处 Toolathlon 请求采集共用文件定位，回放读到了相同请求摘要。LongDS 路径预检按新布局估算最长临时文件，同机接受浅目录并拒绝超长目录。 |
 
-局部验收用一组真实归档回放，回放未调用模型。随后在与原运行等长的输出目录下重跑 `quantitative-financial-analysis`，对话返回 HTTP 200，20 份模型响应均写入 198 字符的路径。整例评分结果见[问题记录](../../problems/toolathlon-verifierd.md#工具参数和错误恢复)。后续真实样本若再因归档长度失败，以新的路径和失败边界重新定位。[回放报告](../../../.tmp/pa-path-1113/report.json) · [Journal 实现](../../../src/personal_agent/application/conversation/journal.py)
+局部验收用一组真实归档回放，回放未调用模型。随后在与原运行等长的输出目录下重跑 `quantitative-financial-analysis`，对话返回 HTTP 200，20 份模型响应均写入 198 字符的路径。后续真实样本若再因归档长度失败，以新的路径和失败边界重新定位。[回放报告](../../../.tmp/pa-path-1113/report.json) · [整例评分](../../../.tmp/ta-notion-mcp-1112/remaining-verify/quantitative-financial-analysis/grader.log) · [Journal 实现](../../../src/personal_agent/application/conversation/journal.py)

@@ -1,4 +1,57 @@
-# 模型自主 Python 数据分析工具 Spec
+# 脚本执行工具 Spec
+
+## Bash 替换脚本执行工具
+
+2026-11-17 决定。GDP 第 9、10、12、13、16 步反复抄错输入文件的会话目录名，Python 进程尚未启动，模型累计消耗 101.4 秒。本轮用模型可见的 `bash` 取代 `execute_python` 及 `input_files`，支持在同一现有隔离容器执行普通 shell 命令。[原始运行报告](../../../.tmp/execution-input-removal-20261116/gdp/gdp-cr5-analysis/personal/report.json)
+
+| 需求 | 设计和通过条件 |
+| --- | --- |
+| BASH-1 唯一工具 | 相同会话授权装配 `bash`。模型提交命令和用途说明，默认工作目录为容器内 `/workspace`。允许相对的子目录作为单次命令工作目录。正式主请求只声明这一脚本工具，Toolathlon 和 LongDS 复用共用 HTTP 入口。 |
+| BASH-2 输入和隔离 | Journal 在接受调用时从当前任务可读的 Artifact 引用冻结工作区。工具卸载文件沿用回执中的相对路径，用户附件用 `attachments/` 下的可发现文件。容器只读挂载该快照，沿用非 root、限额和临时 scratch。网络默认关闭，按[部署许可](../../adr/0056-bash-workspace.md)显式绑定时使用任务网关网络。命令、快照输入版本及摘要绑定原 Journal 生命周期。 |
+| BASH-3 结果 | 模型通过原生工具回执消费 stdout、stderr、退出码及超时状态。进程返回非零时保留原 stderr。错误如实来自实际执行或既有运行时准入。原 Artifact 保存确切命令、输入清单和双流。宿主缓存使用短文件名，容器保留原工作区相对路径，未知执行沿原身份恢复。 |
+| BASH-4 共享工作区 | 部署可在会话许可中绑定已启用的 MCP Server 和对应 Docker 卷子目录。该目录是命令工作区与可写交付位置。独立的冻结快照挂载在 `/run/personal-agent-inputs`，工具说明按实际装配提供两个路径。Toolathlon 的准备与验收由 [MCP 接入 Spec](../../mcpDesign/README.md#可比的执行环境)维护。 |
+
+源机制采用 DeepSeek Harness 的普通 shell 调用、共同工作目录和基于进程的回执。本项目已有明确的隔离和重放边界，因此继续使用现有 ToolExecutor、Conversation Journal、Artifact 和 Docker 适配器。检索实验只在其固定 Python worker 中解析排名输出，继续使用同一底层 Docker runner。旧工具、旧模型参数及专用反馈模板随替换退役。[DeepSeek Shell](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/shell/tool-bash/src/index.ts#L413-L433) · [结果格式](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/shell/tool-bash/src/render.ts#L27-L65)
+
+验收先用真实 GDP 第 8 至 9 步的封存原件检查可发现路径、成功读取及 Bash 命令读错文件时的原始 stderr。现有身份只读保存。再通过 Toolathlon 正式 GDP 原题和相同评分器执行一次，沿用 1,200 秒会话预算。记录工具注册、首次成功读原件、实际写入、答复及评分，整例判据为 100/100 并返回答复。LongDS 的工具和许可同步迁移，按已知真实材料检查正式入口读取能力与作用域。
+
+原件回放在真实 Docker 中覆盖目录发现、相对工作目录、双流和超时。GDP 两份封存文件通过 Bash 读取，容器中计算的 SHA-256 与源文件一致。命令读取不存在的文件时，stdout 仍保留、stderr 返回 Bash 原始错误，退出码为 1。限时命令的部分 stdout 可读，状态为 `timed_out`。[GDP 原件回放](../../../.tmp/bash-execution-20261117/replay-final/report.json)
+
+LongDS 的附件检查经共用 HTTP 入口上传 Netflix 原始 CSV。授权会话两次 Bash 执行成功，最终答复给出正确 SHA-256。未授权会话的两次模型请求均缺少 Bash 声明，没有执行记录。该检查覆盖附件及授权边界。[LongDS 检查](../../../.tmp/bash-execution-20261117/longds-final/report.json)
+
+GDP 最新正式复跑用 Bash 读取原件，完成表格写入并返回正式答复，达到整例验收判据。[最新同题对比](../../problems/toolathlon/agent-comparison.md#正式配置与原件预载定向复验)
+
+## 在同一 Turn 内复用 Bash 容器
+
+本节记录容器复用契约及历史验收。Conversation 的 Turn 身份与恢复入口由[轮次生命周期规格](conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)定义。
+
+基线：原 Bash 适配器每次调用创建一个容器。Toolathlon Canvas 排考的正式运行有 8 次 Bash 执行、8 个不同容器。普通授权配置的 LongDS 附件验证有 2 次执行、2 个不同容器。两组容器都在命令结束后删除。最早责任在 Docker 执行适配器。见 [Canvas 运行](../../../.tmp/mcp-sandbox-1117/run/canvas-arrange-exam/personal/report.json)、[LongDS 运行](../../../.tmp/bash-execution-20261117/longds-final/report.json)及 [逐次建容器的基线回放](../../../.tmp/bash-run-reuse-20261117/red-live2/report.json)。
+
+在 Windows Docker Desktop 的 Linux Engine 29.9.2 上，用本地两种镜像各做 5 组配对。两侧均非 root、只读根目录、无网络，执行同一条 `bash -c true`。从宿主调用 `docker run --rm` 或 `docker exec` 起计至命令返回。普通镜像中位数为 484.5 对 180.9 毫秒，Toolathlon 镜像为 443.4 对 170.1 毫秒，复用容器各有一次 365.6 和 311.6 毫秒的启动。该诊断未拉取镜像、挂载任务数据或调用模型。差值支持验证容器复用，尚未包含候选方案的输出落盘、输入更新和进程清理成本。
+
+采用 DeepSeek Harness 的命令生命周期，每次启动独立 shell，共用执行环境和工作目录。其 Linux 执行器通过 bwrap 或 Landlock 包装本地子进程。Gemini CLI 的 Docker 路径在 CLI 生命周期外层创建容器，也把环境生命周期提到单个命令以上。本项目继续使用 Linux Docker 来统一 Windows 和 Linux 部署，并保持 Toolathlon 的命名卷。直接在宿主机运行 Bash 无法复用当前的卷和隔离契约。直接让模型命令在 Toolathlon 网关容器内运行会继承该容器的网络和服务文件权限。见 [DeepSeek 执行器](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/shell/bash-sandbox/src/index.ts#L88)和 [Gemini CLI 容器启动](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/cli/src/utils/sandbox.ts#L383)。
+
+| 需求 | 方案和通过条件 |
+| --- | --- |
+| BASH-5 容器生命周期 | Docker 适配器以现有 `ExecutionScope` 的主体、Session、Turn 与部署摘要绑定容器。首条合法命令惰性创建，后续健康调用串行复用。Docker Exec 为每条冻结命令启动新 Bash，分别设置工作目录、超时和输出限额。Turn 终态释放容器，可恢复暂停沿用原 Turn 身份和期限。容器内的受信等待进程在 Journal 的轮次截止时间退出，Docker 随即结束其余进程。运行和恢复消费轮次排他锁，适配器串行处理同一 Turn 内的命令。启动恢复按原身份与期限回收容器和孤立快照。 |
+| BASH-6 输入和写权限 | 普通会话的 `/workspace` 保持只读，Toolathlon 的 `/workspace/dumps/workspace` 仍是网关和 Bash 唯一共享的可写目录。模型命令以 `65534:65534` 执行，使用只读根目录、私有 PID 空间并移除全部 capabilities。网络按已有部署许可配置。适配器通过 Docker 查询完整容器进程列表，核对只剩启动时绑定的受信进程，确认私有 IPC 空间无命令残留，再清理临时文件并刷新只读快照。剩余进程、SysV IPC 对象或 POSIX 消息队列均使容器退出，确认终态后才允许替换。快照泄漏、越权读写或任一跨命令状态残留均判失败。 |
+| BASH-7 结果和恢复 | Docker 继续限制容器资源。适配器在请求执行前，按现有 Command 摘要保存容器和 Exec 身份。宿主适配器采集并有界落盘双流，执行记录目录不挂入容器。Web 重启后从原身份找回已落盘结果。落盘前中断则沿现有规则停止并核对容器，报告输出不可恢复或执行未知，禁止重发原命令。超时、取消、溢出和后台残留均使用同一停机核对；只在执行终态可证时提交已有事实，工作区写入未知沿用原回执。OOM 归因须有 Docker 或容器资源计数的正证据，退出码本身不足以证明 OOM。Command、Journal、Artifact 和回执保留原事实归属。 |
+
+变更属于执行基础设施、资源生命周期与恢复协议调整。改动限定在已有 Bash Execution Port 的实现、Turn 收尾和部署装配，执行边界由 [ADR 0056](../../adr/0056-bash-workspace.md)记录。按轮次回收替换 Bash 的按命令创建与回收分支。固定 Python worker 的检索候选仍使用原单次进程生命周期。
+
+先分别回放 Canvas 已封存的 8 条 Bash 命令和 LongDS 已封存的 2 条命令。各用一个新 Run，检查每组只创建 1 个容器，输入文件摘要、退出状态、适用双流和最终工作区结果符合原契约。用现有只读附件、共享卷相邻目录和限时样本核对隔离及终止，补一次中断恢复，断言无重复写入。清理命令使用有附件的 Docker Exec 连接并核对真实退出码，避免无流连接在命令尚未退出时返回空退出码导致误回收。两种镜像各做 5 组完整适配器对照，包含清理、输出持久化与资源回收，稳定调用的中位耗时须下降。接入后各跑一次原 Canvas 和 LongDS 正式入口，分别记录用户结果与执行检查点，Canvas 原基线的选课语义错误独立计分。任何边界失败即停止对应机制准入，延迟收益未达到时撤回复用候选。
+
+已接入 Bash Docker 适配器及 Conversation Run 收尾。真实 Docker 回放保留 Canvas 8 条和 LongDS 2 条调用的退出、双流及最终工作区结果。两组各创建并回收 1 个容器。边界探测覆盖普通只读附件、共享卷相邻目录、快照刷新、临时文件、超时、宿主中断以及 SysV 共享内存和 POSIX 消息队列。中断后重提原命令仍只有一次写入。两种镜像各 5 组，全部计入适配器输出落盘，稳态中位耗时分别从 567.4 降到 275.5 毫秒、从 570.9 降到 274.5 毫秒。[真实命令回放](../../../.tmp/bash-run-reuse-20261117/fixed-replay/report.json) · [隔离和恢复](../../../.tmp/bash-run-reuse-20261117/fixed-boundaries/report.json) · [IPC 残留](../../../.tmp/bash-run-reuse-20261117/ipc/report.json) · [完整适配器计时](../../../.tmp/bash-run-reuse-20261117/fixed-bench/report.json)
+
+LongDS 附件 HTTP 验收返回正确 SHA-256。授权 Run 的 4 个 Exec 共用一个容器，其中一次命令返回退出码 2，模型继续执行并完成交付。未授权会话无 Bash 声明或调用。Run 收尾清除容器和输入暂存。[LongDS 正式入口报告](../../../.tmp/bash-run-reuse-20261117/longds-target/report.json)
+
+Canvas 正式入口暴露 Windows 路径长度回归。已经冻结的真实工具输出带多级相对路径，叠加评测归档目录与 Run 键后，宿主创建快照报 `WinError 206`，Bash 进程尚未启动。保留容器内原件路径，将只读输入暂存移回宿主短临时目录。技术回收记录仍在 Run 执行目录。该次失败的完整冻结命令和原件已回放成功，最终版的 Canvas 8 条与 LongDS 2 条历史命令再次全部通过。[失败运行](../../../.tmp/bash-run-reuse-20261117/canvas-target/canvas-arrange-exam/personal/web.log) · [长路径复现](../../../.tmp/bash-run-reuse-20261117/long-path-fixed/report.json) · [最终版回放](../../../.tmp/bash-run-reuse-20261117/short-path-replay/report.json)
+
+修正后的 Canvas 正式入口有 11 个不同 Exec，均在同一 Bash 容器内。模型利用命令结果最终交付工作簿和答复，官方评分退出 0。评测结束后检查 Docker 容器已删除，Run 暂存记录已清除。该次运行使用评测部署显式指定的网关网络，禁网与工作区隔离的反事实另由边界诊断覆盖。[Canvas 正式报告](../../../.tmp/bash-run-reuse-20261117/canvas-acceptance/canvas-arrange-exam/personal/report.json) · [官方评分](../../../.tmp/bash-run-reuse-20261117/canvas-acceptance/canvas-arrange-exam/personal/grader.log) · [最终隔离探测](../../../.tmp/bash-run-reuse-20261117/short-path-boundaries/report.json)
+
+## 历史 Python 专用工具
+
+以下记录属于替换前的版本。
 
 状态：截至 2026-10-24，自主程序执行、程序文件复用及独立对话许可已接入；有界局部执行、原件恢复和消费停止成立，完整统计回答及长任务结果仍未通过。归属 `KNOWLEDGE-DECISION-DELIVERY-001` 的自主计算切片；[整体研究 Spec](knowledge-decision-delivery.md#3-整体架构增强顺序与本轮切片)拥有增强顺序，[评测盘点](../../evals/02-current-case-inventory.md)拥有正式结果。LongDS 侧契约及验收范围见 §3.5，不从局部执行推断稳定修复。
 

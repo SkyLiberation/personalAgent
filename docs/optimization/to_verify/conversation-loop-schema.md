@@ -2,11 +2,13 @@
 
 状态：2026-10-25，统一协议已接入生产链路。主终答固定10/10、内部意图固定40/40通过；新LongDS中文36/36轮完成交付并通过第17→18轮真实Web恢复，官方独立评分27/36。当前direct／none的流程已验证，语义结果未全部达标；完整结果和边界见§16。本文唯一拥有主循环Schema流程的替换方案，问题归属CONVERSATION-LOOP-BOUNDARIES-001；能力组织与治理仍由[主循环边界](conversation-loop-boundaries.md)拥有，架构从[工程入口](../../architecture/README.md)阅读。
 
+[ADR 0055](../../adr/0055-unified-conversation-answer.md)终止可替换 writer、独立选证操作和相关评测，并保留正文和带属性的统一提交。下列 claims、direct／claims 配置、对应核验与防绕过规则仅解释原协议及其证据。两类核验的当前装配见 [ADR 0050](../../adr/0050-verification-feature-flags.md)。
+
 ## 1. 目标、范围与真实依据
 
 **主模型按 Code Agent 的原生消息和工具调用表达意图，业务参数只承载模型需要决定的内容；Runtime 绑定身份、执行、持久状态与完成事实。** 删除空 `prepare_final` 与另一次强制 JSON 成文，不把内部 Pydantic 聚合对象直接作为所有模型调用的输出目标。
 
-本设计覆盖意图提取、动作、计划、工具和委派、最终回答与修订、writer／核验、反馈、历史与压缩、异常呈现及恢复。已有业务算法、Python 沙箱、权限、Command、claims 语义与 Verifier 适用条件继续由原 owner 拥有。用户暂放 claim／核验语义问题、未来做 claim 消融、当前 direct＋none、不做下载打包、用量未知不停止的决定保持。
+本设计覆盖原生动作、计划、工具和委派、最终回答与修订、适用核验、反馈、历史与压缩、异常呈现及恢复。业务算法、Python 沙箱、权限、Command 与核验判据继续由原 owner 拥有。
 
 本工程已有事实：
 
@@ -25,7 +27,7 @@
 | S-04 | 用户正文可正常使用 Markdown；引用、已存稿修订和程序产物保持原文、权限及实际执行绑定 | P2、P4 |
 | S-05 | 参数拒绝、工具执行失败、外部请求失败、模型输出无效和本地程序异常分别处理 | P3、P5 |
 | S-06 | 完整原生交换与实际失败均可追溯；恢复不依据 token／轮数猜相位，不补造 tool result 或重执行 | P2、P6 |
-| S-07 | direct／claims 继续可替换，required／none 独立；同一完整候选经过适用核验和 Completion | P4、P6 |
+| S-07 | 同一完整候选经过适用核验和 Completion；可替换 writer 已由 ADR 0055 撤回 | P4、P6 的旧 writer 验证保留原身份 |
 | S-08 | Context 只含当前需要的正文和事实投影；大产物按引用重读，压缩服从完整配对及受保护事实 | P2、P6 |
 | S-09 | 内层确需 typed 结果的能力采用经核对的输出策略，不把正文 JSON 模式当作全循环默认 | P1、P3 |
 | S-10 | 所有现行调用方、Prompt、恢复、文档同步迁移；旧两步协议及无消费者类型删除 | P0、P6 |
@@ -180,6 +182,8 @@ build_structured_model_client继续装配同一Provider、观测、计量与技�
 非 user、越界、反向范围、引用不在当前 projection 或缺少必填来源均进入原 grounded-intent 拒绝／修订契约，不猜来源、不将要求默默视为已接纳。行范围合法只证明原文可恢复；来源能否支撑 criterion／阶段／后台请求仍属于模型语义，并在真实阶段单列验收。
 
 ### 5.3 claims 的入口、选择和同稿出口
+
+历史设计，已撤回。
 
 direct／claims 与 required／none 仍由既有 AnswerResultConfig 和 Composition Root 绑定；主循环只调用模块提供的动作定义与解释器，不写 claims 业务分支。claims 的可达条件沿用 current claims，或 requires_review 且已有成功 web_search／web_read，并保持 experiment_run 排除；删除其中 finalization_mode 条件。来源出现只使真实写作操作可用，不自动开始写作。
 
@@ -403,7 +407,7 @@ P6 的本次正式目标沿用户决定保持 direct＋none。该分支的固定
 
 既有_create_chat_completion内部用私有typed_ProviderCompletion携带SDK payload及该事实，_receive写入原record并sink后由同一完整响应检查读取；不向SDK对象私塞属性或将自有字段藏进Provider raw JSON。SDK合法枚举也不表示assistant答复，完整message.role须为assistant；该校验在完整原件保存后执行，历史坏SDK对象不补正。保护方法的实际观察器调用方须搜索并显式透传／读取payload，wire及费用不变。新增一项typed技术事实及内部载体，模型可见字段、业务状态、完成规则和独立存储均不增加。
 
-实际调用方迁移包括正式retrieval_acceptance_server观察器，以及现行artifact_reference_replay、python_action_replay、model_transport_diagnostics三个独立CLI；它们显式读取payload并透传同一carrier。旧override遗漏的before_send在该受影响签名同轮补齐且只执行原准入，不顺带修改原用例、Schema或工具业务。封存的一次诊断脚本不回改；没有旧SDK返回形状fallback。静态、CLI入口及具备完整真实输入的零模型回放按实际边界验证，不运行单元测试。
+实际调用方迁移包括[评测 SDK 观察器](../../../evals/sdk_capture.py)（原 `retrieval_acceptance_server`），以及现行artifact_reference_replay、python_action_replay、model_transport_diagnostics三个独立CLI；它们显式读取payload并透传同一carrier。旧override遗漏的before_send在该受影响签名同轮补齐且只执行原准入，不顺带修改原用例、Schema或工具业务。封存的一次诊断脚本不回改；没有旧SDK返回形状fallback。静态、CLI入口及具备完整真实输入的零模型回放按实际边界验证，不运行单元测试。
 
 全调用方搜索还命中retrieval_http_server、provider_diagnostics/python_result_analysis_capture两个现行观察器的SDK读取／签名，以及python_result_analysis_inputs的捕获前停止签名，纳入同一最小迁移。捕获边界没有真实发送时不提前执行before_send；真正发送仍按原owner执行一次。loop_schema_journey已有关键字透传且原样返回，无需改写。历史诊断显式加载旧源码时使用其旧契约，当前分支显式使用carrier，不以运行时形状猜测兼容。
 

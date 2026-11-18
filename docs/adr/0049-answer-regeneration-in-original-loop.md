@@ -12,7 +12,7 @@ task2全量尝试第三轮的真实回答核验反馈已经进入原Loop；主�
 
 固定smolagents `96f33fa` 的配置式final_answer_checks失败写入真实记忆并进入下一步，模型重新提交完整结果；固定PydanticAI `922ee561` 的校验失败按原调用交回循环。源码装配与边界见[现有参考](../agentRef/model-interaction-protocols.md)，不将第三方可选检查或最大步数兜底当作本工程Completion契约。
 
-本决定替代[ADR0031](0031-complete-final-revisions.md)的普通回答局部合并路径。其引用丢失背景保留历史身份：完整原稿与引用仍进入当前历史，新稿的必要引用须重新选择并由原binder／Verifier检查，不保证模型自动保留，也不允许Runtime擅自添加。claims的业务局部修订与逐项证据关系保持，不因删除普通段落编辑而删除。旧封存run使用原冻结源码解释，不保留兼容别名、旧Schema或自动转换。
+本决定替代 [ADR 0031](0031-complete-final-revisions.md)的普通回答局部合并。原稿及引用进入当次历史，新稿按需重新选择引用，由现有绑定器和 Verifier 检查。旧运行按原版本追溯。后续统一答复及 claim 路径退出见 [ADR 0055](0055-unified-conversation-answer.md)。
 
 ## 责任、复杂度与验证
 
@@ -20,6 +20,6 @@ task2全量尝试第三轮的真实回答核验反馈已经进入原Loop；主�
 
 随后[新真实全量运行](../optimization/to_verify/verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)复现跨 run 同号回执被误删及压缩后仍超容量，反馈保留范围已重新打开，当前不作整体历史契约通过声明。保留完整重提入口和已成立配对，不恢复旧编辑工具或无界重跑；下一修正先重审身份及压缩边界。
 
-Conversation内DirectAnswerResult负责解释完整模型输出；Service拥有原循环与门禁，Journal保存唯一真实交互。删除一个操作、四个专用类型和一个合并模块及双语资源，无新增工具、字段、模型阶段或存储。代价是普通修正需重新提交完整正文及必要引用；实际输出量、成本与语义另计。
+删除 `revise_final`、四个专用类型、合并模块及对应双语资源。Conversation 复用原循环和门禁，Journal 保存真实交互。普通修正重新提交完整正文及必要引用，输出量和语义结果按实际运行记录。
 
 唯一设计及先行验收由[目标维护Spec §9.16](../optimization/to_verify/analysis-goal-maintenance.md#916-回答拒稿后沿原循环重新生成)拥有：新空会话连续前三轮，实际依赖产物滚动，原用户结果和协议检查分别计分，无隔离模型回放或重采。若真实新输入复现必要引用丢失或新循环无法完成，保留失败并按最早责任重审；不能据结构简化声称目标理解已解决，也不静默恢复旧协议。

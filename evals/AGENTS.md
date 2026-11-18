@@ -1,18 +1,20 @@
 # 评测模块规范（EVM）
 
-> 适用于 `evals/**`，补充根 [AGENTS.md](../AGENTS.md)的评测约束。修改评测前阅读 [EVD](../docs/devSpec/change-evidence.md)、[QLT](../docs/devSpec/quality-security.md)、[评测体系](../docs/evals/README.md)及目标目录；仅整理本文时按 DOC 检查。本文拥有用例登记、比较身份、归档和执行效率。
+> 适用于 `evals/**`，补充根 [AGENTS.md](../AGENTS.md)。修改评测前读 [EVD](../docs/devSpec/change-evidence.md)、[QLT](../docs/devSpec/quality-security.md)、[评测索引](../docs/evals/README.md)及目标目录；仅整理本文按 DOC 检查。
 
 ## 1. 证据分类不能混用
 
 验证类别和替身边界由 [QLT](../docs/devSpec/quality-security.md#1-测试职责与覆盖)拥有；完整 Product E2E 资格由根规范拥有。直调 Application 的旅程是 Integration，文件名、marker 或 `baseline` 标签不提升证据等级。
 
-产品失败 baseline、指标 baseline 和回归 E2E 的区别由 [EVD](../docs/devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)拥有；命名不能提升证据资格。
+失败基线、指标基线和回归 E2E 的区别由 [EVD](../docs/devSpec/change-evidence.md#1-用户结果与工程约束的可执行基线)拥有。
 
 涉及模型前置决策时执行 [EVD 连续验证](../docs/devSpec/change-evidence.md#11-模型依赖链必须连续验证)；归档保留依赖、同轨迹消费、前置失败与后置未到达。评测 Prompt 执行 [COD 通用契约](../docs/devSpec/code-structure.md#6-生产-prompt-是版本化代码契约)，题目、资料和标签由场景数据提供。
 
 ## 2. Canonical owner 与写入口
 
-`evals/` 保留公开数据集评测。数据集的原题、语料与相关性标签由公开发布方维护。各数据集目录拥有加载器、适配器与运行入口，复用已有共用指标与证据选择模块。新增或修改评测时同步[公开数据集索引](../docs/evals/README.md)与实际运行入口。内部输入、评测器输出、测量和配置身份 typed。边界校验失败显式记录。
+公开题目、语料和标签归数据发布方。数据集目录维护加载、适配及入口，复用共用模块。评测变更同步[索引](../docs/evals/README.md)及运行入口；输入、输出、测量和配置身份按 typed 契约校验，失败显式记录。
+
+新增 Conversation 用户结果评测必须复用 [conversation_http.py](conversation_http.py) 启动正式应用、检查就绪、上传本题原件和提交对话，并沿用本阶段的 `benchmark_feature_flags()`。数据集负责题面、材料选取、专用环境及评分。正式应用解析模型设置，共用入口归档子进程实际生效的配置。[运行说明](../docs/evals/04-running-and-release.md#conversation-评测共用入口)
 
 ## 3. 每条用例必须有唯一验收目的
 
@@ -50,7 +52,7 @@
 
 验收与重新打开按 [EVD 第 1.4 节](../docs/devSpec/change-evidence.md#14-真实用例驱动优化与验收闭环)执行。真实阶段回放按 Offline Eval 保存 E2E 来源；未执行、未到达和失败按原计划保留，旧通过记录保持原身份。
 
-定向 target 只证明该变更边界。正式发布按 [REL](../docs/devSpec/migration-release.md#3-完成检查表)提交目标 clean revision 的公开数据集 E2E 证据。报告分子、分母、未执行与未到达数量，以及适用的方差或置信边界。采样与失败结果保留按上述验证规则执行。
+定向 target 只证明变更边界。按 [REL](../docs/devSpec/migration-release.md#3-完成检查表)提供目标 clean revision 的公开数据集 Product E2E 证据。报告分子、分母、未执行与未到达数量及适用的方差或置信边界。
 
 ## 7. E2E 执行效率是评测设计门禁
 

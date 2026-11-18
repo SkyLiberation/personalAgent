@@ -170,17 +170,9 @@ Default wording: {question}""",
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='Web reading did not deliver the body: {detail}',
     ),
-    'tools.python.acceptance_missing': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python execution request has no accepted record.',
-    ),
-    'tools.python.read_receipt': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Read the receipt and original diagnostics.',
-    ),
-    'tools.python.status': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Actual Python execution status: {status}; {detail}',
+    'tools.bash.acceptance_missing': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash execution request has no accepted record.',
     ),
     'tools.experiment.acceptance_missing': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
@@ -222,88 +214,88 @@ Default wording: {question}""",
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The file ID does not identify an Artifact owned by the current principal.',
     ),
-    'python_execution.authorization': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The current principal is not authorized for this Python execution deployment.',
+    'bash_execution.authorization': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The current principal is not authorized for this Bash execution deployment.',
     ),
-    'python_execution.request_digest': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python request differs from its accepted digest.',
+    'bash_execution.request_digest': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash request differs from its accepted digest.',
     ),
-    'python_execution.accepted_deployment': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='This run did not accept the Python request under the current deployment.',
+    'bash_execution.accepted_deployment': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='This run did not accept the Bash request under the current deployment.',
     ),
-    'python_execution.receipt_command': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python receipt is missing its frozen Command.',
+    'bash_execution.receipt_command': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash receipt is missing its frozen Command.',
     ),
-    'python_execution.execution_command': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python execution record is missing its frozen Command.',
+    'bash_execution.execution_command': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash execution record is missing its frozen Command.',
     ),
-    'python_execution.recovery_fact': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The recovered Python result differs from the saved process facts.',
+    'bash_execution.recovery_fact': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The recovered Bash result differs from the saved process facts.',
     ),
-    'python_execution.input_owner': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Python can read only exact Artifacts owned by the current principal.',
+    'bash_execution.input_owner': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='Bash can read only exact Artifacts owned by the current principal.',
     ),
-    'python_execution.input_boundary': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python input identity or byte length exceeds the boundary.',
+    'bash_execution.input_boundary': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash input identity or byte length exceeds the boundary.',
     ),
-    'python_execution.input_changed': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Artifact identity changed while Python input was being read.',
+    'bash_execution.input_changed': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Artifact identity changed while Bash input was being read.',
     ),
-    'python_execution.budget_exhausted': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.budget_exhausted': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='This run has exhausted its execution allowance or absolute deadline.',
     ),
-    'python_execution.input_budget_exhausted': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='This run reached its deadline or exhausted its allowance while preparing Python inputs.',
+    'bash_execution.input_budget_exhausted': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='This run reached its deadline or exhausted its allowance while preparing Bash inputs.',
     ),
-    'python_execution.timer_resolution': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The remaining Python allowance is below execution timer resolution.',
+    'bash_execution.timer_resolution': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The remaining Bash allowance is below execution timer resolution.',
     ),
-    'python_execution.command_request': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The frozen Python Command differs from the accepted request or deployment.',
+    'bash_execution.command_request': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The frozen Bash Command differs from the accepted request or deployment.',
     ),
-    'python_execution.program_bytes': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The frozen Python program differs from the accepted original bytes.',
+    'bash_execution.program_bytes': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The frozen Bash program differs from the accepted original bytes.',
     ),
-    'python_execution.original_command': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The original Python artifact differs from the frozen Command.',
+    'bash_execution.original_command': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The original Bash artifact differs from the frozen Command.',
     ),
-    'python_execution.dispatching_result': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.dispatching_result': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='The executor cannot return dispatching as an execution result.',
     ),
-    'python_execution.capture_budget': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.capture_budget': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='The executor returned more bytes than the frozen capture allowance.',
     ),
-    'python_execution.stdout_limit': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.stdout_limit': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='stdout reached the capture limit; the original contains only the bytes actually captured.',
     ),
-    'python_execution.stderr_limit': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.stderr_limit': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='stderr reached the capture limit; the original contains only the bytes actually captured.',
     ),
-    'python_execution.output_unavailable': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.output_unavailable': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='The original job output cannot be recovered. The program was not rerun; do not interpret this as empty output.',
     ),
-    'python_execution.invalid_utf8': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_execution.invalid_utf8': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='{stream} contains invalid UTF-8; captured original bytes are preserved and no text preview is provided.',
     ),
     'retrieval_experiment.authorization': PromptTranslation(
@@ -546,79 +538,75 @@ Default wording: {question}""",
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The source body exceeds the single-call capacity; an incomplete body was not delivered.',
     ),
-    'python_backend.deployment': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python Command differs from the fixed execution deployment.',
+    'bash_backend.deployment': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash Command differs from the fixed execution deployment.',
     ),
-    'python_backend.directory_symlink': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python execution directory must not contain symbolic links.',
+    'bash_backend.directory_symlink': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash execution directory must not contain symbolic links.',
     ),
-    'python_backend.directory_escape': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python execution directory is outside its allowed boundary.',
+    'bash_backend.directory_escape': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash execution directory is outside its allowed boundary.',
     ),
-    'python_backend.job_command': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The original Python job differs from the frozen Command.',
+    'bash_backend.job_command': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The original Bash job differs from the frozen Command.',
     ),
-    'python_backend.job_command_missing': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The original Python job is missing its frozen Command; re-execution is forbidden.',
+    'bash_backend.job_command_missing': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The original Bash job is missing its frozen Command; re-execution is forbidden.',
     ),
-    'python_backend.input_bytes': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python backend input differs from the frozen original bytes.',
+    'bash_backend.input_command': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The execution inputs differ from the frozen Bash Command.',
     ),
-    'python_backend.input_command': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The execution inputs differ from the frozen Python Command.',
+    'bash_backend.job_identity': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash working directory is missing its original identity; re-execution is forbidden.',
     ),
-    'python_backend.job_identity': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python working directory is missing its original identity; re-execution is forbidden.',
+    'bash_backend.input_symlink': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash input directory must not be a symbolic link.',
     ),
-    'python_backend.input_symlink': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python input directory must not be a symbolic link.',
+    'bash_backend.input_snapshot': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash input snapshot conflicts with the existing snapshot.',
     ),
-    'python_backend.input_snapshot': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python input snapshot conflicts with the existing snapshot.',
+    'bash_backend.cleanup_identity': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='Bash cleanup has not confirmed a matching stopped container.',
     ),
-    'python_backend.cleanup_identity': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Python cleanup has not confirmed a matching stopped container.',
+    'bash_backend.job_record_symlink': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The original Bash job record must not be a symbolic link.',
     ),
-    'python_backend.job_record_symlink': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The original Python job record must not be a symbolic link.',
+    'bash_backend.job_binding': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash backend job does not match the frozen Command.',
     ),
-    'python_backend.job_binding': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python backend job does not match the frozen Command.',
-    ),
-    'python_recovery.identity_missing': PromptTranslation(
+    'bash_recovery.identity_missing': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The candidate directory is missing its original identity; re-execution is forbidden.',
     ),
-    'python_recovery.input_digest': PromptTranslation(
+    'bash_recovery.input_digest': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='Python recovery requires exact input digests or original artifacts.',
     ),
-    'python_recovery.identity_mismatch': PromptTranslation(
+    'bash_recovery.identity_mismatch': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The original candidate identity differs from the recovery request.',
     ),
-    'python_recovery.capture_binding': PromptTranslation(
+    'bash_recovery.capture_binding': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The original Python capture differs from the job identity or limits.',
     ),
-    'python_recovery.output_incomplete': PromptTranslation(
+    'bash_recovery.output_incomplete': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The original candidate output is incomplete.',
     ),
-    'python_recovery.stderr_incomplete': PromptTranslation(
+    'bash_recovery.stderr_incomplete': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The original Python stderr capture is incomplete.',
     ),
@@ -854,45 +842,41 @@ Default wording: {question}""",
         source_version='2026-10-27.v1', version='2026-10-27.v1',
         template='The research did not produce a digest.',
     ),
-    'python_validation.filename': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
+    'bash_validation.filename': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
         template='Input must be a valid non-reserved flat ASCII filename of 1 to 64 characters.',
     ),
-    'python_validation.program_size': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python program exceeds 128 KiB.',
+    'bash_validation.program_size': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash command must be nonempty, contain no NUL, and fit within 128 KiB.',
     ),
-    'python_validation.input_names': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Input filenames must not be duplicates or differ only by letter case.',
+    'bash_validation.input_bytes': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash input length or original-byte digest does not match.',
     ),
-    'python_validation.input_bytes': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python input length or original-byte digest does not match.',
+    'bash_validation.deadline': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash deadline must be later than the acceptance time.',
     ),
-    'python_validation.deadline': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python deadline must be later than the acceptance time.',
+    'bash_validation.reservation': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash reservation exceeds the frozen limit or deadline.',
     ),
-    'python_validation.reservation': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python reservation exceeds the frozen limit or deadline.',
+    'bash_validation.program_identity': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash program identity or length is invalid.',
     ),
-    'python_validation.program_identity': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python program identity or length is invalid.',
+    'bash_validation.input_total': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='Bash inputs are duplicated or exceed 64 MiB.',
     ),
-    'python_validation.input_total': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Python inputs are duplicated or exceed 64 MiB.',
+    'bash_validation.input_owner': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='A Bash Command may bind only Artifacts owned by its principal.',
     ),
-    'python_validation.input_owner': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='A Python Command may bind only Artifacts owned by its principal.',
-    ),
-    'python_validation.command_digest': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='The Python Command digest does not match.',
+    'bash_validation.command_digest': PromptTranslation(
+        source_version='2026-11-17.v1', version='2026-11-17.v1',
+        template='The Bash Command digest does not match.',
     ),
     'experiment_validation.input_digest': PromptTranslation(
         source_version='2026-10-27.v1', version='2026-10-27.v1',

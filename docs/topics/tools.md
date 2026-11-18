@@ -37,7 +37,7 @@ Application Service
 
 HTTP 直接执行通过 `invoke_direct()` 复用 Gateway；它有独立的身份及作用域入口，接口见 [API](../api.md#post-apitoolsnameexecute)。注册工具清单不等于普通模型可选工具清单。
 
-Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入知识和 Artifact 操作；个人知识读取器存在时隐藏三个底层 note 读取工具。`retrieval_experiment` 只在当前 run 已绑定实验许可时投影；`execute_python` 还要求主体与部署匹配、截止和共享额度可用、没有待对账执行。`_model_visible_capabilities_for_turn()` 从初始材料、写入／实验回执和卸载结果恢复合法资源，为读取参数提供确切引用。没有合法资源时隐藏 Artifact 读取／搜索，本交互已成功消费的个人知识搜索也不再投影。主决策另接收工作清单、回答提交及已配置的 Agent 委托动作，回答模块按当前任务决定可用的提交操作。
+Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入知识和 Artifact 操作；个人知识读取器存在时隐藏三个底层 note 读取工具。`retrieval_experiment` 只在当前 run 已绑定实验许可时投影；`execute_python` 还要求主体与部署匹配、截止和共享额度可用、没有待对账执行。文件工具以稳定的路径参数声明。Runtime 从初始材料、已提交回执及外置结果恢复当前可读范围；本交互已成功消费的个人知识搜索不再投影。主决策另接收工作清单、回答提交及已配置的 Agent 委托动作，回答模块按当前任务决定可用的提交操作。
 
 `TurnContextComposition.model_action_definition_chars` 记录每轮动作定义的字符量。模型实际收到的菜单取决于该轮投影，不能从注册总数推导输入体积、误选率或用户结果。
 
@@ -70,19 +70,23 @@ Gateway 将 typed `ToolGatewayContext` 经 `RunnableConfig.configurable` 交给�
 
 Gateway 通过 `PolicyEvaluator` 获取并审计决定。只有 `allow` 才进入执行，`require_confirmation` 与 `require_escalation` 在通用入口均产生权限失败。业务参数 `confirmed` 不构成确认凭据。待确认状态、确认后的恢复与幂等属于具体 Application。已有通用幂等记录仍可通过原审计入口查阅。部署中的 MCP 映射如包含旧字段 `idempotency_key_required`，迁移时删除该字段。[派发边界 ADR](../adr/0052-tool-policy-dispatch-gate.md)
 
+[PolicyEngine](../../src/personal_agent/governance/policy/engine.py)先检查部署拒绝规则，再对 ReAct 工具检查允许名单和自主执行限制。到达调用确认分支时，工具和子 Agent 均按策略请求中的 `requires_confirmation` 判断；高风险配置字段仍可读取，在该分支中不影响现行结果。
+
+内部分支简化以清理前源码为对照：在确认声明、部署配置、风险级别是否为高及是否含禁止副作用的 16 种布尔组合中，确认条件均等价；其余策略方法、ReAct 判断和审计规则值保持。已清理无调用方的旧规划校验，分层、导入及 diff 检查均通过。
+
 固定知识保存、删除和恢复由各自 Application 拥有 Command、确认、Receipt 与事务；工具层不复制这些状态。删除恢复链路见[固定流程](../workflow/delete-knowledge-workflow.md)，保存见 [ADR 0006](../adr/0006-conversation-governed-knowledge-save.md)。
 
 工具审计写入 `tool_audit_events`，查询和脱敏规则由[可观测与治理](observability-governance.md)拥有。[依赖图](../mermaid/tools-model-layer-dependencies.md)只展示现行责任关系。
 
 ## 搜索、读取与内部核验
 
-`web_search(query, limit)` 返回发现摘要；`web_read(url)` 返回指定来源正文。长结果卸载到 Artifact，模型以 `search_action_output` 定位、`read_artifact` 读取同一正文坐标。后端固定调用 `rg`，模型只指定授权资源及读取参数。原 `read_action_output` 保留实现但不投影，准入拒绝；正文和引用契约见 [Context](context-engineering.md#网页来源正文保留与重读)及 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
+`web_search(query, limit)` 返回发现摘要；`web_read(url)` 返回指定来源正文。长结果保存为会话文件，模型用回执给出的路径调用 `grep_file` 定位正文、用 `read_file` 按行读取。Runtime 检查路径对应本任务的已授权来源。搜索后端固定调用 `rg`；正文和引用契约见 [Context](context-engineering.md#网页来源正文保留与重读)及 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。
 
-普通整稿核验注册为 `workflow_activity`，由运行系统在适用提交后调用。研究模型提交 claims 与最终回答，Conversation 沿 Model Port 进行一次统一核验，再由 Completion 交付；两者都不进入普通模型可见工具面，见[核验专题](verification-and-completion.md)。
+整稿核验注册为 `workflow_activity`，由运行系统在适用提交后调用，不进入主模型可见工具面。真实核验结果及确切候选交给 Completion，见[核验专题](verification-and-completion.md)。
 
 研究实验的模型工具分别为 `write_artifact` 与 `retrieval_experiment`：前者创建或按确切快照补丁生成不可变程序／配置版本；后者执行开发实验、冻结确切结果或评测冻结方案。结果摘要从同一不可变原件只读投影 publication，表达业务结果与子文件的对应关系；组合和冻结继续消费原业务结果引用。模型可以根据真实指标及原件选择后续工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。程序用途、输入输出及交付契约由[研究设计](../optimization/to_verify/research-experiment-protocol.md#2-受限实验能力)拥有。当前工具已装配；能力验收核对实际执行、结果消费与回答，下载和打包不在范围，不能由注册事实推断研究语义通过。
 
-公开文件工具统一由模型提交已有 `resource_id`：读取／搜索／检查直接提供该字符串，Python 的 input_files 每项为 name／resource_id，草稿 patch 用 base_resource_id。模型不重建 owner、资源类型或 revision；Artifact 从当前获准集合恢复唯一完整引用，未知、歧义、跨主体及版本不符明确拒绝。内部 ResourceRef、来源和执行回执保留，续读参数只包含文件 ID 与坐标；不增加可写 ID 表或全局文件搜索，见 [ADR 0044](../adr/0044-model-artifact-id-selection.md)。
+读取和搜索使用材料或回执提供的 `file_path`。Python 的每项输入带 `name` 和 `file_path` 或 `resource_id`。检查 Artifact 使用 `resource_id`，草稿补丁使用 `base_resource_id`。Runtime 从当前获准集合恢复唯一完整引用和不可变字节，未知、歧义及跨主体引用会被拒绝。续读参数由文件路径和正文坐标组成。[文件路径契约](../context/tool.md#会话文件替换决定)
 
 `execute_python` 与检索实验并列，当前只要求完整 `code`，可选 `input_files` 省略默认空。已有程序绑定为只读输入，由模型用标准 Python 执行，Runtime 按原字节恢复；Command／Receipt 的程序引用仍保留实际执行身份。原 Artifact owner 保存确切源码、输入清单及 stdout／stderr，工具返回有界预览和原件引用；模型可以继续读取、修正程序或成文。它复用一次程序一个受限容器的技术沙箱，通用分析按显式对话许可聚合任务执行额度，检索部署保持原 run 内共享额度；两者沿用原 Journal 的不可变命令和未知终态对账。独立装配及跨轮原件接续见 [ADR 0040](../adr/0040-scoped-python-analysis-authorization.md)，实际验收状态由下述 Spec 拥有。程序输出不变成可信指标或完成事实；分析原件保留内部引用，完成时不生成用户清单／ZIP或触发下载；历史清单和CLI读取保持原离线身份。工具由模型自主选择，不以调用频次验收参数能力；详细契约及验证边界由 [Python 工具 Spec](../optimization/to_verify/python-data-analysis-tool.md)拥有。
 

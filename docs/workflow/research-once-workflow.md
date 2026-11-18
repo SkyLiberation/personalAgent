@@ -1,6 +1,6 @@
 # 一次性与周期 Research 的业务链路
 
-本文拥有 `ResearchService` 的运行、来源、事件和 digest 信息流。一次性及订阅研究维护独立业务事实；普通 Conversation 的研究 claims、修订和最终回答由 [Runtime](../topics/runtime.md)及[核验专题](../topics/verification-and-completion.md)拥有。
+本文拥有 `ResearchService` 的运行、来源、事件和 digest 信息流。一次性及订阅研究维护独立业务事实；普通 Conversation 使用统一答复协议，契约见 [Runtime](../topics/runtime.md) 和[核验专题](../topics/verification-and-completion.md)。
 
 ## 入口与责任主体
 

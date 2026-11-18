@@ -12,10 +12,11 @@ personalAgent 是个人知识智能体 Runtime。用户表达目标，系统协�
 | [`chinese-writing-spec.md`](chinese-writing-spec.md) | 所有工程文档和对用户回答的表达规范；拥有设计 Spec 结构、需求追溯、证据措辞和存量迁移门禁 |
 | [`devSpec/`](devSpec/README.md) | 开发、设计、评测、文档和发布门禁；规范与项目 skill 统一从[根任务路由](../AGENTS.md#3-任务路由按识别信号读取细则)进入 |
 | [`agentRef/`](agentRef/README.md) | 按组件组织的外部机制检索与分级参考；不定义本工程现状、路线或采用结论 |
+| [`vsDSH/`](vsDSH/README.md) | 按日期归档 DeepSeek Harness 与本工程的模块源码对照、能力差距与验证线索 |
 | [`experience/`](experience/README.md) | 已发生问题的快速识别与排查经验；标明适用范围、原始证据和结论边界，不替代生产契约或正式评测 |
 | [`problems/longDS.md`](problems/longDS.md) | LongDS Task 2 的问题归因与原始证据入口 |
-| [`problems/toolathlon-verifierd.md`](problems/toolathlon-verifierd.md) | Toolathlon-Verified 历次已运行用例的问题汇总与逐例证据 |
-| [`problems/toolathlon-verified.md`](problems/toolathlon-verified.md) | Toolathlon-Verified 分批评测记录、启动问题与原始归档入口 |
+| [`problems/toolathlon/research-loop-problems.md`](problems/toolathlon/research-loop-problems.md) | Toolathlon 在包含 Goal 的研究增强执行链上暴露的问题与证据 |
+| [`problems/toolathlon/agent-comparison.md`](problems/toolathlon/agent-comparison.md) | 最新 Toolathlon 运行结果及与官方 Agent 的同题对比 |
 | [`context/`](context/README.md) | 按模型任务维护上下文模式、输入顺序、反馈修复与源码检索入口；预期要求、实现及验证状态分开记录 |
 | [`budge/`](budge/README.md) | 对话、模型请求与专项任务的预算速查，链接对应配置和执行契约 |
 | [`architecture/`](architecture/README.md) | 现行全局架构、代码地图与横切机制的权威正文；作为后续设计和开发的框架基线 |

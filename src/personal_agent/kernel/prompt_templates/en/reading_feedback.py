@@ -5,9 +5,9 @@ from personal_agent.kernel.prompt_registry import PromptTranslation
 
 TRANSLATIONS = {
     "conversation.read.explanation": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="line is the body line number; only the returned text is visible. next_read provides arguments to continue with read_artifact directly; reaching the end does not mean all preceding lines have been read.",
+        source_version="2026-10-27.v2-file-path",
+        version="2026-10-27.en.v2-file-path",
+        template="line is the body line number; only the returned text is visible. next_read provides arguments to continue with read_file directly; reaching the end does not mean all preceding lines have been read.",
     ),
     "conversation.read.snapshot_mismatch": PromptTranslation(
         source_version="2026-10-27.v1",
@@ -32,7 +32,7 @@ TRANSLATIONS = {
     "conversation.search.explanation": PromptTranslation(
         source_version="v2-draft-ranges",
         version="v2-draft-ranges-en.1",
-        template="Returns matching lines, with partial text and start_column and line_length for very long lines. Use line as read_artifact's start_line. For editable drafts, match_ranges gives patch coordinates; when match_ranges_truncated is true, narrow the search with a more specific term. Exhausted search results or no matches do not mean the full text has been read or the relevant meaning is absent.",
+        template="Returns matching lines, with partial text and start_column and line_length for very long lines. Use line as read_file's start_line. For editable drafts, match_ranges gives patch coordinates; when match_ranges_truncated is true, narrow the search with a more specific term. Exhausted search results or no matches do not mean the full text has been read or the relevant meaning is absent.",
     ),
     "conversation.search.snapshot_mismatch": PromptTranslation(
         source_version="2026-10-27.v1",
@@ -50,28 +50,8 @@ TRANSLATIONS = {
         template="The search result offset exceeds the number of matching records.",
     ),
     "conversation.search.record_capacity_exceeded": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="One matching record exceeds the output capacity. Truncated text has not been counted as complete evidence; use read_artifact to read the original resource.",
-    ),
-    "conversation.observation.omission_marker": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="\n... [{omitted} characters omitted from the middle] ...\n",
-    ),
-    "conversation.observation.window_explanation": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="Only this sequential window is returned; an empty continuation means only that this suffix has ended, not that the full text has cumulatively been read.",
-    ),
-    "conversation.citations.range_invalid": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="Reference {evidence_id} is not a visible continuous multiline range; the end line must be greater than the start line, and every line must have been returned in full.",
-    ),
-    "conversation.citations.coordinate_unavailable": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="Coordinate {missing} in reference {evidence_id} was not returned in full or does not exist. Select lines actually visible in citations; continuous ranges cannot skip missing lines, and partial lines must retain their exact character ranges. Continue reading if other content is needed.",
+        source_version="2026-10-27.v2-file-path",
+        version="2026-10-27.en.v2-file-path",
+        template="One matching record exceeds the output capacity. Truncated text has not been counted as complete evidence; use read_file to read the original resource.",
     ),
 }

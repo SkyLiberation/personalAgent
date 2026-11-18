@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from personal_agent.application.python_execution.models import ExecutePythonArgs
+from personal_agent.application.bash_execution.models import BashArgs
 from personal_agent.capabilities.contracts.verification import VerificationEvent
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import ExecutionScope
@@ -12,14 +12,14 @@ from .analysis_tasks import task_switch_turn
 
 from .errors import ConversationOperationConflict
 from .goal_models import CurrentAnalysisGoal
-from .models import AcceptedPythonToolRequest, ActionGoalReview, ActionObservation, DecisionFeedback, InteractionTrace, SubmittedFinal
+from .models import AcceptedBashToolRequest, ActionGoalReview, ActionObservation, DecisionFeedback, InteractionTrace, SubmittedFinal
 from .verification_context import verification_events
 
 
 @dataclass(frozen=True)
 class ActionHistoryEvent:
     action_id: str
-    arguments: ExecutePythonArgs
+    arguments: BashArgs
     review: ActionGoalReview | None
     rejection: DecisionFeedback | None
     observation: ActionObservation | None
@@ -66,21 +66,21 @@ def project_goal_compliance_history(
         operations = {item.decision_turn: item for item in source.goal_operations if item.operation != "read"}
         reviews = {item.binding.action_id: item for item in source.action_goal_reviews}
         outputs = {item.action_id: item.receipt.stdout_ref for item in source.accepted_tool_requests
-                   if isinstance(item, AcceptedPythonToolRequest) and item.receipt is not None}
+                   if isinstance(item, AcceptedBashToolRequest) and item.receipt is not None}
         producers = {action_id for action_id, stdout in outputs.items() if stdout in input_refs}
         observations = {item.action_id: item for item in source.inputs if isinstance(item, ActionObservation)
-                        and item.capability_id == "execute_python" and item.action_id in reviews.keys() | producers}
+                        and item.capability_id == "bash" and item.action_id in reviews.keys() | producers}
         rejections = {(item.decision_turn, item.action_id): item for item in source.inputs
                       if isinstance(item, DecisionFeedback) and item.reason_code == "action_goal_conflict"}
         displayed = set()
         scope = ExecutionScope(principal=source.principal, execution_id=source.interaction_run_ref,
                                thread_id=source.conversation_id)
-        decisions = tuple(record for record in source.model_decisions if record.turn_index is not None)
+        decisions = source.responded_steps
         switch_turn = task_switch_turn(source)
         for index, record in enumerate(decisions):
-            if record.turn_index < switch_turn:
+            if record.step_no < switch_turn:
                 continue
-            operation = operations.get(record.turn_index)
+            operation = operations.get(record.step_no)
             if operation is not None:
                 active = CurrentAnalysisGoal(reference=operation.goal_ref, goal=operation.goal,
                                               execution_control=operation.execution_control)
@@ -92,14 +92,14 @@ def project_goal_compliance_history(
                         or (action_id not in reviews and action_id not in producers)):
                     continue
                 review = reviews.get(action_id)
-                rejection = rejections.get((record.turn_index, action_id))
+                rejection = rejections.get((record.step_no, action_id))
                 observation = observations.get(action_id)
                 if review is None and observation is None:
                     continue
-                arguments = ExecutePythonArgs.model_validate_json(call["function"]["arguments"], context=prompts)
+                arguments = BashArgs.model_validate_json(call["function"]["arguments"], context=prompts)
                 if review is not None:
                     digest = accepted_tool_request_digest(execution_scope=scope.model_copy(update={"task_id": action_id}),
-                        action_id=action_id, tool_name="execute_python", arguments=arguments)
+                        action_id=action_id, tool_name="bash", arguments=arguments)
                     if digest != review.binding.request_digest:
                         continue
                     if active is None or review.binding.goal_ref != active.reference:

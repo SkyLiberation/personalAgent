@@ -1,5 +1,7 @@
 # 额外 claim 对研究核验器的作用
 
+状态：历史消融。[ADR 0055](../adr/0055-unified-conversation-answer.md)移除 Conversation claim 后，研究写作和核验比较不再作为活动实验；本报告的判据、成绩、样本和用量保持原身份。
+
 主比较日期：2026-10-18。11 个主配对、4 个聚焦配对及 1 次中立核对已执行；生产代码与 Prompt 变更为 0。后续诊断、复评及续跑按各节日期和独立身份解释，不并入主比较分母。
 
 先读[结论](#1-当前结论)与[比较规格](#2-比较规格)。固定指标、结果快照和数据入口见[具体评估指标](#21-具体评估指标)、[指标快照](claim-verifier-metrics.json)及[汇总数据](claim-verifier-data.json)；后续输入诊断、重复验证和修订续跑可从[实验索引](README.md)按目的进入。
@@ -32,7 +34,7 @@
 
 ## 2. 比较规格
 
-原采样正式入口为 `POST /api/conversation/turn`。2026-10-18 冻结请求由[研究实现](../../src/personal_agent/application/conversation/research.py)构造，使用[模板](../../src/personal_agent/kernel/prompt_templates/research.py)的 `conversation.research.support:v36-preserve-execution-results`。本报告保存该版本的隔离实验；现行契约由[核验专题](../topics/verification-and-completion.md)拥有。
+原采样正式入口为 `POST /api/conversation/turn`。2026-10-18 冻结请求由旧版 `application/conversation/research.py` 构造，使用旧版 `kernel/prompt_templates/research.py`的 `conversation.research.support:v36-preserve-execution-results`。本报告保存该版本的隔离实验；现行契约由[核验专题](../topics/verification-and-completion.md)拥有。
 
 | 组别 | 模型收到与承担的内容 |
 | --- | --- |
@@ -125,7 +127,7 @@ claim 独有错误没有进入最终回答时，只计额外研究诊断；移�
 
 核验 Prompt、模型、输入物化、claim／回答契约、选证或反馈修订链变化时，在该变更的验收计划中复用这些指标并选择受影响真实用例；不默认启动全量模型矩阵。新数据使用新计划和归档，固定输入、模型、代码、评测身份及重复计划。跨模型、任务集或判据版本的结果分别展示，不直接合并成趋势或发布结论。新增真实任务复现失败时按 EVD 更新用例；此前有效局部结论保持原身份。
 
-本轮固化状态：正式入口已实现并用原归档验收，11 个主配对、17 个局部关系及 8 组汇总字段与旧快照一致；重复输出目录被拒绝且原文件校验和未变。证据见[正式重算报告](../../.tmp/claim-metrics-solidify-20261018/frozen-v1/report.json)和[核对记录](../../.tmp/claim-metrics-solidify-20261018/validation.json)，原汇总与指标快照均未改写。活动运行命令由[运行与发布](../evals/04-running-and-release.md#claim-指标持续评估)拥有；旧 `.tmp` 脚本只作为历史证据保留，不再作为后续执行入口。
+本轮固化状态：当时的归档重算入口核对 11 个主配对、17 个局部关系及 8 组汇总字段，均与旧快照一致；重复输出目录被拒绝，原文件校验和未变。证据见[正式重算报告](../../.tmp/claim-metrics-solidify-20261018/frozen-v1/report.json)和[核对记录](../../.tmp/claim-metrics-solidify-20261018/validation.json)。
 
 #### 标注、汇总与判定
 
@@ -139,7 +141,7 @@ claim 独有错误没有进入最终回答时，只计额外研究诊断；移�
 
 [指标快照](claim-verifier-metrics.json)以 `claim-verifier-metrics:v1` 只读汇总[原始数据](claim-verifier-data.json)，保存输入校验和、脚本身份、任务级分母、两组计数及缺失原因。A1、A2 目前只有预设关系的局部成绩；全部反馈尚未完整标注，不能计算整稿召回、精确率或 A3。
 
-历史重算脚本与校验和保存在原指标快照中。后续统一使用[正式运行命令](../evals/04-running-and-release.md#claim-指标持续评估)，检查标签与裁判一一覆盖、配对完整和用量一致，输出独立归档；保留旧汇总与快照。
+历史重算脚本与校验和保存在原指标快照中。需要复查时按[历史命令](../evals/04-running-and-release.md#历史-claim-指标重算)使用原源码版本与冻结归档，不覆盖旧汇总和快照。
 
 | 指标 | 完整组 | 移除组 | 当前可得结论 |
 | --- | ---: | ---: | --- |
@@ -253,7 +255,7 @@ N3 的聚焦诊断中完整组识别“海岸”、移除组未识别，但完�
 
 删除后的完整组正确区分了部分未绑定原文，并报告声景／独立性缺证；但它把地点差异概括为不同环境可推断，未独立报告海岸限定。记录还把“同一单元”与只报一项联系起来。实际规则是同一待修关系只报告一次、多个独立错误分别输出；一个片段可同时有地点与声景两项缺口。这里观察到的是关系与单元混淆，不能断言模型已经认定海岸有错、随后才把它合并删除。
 
-代码核对也排除了两项解释：[报告校验](../../src/personal_agent/application/conversation/research.py)没有“同一单元最多一项”的限制；两份新响应的 JSON 正文与保存报告逐字段一致，未发现后处理丢弃海岸反馈。校验只能检查实际报告的类别、目标及证据身份，不能据空报告证明每个事实都已查证。
+代码核对也排除了两项解释：报告校验（旧版 `research.py`）没有“同一单元最多一项”的限制；两份新响应的 JSON 正文与保存报告逐字段一致，未发现后处理丢弃海岸反馈。校验只能检查实际报告的类别、目标及证据身份，不能据空报告证明每个事实都已查证。
 
 **“海岸”出现在输入里，不足以解释漏检。**原 MN3 聚焦完整组保留了与 N3-final 逐字段相同的 `c3`、`a3`，同样含三处海岸，却成功指出 `d3:59` 不支持该限定，还分别报告了同片段的声景问题。原归档哈希及这一对照见[聚焦审计](../../.tmp/claim-persistent-analysis-20261018/counterexample-audit.json)。聚焦输入删除了其他被评单元，不能替代完整阶段通过，也不能由此证明缩短输入即可解决。
 
@@ -339,7 +341,7 @@ B 报告 `c3.f1` 的声景／独立性缺证，以及 `c2.f2` 中精确录音条
 
 对应原生文件、SHA-256 和字符区间见[本地审计](../../.tmp/claim-root-cause-review-20261019/local-audit.json)，只公开语义摘要，不复制推理正文。隔离组停止也经过复核：事前规则要求地理阅读忠实且不得以背景补作原文明示事实；它新增“自然保护区”，又将 NBP 地点不明扩大成第八名称不明，属于本轮地理任务。原引用 ID 全部合法，失败在语义支持，不是 ID 校验；未执行的后续比较仍不计漏检。
 
-生产契约已有本单元来源限制、缺证无需证明为假及独立错误分别报告。实际[Prompt](../../src/personal_agent/kernel/prompt_templates/research.py)同时使用来源支持的“必要关系”、两稿保真的“实质内容”和用户覆盖的“所需事实”；这些职责被交叉理解为重要性筛选，是有轨迹依据的候选解释，尚未证明哪段措辞造成了它。[研究实现](../../src/personal_agent/application/conversation/research.py)的校验只约束已报告问题的类别、定位和引用，空 findings 可通过；它不能确定模型是否检查过段内每个限定。增加一个 supported 自评也不能解决这个语义覆盖缺口。
+生产契约已有本单元来源限制、缺证无需证明为假及独立错误分别报告。当时的 Prompt同时使用来源支持的“必要关系”、两稿保真的“实质内容”和用户覆盖的“所需事实”；这些职责被交叉理解为重要性筛选，是有轨迹依据的候选解释，尚未证明哪段措辞造成了它。旧版 `application/conversation/research.py` 的校验只约束已报告问题的类别、定位和引用，空 findings 可通过；它不能确定模型是否检查过段内每个限定。增加一个 supported 自评也不能解决这个语义覆盖缺口。
 
 外部检索优先读取原始 issue、评论、关联 PR 和固定源码，未把机器人回复当作维护者结论。下列状态均截至本次复核，来源快照与 URL 由[来源清单](../../.tmp/claim-root-cause-review-20261019/source-manifest.json)拥有。
 
@@ -643,7 +645,7 @@ E 的准确反馈为 E05／E06／E09／E10；Z 为 Z01／Z02／Z03／Z06／Z08�
 
 ### 2.22 中文单类核验恢复基础反馈与验收复核
 
-用户指出 true 必须解释并返回研究模型后，已恢复单类核验的四项基础反馈。**十次首响应均返回至少一条真实、说明具体且定位正确的错误；不要求单轮同时发现海岸和其他全部错误。**这与[已有渐进核验契约](../optimization/completed/multi-error-verification-revision.md)一致。旧纯布尔任务把解释从协议中禁掉，是执行者的实验设计错误；生产[Finding 契约](../../src/personal_agent/capabilities/contracts/research.py)和[研究模型消费说明](../../src/personal_agent/kernel/prompt_templates/research.py)原本就保留基础反馈。
+用户指出 true 必须解释并返回研究模型后，已恢复单类核验的四项基础反馈。**十次首响应均返回至少一条真实、说明具体且定位正确的错误；不要求单轮同时发现海岸和其他全部错误。**这与[已有渐进核验契约](../optimization/completed/multi-error-verification-revision.md)一致。旧纯布尔任务把解释从协议中禁掉，是执行者的实验设计错误；生产Finding 契约（旧版 `research.py`）和研究模型消费说明（旧版 `research.py`）原本就保留基础反馈。
 
 当前输出中，true 必须带非空 findings，每项保留 category、target、error_description、evidence_ids；类别固定为 `citation_not_supported`，说明用中文，定位及原文 ID 来自当前实际输入。false 仍须中文 reason。完整中文材料逐字不变，模型、thinking、JSON Object 和供应商参数保持；只恢复反馈任务及 Schema，并收窄到当前可见单元 ID，不点名海岸或注入期望解释。参见[实际请求](../../.tmp/coast-feedback-probe-20261020/run-1/wire.json)、[输出 Schema](../../.tmp/coast-feedback-probe-20261020/run-1/schema.json)及[先行设计](../optimization/to_verify/research-goal-coverage.md#中文单类核验恢复基础反馈)。任务与输出约束共同变化，不作为单分类或某字段的独立收益。
 

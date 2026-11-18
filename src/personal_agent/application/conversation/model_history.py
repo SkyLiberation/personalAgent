@@ -8,6 +8,7 @@ from personal_agent.capabilities.contracts.model import (
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS, create_prompt_catalog
 
+from .artifact_sources import tool_result_artifact_refs
 from .citations import CitableInput, render_citable_input, render_decision_feedback
 from .analysis_tasks import AnalysisTaskHistory, task_message_indices, task_switch_turn
 from .errors import ConversationOperationConflict
@@ -17,7 +18,8 @@ from .goal_models import GOAL_PENDING_ACTION_REJECTED
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY
 from .working_plan import render_working_plan
 from .models import (
-    ActionObservation, DecisionFeedback, InteractionTrace, ModelCallDisposition, ModelDecisionRecord,
+    ActionObservation, ArtifactSourceInput, ConversationWorkingPlan, DecisionFeedback, InteractionTrace, ModelCallDisposition,
+    ModelDecisionRecord, SubmittedFinal,
 )
 
 
@@ -33,7 +35,7 @@ def task_switch_input_indices(trace: InteractionTrace) -> frozenset[int]:
     if not switch_turn:
         return frozenset()
     return frozenset(index for record in trace.model_decisions
-        if record.turn_index is not None and record.turn_index <= switch_turn
+        if record.step_no is not None and record.step_no <= switch_turn
         for index in decision_input_indices(trace, record))
 
 
@@ -46,17 +48,17 @@ def goal_pending_rejection(trace: InteractionTrace, record: ModelDecisionRecord)
 
 
 def decision_input_indices(trace: InteractionTrace, record: ModelDecisionRecord) -> tuple[int, ...]:
-    if record.turn_index is None or record.assistant is None:
+    if record.step_no is None or record.assistant is None:
         return ()
     ids = set(record.assistant.call_ids)
-    end = next((other.input_start for other in trace.model_decisions
-                if other.turn_index is not None and other.turn_index > record.turn_index), len(trace.inputs))
+    end = next((other.input_start for other in trace.responded_steps
+                if other.step_no is not None and other.step_no > record.step_no), len(trace.inputs))
     indices = []
     for index, item in enumerate(trace.inputs):
         if record.blocked_by is not None and input_identity(item) == record.blocked_by:
             indices.append(index)
         elif isinstance(item, DecisionFeedback):
-            if item.decision_turn == record.turn_index:
+            if item.decision_turn == record.step_no:
                 indices.append(index)
         elif (isinstance(item, ActionObservation)
               and item.capability_id == INTERACTION_VERIFICATION_CAPABILITY
@@ -73,26 +75,26 @@ def decision_input_indices(trace: InteractionTrace, record: ModelDecisionRecord)
                 if caller.assistant is None or caller.input_start > index or item.action_id not in caller.assistant.call_ids:
                     continue
                 rejected = any(isinstance(feedback, DecisionFeedback)
-                    and feedback.decision_turn == caller.turn_index
+                    and feedback.decision_turn == caller.step_no
                     and (feedback.action_id == item.action_id
                          or (input_identity(feedback) == caller.blocked_by
                              and feedback.action_id not in caller.assistant.call_ids))
                     for feedback in trace.inputs)
                 if not rejected:
-                    eligible.append(caller.turn_index)
-            if eligible and eligible[-1] == record.turn_index:
+                    eligible.append(caller.step_no)
+            if eligible and eligible[-1] == record.step_no:
                 indices.append(index)
     return tuple(indices)
 
 
 def update_decisions(
-    trace: InteractionTrace | None, *, inputs, turn_index: int,
+    trace: InteractionTrace | None, *, inputs, step_no: int,
     response: StructuredModelResponse | None = None,
     dispositions: tuple[ModelCallDisposition, ...] = (),
 ) -> tuple[ModelDecisionRecord, ...]:
     records = list(trace.model_decisions if trace is not None else ())
     index = next((i for i in range(len(records) - 1, -1, -1)
-                  if records[i].turn_index == turn_index), None)
+                  if records[i].step_no == step_no), None)
     if index is None:
         if dispositions:
             raise ConversationOperationConflict("控制处置缺少同轮原生模型响应")
@@ -108,7 +110,7 @@ def update_decisions(
     blocked_by = record.blocked_by
     if blocked_by is None:
         feedback = next((item for item in inputs if isinstance(item, DecisionFeedback)
-                         and item.decision_turn == turn_index), None)
+                         and item.decision_turn == step_no), None)
         blocked_by = input_identity(feedback) if feedback is not None else None
     records[index] = record.model_copy(update={"dispositions": tuple(current.values()), "blocked_by": blocked_by})
     return tuple(records)
@@ -119,16 +121,11 @@ def validate_decision_extension(previous: InteractionTrace, current: Interaction
         raise ConversationOperationConflict("原生模型历史不可删除")
     for old, new in zip(previous.model_decisions, current.model_decisions):
         if (old.invocation_id != new.invocation_id or old.operation != new.operation or old.request != new.request
-                or (old.turn_index is not None and old.turn_index != new.turn_index) or old.input_start != new.input_start
+                or old.step_no != new.step_no or old.input_start != new.input_start
                 or new.response_refs[:len(old.response_refs)] != old.response_refs
                 or new.protocol_exchanges[:len(old.protocol_exchanges)] != old.protocol_exchanges
                 or new.dispositions[:len(old.dispositions)] != old.dispositions
                 or (old.blocked_by is not None and old.blocked_by != new.blocked_by)
-                or (old.research_selection is not None and (
-                    old.research_selection != new.research_selection
-                    or old.research_claim_ref != new.research_claim_ref
-                    or old.research_evidence_digest != new.research_evidence_digest
-                    or old.research_criteria_digest != new.research_criteria_digest))
                 or (old.consumed and (not new.consumed or old.response_refs != new.response_refs
                     or old.assistant != new.assistant or old.status != new.status
                     or old.protocol_exchanges != new.protocol_exchanges or old.diagnostics != new.diagnostics))):
@@ -196,21 +193,27 @@ def _paired_rejection_content(
 def project_model_history(
     trace: InteractionTrace, visible: Sequence[CitableInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, covered_through: int = 0,
-) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...]]:
+    working_plan: ConversationWorkingPlan | None = None,
+) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...], bool]:
     """Use only already materialized/visible facts, never raw tool payloads."""
     keyed = {input_identity(item.observation): item for item in visible
              if input_identity(item.observation) is not None}
+    artifacts = {item.observation.resource.resource_ref: item for item in visible
+                 if isinstance(item.observation, ArtifactSourceInput)}
+    published = tool_result_artifact_refs(trace)
     consumed: set[HistoryItemKey] = set()
     exchanges: list[ModelHistoryEntry] = []
+    emitted_turns: set[int] = set()
+    current_plan_visible = False
     switch_turn = task_switch_turn(trace)
     for record in trace.model_decisions:
-        if record.turn_index is None or not record.consumed:
+        if record.step_no is None or not record.consumed:
             continue
-        if record.turn_index <= switch_turn:
+        if record.step_no <= switch_turn:
             consumed.update(input_identity(trace.inputs[index])
                             for index in decision_input_indices(trace, record))
             continue
-        if record.turn_index <= covered_through:
+        if record.step_no <= covered_through:
             continue
         if record.assistant is None:
             # A failed envelope has no legal call IDs; do not invent a native exchange.
@@ -239,11 +242,18 @@ def project_model_history(
                 content = (_paired_rejection_content(item.observation, record.assistant, call_id, prompts)
                            if isinstance(item.observation, DecisionFeedback)
                            else render_citable_input(item, prompts=prompts, native_tool_result=True))
+                if isinstance(item.observation, ActionObservation):
+                    materials = (render_citable_input(artifacts[ref], prompts=prompts)
+                                 for ref in published.get(call_id, ()) if ref in artifacts)
+                    content = "\n\n".join((content, *materials))
                 results.append(ModelToolResult(call_id=call_id, content=content))
                 consumed.add(input_identity(item.observation))
             elif call_id in dispositions:
+                disposition = dispositions[call_id]
                 results.append(ModelToolResult(call_id=call_id,
-                    content=_disposition_content(dispositions[call_id], prompts, trace, record.turn_index)))
+                    content=_disposition_content(disposition, prompts, trace, record.step_no)))
+                if working_plan is not None and disposition.working_plan_snapshot == working_plan:
+                    current_plan_visible = True
             elif any(item.action_id == call_id for item in trace.accepted_tool_requests):
                 raise ConversationOperationConflict("原生工具调用仍缺少已接受执行的恢复结果")
             elif record.blocked_by is not None and record.blocked_by in keyed:
@@ -262,8 +272,18 @@ def project_model_history(
                          if (key := input_identity(trace.inputs[index])) not in consumed)
         exchanges.append(ModelToolExchange(assistant=record.assistant, results=tuple(results),
             runtime_feedback=tuple(render_citable_input(item, prompts=prompts) for item in feedback)))
+        emitted_turns.add(record.step_no)
         consumed.update(input_identity(item.observation) for item in feedback)
-    return tuple(exchanges), tuple(item for item in visible if input_identity(item.observation) not in consumed)
+    # A submission records the answer decoded from its original decision.
+    # Omit its second rendering only when that Run's original exchange is visible.
+    remaining = tuple(
+        item for item in visible
+        if input_identity(item.observation) not in consumed
+        and not (isinstance(item.observation, SubmittedFinal)
+                 and item.observation.resource_ref.revision in emitted_turns
+                 and item.observation in trace.inputs)
+    )
+    return tuple(exchanges), remaining, current_plan_visible
 
 
 _PLAN_REVIEW_DELIVERIES = tuple(create_prompt_catalog(language).render("conversation.service.plan_review_ready")
@@ -273,7 +293,7 @@ _PLAN_REVIEW_DELIVERIES = tuple(create_prompt_catalog(language).render("conversa
 def _matches_analysis_delivery(trace: InteractionTrace, content: str) -> bool:
     if trace.final_message is not None:
         return trace.final_message.message == content
-    last = next((item for item in reversed(trace.model_decisions) if item.turn_index is not None), None)
+    last = next(iter(reversed(trace.responded_steps)), None)
     waiting = next((item for item in last.dispositions if item.plan_waiting), None) if last else None
     if waiting is None:
         return False
@@ -292,7 +312,7 @@ def prior_analysis_turns(
         end = len(source.messages)
         if (source.interaction_run_ref == trace.interaction_run_ref
                 or source.principal != trace.principal or source.conversation_id != trace.conversation_id
-                or source.python_authorization_digest != trace.python_authorization_digest
+                or source.bash_authorization_digest != trace.bash_authorization_digest
                 or end >= len(trace.messages)
                 or source.messages != trace.messages[:end]
                 or trace.messages[end].role != "assistant"):
@@ -314,10 +334,12 @@ def selected_analysis_turns(
 def project_conversation_history(
     trace: InteractionTrace, previous: Sequence[InteractionTrace], visible: Sequence[CitableInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, candidate: HistoryCompactionCheckpoint | None = None,
-) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...]]:
+    working_plan: ConversationWorkingPlan | None = None,
+) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...], bool]:
     """Place prior complete exchanges before their displayed final answer."""
     exchanges: list[ModelHistoryEntry] = []
     remaining = tuple(visible)
+    predecessor_plan_visible = False
     checkpoint = candidate or active_history_checkpoint(trace, previous)
     coverage = {item.run_ref: item.through_turn for item in checkpoint.sources} if checkpoint else {}
     indices = task_message_indices(trace, previous)
@@ -331,18 +353,20 @@ def project_conversation_history(
                              and item.capability_id == INTERACTION_VERIFICATION_CAPABILITY))
         source_visible = tuple(item for item in remaining
                                if not is_runtime_feedback(item.observation))
-        history, projected = project_model_history(source, (*source_visible, *feedback), prompts=prompts,
-            covered_through=coverage.get(source.interaction_run_ref, 0))
+        history, projected, plan_visible = project_model_history(
+            source, (*source_visible, *feedback), prompts=prompts,
+            covered_through=coverage.get(source.interaction_run_ref, 0), working_plan=working_plan)
+        predecessor_plan_visible |= plan_visible
         history = _with_prefix_summary(history, source.interaction_run_ref, checkpoint, prompts)
         remaining = tuple(item for item in original_visible
                           if is_runtime_feedback(item.observation) or item in projected)
         # The request's stable system prefix occupies position zero.
         position = indices.index(len(source.messages)) + 1
         exchanges.extend(item.model_copy(update={"before_message_index": position}) for item in history)
-    history, remaining = project_model_history(trace, remaining, prompts=prompts,
-        covered_through=coverage.get(trace.interaction_run_ref, 0))
+    history, remaining, plan_visible = project_model_history(trace, remaining, prompts=prompts,
+        covered_through=coverage.get(trace.interaction_run_ref, 0), working_plan=working_plan)
     history = _with_prefix_summary(history, trace.interaction_run_ref, checkpoint, prompts)
-    return (*exchanges, *history), remaining
+    return (*exchanges, *history), remaining, plan_visible or predecessor_plan_visible
 
 
 def history_summary_context(checkpoint: HistoryCompactionCheckpoint, prompts: PromptCatalog) -> str:

@@ -14,7 +14,7 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.application.artifacts.models import ContentDigest, TextPosition
 
 from .context_materialization import (
-    ARTIFACT_OUTPUT_CAPABILITIES,
+    FILE_READ_CAPABILITIES,
     select_visible_successful_observations,
 )
 from .models import ActionObservation, ArtifactSourceInput, InteractionInput
@@ -73,7 +73,7 @@ def source_metadata_by_resource(
     for item in observations:
         if not isinstance(item, ActionObservation) or item.status != "succeeded":
             continue
-        if item.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
+        if item.capability_id in FILE_READ_CAPABILITIES:
             continue
         retrieval = item.payload.get("retrieval")
         if not isinstance(retrieval, dict) or "resource_ref" not in retrieval:
@@ -130,7 +130,7 @@ def materialize_source_reading_state(
     seen: dict[ResourceRef, set[int]] = {ref: set() for ref in sources}
     ranges: dict[tuple[ResourceRef, int], list[tuple[int, int]]] = {}
     for item in observations:
-        if item.capability_id not in ARTIFACT_OUTPUT_CAPABILITIES:
+        if item.capability_id not in FILE_READ_CAPABILITIES:
             continue
         # A lossy display does not prove any of its original lines was fully shown.
         if item.payload.get("retrieval"):

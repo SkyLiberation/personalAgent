@@ -277,11 +277,11 @@ PROMPTS.update({
         'interaction_verification.context.status.not_satisfied': '未满足',
         'interaction_verification.context.status.insufficient_evidence': '依据不足',
         'interaction_verification.context.revision': '修订反馈\n{feedback}',
-        'interaction_verification.context.action_id': '历史 Python 调用 ID 为 `{action_id}`。',
+        'interaction_verification.context.action_id': '历史 Bash 调用 ID 为 `{action_id}`。',
         'interaction_verification.context.input': '输入文件 `{binding_name}` 对应 resource_id `{resource_id}`。',
         'interaction_verification.context.input_revision': '输入文件版本为 {revision}。',
         'interaction_verification.context.input_version': '输入文件版本为 {revision}，原文件名 `{filename}`，内容类型 `{media}`。',
-        'interaction_verification.context.code': '本次调用的 Python 原码\n\n{code}',
+        'interaction_verification.context.code': '本次调用的 Bash 命令\n\n{code}',
         'interaction_verification.context.mounted_code': '挂载脚本 `{binding_name}` 的原码\n\n{code}',
         'interaction_verification.context.source.unavailable': '无法提供该挂载脚本的原码。',
         'interaction_verification.context.source.over_budget': '该挂载脚本超过核验输入的源码额度。',
@@ -294,6 +294,6 @@ PROMPTS.update({
         'interaction_verification.context.stream': '实际输出预览（{stream}）\n\n{text}',
         'interaction_verification.context.delivered': '该回答已交付。',
         'interaction_verification.context.not_delivered': '该稿件没有交付记录。',
-        'interaction_verification.context.pending_slot': '待验 Python 调用 `{action_id}`，请用槽位 `{slot}` 返回本次判决。',
+        'interaction_verification.context.pending_slot': '待验 Bash 调用 `{action_id}`，请用槽位 `{slot}` 返回本次判决。',
     }.items()
 })

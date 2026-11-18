@@ -40,9 +40,9 @@
 
 ## 撤回后失败版本的事实与最早责任边界
 
-当前研究入口在有一段可引用 `source_text` 后即可打开；[研究写作者指令](../../../src/personal_agent/kernel/prompt_templates/research.py)要求“形成足以回答全部事实问题的完整研究 claim 集合”，`CreateClaims` 接收正文及引用。实发[研究请求](../../../.tmp/claim-production-integration-20260928/target-source-entry/model-calls/6296/0006-request.json)包含原始用户消息、已读来源正文和引用坐标，说明本问题不能简单归因为来源完全没有进入模型输入。该请求仍处于“从现有资料直接提交完整 claim 集合”的协议；是否会优先判断资料适合回答哪一个用户问题，没有独立、可观察的选择步骤。
+当前研究入口在有一段可引用 `source_text` 后即可打开；研究写作者指令（旧版 `research.py`）要求“形成足以回答全部事实问题的完整研究 claim 集合”，`CreateClaims` 接收正文及引用。实发研究请求（原归档 `.tmp/claim-production-integration-20260928/target-source-entry/model-calls/6296/0006-request.json`）包含原始用户消息、已读来源正文和引用坐标，说明本问题不能简单归因为来源完全没有进入模型输入。该请求仍处于“从现有资料直接提交完整 claim 集合”的协议；是否会优先判断资料适合回答哪一个用户问题，没有独立、可观察的选择步骤。
 
-[`admit_claim_change`](../../../src/personal_agent/application/conversation/research.py)确定性校验引用来自实际返回的坐标，却不负责判断来源是否适合回答用户问题；[`materialize_cited_draft`](../../../src/personal_agent/application/conversation/citations.py)再从 claim 自选引用重建核验输入。来源支持 Verifier 因而只能判断所交片段与既有 claim 的关系，无法反向证明研究模型最初选了恰当的来源、覆盖了原问题，或没有为了保留先写的 claim 而补找条款。历史结构先行候选曾在来源支持前结束该版核验；当前生产已停用复合结构识别。
+`admit_claim_change`确定性校验引用来自实际返回的坐标，却不负责判断来源是否适合回答用户问题；[`materialize_cited_draft`](../../../src/personal_agent/application/conversation/citations.py)再从 claim 自选引用重建核验输入。来源支持 Verifier 因而只能判断所交片段与既有 claim 的关系，无法反向证明研究模型最初选了恰当的来源、覆盖了原问题，或没有为了保留先写的 claim 而补找条款。历史结构先行候选曾在来源支持前结束该版核验；当前生产已停用复合结构识别。
 
 历史反例给出需要改变方向的理由，但尚不构成新机制的因果证明：[c7 的反馈后修订](../claim-revision-nonconvergence.md#整体失败链与已有优化)曾删去又带回无据判断；[同轨迹来源审计](../evidence-acquisition.md#120-生成侧越界的最早责任边界归因)发现应引的条款已在已读资料中，修订稿却遗漏或错配；[结构先行连续样本](claim-multi-proposition.md#已执行结果与未验证边界)在 256 次结构调用后仍未到来源支持。三类事实分别指向证据选择、论断改写和核验顺序，不能合并成“多搜或多拆就会通过”的结论。历史 `target-source-entry` 样本主动中止，不能用这些 Offline 轨迹或中止样本替代产品 baseline。
 

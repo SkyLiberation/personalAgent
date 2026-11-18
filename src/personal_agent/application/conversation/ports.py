@@ -111,6 +111,10 @@ class InteractionAgentPort(Protocol):
 
 
 class InteractionArtifactPort(Protocol):
+    def write_tool_output(
+        self, *, execution_scope: ExecutionScope, capability_id: str, content: str,
+    ) -> ResourceRef: ...
+
     def write_draft(
         self, *, execution_scope: ExecutionScope, tool_call_id: str,
         request: ArtifactWriteRequest, allowed_resource_refs: tuple[ResourceRef, ...],

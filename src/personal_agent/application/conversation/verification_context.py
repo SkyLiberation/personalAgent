@@ -18,7 +18,7 @@ from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY, observe
 
 
 def current_question_inputs(trace: InteractionTrace) -> tuple[InteractionInput, ...]:
-    decisions = tuple(record for record in trace.model_decisions if record.turn_index is not None)
+    decisions = trace.responded_steps
     if not decisions:
         raise ConversationOperationConflict("verification requires the current decision")
     return trace.inputs[decisions[0].input_start:]
@@ -53,13 +53,13 @@ def verification_prefix(turn: VerificationTurn, end: int, *, kind: VerificationK
 
 def verification_events(trace: InteractionTrace) -> tuple[VerificationEvent, ...]:
     events: list[VerificationEvent] = []
-    decisions = tuple(item for item in trace.model_decisions if item.turn_index is not None)
+    decisions = trace.responded_steps
     active = None
     verified_goal = None
     unverified_goal = None
     switch_turn = task_switch_turn(trace)
     for index, record in enumerate(decisions):
-        if record.turn_index < switch_turn:
+        if record.step_no < switch_turn:
             continue
         end = decisions[index + 1].input_start if index + 1 < len(decisions) else len(trace.inputs)
         items = trace.inputs[record.input_start:end]
@@ -70,10 +70,10 @@ def verification_events(trace: InteractionTrace) -> tuple[VerificationEvent, ...
                 name = function.get("name")
                 if name not in (SUBMIT_GOAL_PATCH, "maintain_goal", "retain_goal"):
                     continue
-                submission_id = goal_submission_id(trace, call["id"], record.turn_index)
+                submission_id = goal_submission_id(trace, call["id"], record.step_no)
                 verdict = next((receipt for receipt in receipts if receipt.checked_kind == "goal"), None)
                 accepted = next((op for op in trace.goal_operations
-                    if op.call_id == call["id"] and op.decision_turn == record.turn_index), None)
+                    if op.call_id == call["id"] and op.decision_turn == record.step_no), None)
                 content = verdict.verified_draft if verdict else (
                     accepted.verification_text() if accepted else None)
                 if content is None and name != SUBMIT_GOAL_PATCH:
@@ -144,7 +144,7 @@ def build_verification_context(*, trace: InteractionTrace, history: tuple[Intera
         if source is trace:
             if goal_call_id is not None:
                 pending = VerificationEvent(kind="goal", submission_id=goal_submission_id(trace, goal_call_id,
-                    trace.usage.model_turns), content=draft)
+                    trace.current_step_no), content=draft)
                 events = tuple(item for item in events if item.submission_id != pending.submission_id) + (pending,)
                 if task_review is not None and task_review.action != "continue":
                     events = (pending,)

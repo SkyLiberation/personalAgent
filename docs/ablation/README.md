@@ -1,6 +1,6 @@
 # 机制消融
 
-本目录保存隔离实验的规格、结果与证据边界。实验回放按 Offline Eval 解释；当前生产契约见[核验专题](../topics/verification-and-completion.md)，完整用户结果与发布资格见[评测体系](../evals/README.md)。
+本目录保存隔离实验的规格、结果与证据边界。[ADR 0055](../adr/0055-unified-conversation-answer.md)移除 Conversation claim 后，旧 claim 对比停止新增运行，原配置、标签和结果按历史身份保留。两类核验的 feature flag 实验组仍有效。实验回放按 Offline Eval 解释；当前生产契约见[核验专题](../topics/verification-and-completion.md)，完整用户结果与发布资格见[评测体系](../evals/README.md)。
 
 ## 按阅读目标进入
 
@@ -8,7 +8,7 @@
 | --- | --- |
 | Feature flag 配置、实验组及功能变更时的同步维护 | [实验组登记](experiment.md)、[控制 skill](../../.agents/skills/manage-feature-flags/SKILL.md)；两类核验已接入，默认开启 |
 | 额外 claim 的比较规格、局部收益、成本与未测边界 | [主报告](claim-verifier.md)、[原始汇总](claim-verifier-data.json) |
-| 固定指标与历史基线的只读重算 | [指标规格](claim-verifier.md#21-具体评估指标)、[冻结计划](claim-verifier-baseline.plan.json)、[指标快照](claim-verifier-metrics.json)、[运行命令](../evals/04-running-and-release.md#claim-指标持续评估) |
+| 固定指标与历史基线的只读重算 | [指标规格](claim-verifier.md#21-具体评估指标)、[冻结计划](claim-verifier-baseline.plan.json)、[指标快照](claim-verifier-metrics.json)、[运行命令](../evals/04-running-and-release.md#历史-claim-指标重算) |
 | 全部反馈的事后 AI 初审及限制 | [初审报告](claim-complete-review-20261020.md)、[逐行数据](claim-complete-review-20261020.json) |
 | N2 的真实修订与用户收益边界 | [恢复预检](claim-n2-continuation-preflight-20261020.md)、[条件续跑](claim-n2-continuation-20261021.md)、[价值复核](claim-verifier.md#223-claim-收益价值复核)、[反馈交接续验](claim-verifier.md#224-历史反馈交接的真实续验) |
 | 海岸漏报的输入、任务与判断诊断 | [Context 删除与输入归属](claim-verifier.md#23-context-定向删除验证)至[直接追问](claim-verifier.md#213-直接追问未分类原因)；每节链接对应结果数据 |

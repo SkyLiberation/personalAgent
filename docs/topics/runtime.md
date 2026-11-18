@@ -2,7 +2,7 @@
 
 **Runtime 负责装配和执行机械事实，不拥有用户目标、领域状态或最终完成语义。** 当前普通交互是一个基于 typed Observation 的 Conversation loop；固定事务由各自 Application/Domain 拥有。
 
-回答结果由 Runtime 显式注入 direct 或 claims 模块，核验由 required/none 独立配置；同一个 Conversation 循环继续拥有执行、计量和唯一 Final。Journal 冻结装配，恢复及同对话新 run 不允许更换配置。默认保持 claims+required；无核验仅用于当前授权的独立流程诊断，范围与退出见 [ADR 0041](../adr/0041-replaceable-answer-result-modules.md)。
+Conversation 循环拥有执行、计量和唯一 `FinalMessage`。部署配置控制目标、回答的适用核验与回答测试模式，默认开启两类核验。Journal 绑定配置，恢复及同对话新 run 沿用原绑定。提交契约见 [ADR 0055](../adr/0055-unified-conversation-answer.md)，核验开关见 [ADR 0050](../adr/0050-verification-feature-flags.md)。
 
 主循环采用原生 assistant 消息与动作协议，实施决定见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)。原生交换在真实 assistant／tool 消息之后追加对应 Runtime 反馈，取消了“仅最新”筛选；但新的真实运行已复现跨 run 同号回执被误删，以及两次压缩后仍超容量，当前完整历史契约尚未通过。归属、已成立部分与重新打开范围见[目标维护 Spec §9.18—§9.19](../optimization/to_verify/analysis-goal-maintenance.md#918-核验反馈与实际修复按原交互进入主循环)。实际生成、完整任务结果及限制由[统一设计](../optimization/to_verify/conversation-loop-schema.md)与[评测盘点](../evals/02-current-case-inventory.md)维护。
 
@@ -25,7 +25,7 @@ HTTP / CLI / Message Adapter
 
 每个用户轮次通过 `submit_goal_patch` 提交版本化目标。Journal 保存来源、已接纳变更及执行控制。目标接纳后开放已授权工具，按需使用 `read_current_goal({})`。业务动作仍由原权限和执行边界约束。[统一主循环规格](../optimization/to_verify/analysis-goal-maintenance.md#统一-conversation-主循环)
 
-目标与回答核验消费各自的历史、提交及反馈。回答核验使用生效目标、实际稿件及引用证据。普通外部研究沿用论断与来源核验，检索实验沿用专有完成契约。运行中的验收条件由当前 Goal 派生，独立前置意图分类已退役。[目标核验](../context/goal-verifier.md) · [回答核验](../context/goal-compliance-verifier.md)
+目标与回答核验消费各自的历史、提交及反馈。回答核验使用生效目标、实际稿件及引用证据；绑定的检索实验沿用专有完成契约。运行中的验收条件由当前 Goal 派生，独立前置意图分类已退役。[目标核验](../context/goal-verifier.md) · [回答核验](../context/goal-compliance-verifier.md)
 
 `AgentRuntime` 装配 Conversation 的预算组件。它从已提交用量派生主模型可见的轮次、工具调用、Agent 委派和 token 余额，并负责新模型实发与工具批次的额度判定。存在 `run_deadline_at` 时，快照包含从原截止和当前 UTC 派生的 `wall_seconds_at_input`。Journal 持有用量、执行预留和结算，恢复沿用原截止。低 token 提醒随下一次主决策请求物化，触发条件与预算停止分开判定。具体关口和验证见[主循环预算治理设计](../optimization/to_verify/conversation-loop-boundaries.md#319-对话预算治理的装配边界)。
 
@@ -40,17 +40,16 @@ messages + authenticated principal
   -> governed Tool/Agent/Application action execution
   -> ActionObservation | DecisionFeedback
   -> 模型继续选择动作，或以原生 assistant 正文／带属性提交形成完整候选
-  -> 普通外部研究：同版本 claims 与 final_answer -> 统一核验 -> Completion
   -> 绑定检索实验：完整候选 -> SubmittedFinal -> 引用及实验文件检查 -> Completion
   -> 普通：完整候选 -> 按配置核验目标遵循与引用证据 -> Completion
   -> 交付确切通过的回答，或继续修订
 ```
 
-普通外部研究的 claims 与最终回答由同一版本和原 Interaction Journal 保存，模型自主取证和编辑。同一研究版本提交的完整 `final_answer` 属于最终交付提议；Runtime 只将该字段的确切正文与引用恢复为 `FinalMessage`，按同版本统一核验，通过后直接经 Completion 交付确切回答。字段缺失时保存中间进展，继续研究；恢复不生成答案，也不增加独立汇总或第二次语义核验。全部调用计入原预算，不再构造研究 Final。当前生产接入、例外范围及正式验收状态见 [ADR 0032](../adr/0032-conversation-research-claims.md)。
+网页读取和其他工具回执作为模型成文的材料。成功读取网页后仍沿同一提交协议交付完整回答，引用可空；需要绑定已读取的来源时，由 Runtime 从当次可见原文核对坐标。
 
-部署绑定的检索实验不进入 claim／选证／语义 verifier。模型用原生提交交回完整候选，SubmittedFinal 与实际用量持久后检查引用、实际执行、冻结/test及权限，再返回同一 Final。恢复沿同稿完成校验，不发布清单、ZIP或报告 Artifact，不收集下载资源；该领域检查继续由 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)拥有，模型传输已由 ADR 0045 替换。
+部署绑定的检索实验通过同一协议提交完整候选。`SubmittedFinal` 与实际用量持久后检查引用、实际执行、冻结、test 及权限，再返回同一 Final。恢复沿同稿完成校验。领域检查由 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)拥有。
 
-当前主循环仍直接编排研究局部步骤，代码职责混合见[架构现状](../architecture/core-architecture-current-state.md#31-当前主循环的职责混合)。[主循环边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md)拥有待验证整理方案；本页只说明现行行为。
+主循环的职责及代码落点见[架构现状](../architecture/core-architecture-current-state.md#31-当前主循环的职责混合)。[主循环边界 Spec](../optimization/to_verify/conversation-loop-boundaries.md)拥有待验证的整理方案。
 
 模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 
@@ -68,7 +67,7 @@ Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDe
 
 Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answer 为边界。未交付任务的修订保持 Plan 身份，跨轮恢复保留该 Plan 的成功执行资料。普通进度更新直接继续，用户要求先审阅时用工具进入等待。读写字段及可见性见[本地工具](../context/local-tools.md#5-conversation-直接声明的本地动作)，整体决定见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
-普通可见正文形成默认 `answer` 候选；`submit_final(message, disposition, references)` 显式选择沟通属性与行引用，两者进入同一 `FinalMessage` 出口。回答被拒后，原稿及真实反馈回原循环，模型继续取证或重新提交完整回答；普通回答不再暴露专用按段修改工具，见[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)。有调用时正文只作该轮说明，坏调用不能降为文字答案；空白、reasoning、截断或非法角色不形成候选。claims模式保留逐段结构和业务修改，普通正文不能绕过当前版本写作。提交和研究操作独占批次，引用、适用核验、预算、计划及未决执行在交付前检查。
+普通可见正文形成默认 `answer` 候选；`control_submit_final(message, disposition, references)` 可显式选择沟通状态与行引用，两者进入同一 `FinalMessage` 出口。提交工具独占批次；有工具调用时正文只作当轮说明，非法调用不能降为文字答案。空白、reasoning、截断或非法角色不形成候选。交付前检查引用、适用核验、预算、计划及未决执行。回答被拒后，原稿及真实反馈回原循环，模型继续取证或重新提交完整回答，见 [ADR 0049](../adr/0049-answer-regeneration-in-original-loop.md)。
 
 意图判断及后台来源修订使用 `prompted_json`，以通用 Schema 指令、原始 JSON 文本和严格类型／来源校验承载，不请求工具或 API 格式功能。其他已迁移的内部 typed 能力使用原生输出声明，由 Infra 通过 LangChain 公共转换导出参数。两类承载都保留原件，按请求执行有限修复，不强转业务值。模板与版本见 [Prompt Registry](../llm-prompts.md)，验证范围见[统一设计 §15](../optimization/to_verify/conversation-loop-schema.md#15-内部意图判断采用提示式json的候选)。
 
@@ -76,7 +75,7 @@ Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answe
 
 ### 回答测试模式
 
-使用 `PERSONAL_AGENT_ANSWER_RESULT={"writer":"direct","test_mode":true}` 启动测试部署。`test_mode` 默认 `false`，可与直接回答或论断写作搭配。Runtime 在创建对话运行时绑定这项配置。
+使用 `PERSONAL_AGENT_ANSWER_RESULT={"test_mode":true}` 启动测试部署。`test_mode` 默认 `false`。Runtime 在创建对话运行时绑定这项配置。
 
 普通模式通过独立的 `control_request_clarification` 提交需要用户回答的问题。它独占当次模型调用。Runtime 保存调用身份和实际问题，并以 `clarification_required` 向客户端返回。客户端在同一会话继续发送用户回复，主循环按原时间顺序消费问题和回复。正常答案、限制和失败由 `control_submit_final` 接收。
 
@@ -84,7 +83,7 @@ Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answe
 
 离线回放已核对 Task2 第 24 轮的原调用在两种模式下均被拒绝。独立澄清在普通模式可提交并接续用户回复，测试模式拒绝该调用并保留目标读取。回放覆盖中英文和目标待维护、普通答复两个阶段。[原实发请求](../../.tmp/gc34/c-recovery/sdk/9dfd11b4d60544d1b1dcea3ff65f461c.http.request.json) · [原第 24 轮轨迹](../../.tmp/gc34/c-recovery/turn-24.trace.json)
 
-普通整稿 verifier 注册为 `workflow_activity`，由运行系统调用并生成 `SemanticVerificationReceipt`，不进入模型可见能力。研究统一核验沿 Model Port 返回绑定当前版本的 `ResearchReview`，Completion 不再追加语义调用。Verifier 只聚合 `passed|failed`；运行系统不解读逐判据的失败类别来选择工具相位。预算内的失败把完整 feedback 交还智能体决定修订或继续取证；下一轮已耗尽预算则直接停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已经完成的 `search_personal_knowledge`，但其他可见能力和最终交付入口保持可用。
+整稿 verifier 注册为 `workflow_activity`，由运行系统调用并生成 `SemanticVerificationReceipt`，不进入模型可见能力。Verifier 聚合 `passed|failed`；运行系统将失败反馈交回主循环，模型可重新作答或继续取证。下一轮额度耗尽时停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已完成的 `search_personal_knowledge`，其他可见能力和交付入口保持可用。
 
 新增请求前检查预算和截止；额度耗尽后仍可解码已付费原件，或完成无需新模型的同稿交付，新的核验和执行继续受预算约束。`max_tool_calls=0` 允许正常无工具回答，预算耗尽不生成替代答案或额外 Final 宽限。阈值按已知消费检查，未知不填零也不单独停止；在途请求可超出阈值。实际用户结果见[评测盘点](../evals/02-current-case-inventory.md)。
 

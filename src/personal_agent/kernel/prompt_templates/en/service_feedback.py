@@ -24,16 +24,6 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template='The model repeatedly submitted the same kind of invalid action, so this interaction stopped safely. None of the rejected actions were executed.',
     ),
-    'conversation.service.research_selection_coverage_repair': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='Cover every requirement exactly once, linking only current claims and returned references. This selection was not accepted.',
-    ),
-    'conversation.service.research_selection_evidence_repair': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='Use currently allowed tools to address the gaps, then select evidence again after obtaining new evidence.',
-    ),
     'conversation.service.experiment_delivery_check_unavailable': PromptTranslation(
         source_version='2026-10-27.v1',
         version="2026-10-27.en.v1",
@@ -95,9 +85,9 @@ TRANSLATIONS = {
         template='{error}\nSee the latest submitted_final for the complete rejected draft and its per-segment references.',
     ),
     'conversation.service.citation_repair': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='Correct the references or read the missing material, then resubmit the draft with its corresponding references. Do not fabricate evidence.',
+        source_version='2026-11-15.v1',
+        version="2026-11-15.en.v1",
+        template='Resubmit the complete answer. Fix required references or read their source text first. Remove optional coordinates that are unavailable.',
     ),
     'conversation.service.verification_budget_exhausted': PromptTranslation(
         source_version='2026-10-27.v1',
@@ -169,25 +159,21 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template="The current model request exceeds its declared capacity boundary, or the deployment's capacity information does not match the actual request. This call was stopped.",
     ),
-    'conversation.service.artifact_unread': PromptTranslation(
-        source_version='v1', version='en.v1',
-        template='This turn cannot end as `{disposition}` while the omitted portion of original `{resource_id}` is unread.',
-    ),
     'conversation.service.artifact_refetch': PromptTranslation(
         source_version='v2', version='en.v2',
         template='Duplicate tool call. Execution skipped.',
     ),
     'conversation.service.artifact_repair_read': PromptTranslation(
-        source_version='v1', version='en.v1',
-        template='Use `{tool}` with `resource_id` set to `{resource_id}` and choose a relevant `start_line`.',
+        source_version='v2-file-path', version='en.v2-file-path',
+        template='Use `{tool}` with `file_path` set to `{file_path}` and choose a relevant `start_line`.',
     ),
     'conversation.service.artifact_repair_search': PromptTranslation(
-        source_version='v1', version='en.v1',
-        template='Use `{tool}` with `resource_id` set to `{resource_id}` and a `keyword` to locate relevant content.',
+        source_version='v2-file-path', version='en.v2-file-path',
+        template='Use `{tool}` with `file_path` set to `{file_path}` and a `keyword` to locate relevant content.',
     ),
     'conversation.service.artifact_repair_unavailable': PromptTranslation(
-        source_version='v1', version='en.v1',
-        template='No declared read or search action accepts original `{resource_id}` in this request.',
+        source_version='v2-file-path', version='en.v2-file-path',
+        template='No declared read or search action accepts original `{file_path}` in this request.',
     ),
     'conversation.service.historical_source_rejected': PromptTranslation(
         source_version='2026-11-06.v2',
@@ -285,19 +271,14 @@ TRANSLATIONS = {
         template='Use capabilities available to this task, or explain that an authorized execution environment is missing.',
     ),
     'conversation.service.resource_reference_not_allowed': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template="Only exact resource references supplied by this task's inputs or committed receipts may be read.",
+        source_version='2026-10-27.v2-file-path',
+        version="2026-10-27.en.v2-file-path",
+        template="Only exact file paths supplied by this task's inputs or committed receipts may be read.",
     ),
     'conversation.service.resource_reference_repair': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='Use a resource_id supplied by current inputs or committed receipts.',
-    ),
-    'conversation.service.read_request_too_long': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='The read parameters are too long to echo completely and provide continuation parameters within the output budget. Shorten the literal keyword.',
+        source_version='2026-10-27.v2-file-path',
+        version="2026-10-27.en.v2-file-path",
+        template='Use a file_path supplied by current inputs or committed receipts.',
     ),
     'conversation.service.experiment_mutation_deadline': PromptTranslation(
         source_version='2026-10-27.v1',

@@ -26,6 +26,12 @@ GPT Researcher 是 Conversation 可选择的外部 Agent 执行资源。父 Conv
 
 能力未装配或不可用时，Application 返回明确反馈。模型的 Agent 选择、Gateway 的授权和实际远端结果分别记录；拒绝后不能由执行器静默替换 provider 或改写子目标。
 
+### A2A 任务响应的校验归属
+
+**A2A-01：** 提交、查询和取消收到 JSON-RPC 任务结果时，由 [A2A 客户端](../../src/personal_agent/infra/a2a.py)统一拒绝非对象结果，并以同一解析规则返回 `A2AResearchResponse`。原先三个调用分别执行同一判断，错误文案和解析入口需要同步维护。复用客户端现有 RPC 方法即可集中这一规则，无需添加一层包装。Runtime 仍装配 [GPT Researcher Adapter](../../src/personal_agent/agents/gpt_researcher_a2a.py)，由 Adapter 消费客户端结果并负责状态和产物交接。
+
+验收以改动前源码为基线：用 `rg -n 'non-object task result' src/personal_agent/infra/a2a.py` 确认校验从三处减到一处，再逐条对照三种 RPC 的方法名、参数、传输、解析顺序和异常，以及提交和流读取的上游调用。任一差异超出校验位置即撤回本轮重构。历史[真实委派记录](../optimization/evidence-acquisition.md#71-gpt-researcher-a2a-的正式入口真实委托验证)仅提供报告交接的运行依据；本轮验收是源码对照和工程检查。
+
 ## 证据与交付
 
 A2A 响应可解析只证明协议形状；子任务终止与有 Artifact 只证明远端执行结果。父级按原用户要求核对来源、覆盖、时效和冲突，必要时继续读取或核验，再提交唯一最终答复。具体验收由[核验专题](../topics/verification-and-completion.md)拥有。

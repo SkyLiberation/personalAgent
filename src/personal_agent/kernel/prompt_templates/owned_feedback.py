@@ -170,17 +170,9 @@ JSON schema：{{"topic":"...","instructions":"...","max_items":1,"lookback_hours
         name='tools.web_read.undelivered', version='2026-10-27.v1', owner='web_read',
         template='网页读取未交付正文：{detail}',
     ),
-    'tools.python.acceptance_missing': PromptSpec(
-        name='tools.python.acceptance_missing', version='2026-10-27.v1', owner='python_execution',
-        template='Python执行请求缺少已接受记录。',
-    ),
-    'tools.python.read_receipt': PromptSpec(
-        name='tools.python.read_receipt', version='2026-10-27.v1', owner='python_execution',
-        template='请读回执和诊断原件',
-    ),
-    'tools.python.status': PromptSpec(
-        name='tools.python.status', version='2026-10-27.v1', owner='python_execution',
-        template='Python实际执行状态：{status}；{detail}',
+    'tools.bash.acceptance_missing': PromptSpec(
+        name='tools.bash.acceptance_missing', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash执行请求缺少已接受记录。',
     ),
     'tools.experiment.acceptance_missing': PromptSpec(
         name='tools.experiment.acceptance_missing', version='2026-10-27.v1', owner='retrieval_experiment',
@@ -222,88 +214,88 @@ JSON schema：{{"topic":"...","instructions":"...","max_items":1,"lookback_hours
         name='artifacts.ref_owner_mismatch', version='2026-10-27.v1', owner='artifacts',
         template='文件ID不属于当前主体的Artifact。',
     ),
-    'python_execution.authorization': PromptSpec(
-        name='python_execution.authorization', version='2026-10-27.v1', owner='python_execution',
-        template='本主体未获Python执行部署授权',
+    'bash_execution.authorization': PromptSpec(
+        name='bash_execution.authorization', version='2026-11-17.v1', owner='bash_execution',
+        template='本主体未获Bash执行部署授权',
     ),
-    'python_execution.request_digest': PromptSpec(
-        name='python_execution.request_digest', version='2026-10-27.v1', owner='python_execution',
-        template='Python请求与已接受摘要不同',
+    'bash_execution.request_digest': PromptSpec(
+        name='bash_execution.request_digest', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash请求与已接受摘要不同',
     ),
-    'python_execution.accepted_deployment': PromptSpec(
-        name='python_execution.accepted_deployment', version='2026-10-27.v1', owner='python_execution',
-        template='Python请求未被本run按当前部署接受',
+    'bash_execution.accepted_deployment': PromptSpec(
+        name='bash_execution.accepted_deployment', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash请求未被本run按当前部署接受',
     ),
-    'python_execution.receipt_command': PromptSpec(
-        name='python_execution.receipt_command', version='2026-10-27.v1', owner='python_execution',
-        template='Python回执缺少冻结Command',
+    'bash_execution.receipt_command': PromptSpec(
+        name='bash_execution.receipt_command', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash回执缺少冻结Command',
     ),
-    'python_execution.execution_command': PromptSpec(
-        name='python_execution.execution_command', version='2026-10-27.v1', owner='python_execution',
-        template='Python执行记录缺少冻结Command',
+    'bash_execution.execution_command': PromptSpec(
+        name='bash_execution.execution_command', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash执行记录缺少冻结Command',
     ),
-    'python_execution.recovery_fact': PromptSpec(
-        name='python_execution.recovery_fact', version='2026-10-27.v1', owner='python_execution',
-        template='Python恢复结果与已保存进程事实不同',
+    'bash_execution.recovery_fact': PromptSpec(
+        name='bash_execution.recovery_fact', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash恢复结果与已保存进程事实不同',
     ),
-    'python_execution.input_owner': PromptSpec(
-        name='python_execution.input_owner', version='2026-10-27.v1', owner='python_execution',
-        template='Python只能读取本主体的确切Artifact',
+    'bash_execution.input_owner': PromptSpec(
+        name='bash_execution.input_owner', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash只能读取本主体的确切Artifact',
     ),
-    'python_execution.input_boundary': PromptSpec(
-        name='python_execution.input_boundary', version='2026-10-27.v1', owner='python_execution',
-        template='Python输入身份或字节长度超过边界',
+    'bash_execution.input_boundary': PromptSpec(
+        name='bash_execution.input_boundary', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash输入身份或字节长度超过边界',
     ),
-    'python_execution.input_changed': PromptSpec(
-        name='python_execution.input_changed', version='2026-10-27.v1', owner='python_execution',
-        template='Python读取期间Artifact身份发生变化',
+    'bash_execution.input_changed': PromptSpec(
+        name='bash_execution.input_changed', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash读取期间Artifact身份发生变化',
     ),
-    'python_execution.budget_exhausted': PromptSpec(
-        name='python_execution.budget_exhausted', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.budget_exhausted': PromptSpec(
+        name='bash_execution.budget_exhausted', version='2026-11-17.v1', owner='bash_execution',
         template='当前run执行额度或绝对截止已耗尽',
     ),
-    'python_execution.input_budget_exhausted': PromptSpec(
-        name='python_execution.input_budget_exhausted', version='2026-10-27.v1', owner='python_execution',
-        template='准备Python输入时当前run截止或额度已耗尽',
+    'bash_execution.input_budget_exhausted': PromptSpec(
+        name='bash_execution.input_budget_exhausted', version='2026-11-17.v1', owner='bash_execution',
+        template='准备Bash输入时当前run截止或额度已耗尽',
     ),
-    'python_execution.timer_resolution': PromptSpec(
-        name='python_execution.timer_resolution', version='2026-10-27.v1', owner='python_execution',
-        template='Python剩余额度低于执行时钟精度',
+    'bash_execution.timer_resolution': PromptSpec(
+        name='bash_execution.timer_resolution', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash剩余额度低于执行时钟精度',
     ),
-    'python_execution.command_request': PromptSpec(
-        name='python_execution.command_request', version='2026-10-27.v1', owner='python_execution',
-        template='冻结Python Command与已接受请求或部署不同',
+    'bash_execution.command_request': PromptSpec(
+        name='bash_execution.command_request', version='2026-11-17.v1', owner='bash_execution',
+        template='冻结Bash Command与已接受请求或部署不同',
     ),
-    'python_execution.program_bytes': PromptSpec(
-        name='python_execution.program_bytes', version='2026-10-27.v1', owner='python_execution',
-        template='冻结Python程序与已接受原字节不同',
+    'bash_execution.program_bytes': PromptSpec(
+        name='bash_execution.program_bytes', version='2026-11-17.v1', owner='bash_execution',
+        template='冻结Bash程序与已接受原字节不同',
     ),
-    'python_execution.original_command': PromptSpec(
-        name='python_execution.original_command', version='2026-10-27.v1', owner='python_execution',
-        template='Python原件与冻结Command不同',
+    'bash_execution.original_command': PromptSpec(
+        name='bash_execution.original_command', version='2026-11-17.v1', owner='bash_execution',
+        template='Bash原件与冻结Command不同',
     ),
-    'python_execution.dispatching_result': PromptSpec(
-        name='python_execution.dispatching_result', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.dispatching_result': PromptSpec(
+        name='bash_execution.dispatching_result', version='2026-11-17.v1', owner='bash_execution',
         template='执行器不能以dispatching作为执行结果',
     ),
-    'python_execution.capture_budget': PromptSpec(
-        name='python_execution.capture_budget', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.capture_budget': PromptSpec(
+        name='bash_execution.capture_budget', version='2026-11-17.v1', owner='bash_execution',
         template='执行器返回超过冻结捕获额度的字节',
     ),
-    'python_execution.stdout_limit': PromptSpec(
-        name='python_execution.stdout_limit', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.stdout_limit': PromptSpec(
+        name='bash_execution.stdout_limit', version='2026-11-17.v1', owner='bash_execution',
         template='stdout已达到捕获限制；原件只包含实际捕获字节。',
     ),
-    'python_execution.stderr_limit': PromptSpec(
-        name='python_execution.stderr_limit', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.stderr_limit': PromptSpec(
+        name='bash_execution.stderr_limit', version='2026-11-17.v1', owner='bash_execution',
         template='stderr已达到捕获限制；原件只包含实际捕获字节。',
     ),
-    'python_execution.output_unavailable': PromptSpec(
-        name='python_execution.output_unavailable', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.output_unavailable': PromptSpec(
+        name='bash_execution.output_unavailable', version='2026-11-17.v1', owner='bash_execution',
         template='原作业输出不可恢复；未重新运行程序，不能按空输出来解释。',
     ),
-    'python_execution.invalid_utf8': PromptSpec(
-        name='python_execution.invalid_utf8', version='2026-10-27.v1', owner='python_execution',
+    'bash_execution.invalid_utf8': PromptSpec(
+        name='bash_execution.invalid_utf8', version='2026-11-17.v1', owner='bash_execution',
         template='{stream}含无效UTF-8；保留捕获原字节，不提供文本预览。',
     ),
     'retrieval_experiment.authorization': PromptSpec(
@@ -546,80 +538,76 @@ JSON schema：{{"topic":"...","instructions":"...","max_items":1,"lookback_hours
         name='web_source.body_limit', version='2026-10-27.v1', owner='web_source',
         template='来源正文超过单次容量，未交付不完整正文。',
     ),
-    'python_backend.deployment': PromptSpec(
-        name='python_backend.deployment', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python Command与固定执行部署不同',
+    'bash_backend.deployment': PromptSpec(
+        name='bash_backend.deployment', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash Command与固定执行部署不同',
     ),
-    'python_backend.directory_symlink': PromptSpec(
-        name='python_backend.directory_symlink', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python执行目录不得包含符号链接',
+    'bash_backend.directory_symlink': PromptSpec(
+        name='bash_backend.directory_symlink', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash执行目录不得包含符号链接',
     ),
-    'python_backend.directory_escape': PromptSpec(
-        name='python_backend.directory_escape', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python执行目录越界',
+    'bash_backend.directory_escape': PromptSpec(
+        name='bash_backend.directory_escape', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash执行目录越界',
     ),
-    'python_backend.job_command': PromptSpec(
-        name='python_backend.job_command', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python原作业与冻结Command不同',
+    'bash_backend.job_command': PromptSpec(
+        name='bash_backend.job_command', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash原作业与冻结Command不同',
     ),
-    'python_backend.job_command_missing': PromptSpec(
-        name='python_backend.job_command_missing', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python原作业缺少冻结Command，禁止重新执行',
+    'bash_backend.job_command_missing': PromptSpec(
+        name='bash_backend.job_command_missing', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash原作业缺少冻结Command，禁止重新执行',
     ),
-    'python_backend.input_bytes': PromptSpec(
-        name='python_backend.input_bytes', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python后端输入与冻结原字节不同',
+    'bash_backend.input_command': PromptSpec(
+        name='bash_backend.input_command', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='执行输入与冻结Bash Command不同',
     ),
-    'python_backend.input_command': PromptSpec(
-        name='python_backend.input_command', version='2026-10-27.v1', owner='python_execution_backend',
-        template='执行输入与冻结Python Command不同',
+    'bash_backend.job_identity': PromptSpec(
+        name='bash_backend.job_identity', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash工作目录缺少原身份，禁止重新执行',
     ),
-    'python_backend.job_identity': PromptSpec(
-        name='python_backend.job_identity', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python工作目录缺少原身份，禁止重新执行',
+    'bash_backend.input_symlink': PromptSpec(
+        name='bash_backend.input_symlink', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash输入目录不得是符号链接',
     ),
-    'python_backend.input_symlink': PromptSpec(
-        name='python_backend.input_symlink', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python输入目录不得是符号链接',
+    'bash_backend.input_snapshot': PromptSpec(
+        name='bash_backend.input_snapshot', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash输入快照冲突',
     ),
-    'python_backend.input_snapshot': PromptSpec(
-        name='python_backend.input_snapshot', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python输入快照冲突',
+    'bash_backend.cleanup_identity': PromptSpec(
+        name='bash_backend.cleanup_identity', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash清理未确认匹配的停止容器',
     ),
-    'python_backend.cleanup_identity': PromptSpec(
-        name='python_backend.cleanup_identity', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python清理未确认匹配的停止容器',
+    'bash_backend.job_record_symlink': PromptSpec(
+        name='bash_backend.job_record_symlink', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash原作业记录不得是符号链接',
     ),
-    'python_backend.job_record_symlink': PromptSpec(
-        name='python_backend.job_record_symlink', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python原作业记录不得是符号链接',
+    'bash_backend.job_binding': PromptSpec(
+        name='bash_backend.job_binding', version='2026-11-17.v1', owner='bash_execution_backend',
+        template='Bash后端作业与冻结Command不符',
     ),
-    'python_backend.job_binding': PromptSpec(
-        name='python_backend.job_binding', version='2026-10-27.v1', owner='python_execution_backend',
-        template='Python后端作业与冻结Command不符',
-    ),
-    'python_recovery.identity_missing': PromptSpec(
-        name='python_recovery.identity_missing', version='2026-10-27.v1', owner='python_execution_recovery',
+    'bash_recovery.identity_missing': PromptSpec(
+        name='bash_recovery.identity_missing', version='2026-10-27.v1', owner='bash_execution_recovery',
         template='候选目录缺少原身份，禁止重新执行',
     ),
-    'python_recovery.input_digest': PromptSpec(
-        name='python_recovery.input_digest', version='2026-10-27.v1', owner='python_execution_recovery',
+    'bash_recovery.input_digest': PromptSpec(
+        name='bash_recovery.input_digest', version='2026-10-27.v1', owner='bash_execution_recovery',
         template='恢复Python需要确切输入摘要或原件',
     ),
-    'python_recovery.identity_mismatch': PromptSpec(
-        name='python_recovery.identity_mismatch', version='2026-10-27.v1', owner='python_execution_recovery',
+    'bash_recovery.identity_mismatch': PromptSpec(
+        name='bash_recovery.identity_mismatch', version='2026-10-27.v1', owner='bash_execution_recovery',
         template='原候选身份与恢复请求不同',
     ),
-    'python_recovery.capture_binding': PromptSpec(
-        name='python_recovery.capture_binding', version='2026-10-27.v1', owner='python_execution_recovery',
+    'bash_recovery.capture_binding': PromptSpec(
+        name='bash_recovery.capture_binding', version='2026-10-27.v1', owner='bash_execution_recovery',
         template='原Python捕获与作业身份或限额不同',
     ),
-    'python_recovery.output_incomplete': PromptSpec(
-        name='python_recovery.output_incomplete', version='2026-10-27.v1', owner='python_execution_recovery',
+    'bash_recovery.output_incomplete': PromptSpec(
+        name='bash_recovery.output_incomplete', version='2026-10-27.v1', owner='bash_execution_recovery',
         template='原候选输出不完整',
     ),
-    'python_recovery.stderr_incomplete': PromptSpec(
-        name='python_recovery.stderr_incomplete', version='2026-10-27.v1', owner='python_execution_recovery',
+    'bash_recovery.stderr_incomplete': PromptSpec(
+        name='bash_recovery.stderr_incomplete', version='2026-10-27.v1', owner='bash_execution_recovery',
         template='原Python stderr捕获不完整',
     ),
     'experiment_backend.directory_escape': PromptSpec(
@@ -854,45 +842,41 @@ JSON schema：{{"topic":"...","instructions":"...","max_items":1,"lookback_hours
         name='tools.research.digest_missing', version='2026-10-27.v1', owner='research',
         template='研究未生成简报。',
     ),
-    'python_validation.filename': PromptSpec(
-        name='python_validation.filename', version='2026-10-27.v1', owner='python_execution_validation',
+    'bash_validation.filename': PromptSpec(
+        name='bash_validation.filename', version='2026-11-17.v1', owner='bash_execution_validation',
         template='输入必须是合法、非保留的1—64字符ASCII平面文件名',
     ),
-    'python_validation.program_size': PromptSpec(
-        name='python_validation.program_size', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python程序超过128 KiB',
+    'bash_validation.program_size': PromptSpec(
+        name='bash_validation.program_size', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash 命令须非空、无 NUL 且不超过 128 KiB',
     ),
-    'python_validation.input_names': PromptSpec(
-        name='python_validation.input_names', version='2026-10-27.v1', owner='python_execution_validation',
-        template='输入文件名不能重复或仅大小写不同',
+    'bash_validation.input_bytes': PromptSpec(
+        name='bash_validation.input_bytes', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash输入长度或原字节摘要不符',
     ),
-    'python_validation.input_bytes': PromptSpec(
-        name='python_validation.input_bytes', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python输入长度或原字节摘要不符',
+    'bash_validation.deadline': PromptSpec(
+        name='bash_validation.deadline', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash deadline必须晚于接受时间',
     ),
-    'python_validation.deadline': PromptSpec(
-        name='python_validation.deadline', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python deadline必须晚于接受时间',
+    'bash_validation.reservation': PromptSpec(
+        name='bash_validation.reservation', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash预留超过冻结限额或deadline',
     ),
-    'python_validation.reservation': PromptSpec(
-        name='python_validation.reservation', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python预留超过冻结限额或deadline',
+    'bash_validation.program_identity': PromptSpec(
+        name='bash_validation.program_identity', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash程序身份或长度不合法',
     ),
-    'python_validation.program_identity': PromptSpec(
-        name='python_validation.program_identity', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python程序身份或长度不合法',
+    'bash_validation.input_total': PromptSpec(
+        name='bash_validation.input_total', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash输入重复或超过64 MiB',
     ),
-    'python_validation.input_total': PromptSpec(
-        name='python_validation.input_total', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python输入重复或超过64 MiB',
+    'bash_validation.input_owner': PromptSpec(
+        name='bash_validation.input_owner', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash Command只绑定本主体的Artifact',
     ),
-    'python_validation.input_owner': PromptSpec(
-        name='python_validation.input_owner', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python Command只绑定本主体的Artifact',
-    ),
-    'python_validation.command_digest': PromptSpec(
-        name='python_validation.command_digest', version='2026-10-27.v1', owner='python_execution_validation',
-        template='Python Command摘要不一致',
+    'bash_validation.command_digest': PromptSpec(
+        name='bash_validation.command_digest', version='2026-11-17.v1', owner='bash_execution_validation',
+        template='Bash Command摘要不一致',
     ),
     'experiment_validation.input_digest': PromptSpec(
         name='experiment_validation.input_digest', version='2026-10-27.v1', owner='retrieval_experiment_validation',

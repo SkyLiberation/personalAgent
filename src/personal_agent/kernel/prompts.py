@@ -14,12 +14,11 @@ from personal_agent.kernel.prompt_templates.interaction_verification import (
     PROMPTS as INTERACTION_VERIFICATION_PROMPTS,
 )
 from personal_agent.kernel.prompt_templates.runtime import PROMPTS as RUNTIME_PROMPTS
-from personal_agent.kernel.prompt_templates.research import PROMPTS as RESEARCH_PROMPTS
 from personal_agent.kernel.prompt_templates.retrieval_experiment import (
     PROMPTS as RETRIEVAL_EXPERIMENT_PROMPTS,
 )
-from personal_agent.kernel.prompt_templates.python_execution import (
-    PROMPTS as PYTHON_EXECUTION_PROMPTS,
+from personal_agent.kernel.prompt_templates.bash_execution import (
+    PROMPTS as BASH_EXECUTION_PROMPTS,
 )
 from personal_agent.kernel.prompt_templates.web_search import PROMPTS as WEB_SEARCH_PROMPTS
 from personal_agent.kernel.prompt_templates.supplemental import PROMPTS as SUPPLEMENTAL_PROMPTS
@@ -32,8 +31,8 @@ from personal_agent.kernel.prompt_templates.context_feedback import PROMPTS as C
 
 _PROMPTS: dict[str, PromptSpec] = {}
 for _group in (ASK_PROMPTS, ARTIFACT_PROMPTS, CONVERSATION_PROMPTS, GRAPH_PROMPTS,
-               INTERACTION_VERIFICATION_PROMPTS, RUNTIME_PROMPTS, RESEARCH_PROMPTS,
-               RETRIEVAL_EXPERIMENT_PROMPTS, PYTHON_EXECUTION_PROMPTS,
+               INTERACTION_VERIFICATION_PROMPTS, RUNTIME_PROMPTS,
+               RETRIEVAL_EXPERIMENT_PROMPTS, BASH_EXECUTION_PROMPTS,
                WEB_SEARCH_PROMPTS, SUPPLEMENTAL_PROMPTS, READING_FEEDBACK_PROMPTS,
                OWNED_FEEDBACK_PROMPTS, RESULT_FEEDBACK_PROMPTS, SERVICE_FEEDBACK_PROMPTS,
                CONTEXT_FEEDBACK_PROMPTS):

@@ -1,12 +1,40 @@
 # 运行、归档与发布
 
-## Toolathlon MCP 验证
+## Conversation 评测共用入口
 
-Toolathlon 的隔离产品进程关闭前置意图分类。各场景按自己的核验配置运行，生成的 `feature_flags.toml` 随结果保存。
+LongDS、Toolathlon 及后续采集 Conversation 用户结果的评测复用 [conversation_http.py](../../evals/conversation_http.py) 启动正式 HTTP 应用、检查就绪并提交对话。各数据集入口保留自己的题目、材料、工具环境和评分，不维护第二套产品对话执行链。
+
+当前两套运行均从独立环境开始，关闭 `goal_verification` 和 `answer_verification`，保存各自生效配置。结果属于未核验流程采集，与权威评分一起报告，不计为完整 Product E2E 或发布证据。部署默认核验仍开启。
+
+### 正式 Web 配置
+
+`EVAL-CONFIG-1` 评测将所选运行配置交给正式 Web 应用，由应用的 `Settings.from_env()` 解析模型、超时、重试和其他运行参数。Toolathlon 的 `--model-env` 是完整配置文件，显式覆盖测试数据库、认证、工具挂载、后台任务和评测开关。LongDS 继续按其既定样本配置装配同一个 Web 应用。共用启动器在子进程中从已装配应用读取实际模型和预算参数，保存到 `web-settings.json`，归档排除凭据。
+
+共用启动器在 45 秒内等待正式 Web 子进程公布监听端口，进程提前退出时立即报错。四个执行位并行复跑 Toolathlon 时，`academic-pdf-report` 与 `cvpr-research` 的端口分别在 15.65 秒和 17.46 秒公布，旧的 15 秒上限先行结束了会话准备。端口公布后按各用例的既有就绪和会话预算继续。[启动报告](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/academic-pdf-report/personal/report.json) · [另一样本](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/cvpr-research/personal/report.json)
+
+`inventory-sync` 的历史复验在 60 秒单次截止下耗尽重试。本机正式配置的单次时限为 480 秒，差异来自 Toolathlon 启动器筛掉了该配置项。删除模型字段清单及在评测入口重复检查的模型绑定字段。验收以同一配置同一生产解析器为对照，核对 Toolathlon Web 子进程读取的超时、重试、预算和评测隔离，同时通过 LongDS 共用启动器核对实际生效参数。检查现有 Time 场景的 MCP 生命周期，并用原题和评分器定向复验 `inventory-sync`。
+
+实际启动检查确认 Toolathlon 和 LongDS 子进程均读取 480 秒、最多重试 2 次。Toolathlon 使用另一配置启动时，从正式解析器读取其指定的模型、73 秒和最多 4 次重试。Time `disconnect` 场景通过实际 MCP 接线和断连恢复检查。[改动前配置](../../.tmp/wf16/before.json) · [子进程配置检查](../../.tmp/wf16/config-final/report.json) · [Time 复验](../../.tmp/wf16/time/report.json)
+
+### 测试原件准备
+
+`EVAL-FILES-1` 首轮对话前，由数据集入口选定本题授权使用的原件，共用 HTTP 入口按本题身份上传原始字节，校对文件大小与 SHA-256，并将版本化引用随原题提交。空材料集直接提交。准备失败时记录失败，停止本题首次对话。多轮评测沿用已上传的引用，会话恢复沿用原有引用。
+
+LongDS 沿用其公开材料清单，共用 HTTP 入口负责上传。Toolathlon 题目绑定共享工作区时，上游预处理将原件放入 `/workspace/dumps/workspace`，MCP、Bash 和评分器使用同一份文件，通过共用 HTTP 入口提交题面即可。未绑定共享工作区的用例沿用 [workspace_inputs.py](../../evals/Toolathlon/workspace_inputs.py)，从已就绪的网关或已准备好的本地目录复制普通文件，排除链接、凭据、评分和记忆目录。常规材料按文件上传，超过数量限制或存在文件名冲突时使用保留相对路径的 ZIP。Bash 使用只读方式访问独立上传的附件。远端服务状态继续通过对应工具访问。[共享工作区接入](../mcpDesign/README.md#可比的执行环境)
+
+验收采用原始 `inventory-sync` 与 `dietary-health` 轨迹，以及原有 LongDS 附件准备。旧轨迹均无初始附件引用，SQLite 经文本读取后损坏，营养表通过 Python 访问 MCP 绝对路径时找不到。先核对同一批原件的源摘要、上传回执及真实 Python 输入绑定，检查空材料集、排除路径和复制失败。库存题按原题、原模型预算和原评分器定向复验，分别记录原件送达、Python 实际读取和库存评分。其他用例不随本次变更全量复跑。
+
+本轮筛查 96 份 Toolathlon 报告及其中 88 份会话轨迹。15 题的 Python 工具回执出现网关路径找不到或 SQLite 内容损坏。`dietary-health`、`canvas-arrange-exam` 和 `latex-prompt-box` 涉及题目原件。`courses-ta-hws`、`excel-market-research` 和 `sales-accounting` 出现同类读取障碍后达到整题评分。其余命中包含运行时下载、目录探测及写入路径问题，逐题归因需结合实际工具参数。[轨迹筛查](../../.tmp/at16/baseline-audit.json)
+
+原件交接检查中，`inventory-sync` 的 6 个数据库与预处理后网关源文件的 SHA-256 一致，首轮实际请求均可见，Python 成功使用同一组 6 个版本。无模型的正式 HTTP 检查逐字节核对了 `dietary-health` 的 5 个原件和 `courses-ta-hws` 的 ZIP 中 542 个成员，同时验证了跨用户读取拒绝、空目录和复制失败。[库存原件检查](../../.tmp/at16/inventory-preparation.json) · [HTTP 检查](../../.tmp/at16/probe/report.json)
+
+`inventory-sync` 采用正式配置定向复验。Web 子进程读到 480 秒、最多重试 2 次，一次模型请求用时 60.51 秒并完整返回。Agent 返回正式答复，官方评分为 51/51。工作区 `approve` 用例通过了文件移动和答复检查。LongDS 正式入口接收了 16 个原始附件，首轮有 13 次成功的 Python 执行，样本达到 100 万 token 预算后以受限答复结束。[库存配置](../../.tmp/wf16/target/inventory-sync/personal/web-settings.json) · [库存复验](../../.tmp/wf16/target/inventory-sync/personal/report.json) · [官方评分](../../.tmp/wf16/target/inventory-sync/personal/grader.log) · [工作区复验](../../.tmp/wf16/workspace/report.json) · [LongDS 复验](../../.tmp/at16/l2/report.json)
+
+## Toolathlon MCP 验证
 
 需要上游任务材料或验证聚合网关时，按[本地部署说明](../../evals/Toolathlon/DEPLOYMENT.md)准备固定版本的独立检出。
 
-从仓库根运行。Time 镜像使用 Toolathlon 锁定的 Time Server 依赖。每个场景创建独立数据库、产品进程和工具容器。`protocol_and_lifecycle_passed` 评价接线与生命周期。`--model-env` 可追加一次正式对话并归档答复及模型请求声明。
+从仓库根运行。Time 镜像使用 Toolathlon 锁定的 Time Server 依赖。每个场景创建独立数据库、产品进程和工具容器，正式对话为本次用例分配独立 `session_id`，并归档返回的 `turn_id`。`protocol_and_lifecycle_passed` 评价接线与生命周期。`--model-env` 可追加一次正式对话并归档答复及模型请求声明。
 
 ```powershell
 docker build --tag personal-agent-toolathlon-time:0.6.2 evals/Toolathlon
@@ -83,6 +111,71 @@ docker run --rm -d --network $toolathlonNetwork --network-alias serpapi-maps -e 
 
 调度验收使用已有 Time 接线和启动拒绝场景，核对真实子进程重叠、独立报告及原有判据。另用一个无效 Time 镜像与一个正常 Filesystem 探针同批运行，核对失败后其余用例仍完成、批次返回非零。
 
+### Canvas 未提交测验与作业的 CSV 交付
+
+`canvas-list-test` 要求直接更新评测容器中已有的 `quiz_info.csv` 与 `assignment_info.csv`。上游官方 Agent 通过内置 Python 访问该目录。旧版 personalAgent 对照入口只接入该任务声明的 Canvas 和 Memory MCP，真实模型请求缺少工作区读写工具，两份模板均未修改。[基线报告](../../.tmp/tac1114/runs/canvas-list-test/personal/report.json) · [基线评分](../../.tmp/tac1114/runs/canvas-list-test/personal/grader.log)
+
+personalAgent 对照入口为该用例接入现有 Filesystem MCP，服务的允许目录指向预处理生成的同一评测工作区。工具映射复用已有本地读取与写入策略。模型从原题取得工作区和任务要求，自行读取模板、查询 Canvas、整理并写回文件。评测沿用上游任务配置和评分器。
+
+定向验收在独立归档中执行一次。先通过真实工具声明确认目录列表、文本读取和文件写入已映射，再用原题、MiniMax-M3.1-Flash、64 轮、128 次工具调用、800 万 token 和 1,200 秒等待重跑 personalAgent。目标核验与回答核验关闭。局部检查读取及写入是否到达原工作区。整例按官方评分确认两份 CSV 的字段、顺序、行数及内容，并独立记录正式答复。
+
+从仓库根运行本地对照脚本，输出使用新目录。以下命令对应本次 CSV 定向运行的归档脚本。后续共享工作区接入使用锁定的 Toolathlon 任务镜像和原件，由各用例的适配层装配，继续使用共用对话入口。[接入规格](../mcpDesign/README.md#62-toolathlon-本地-bash)
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+$toolathlonCsvRun = ".tmp/toolathlon-canvas-$(Get-Date -Format yyyyMMdd-HHmmss)"
+& ./.venv/Scripts/python.exe -B -X utf8 .tmp/bash-execution-20261117/compare.py --arm personal --workers 1 --output $toolathlonCsvRun canvas-list-test
+```
+
+2026-11-14 复跑确认模型能读到两份原始 CSV。独立接入检查经产品工具入口成功覆写两份同名副本，并拒绝工作区外的写入。真实模型在第 45 轮用完 128 次工具调用，未提交写入，也未返回正式答复。官方评分仍未通过。[复跑报告](../../.tmp/tac1114/csv-fix-1114/canvas-list-test/personal/report.json) · [写入检查](../../.tmp/tac1114/csv-workspace-write-1114/report.json) · [官方评分](../../.tmp/tac1114/csv-fix-1114/canvas-list-test/personal/grader.log)
+
+#### 历史本地 Python 接入复验
+
+2026-11-15 的本地 Python 检查中，授权会话的三次工具决策请求均声明 `execute_python`。Docker 执行成功，工具标准输出和正式答复均包含预期哈希。未授权会话的十五次工具决策请求均未声明 Python，且没有 Python 调用回执。该会话在 HTTP 等待上限内未给出答复，脚本退出码为 1。另用不存在的镜像验证，入口在启动任务前拒绝并返回退出码 2。[会话权限检查](../../.tmp/ta-ps2-1115/scope-verification.json)
+
+同日复跑 `canvas-list-test`。模型实际收到和调用的工具由不同证据确认。40 次模型调用中有 38 次携带工具声明，这 38 次均声明 `execute_python`。模型没有调用 Python，经 Filesystem MCP 成功更新两份原始 CSV。模型在第 40 轮、累计 87 次工具调用后返回 `limitation`。官方评分确认作业表 4/4 完全匹配，测验表因 11 行与预期 13 行不符而未通过。按课程和测验标题对照导出文件，漏掉 CS101、DB101、NLP101 三条记录，多出 ENG101 一条，匹配到的十条里另有五条学分不符。[复跑报告](../../.tmp/ta-py2-1115/canvas-list-test/personal/report.json) · [官方评分](../../.tmp/ta-py2-1115/canvas-list-test/personal/grader.log)
+
+#### 官方 Agent 的评测材料隔离
+
+旧对照将官方循环与预处理部署到同一个容器。原生 Python 从预处理配置 `course_config.json` 读取学分及测验字段，并用该配置写出两份通过评分的 CSV。上游参考答案也从该配置生成。[旧运行轨迹](../../.tmp/tac1114/runs/canvas-list-test/official/traj_log.json)
+
+本地对照入口单独为该用例启动官方 Agent 容器。预处理生成的参考答案先交给宿主评分流程，随后将原始工作区复制给执行容器。执行容器装入原题、官方运行代码与 Canvas 学生和 Memory 接入所需的配置。Canvas 和 Memory 网关在该容器启动，共享复制后的工作区。预处理容器在模型启动前退出。评分容器从执行容器导出的工作区和宿主留存参考分别取数。
+
+验收先用官方 Python 工具核对隔离前后的访问。执行容器应能读写两份原始 CSV，并通过网关读取 Canvas 用户与 Memory。用于生成答案的配置、预处理目录、挂载源和参考文件均须不可读。检查通过后，在新归档中执行一次官方 Agent，使用同一原题、MiniMax-M3.1-Flash、64 轮、1,200 秒等待和上游评分器。分别记录隔离检查、正式答复及两份 CSV 的评分。泄露运行保留原始归档，退出有效配对统计。
+
+从仓库根运行本地官方对照入口。
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+$toolathlonCanvasRun = ".tmp/tac1114/canvas-clean-$(Get-Date -Format yyyyMMdd-HHmmss)"
+& ./.venv/Scripts/python.exe -B -X utf8 .tmp/tac1114/compare.py --arm official --workers 1 --output $toolathlonCanvasRun canvas-list-test
+```
+
+2026-11-14 隔离复跑通过访问检查，官方 Agent 在第 35 轮返回正式答复，共调用工具 85 次。作业表 4/4 完全匹配。测验表只有 10 行，评分要求 13 行。模型排除了三个标记为练习的测验，保留的 10 行中另有 8 行学分与参考不符。评分在行数检查时停止，学分差异来自导出产物与本次参考的逐课程比对。[隔离检查](../../.tmp/tac1114/canvas-clean-1114/canvas-list-test/official/official-isolation.json) · [运行报告](../../.tmp/tac1114/canvas-clean-1114/canvas-list-test/official/report.json) · [官方评分](../../.tmp/tac1114/canvas-clean-1114/canvas-list-test/official/grader.log)
+
+### Toolathlon 共用 MCP 工具清单
+
+[配对入口](../../evals/Toolathlon/compare/suite.py)用一份清单装配双方的业务 MCP 工具。每轮在用例目录保存 `mcp-tools.json`，并在两份报告中记录同一份清单的摘要和实际模型请求中的工具集合。Toolathlon 的任务预处理、工具服务和评分继续使用本机夹具。配对结果按本轮清单解释，历史运行按各自工具条件查阅。[接入契约](../mcpDesign/README.md#toolathlon-配对运行的-mcp-清单)
+
+从仓库根使用本次已配置的任务夹具运行 `apply-phd-email`。双方串行使用模拟邮箱，各自执行上游预处理和评分。
+
+```powershell
+$toolathlonRoot = (Get-Location).Path
+$env:PYTHONPATH = "$toolathlonRoot;$toolathlonRoot/.tmp/mcp-parity-1117"
+$toolathlonRun = ".tmp/toolathlon-paired-$(Get-Date -Format yyyyMMdd-HHmmss)"
+& ./.venv/Scripts/python.exe -B -X utf8 -m evals.Toolathlon.compare.suite --workers 1 --output $toolathlonRun apply-phd-email
+```
+
+#### 剩余差异题的盲测复验
+
+已有双侧探测确认 `dietary-health` 的容器内评分资料已隔离，公网答案仍可达。本轮用 `dietary-health` 和 `travel-exchange` 验证同一配对入口上的出网隔离。每题每方使用独立工作区和 Docker 内部网络，网络桥使用 `isolated` 模式。HTTPS 代理只转发该用例批准的模型与原始数据服务域名。官方 Agent 的模型请求经此网络。本 Agent 的正式 HTTP 入口连接模型，本地网页读取权限按同一数据来源约束。两边的工具服务及 Bash 使用同一镜像依赖，评分器在独立网络和目录消费封存产物。[旧隔离探测](../../.tmp/ta-compare-1118/boundary-probe/report.json) · [Docker 内部网络](https://docs.docker.com/reference/cli/docker/network/create/#network-internal-mode---internal)
+
+预检验证原件摘要、评分资料隔离、合法数据源，以及直连和代理访问公网参考的拒绝结果。`dietary-health` 用预装 HowToCook MCP 提供菜谱，`travel-exchange` 允许 Yahoo Finance 和其客户端依赖的行情查询域名。每题双方各跑一次，固定上游提交、共用 MCP 清单、MiniMax-M3.1-Flash、64 轮及 1,200 秒等待。本 Agent 保留既有 128 次工具调用和 800 万 token 预算，官方内部额度按上游配置记录。预检失败时停在模型启动前。Google Drive 两题与 GitHub 一题先确认外部资源可隔离、可复位，再使用同一入口评测。[试跑启动器](../../.tmp/ta-blind-1118/run.py) · [对比结果](../problems/toolathlon/agent-comparison.md)
+
+`sync-todo-to-readme` 从 `GITHUB_TEST_TOKEN` 授权的账号创建独立测试仓库，以 Toolathlon 发布的 `main`、`dev` 提交为起点。题面和评分器继续使用 `LUFFY`；测试网关在 Git 和 GitHub API 调用时把它绑定到本方夹具。网关保管测试令牌，执行容器只获得夹具访问凭据。启动前核对两方远端提交、读取和写入能力、仓库间隔离及评分材料隔离。评分使用各自远端 `dev` 的 README 和原判据。现有同名仓库不参与写入，两方各跑一次，沿用本节预算。[凭据预检](../../.tmp/ta-github-1118/credential-preflight.json) · [远端起点](../../.tmp/ta-github-1118/repository-preflight.json)
+
+`music-analysis` 和 `investment-decision-analysis` 各为双方新建私有 Drive 文件夹。可信准备进程按上游资料复制 Billboard 原表，投资题从空文件夹开始。隔离网关托管实际 Google OAuth 凭据，将 Sheets MCP 及原生 Python 的 Google API 请求限定在本方文件夹。评分器使用上游题面、模板和判据，投资题绑定本方文件夹 ID。启动前核对原件摘要、`openpyxl` 及工作区写入、目标数据可读和其他文件夹不可达。投资题另验证 Yahoo Finance 可用和三张表所需的 API 写入能力。两方各跑一次，沿用本节预算。现有同名文件夹不参与写入。
+
 ### Redis Helm 官方 Agent 对照
 
 `k8s-redis-helm-upgrade` 用于观察同一 MiniMax-M3.1-Flash 在 Toolathlon 官方 Agent 与 personalAgent 中如何推进 Redis Helm 升级。历史 personalAgent 样本在累计 200 万 token 后结束，官方评分为 0.8。待验证的问题是官方 Agent 是否会提交升级，以及它在镜像检查、配置迁移、工具拒绝和验收上的实际路径。
@@ -95,7 +188,7 @@ docker run --rm -d --network $toolathlonNetwork --network-alias serpapi-maps -e 
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.Toolathlon.compare.redis_helm --model-env .env --output .tmp/ta-redis-compare --mcp-session-timeout 90 --personal-run .tmp/ta27-1113-k8s/final-redis-helm-upgrade/k8s-redis-helm-upgrade
 ```
 
-本地入口启动上游 `scripts.decoupled.host_agent_loop`，任务与评分来自上游 `9be8d8fe07a497b18ee61e3f2ae694e9797f39eb`。`--check-only` 核对版本、模型与历史输入，不启动容器。实际对照结果见[历次评测问题汇总](../problems/toolathlon-verifierd.md#redis-helm-官方-agent-对照)。
+本地入口启动上游 `scripts.decoupled.host_agent_loop`，任务与评分来自上游 `9be8d8fe07a497b18ee61e3f2ae694e9797f39eb`。`--check-only` 核对版本、模型与历史输入，不启动容器。[旧版运行对照归档](../../.tmp/mcp-model-dedup-1113/comparison-64.json) · [含 Goal 的 Redis 验证](../problems/toolathlon/research-loop-problems.md#工具接入和执行结果)
 
 扩大预算的对照为两个 Agent 各执行一次 64 轮样本，沿用同一模型、原题、Kind 初始状态与官方评分器。personalAgent 使用 128 次工具调用和 800 万累计 token，让它有额度继续执行 64 轮。官方 Agent 继续使用 90 秒 SSE 等待设置，工具调用和累计 token 随其原生循环统计。两个新集群串行启动。评分分别核对升级版本、配置及运行状态，另记录停止原因和用量。此前 32 轮运行按原身份保留。
 
@@ -122,13 +215,13 @@ LongDS 的现行入口位于 `evals/longDS/`，使用公开题面和语料，采
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.longDS.longds_suite --root "$evaluationEvidenceRoot/longds" --collect-only
 ```
 
-正式采集和恢复入口为 `python -m evals.longDS.run_longds`，独立评分入口为 `python -m evals.longDS.longds_judge`。各模块用 `--help` 查看参数。迁移沿用原 HTTP 装配、题面与评分协议，验收核对三个入口、HTTP 健康检查、封存题面及用量。旧检查点的源码摘要包含原路径，续跑使用当次冻结源码。原始预算和已执行记录见 [LongDS 长程分析基线](#longds-长程分析基线)。
+正式采集和恢复入口为 `python -m evals.longDS.run_longds`。需要 Bash 时同时传入 `--bash-image-id` 和 `--docker-endpoint`。独立评分入口为 `python -m evals.longDS.longds_judge`。各模块用 `--help` 查看参数。采集复用[共用 HTTP 链路](#conversation-评测共用入口)；旧检查点沿原源码版本和配置续跑。原始预算和历史结果见 [LongDS 长程分析基线](#longds-长程分析基线)。
 
 ## 正式发布验证
 
 按 [REL 发布门禁](../devSpec/migration-release.md#3-完成检查表)，在目标 clean revision 上完成 `evals/` 公开数据集的 Product E2E。运行前确定适用用例、生产配置和通过判据，使用本页现行入口完成采集、评分和归档。通过发布判据后才可正式发布。
 
-当前长程任务可使用上节 LongDS 的正式产品入口。每条发布用例都须满足 [Product E2E 资格](../devSpec/change-evidence.md#2-产品-e2e-的最低资格)。词法检索样本、仅收集用例及未走完整生产链的采集按各自证据类别记录。按 [EVM](../../evals/AGENTS.md#5-比较身份与归档)保留目标版本、配置、实际结果和校验和。
+当前 LongDS 和 Toolathlon 入口按配置关闭两类核验；如需正式发布验证，须从目标版本的完整生产配置取得合格证据。每条发布用例都须满足 [Product E2E 资格](../devSpec/change-evidence.md#2-产品-e2e-的最低资格)。词法检索样本、仅收集用例及未走完整生产链的采集按各自证据类别记录。按 [EVM](../../evals/AGENTS.md#5-比较身份与归档)保留目标版本、配置、实际结果和校验和。
 
 ## 历史操作记录
 
@@ -156,7 +249,7 @@ LongDS 的现行入口位于 `evals/longDS/`，使用公开题面和语料，采
 | baseline／target 配对与逐样本晋级 | [独立变更准入证据](#独立变更准入证据)、[晋级门槛](#逐样本晋级门槛与早停) |
 | 判断目标版本发布资格 | [Release gate](#release-gate) |
 | LongDS 采集、续跑与独立评分 | [长程分析基线](#longds-长程分析基线)、[Prompt 语言与评分配置](#prompt-语言与独立-longds-评分配置) |
-| 重算 claim 历史指标 | [claim 指标持续评估](#claim-指标持续评估) |
+| 重算 claim 历史指标 | [历史 claim 指标重算](#历史-claim-指标重算) |
 
 ## 新运行的归档位置
 
@@ -369,7 +462,7 @@ Netflix task2 的 20 轮已交付结果和未决执行单独保留；本次可�
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.run_longds baseline --materials .tmp/longds-implementation-20261023/materials --output .tmp/longds-implementation-20261023/l1-baseline
 ```
 
-基线须先配置真实模型、两条匹配的容量配置和既有本机评测数据库凭据；本次每 run 10M tokens、40 次主决策，其他参数按 Spec 固定。调用正式 `/api/artifacts/upload` 后，按顺序发送最多两轮完整中文请求至 `/api/conversation/turn`；只在实际 `answer` 后继续，不代答澄清或确认。参考答案不挂载。采集器复用现有只读 SDK／HTTP 观察及实际进程身份，保存源快照、原始请求、回答、Journal、用量和校验和；不提供解题代码。`report.json` 的 `not_scored` 仅记录流程，不能计作正确性或完整 36 轮通过。
+基线须先配置真实模型、两条匹配的容量配置和既有本机评测数据库凭据；本次每 run 10M tokens、40 次主决策，其他参数按 Spec 固定。调用正式 `/api/artifacts/upload` 后，按顺序发送最多两轮完整中文请求至 `/api/conversation/turns`；只在实际 `answer` 后继续，不代答澄清或确认。参考答案不挂载。采集器复用现有只读 SDK／HTTP 观察及实际进程身份，保存源快照、原始请求、回答、Journal、用量和校验和；不提供解题代码。`report.json` 的 `not_scored` 仅记录流程，不能计作正确性或完整 36 轮通过。
 
 独立 Python 能力 target 使用相同入口和新的输出目录；本次固定镜像如下。该目录若已经存在，保留原运行，不覆盖或以同名重跑。
 
@@ -379,7 +472,7 @@ Netflix task2 的 20 轮已交付结果和未决执行单独保留；本次可�
 
 生成进程已停止且 seal 有效后，独立评分才读取实际 Final。Judge 资格与 2M 独立额度由 Spec 固定；下面复用已通过的同配置资格，不重复计资格样本或把评分回灌生成侧。
 
-用户授权的无 claim／核验流程使用相同采集入口，运行前显式设置 `$env:PERSONAL_AGENT_ANSWER_RESULT = '{"writer":"direct"}'`，并通过 `$env:PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 选择已声明的独立 TOML，输出另取尚不存在的目录。目标和结果核验的取值与适用范围由[实验组 1](../ablation/experiment.md)拥有；关闭任一核验记录为 `unverified_flow_capture`、`release_eligible=false`，不计完整 Product E2E。默认对照使用默认全开配置；同对话与同 run 不能换装配，后续 claim 消融使用独立对话并固定两项核验开关，实际确认 claim 机制被消费。历史 `.tmp/answer-result-modules-20261023/l1-direct-flow` 的旧 `verification=none` 原件和成绩不改写，原预算与判据由[可替换回答模块与无核验流程验证](../optimization/to_verify/verify_results/longds-analysis.md#2-可替换回答模块与无核验流程验证)拥有。
+当时的无 claim、无核验流程使用旧 writer 配置；其封存原件和成绩保持原身份。当前已统一答复入口，两类核验的取值与适用范围由[实验组 1](../ablation/experiment.md)拥有。关闭任一核验记为 `unverified_flow_capture`，不计完整 Product E2E。历史 `.tmp/answer-result-modules-20261023/l1-direct-flow` 的原预算与判据由[可替换回答模块与无核验流程验证](../optimization/to_verify/verify_results/longds-analysis.md#2-可替换回答模块与无核验流程验证)拥有。
 
 ```powershell
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.product_baselines.longds_judge score --judge-root .tmp/longds-implementation-20261023/judge --source-directory .tmp/longds-design-20261023 --materials .tmp/longds-implementation-20261023/materials --capture .tmp/longds-implementation-20261023/l1-python-target --name l1-python-target
@@ -509,7 +602,7 @@ prepare与replay零HTTP；run保留源模型／完整Context和Schema、零重�
 
 ## 检索实验研究能力准入
 
-`RETRIEVAL-EXPERIMENT-001`（E1）与 `RETRIEVAL-EXPERIMENT-PROGRAM-001`（P1）的阶段 0 正式入口及预算由[唯一 Spec](../optimization/to_verify/verify_results/research-experiment.md#32-完整落地-implementation-plan)拥有。节点采用真实 Web 子进程、生产模型与 `POST /api/conversation/turn`，原件只经 Artifact owner 准备，不摄入知识，也不向模型提供预生成排名、候选代码或 test 标注。当前独立准入节点不加入默认 release 分母。
+`RETRIEVAL-EXPERIMENT-001`（E1）与 `RETRIEVAL-EXPERIMENT-PROGRAM-001`（P1）的阶段 0 正式入口及预算由[唯一 Spec](../optimization/to_verify/verify_results/research-experiment.md#32-完整落地-implementation-plan)拥有。节点采用真实 Web 子进程、生产模型与 `POST /api/conversation/turns`，原件只经 Artifact owner 准备，不摄入知识，也不向模型提供预生成排名、候选代码或 test 标注。当前独立准入节点不加入默认 release 分母。
 
 先收集和零模型材料预检：
 
@@ -571,9 +664,9 @@ F2 原生 start 响应中断复用研究采集 CLI。按 Spec 单独准入后，
 
 故障与普通准备不可混用。`fault_boundary/fault-configuration.json` 绑定实际部署，`fault-control/transport-observations.json` 保存真实 create／start／响应／查询及清理观察，SDK、HTTP、Journal 和终态沿原采集归档。canonical catalog 以 `RETRIEVAL-EXPERIMENT-START-RESPONSE-001` 登记此 CLI；它使用真实模型及进程内故障控制，分类 boundary_evaluation。真实到达、安全结论与完整交付分别报告，不凭注入次数计成功，不计产品发布分子。
 
-## claim 指标持续评估
+## 历史 claim 指标重算
 
-指标定义与收益判据固定在[claim 指标规格](../ablation/claim-verifier.md#21-具体评估指标)，历史基线由[冻结计划](../ablation/claim-verifier-baseline.plan.json)标识。下列命令只读重算已裁判的完整阶段归档，零模型调用，不收集或运行测试：
+Conversation claim 已由 [ADR 0055](../adr/0055-unified-conversation-answer.md)移除，脚本也已退出当前工作树。下列命令只用于原版本的历史归档重算。原判据见[指标规格](../ablation/claim-verifier.md#21-具体评估指标)，原输入见[冻结计划](../ablation/claim-verifier-baseline.plan.json)。
 
 ```powershell
 $claimMetricsOutput = ".tmp/claim-metrics-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
@@ -582,9 +675,9 @@ $claimMetricsOutput = ".tmp/claim-metrics-" + (Get-Date -Format "yyyyMMdd-HHmmss
   --output-root $claimMetricsOutput
 ```
 
-输出根必须尚不存在。每次归档保存源汇总、计划、报告、重算源码及校验和；源 SHA-256、完整配对、标签覆盖或任务映射不符时拒绝出具报告。该入口目前自动统计预设关系、任务均值与核验成本，缺少闭环或整例证据的指标保持未测。
+输出根必须尚不存在。每次归档保存源汇总、计划、报告、重算源码及校验和；源 SHA-256、完整配对、标签覆盖或任务映射不符时拒绝出具报告。该历史入口曾自动统计预设关系、任务均值与核验成本，缺少闭环或整例证据的指标保持未测。
 
-后续新模型、Prompt、Context 或修订链评估使用新冻结计划与真实产物，按指标规格连续消费实际输出；本命令不负责采样或生成语义裁判。旧结果不覆盖，跨评测身份不直接合并，阶段重算不计发布通过。
+历史指标重算不生成语义裁判，不改写旧结果，不计入发布通过。
 
 ## 独立变更准入证据
 

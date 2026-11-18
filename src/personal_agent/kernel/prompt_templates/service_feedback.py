@@ -28,18 +28,6 @@ PROMPTS = {
         template='模型连续提交了同一类无效动作，本次交互已安全停止；所有被拒绝的动作均未执行。',
         owner="conversation",
     ),
-    'conversation.service.research_selection_coverage_repair': PromptSpec(
-        name='conversation.service.research_selection_coverage_repair',
-        version='2026-10-27.v1',
-        template='覆盖全部requirements且每项恰好一次，只关联当前claim与已返回引用；本次选择未接纳。',
-        owner="conversation",
-    ),
-    'conversation.service.research_selection_evidence_repair': PromptSpec(
-        name='conversation.service.research_selection_evidence_repair',
-        version='2026-10-27.v1',
-        template='根据缺口调用当前合法工具；取得新证据后重新选证。',
-        owner="conversation",
-    ),
     'conversation.service.experiment_delivery_check_unavailable': PromptSpec(
         name='conversation.service.experiment_delivery_check_unavailable',
         version='2026-10-27.v1',
@@ -114,8 +102,8 @@ PROMPTS = {
     ),
     'conversation.service.citation_repair': PromptSpec(
         name='conversation.service.citation_repair',
-        version='2026-10-27.v1',
-        template='修正引用或补读后重新提交草稿和对应引用，不要编造证据。',
+        version='2026-11-15.v1',
+        template='重新提交完整答复。需要引用时修正坐标或补读原文，可省略不必要且不可用的坐标。',
         owner="conversation",
     ),
     'conversation.service.verification_budget_exhausted': PromptSpec(
@@ -202,25 +190,21 @@ PROMPTS = {
         template='当前模型请求超过已声明的容量边界，或部署容量信息与实际请求不匹配；本次调用已停止。',
         owner="conversation",
     ),
-    'conversation.service.artifact_unread': PromptSpec(
-        name='conversation.service.artifact_unread', version='v1', owner='conversation',
-        template='当前原件 `{resource_id}` 的省略部分尚未查阅，本轮暂不能以 `{disposition}` 结束。',
-    ),
     'conversation.service.artifact_refetch': PromptSpec(
         name='conversation.service.artifact_refetch', version='v2', owner='conversation',
         template='重复工具调用，本次未执行。',
     ),
     'conversation.service.artifact_repair_read': PromptSpec(
-        name='conversation.service.artifact_repair_read', version='v1', owner='conversation',
-        template='可调用 `{tool}`，将 `resource_id` 设为 `{resource_id}`，按 `start_line` 读取相关窗口。',
+        name='conversation.service.artifact_repair_read', version='v2-file-path', owner='conversation',
+        template='可调用 `{tool}`，将 `file_path` 设为 `{file_path}`，按 `start_line` 读取相关窗口。',
     ),
     'conversation.service.artifact_repair_search': PromptSpec(
-        name='conversation.service.artifact_repair_search', version='v1', owner='conversation',
-        template='可调用 `{tool}`，将 `resource_id` 设为 `{resource_id}`，用 `keyword` 定位相关内容。',
+        name='conversation.service.artifact_repair_search', version='v2-file-path', owner='conversation',
+        template='可调用 `{tool}`，将 `file_path` 设为 `{file_path}`，用 `keyword` 定位相关内容。',
     ),
     'conversation.service.artifact_repair_unavailable': PromptSpec(
-        name='conversation.service.artifact_repair_unavailable', version='v1', owner='conversation',
-        template='当前声明中没有可用于原件 `{resource_id}` 的读搜动作。',
+        name='conversation.service.artifact_repair_unavailable', version='v2-file-path', owner='conversation',
+        template='当前声明中没有可用于原件 `{file_path}` 的读搜动作。',
     ),
     'conversation.service.historical_source_rejected': PromptSpec(
         name='conversation.service.historical_source_rejected',
@@ -322,20 +306,14 @@ PROMPTS = {
     ),
     'conversation.service.resource_reference_not_allowed': PromptSpec(
         name='conversation.service.resource_reference_not_allowed',
-        version='2026-10-27.v1',
-        template='只能读取本任务输入或已提交回执提供的确切资源引用。',
+        version='2026-10-27.v2-file-path',
+        template='只能读取本任务输入或已提交回执提供的确切文件路径。',
         owner="conversation",
     ),
     'conversation.service.resource_reference_repair': PromptSpec(
         name='conversation.service.resource_reference_repair',
-        version='2026-10-27.v1',
-        template='使用当前输入或已提交回执提供的 resource_id。',
-        owner="conversation",
-    ),
-    'conversation.service.read_request_too_long': PromptSpec(
-        name='conversation.service.read_request_too_long',
-        version='2026-10-27.v1',
-        template='读取参数过长，无法在输出预算内完整回显和提供续读参数；请缩短字面关键词。',
+        version='2026-10-27.v2-file-path',
+        template='使用当前输入或已提交回执提供的 file_path。',
         owner="conversation",
     ),
     'conversation.service.experiment_mutation_deadline': PromptSpec(

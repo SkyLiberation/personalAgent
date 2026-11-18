@@ -704,9 +704,9 @@ gv646 首个错误目标判定已触发预声明失败早停：核验器实际�
 
 #### 9.10.8 参考采用与整体设计复审
 
-复用 [LLM 决策实践对照](../../../.agents/skills/design-llm-decisions/references/open-source-practices.md)中已核对的两个独立 A 级实现：PydanticAI `922ee561846333665a5bd5391e175b4b20867667` 的 Agent 装配 → `_agent_graph` → `OutputValidator` → 真实反馈／再次请求，采用产物被消费者接纳前验证、失败由原循环修订；LangChain `b15a385cb1aa4507b86a3ba1e6430748b0c4ae4b` 的 `create_agent` → 输出解析 → 原 call ID 反馈 → 继续模型，采用输入、Schema、解析及反馈实际消费一致。它们没有替本工程提供“所有目标写入都必须由 LLM 核验”的默认契约；这个触发由本次用户要求和真实失败确定，调用次数及误拒成本仍须本地验收。
+复用 [LLM 决策实践对照](../../agentRef/llm-decision-practices.md)中已核对的两个独立 A 级实现：PydanticAI `922ee561846333665a5bd5391e175b4b20867667` 的 Agent 装配 → `_agent_graph` → `OutputValidator` → 真实反馈／再次请求，采用产物被消费者接纳前验证、失败由原循环修订；LangChain `b15a385cb1aa4507b86a3ba1e6430748b0c4ae4b` 的 `create_agent` → 输出解析 → 原 call ID 反馈 → 继续模型，采用输入、Schema、解析及反馈实际消费一致。它们没有替本工程提供“所有目标写入都必须由 LLM 核验”的默认契约；这个触发由本次用户要求和真实失败确定，调用次数及误拒成本仍须本地验收。
 
-有序历史与当前状态分工复用 skill 的 [Hermes／DeepSeek Harness Context 源码对照](../../../.agents/skills/design-llm-decisions/references/context-lifecycle.md)：从同一权威运行记录派生模型可见输入，保留原交互顺序与工具配对，按预算压缩。采纳这些机制，不复制对方完整会话数据库、自动续跑或多 Agent 架构；固定版本和未执行第三方项目的边界保持。
+有序历史与当前状态分工复用 [Hermes／DeepSeek Harness Context 源码对照](../../agentRef/model-context-lifecycle.md)：从同一权威运行记录派生模型可见输入，保留原交互顺序与工具配对，按预算压缩。采纳这些机制，不复制对方完整会话数据库、自动续跑或多 Agent 架构；固定版本和未执行第三方项目的边界保持。
 
 整体 critic 已将设计阶段的冲突直接修入本节：两类判定共用任务及历史；读取排除而沿用纳入；候选不得提前生效；目标回执不得替代回答通过；`none` 的装配缺口明确修正；旧目标不高于用户原话。独立构建审查进一步发现两项缺口并已修正：维护前取证工具不可达，因此允许忠实记录未知项并提供受统一核验的既有非业务出口；主循环检查点不能保存另一种历史，因此由同一 Journal 独立管理一份统一核验检查点，明确读取、更新及跨轮恢复。模型仍拥有目标解释、修订、方法、补证与交付选择，Runtime 只固定提交前依赖及真实状态迁移。预期价值是提前暴露目标失真，代价是新增模型耗用和误拒机会；这些是待验证假设，不用机制存在证明收益。本轮隔离输入与判定已经实现并运行，但语义准入未通过；生产写入前调用、压缩与装配，以及正式前三轮均未执行。已停止继续修改同类候选，待基于新证据重审任务设计。
 
@@ -994,7 +994,7 @@ Return checks. Each item contains a concrete user requirement in requirement, a 
 
 本轮复用并核对固定源码及实际消费者：OpenHands `98849457621881ae2414719b82b8bc1cf535b4ab`的`run_goal → on_run_finished → judge_goal`在执行结束后以原objective和实际transcript判断完成；它的完成审计不证明执行前的目标定义正确，本工程不再将同一完成任务兼用于写入前核验。源码及SHA由[原来源清单](../../../.tmp/goal-verifier-redesign-20261102/source-index.json)拥有。
 
-Context责任隔离采用已核对的[Hermes与DeepSeek Harness源码实践](../../../.agents/skills/design-llm-decisions/references/context-lifecycle.md#3-同一任务的不同调用不必共享所有历史)：独立职责取得显式任务与必要材料，运行记录与本次可见历史分开。两者均有独立输入和继承模式，并未实现本工程这套目标／回答双核验；本地按职责筛选及各自摘要是适配决定，不据外部存在声称识别正确率。没有运行第三方代码或模型。
+Context责任隔离采用已核对的[Hermes与DeepSeek Harness源码实践](../../agentRef/model-context-lifecycle.md#3-同一任务的不同调用不必共享所有历史)：独立职责取得显式任务与必要材料，运行记录与本次可见历史分开。两者均有独立输入和继承模式，并未实现本工程这套目标／回答双核验；本地按职责筛选及各自摘要是适配决定，不据外部存在声称识别正确率。没有运行第三方代码或模型。
 
 整体critic结论：直接删除首次误拒所依据的回答状态，且目标核验任务只含定义判断，因果假设可被实际首轮证伪；回答仍保留原始要求和此前回答，防止丢失跨轮对象。主要代价是两种提示及摘要职责绑定，使用一个canonical日志避免双写。核验模型仍可能误解用户，保留原结果判据；不以历史分离、报告合法或反馈到达代替正确判断。目标生成、业务方法、修复及是否交付仍由主模型选择，不预填期望名单或理想反馈。当前设计无待用户决定的实现阻断项。
 

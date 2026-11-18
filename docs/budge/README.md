@@ -43,8 +43,8 @@
 
 | 任务 | 独立额度与适用范围 | 依据 |
 | --- | --- | --- |
-| Python 分析 | 部署授权必填任务总 token 和总执行秒数，跨同一授权对话的多个运行累计。有效 token 余量取单次运行与任务余量的较小值。单次运行截止取开始后 `turn_timeout_seconds`（默认 3,600 秒）和授权到期时间的较早值 | [Python 授权配置](../env.md#通用-python-执行许可) · [预算实现](../../src/personal_agent/application/conversation/budget.py) |
-| Python 沙箱 | 单次执行默认 60 秒、512 MB 内存、1 个 CPU 和 64 个进程，另有临时盘、标准输出和标准错误配额。程序限 128 KiB，输入最多 32 项，合计限 64 MiB | [沙箱与授权契约](../../src/personal_agent/application/python_execution/models.py) |
+| Bash 分析 | 部署授权必填任务总 token 和总执行秒数，跨同一授权对话的多个运行累计。有效 token 余量取单次运行与任务余量的较小值。单次运行截止取开始后 `turn_timeout_seconds`（默认 3,600 秒）和授权到期时间的较早值 | [Bash 授权配置](../env.md#通用-bash-执行许可) · [预算实现](../../src/personal_agent/application/conversation/budget.py) |
+| Bash 沙箱 | 单次默认 60 秒、512 MB 内存、1 个 CPU 和 64 个进程，另有临时盘及输出配额。命令限 128 KiB，工作区输入合计限 64 MiB | [沙箱与授权契约](../../src/personal_agent/application/bash_execution/models.py) |
 | 检索实验 | 部署声明单次运行时限与累计执行秒数。外层实验进程默认 1,200 秒，候选程序默认 60 秒，两者各有 CPU、内存、进程和输出限制 | [实验额度契约](../../src/personal_agent/application/retrieval_experiment/models.py) · [执行准入](../../src/personal_agent/application/retrieval_experiment/service.py) |
 | 独立 Research 与定时简报 | 默认总查询 5 次，其中探索最多 3 次、核证最多 2 次。满意度模型判断最多 1 次，计入预算的工具调用最多 15 次。来源采集配置搜索结果上限为 30 条，单次搜索最多请求 10 条，每次采集最多成功保留 5 篇全文 | [Research 流程](../workflow/research-once-workflow.md#停止与结果状态) · [运行限额](../../src/personal_agent/kernel/contracts/research.py) · [执行实现](../../src/personal_agent/application/research/service.py) |
 | 外部 GPT Researcher 委派 | 单次委派时限默认 240 秒，并受子智能体配置的运行时长上限约束。父级等待到子任务终态或委派时限耗尽。远端在途任务默认最多 4 个，可单独配置。父级授权记录还保存 `token_budget` 和 `cost_budget`，默认分别为 4,000 和 1.0。远端提交参数中的额度为可选搜索结果上限 `max_search_results` | [委派提交、预算与恢复](../workflow/gpt-researcher-a2a-workflow.md#提交预算与恢复) · [委派提议](../../src/personal_agent/application/conversation/models.py) · [远端适配](../../src/personal_agent/agents/gpt_researcher_a2a.py) · [委派网关](../../src/personal_agent/agents/gateway.py) |

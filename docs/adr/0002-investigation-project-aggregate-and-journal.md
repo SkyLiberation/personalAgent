@@ -1,72 +1,11 @@
-# ADR 0002: Investigation Project Aggregate and Journal
+# ADR 0002：Investigation Project 聚合与 Journal
 
-- Status: Superseded and removed on 2026-08-26
-- Date: 2026-07-27
+2026-07-27 决定，2026-08-26 随 [ADR 0015](0015-withdraw-investigation-project.md)撤回。
 
-> Historical record only. Baseline-first review found no evidence that an independent Project lifecycle was required, while formal samples delivered `0/20`; the implementation was removed. Current decision: [ADR 0015](0015-withdraw-investigation-project.md).
+## 原决定
 
-## Context and Baseline
+旧后台调查使用专用聚合，Project Service 唯一写入定义和计划，PostgreSQL 保存事件并重建投影。Worker 消费已接纳的计划并重新入队非终态项目。用户只能恢复自己暂停的项目，预算、审批等停点需要各自条件满足。取消与交付按已保存事实恢复，执行产物由 Artifact 保存。采用业务特定的持久生命周期，未引入通用任务框架。
 
-Conversation ReAct can recover committed interaction inputs, and existing durable workflows can recover
-fixed topologies. Neither owns dynamic SubGoal dependencies, requirement coverage, steering revisions or
-a deliverable contract across process and approval boundaries.
+## 历史证据与退出
 
-The adoption-time design said LT09 would freeze Conversation as the simplest product baseline and LT12
-would compare a fixed durable workflow with observation-driven revision. A later evidence audit found that
-LT09 returned a constructed `conversation_coverage` value without executing the Conversation production
-entry, while LT12 was mechanism evidence created with the design. They therefore do not qualify the
-product demand for InvestigationProject. This ADR records the ownership and recovery boundaries of the
-implemented public path; it must not be cited as proof that real users required the aggregate.
-
-## Decision
-
-Introduce one business-specific `InvestigationProject` aggregate. Its immutable definition and append-only
-events are stored by `PostgresInvestigationProjectStore`; the aggregate projection is rebuilt from those
-facts. `InvestigationProjectService` is the only Project write entry. Accepted Plan versions are production
-inputs to ready-set calculation, dispatch, join, progress and coverage.
-
-Creation persists the definition before enqueue and returns `202`. The investigation worker scans
-non-terminal Projects after restart and re-enqueues them with stable keys. A paused Project is not
-recovered automatically. User resume is legal only when the canonical pause reason is `user_paused`;
-budget, capability, approval and repair pauses require their typed condition to change.
-
-The implementation remains Project-specific. A generic DurableTask framework is prohibited until a second
-business aggregate demonstrates the same invariants through its own E2E.
-
-`cancelling` and `completing` are recoverable states, not transient method-local markers. Restart continues
-child cancellation or final verification from journal facts. A committed final Artifact is read through
-ArtifactService on recovery, so final synthesis is not repeated.
-
-## Ownership
-
-- Definition, Plan, SubGoal, waiting reason, budget and completion lifecycle: Project aggregate.
-- Commands that change the aggregate: `InvestigationProjectService`.
-- Persistence and optimistic sequence check: PostgreSQL Project store.
-- Queue lease and retry facts: existing worker queue store.
-- Open semantic proposals: structured-model ports; never the aggregate or worker.
-
-## Net Complexity and Removed Path
-
-Added one aggregate, one journal/store and one worker handler. The initial implementation removed the old
-Conversation `WorkingPlanSnapshot`; a later, independently admitted change added a Conversation-owned
-typed working plan without sharing Project facts or durable dispatch. No converter, feature flag or second
-Project write path remains.
-
-## Verification
-
-Current diagnostic coverage excludes the invalid LT09 comparison. The remaining runtime-conformance and
-lifecycle tests exercise production domain/application/store/queue code with scripted external ports and
-assert user pause/resume, restart scanning, system-pause non-bypass, and crash recovery from `cancelling`
-and `completing` without duplicate provider cancellation or final synthesis. These are regression and
-mechanism claims, not product-demand evidence. Live model/provider release evidence remains mandatory for
-the corresponding provider profile.
-
-## Alternatives and Exit
-
-A generic DAG engine remains rejected because it adds abstraction without a second business consumer.
-No additional Project lifecycle, approval, planning or persistence mechanism may be added until a
-traceable user/contract source and same-input failure baseline establish the missing result. The existing
-HTTP/Conversation path is already a public behavior with persisted canonical facts, so removing or
-collapsing it is also a product change: first identify real consumers and migration obligations, execute a
-behavior/migration baseline, and preserve canonical facts before deletion. Architecture references alone
-authorize neither expansion nor destructive removal.
+LT09 构造了 Conversation 覆盖值，未经过该生产入口；LT12 是随方案建立的机制检查。两者均不足以证明产品需要独立聚合。早期验证只证明暂停、重启扫描及取消／交付恢复等局部边界；正式后台样本交付 0/20。Project 代码、入口及专属运行资产退出，原测试与归档按原身份追溯。[原记录](https://github.com/SkyLiberation/personalAgent/blob/345c62679a6c1f6a4c70980c868f55b5dee95fef/docs/adr/0002-investigation-project-aggregate-and-journal.md)

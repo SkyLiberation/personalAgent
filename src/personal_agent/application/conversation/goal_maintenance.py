@@ -98,7 +98,7 @@ def admit_goal_maintenance(
         reference = AnalysisGoalRef(run_ref=trace.interaction_run_ref, call_id=invocation.call_id,
             revision=0 if operation in ("control", "resolve") else previous_version + 1, content_digest=_goal_digest(goal))
     return GoalOperationRecord(run_ref=trace.interaction_run_ref, call_id=invocation.call_id,
-        decision_turn=trace.usage.model_turns, input_digest=goal_input_digest(trace),
+        decision_turn=trace.current_step_no, input_digest=goal_input_digest(trace),
         operation=operation, base_goal_ref=base, goal_ref=reference, goal=goal,
         verification_ref=verification_ref, patch=invocation.arguments, execution_control=candidate.execution_control)
 
@@ -124,7 +124,7 @@ def goal_decision_outcome(decision, *, trace: InteractionTrace, previous: Sequen
     read = decision.goal_read if isinstance(decision, ContinueTurnProposal) else None
     if read is not None and current is not None:
         return GoalOperationRecord(run_ref=trace.interaction_run_ref, call_id=read.call_id,
-            decision_turn=trace.usage.model_turns, input_digest=goal_input_digest(trace),
+            decision_turn=trace.current_step_no, input_digest=goal_input_digest(trace),
             operation="read", base_goal_ref=current.reference, goal_ref=current.reference,
             goal=current.goal, execution_control=current.execution_control)
     if goal_prepared(trace, current):

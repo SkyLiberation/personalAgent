@@ -218,11 +218,11 @@ TRANSLATIONS.update({
         'interaction_verification.context.status.not_satisfied': 'not satisfied',
         'interaction_verification.context.status.insufficient_evidence': 'insufficient evidence',
         'interaction_verification.context.revision': 'Revision feedback\n{feedback}',
-        'interaction_verification.context.action_id': 'Historical Python call ID `{action_id}`.',
+        'interaction_verification.context.action_id': 'Historical Bash call ID `{action_id}`.',
         'interaction_verification.context.input': 'Input file `{binding_name}` is bound to resource_id `{resource_id}`.',
         'interaction_verification.context.input_revision': 'Input file revision {revision}.',
         'interaction_verification.context.input_version': 'Input revision {revision}, original filename `{filename}`, media type `{media}`.',
-        'interaction_verification.context.code': 'Original Python code for this call\n\n{code}',
+        'interaction_verification.context.code': 'Original Bash command for this call\n\n{code}',
         'interaction_verification.context.mounted_code': 'Original code of mounted script `{binding_name}`\n\n{code}',
         'interaction_verification.context.source.unavailable': 'The mounted script source could not be provided.',
         'interaction_verification.context.source.over_budget': "The mounted script exceeds the review's source budget.",
@@ -235,6 +235,6 @@ TRANSLATIONS.update({
         'interaction_verification.context.stream': 'Observed output preview ({stream})\n\n{text}',
         'interaction_verification.context.delivered': 'This answer was delivered.',
         'interaction_verification.context.not_delivered': 'No delivery was recorded for this draft.',
-        'interaction_verification.context.pending_slot': 'Pending Python call `{action_id}`; return its judgment in slot `{slot}`.',
+        'interaction_verification.context.pending_slot': 'Pending Bash call `{action_id}`; return its judgment in slot `{slot}`.',
     }.items()
 })

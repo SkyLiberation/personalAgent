@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 
-from personal_agent.application.conversation.artifact_search import TextMatch
+from personal_agent.application.conversation.file_search import TextMatch
 
 
 class RipgrepArtifactSearch:
@@ -24,6 +24,19 @@ class RipgrepArtifactSearch:
         self._max_output_bytes = max_output_bytes
 
     def find(self, text: str, *, keyword: str, regex: bool) -> tuple[TextMatch, ...]:
+        output = self._run_ripgrep(text, keyword=keyword, regex=regex)
+        matches = []
+        for line in output.splitlines():
+            event = json.loads(line)
+            if event["type"] != "match":
+                continue
+            data = event["data"]
+            for submatch in data["submatches"]:
+                matches.append(TextMatch(start=data["absolute_offset"] + submatch["start"],
+                                         end=data["absolute_offset"] + submatch["end"]))
+        return tuple(matches)
+
+    def _run_ripgrep(self, text: str, *, keyword: str, regex: bool) -> bytearray:
         if not self._executable:
             raise RuntimeError(self._prompts.render('artifact_search.engine_missing'))
         args = [self._executable, "--json", "--no-config", "--text", "--multiline", "--ignore-case"]
@@ -60,13 +73,4 @@ class RipgrepArtifactSearch:
                         process.kill()
                     process.wait()
                     timer.join()
-        matches = []
-        for line in output.splitlines():
-            event = json.loads(line)
-            if event["type"] != "match":
-                continue
-            data = event["data"]
-            for submatch in data["submatches"]:
-                matches.append(TextMatch(start=data["absolute_offset"] + submatch["start"],
-                                         end=data["absolute_offset"] + submatch["end"]))
-        return tuple(matches)
+        return output

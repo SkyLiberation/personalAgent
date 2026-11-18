@@ -25,14 +25,17 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 from .context_materialization import (
-    ARTIFACT_OUTPUT_CAPABILITIES,
+    FILE_READ_CAPABILITIES,
+    GREP_FILE_CAPABILITY,
     select_visible_successful_observations,
 )
 from .goal_models import GOAL_PENDING_ACTION_REJECTED
 from .mcp_result_projection import mcp_duplicate_lines, project_mcp_result
 from .models import ActionObservation, ArtifactSourceInput, DecisionFeedback, InteractionInput
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY, observed_receipts
-from .artifact_search import SearchActionOutputArguments, SourceSearchResult
+from personal_agent.application.artifacts.models import artifact_file_path
+from personal_agent.application.bash_execution.models import BashToolResult
+from .file_search import GrepFileArguments, SourceSearchResult
 from .source_reading import (
     ReturnedSourceLine,
     SourceReadWindow,
@@ -60,12 +63,12 @@ class CitableInput(BaseModel):
     observation: InteractionInput
     citations: tuple[CitationLine, ...] = ()
     document_kind: Literal["source_text", "tool_result"] | None = None
-    executed_query: WebSearchArgs | SearchActionOutputArguments | None = None
+    executed_query: WebSearchArgs | GrepFileArguments | None = None
 
 
 def _separate_executed_query(
     item: InteractionInput,
-) -> tuple[InteractionInput, WebSearchArgs | SearchActionOutputArguments | None]:
+) -> tuple[InteractionInput, WebSearchArgs | GrepFileArguments | None]:
     """Only source results enter citation binding; queries remain decision data."""
     if not isinstance(item, ActionObservation) or item.status != "succeeded":
         return item, None
@@ -76,12 +79,12 @@ def _separate_executed_query(
             **item.payload,
             "data": output.model_dump(mode="json", exclude={"query", "limit"}),
         }
-    elif item.capability_id == "search_action_output":
+    elif item.capability_id == GREP_FILE_CAPABILITY:
         output = SourceSearchResult.model_validate(
             {key: value for key, value in item.payload.items() if key != "ok"}
         )
-        query = SearchActionOutputArguments(
-            resource_id=output.resource_id,
+        query = GrepFileArguments(
+            file_path=output.file_path,
             keyword=output.keyword,
             regex=output.regex,
             result_offset=output.result_offset,
@@ -138,7 +141,7 @@ def _catalog(
 ) -> dict[str, tuple[AvailableCitation, ...]]:
     inputs = tuple(inputs)
     visible = select_visible_successful_observations(
-        inputs, excluded_capability_ids=frozenset({"verify_interaction_draft"})
+        inputs, excluded_capability_ids=frozenset({"verify_interaction_draft", "bash"})
     )
     sources = source_metadata_by_resource((*inputs, *visible))
     documents: dict[ResourceRef | CitationSource, str] = {}
@@ -153,7 +156,7 @@ def _catalog(
         if observation.payload.get("retrieval"):
             catalog[observation.action_id] = ()
             continue
-        if observation.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
+        if observation.capability_id in FILE_READ_CAPABILITIES:
             window = SourceReadWindow.model_validate(observation.payload)
             metadata = sources.get(window.resource_ref)
             if metadata is None:
@@ -222,7 +225,7 @@ def materialize_citation_context(
         item, query = _separate_executed_query(item)
         if locations:
             assert isinstance(item, ActionObservation)
-            if item.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
+            if item.capability_id in FILE_READ_CAPABILITIES:
                 payload = {
                     key: value for key, value in item.payload.items() if key != "lines"
                 }
@@ -288,6 +291,9 @@ def render_decision_feedback(
 def _render_observation(
     observation: ActionObservation, item: CitableInput, *, prompts: PromptCatalog, native_tool_result: bool,
 ) -> str:
+    data = observation.payload.get("data")
+    if observation.capability_id == "bash" and isinstance(data, dict) and "receipt" in data:
+        return BashToolResult.model_validate(data).shell_output()
     status = prompts.get(f"conversation.context.state.{observation.status}").template
     parts = [prompts.render("conversation.context.tool.status", tool_name=observation.capability_id, status=status)]
     if not native_tool_result:
@@ -313,7 +319,8 @@ def _render_observation(
     if isinstance(retrieval, dict):
         ref = retrieval.get("resource_ref")
         if isinstance(ref, dict) and ref.get("resource_id"):
-            parts.append(prompts.render("conversation.context.tool.resource", resource_id=ref["resource_id"]))
+            parts.append(prompts.render("conversation.context.tool.resource",
+                file_path=artifact_file_path(ResourceRef.model_validate(ref))))
         if retrieval.get("total_lines") is not None:
             parts.append(prompts.render("conversation.context.tool.lines", lines=retrieval["total_lines"]))
         if omitted is not None:
@@ -326,12 +333,13 @@ def _render_observation(
             parts.append(retrieval["read_more"])
     elif omitted is not None:
         parts.append(prompts.render("conversation.context.tool.omitted", count=omitted))
-    if observation.capability_id in ARTIFACT_OUTPUT_CAPABILITIES:
+    if observation.capability_id in FILE_READ_CAPABILITIES:
         # Authorization and version checks use the original typed receipt.
         payload.pop("content_digest", None)
         ref = payload.pop("resource_ref", None)
         if isinstance(ref, dict) and ref.get("resource_id"):
-            parts.append(prompts.render("conversation.context.tool.source", resource_id=ref["resource_id"]))
+            parts.append(prompts.render("conversation.context.tool.source",
+                file_path=artifact_file_path(ResourceRef.model_validate(ref))))
         total_lines = payload.pop("total_lines", None)
         if total_lines is not None:
             parts.append(prompts.render("conversation.context.tool.lines", lines=total_lines))
@@ -363,7 +371,8 @@ def render_citable_input(
     if isinstance(observation, ArtifactSourceInput):
         resource = observation.resource
         return prompts.render("conversation.context.tool.material", filename=resource.filename,
-            resource_id=resource.resource_ref.resource_id, size=resource.size_bytes)
+            resource_id=resource.resource_ref.resource_id, file_path=artifact_file_path(resource.resource_ref),
+            size=resource.size_bytes)
     return prompts.render("conversation.context.execution_data", data=item.model_dump_json(exclude_none=True))
 
 
@@ -429,51 +438,6 @@ def materialize_cited_draft(
         segment.text for segment in segments
     )
     return tuple(units)
-
-
-def materialize_reference_sources(
-    segments: tuple[ConversationAnswerSegment, ...],
-    inputs: Iterable[InteractionInput],
-    *,
-    prompts: PromptCatalog = DEFAULT_PROMPTS,
-) -> tuple[AvailableCitation, ...]:
-    """Keep document coordinates when projecting source identity for synthesis.
-
-    CitedDraftUnit uses verifier-local eNNN identities, which must never escape
-    as Conversation document references.
-    """
-    catalog = {
-        location.evidence_id: location
-        for locations in _catalog(inputs).values()
-        for location in locations
-    }
-    return tuple(
-        dict.fromkeys(
-            location
-            for segment in segments
-            for ref in segment.references
-            for location in _resolve_citation(ref.evidence_id, catalog, prompts=prompts)
-        )
-    )
-
-
-def selected_citation_ids(
-    references: tuple[ConversationEvidenceReference, ...],
-    inputs: Iterable[InteractionInput],
-    *,
-    prompts: PromptCatalog = DEFAULT_PROMPTS,
-) -> frozenset[str]:
-    """Bind a selection to returned coordinates using the canonical resolver."""
-    catalog = {
-        location.evidence_id: location
-        for locations in _catalog(inputs).values()
-        for location in locations
-    }
-    return frozenset(
-        location.evidence_id
-        for reference in references
-        for location in _resolve_citation(reference.evidence_id, catalog, prompts=prompts)
-    )
 
 
 def bound_citation_ids(

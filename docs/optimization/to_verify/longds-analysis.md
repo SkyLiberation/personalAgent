@@ -2,9 +2,9 @@
 
 问题编号：`KNOWLEDGE-DECISION-DELIVERY-001`。本文拥有原 Netflix task3 连续分析用例、LT 需求、跨 run 依赖、L0—L3 及官方评分协议。已执行计划与结果移至[LongDS 验证记录](verify_results/longds-analysis.md)；新增 task2 语义候选及其独立身份见[长程语义设计](longtask-semantic-consistency.md)。
 
-当前未知用量单独记录，不单独停止；确定性额度耗尽、许可到期及无法确认的执行继续按原门禁处理。实际策略见[Runtime](../../topics/runtime.md)，回答装配见[Verification 专题](../../topics/verification-and-completion.md)及[ADR 0041](../../adr/0041-replaceable-answer-result-modules.md)。历史记录中的旧额度、未知用量停止线和模型配置只说明当时身份。
+当前未知用量单独记录，不单独停止；确定性额度耗尽、许可到期及无法确认的执行继续按原门禁处理。实际策略见[Runtime](../../topics/runtime.md)，回答装配见[Verification 专题](../../topics/verification-and-completion.md)及[ADR 0055](../../adr/0055-unified-conversation-answer.md)。历史记录中的旧额度、未知用量停止线和模型配置只说明当时身份。
 
-状态：独立 Python 许可、跨轮原件及任务消费聚合已经接入；task3 完整交付和第 17→18 轮进程恢复已有实际证据，语义正确性尚未全部达标。最初接入状态与每次运行配置见[验证记录](verify_results/longds-analysis.md)，正式分数见[评测盘点](../../evals/02-current-case-inventory.md)。本页拥有固定用例与验收合同，新增语义机制由[SEM 候选](longtask-semantic-consistency.md)拥有。
+当前独立分析许可装配 Bash，通过同一正式 HTTP 入口接收原件。历史 task3 使用当时的执行工具，已取得完整交付和第 17→18 轮进程恢复证据，语义正确性尚未全部达标。最初接入状态与每次运行配置见[验证记录](verify_results/longds-analysis.md)，正式分数见[评测盘点](../../evals/02-current-case-inventory.md)。本页拥有固定用例与验收合同，新增语义机制由[SEM 候选](longtask-semantic-consistency.md)拥有。
 
 ## 1. 问题、用户结果与用例身份
 
@@ -27,18 +27,18 @@
 | LT-01 连续输入 | 同一主体、同一专用对话依次接收 36 个完整当前轮请求；下一轮消费本 Agent 的真实前轮回答 | 顺序、语言镜像或原题缺失使输入准备失败；L0／L2 |
 | LT-02 自主计算 | 模型按需选择原件和工具；使用 Python 时自行编写或修订程序，执行后消费真实输出并保留版本 | 工程不提供解题程序、预计算表或期待数字；错误由原工具反馈，L1／L2 |
 | LT-03 分析状态 | 模型遵循仍生效的用户原约束，正确区分本轮变更、默认更新、临时假设及历史回滚；计算和回答使用相应口径及成果版本 | 正确结果不能仅靠旧回答自证；原件来自当前授权下的真实历史，缺失明确反馈，不注入正确历史替换；L1／L2，已确认缺口见 [长程语义的整体复审与下一准入](verify_results/analysis-correctness.md#4-长程语义的整体复审与下一准入) |
-| LT-04 权限与完成 | 通用数据分析可获得明确 Python 执行许可并返回本轮确切 Final；无需检索实验材料、冻结或 test | 未授权、过期、原件缺失及未知执行按原边界拒绝；普通核验保持适用，L0／L1 |
+| LT-04 权限与完成 | 通用数据分析可获得明确 Bash 执行许可并返回本轮确切 Final；无需检索实验材料、冻结或 test | 未授权、过期、原件缺失及未知执行按原边界拒绝；普通核验保持适用，L0／L1 |
 | LT-05 结果评分 | 每轮实际 Final 独立对照该轮官方答案；完整任务同时报告逐轮分数及第 36 轮推荐 | Judge 故障、未答和语义错误分别记录；生产不消费评分反馈，L2 |
 | LT-06 消费与接续 | 所有用户轮、修复、重读及摘要计入同任务总用量；已发生执行保持原身份 | 新 run 不赠送总额度，未知用量单列记录，不单独停止；恢复按原事实，L1／L2／L3 |
 
 ## 3. 架构分析与候选边界
 
-先沿[架构入口](../../architecture/README.md)及[代码地图](../../architecture/code-map.md)定位。独立许可、跨轮原件和消费聚合的生产接入由[Python Spec](python-data-analysis-tool.md#35-longds-用例的条件适配)及 ADR 0040 拥有，实际接续与完整流程证据见[验证记录](verify_results/longds-analysis.md)。下面说明继续保留的责任边界，不重开旧两轮准入。
+先沿[架构入口](../../architecture/README.md)及[代码地图](../../architecture/code-map.md)定位。独立许可和工作区由 [Bash Spec](python-data-analysis-tool.md#bash-替换脚本执行工具)及 [ADR 0056](../../adr/0056-bash-workspace.md) 定义，实际接续与完整流程证据见[验证记录](verify_results/longds-analysis.md)。下面说明继续保留的责任边界，不重开旧两轮准入。
 
 | 边界与当前事实 | 责任、复用及候选调整 |
 | --- | --- |
 | [正式 Web](../../../src/personal_agent/adapters/web/routes/conversation.py)调用 `AgentService.converse()`；同 run 的 messages 已冻结 | 评测侧仅适配正式 HTTP 输入／输出。每个新用户请求使用新 `interaction_run_ref`，保持同一 `conversation_id` 和主体；原样请求恢复才复用旧 run。第 36 轮累计为 71 条用户／助手消息，在现有 100 条契约内 |
-| [Runtime](../../../src/personal_agent/orchestration/runtime.py)支持检索部署或独立 Python 对话许可；同一 Runtime 仅选一种装配为原 Profile | Python owner 拥有许可与执行，Conversation 冻结专用授权摘要；检索部署、冻结和 test 继续留在检索能力内。已实施，正式流程证据按原身份见 [Python Spec](python-data-analysis-tool.md#35-longds-用例的条件适配) |
+| [Runtime](../../../src/personal_agent/orchestration/runtime.py)支持检索部署或独立 Bash 对话许可。同一 Runtime 选一种装配为执行 Profile | Conversation 冻结许可摘要及 Bash 可读工作区。检索部署、冻结和 test 由检索能力管理。[执行契约](python-data-analysis-tool.md#bash-替换脚本执行工具) |
 | [Journal](../../../src/personal_agent/application/conversation/journal.py)普通 Plan 仍恢复未交付观察；通用分析新增同主体／对话／授权下的成功程序及工作产物读取投影 | Conversation 消费原事实并经 Artifact 当前校验；不复制费用、不创建第二状态库、不使用 LongDS 依赖标签挑历史。跨轮消费已在完整任务中发生，正确性与具体覆盖按验证记录解释 |
 | [Artifact 引用](../../../src/personal_agent/application/conversation/artifact_sources.py)与 Python Journal 已保存确切执行原件 | Artifact 继续保存不可变字节；模型的分析规则和版本说明可作为普通工作产物保存，不把评分公式、市场分类或历史状态选择写入 Runtime。Python 仍执行一次有界程序，程序复用及改动沿原引用／patch 契约 |
 | 各 run 保持自己的真实用量；通用分析 Journal 聚合相同许可的消费，原模型及执行准入取剩余量 | 授权绝对截止和总额不因新 run 改变；每轮仍受原预算约束，对话锁覆盖准入与提交。实现已接入，实际额度与恢复反事实按原覆盖记录；未知用量单独停止已撤销 |

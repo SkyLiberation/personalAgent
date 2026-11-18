@@ -45,7 +45,7 @@ Instructor 的[动态标签示例](https://github.com/instructor-ai/instructor/b
 
 ## 3. 当前四字段是否合理
 
-生产定义见[契约](../../src/personal_agent/capabilities/contracts/research.py)，现行语义见[研究 Prompt](../../src/personal_agent/kernel/prompt_templates/research.py)，引用检查和反馈恢复见[研究应用层](../../src/personal_agent/application/conversation/research.py)。本轮核对的坐标为：契约第 37–87 行；应用层第 675–708、737–761、830–903 行；实际消费在[会话服务](../../src/personal_agent/application/conversation/service.py)第 1599–1624、1692–1749 行。代码后续变化时按命名入口反查。
+当时的定义、Prompt 和引用检查分别位于 `capabilities/contracts/research.py`、`kernel/prompt_templates/research.py` 和 `application/conversation/research.py`。本轮核对的坐标为：契约第 37–87 行；应用层第 675–708、737–761、830–903 行；实际消费在[会话服务](../../src/personal_agent/application/conversation/service.py)第 1599–1624、1692–1749 行。复查这些坐标时使用原归档的源码版本。
 
 | 字段 | 当前用途与合理处 | 现有约束的边界 |
 | --- | --- | --- |
@@ -163,7 +163,7 @@ U1 的具体错误是：d3:120 说整个数据字典包含 Train、Test_5s 和 T
 
 ### 引用门禁究竟检查了什么
 
-U1 违反的是本次最简任务“evidence_ids 只用本单元绑定”的要求。原生产动态 validator 实际接受该报告：[应用层](../../src/personal_agent/application/conversation/research.py)的 `validate_research_support` 对 `citation_not_supported` 限于绑定集合，对 `factual_conflict` 等类别允许实际返回原文作为反证。**这个权限本身有用途，错误在于本次资料并不构成反证。**不能把诊断的范围违规写成生产确定性门禁失效，或据此禁止使用所有未绑定反证。
+U1 违反的是本次最简任务“evidence_ids 只用本单元绑定”的要求。原生产动态 validator 实际接受该报告：应用层（旧版 `research.py`）的 `validate_research_support` 对 `citation_not_supported` 限于绑定集合，对 `factual_conflict` 等类别允许实际返回原文作为反证。**这个权限本身有用途，错误在于本次资料并不构成反证。**不能把诊断的范围违规写成生产确定性门禁失效，或据此禁止使用所有未绑定反证。
 
 这说明结构合法的错类可以携带错误的证据解释通过形状与引用检查；当前已观察到一项错误分类反馈，但不能把其他轮的全部漏报统称为分类错误。U1 未报告声景并不证明它具体如何接受声景；本轮无需依赖未观察到的内部判断来成立归属及反证误读结论。
 

@@ -77,7 +77,8 @@ def read_personal_run(path: Path, question: str) -> tuple[RunResult, dict]:
     ):
         raise ValueError("Historical run has a different case, upstream version, model or task input")
     turn = report["turn"]
-    snapshots = sorted((path / "product-data/interaction_runs" / turn["interaction_run_ref"]).glob("*.json"))
+    turn_id = turn["turn_id"] if "turn_id" in turn else turn["interaction_run_ref"]
+    snapshots = sorted((path / "product-data/interaction_runs" / turn_id).glob("*.json"))
     trace = snapshots[-1]
     usage = read_json(trace)["usage"]
     return {

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
+from personal_agent.application.artifacts.models import artifact_file_path
+from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.application.capture.web_source import (
     WEB_SOURCE_FORMAT,
     WebReadOutput,
@@ -21,34 +23,29 @@ from personal_agent.capabilities.contracts.model import ModelActionDefinition
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
-READ_ACTION_OUTPUT_CAPABILITY = "read_action_output"
-READ_ARTIFACT_CAPABILITY = "read_artifact"
-SEARCH_ACTION_OUTPUT_CAPABILITY = "search_action_output"
-ARTIFACT_OUTPUT_CAPABILITIES = frozenset({READ_ACTION_OUTPUT_CAPABILITY, READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY})
+READ_FILE_CAPABILITY = "read_file"
+GREP_FILE_CAPABILITY = "grep_file"
+FILE_READ_CAPABILITIES = frozenset({READ_FILE_CAPABILITY, GREP_FILE_CAPABILITY})
 
 
-def artifact_read_actions(
-    resource_id: str, actions: Sequence[ModelActionDefinition],
-) -> tuple[ModelActionDefinition, ...]:
+def file_read_actions(actions: Sequence[ModelActionDefinition]) -> tuple[ModelActionDefinition, ...]:
     return tuple(action for action in actions
-                 if action.kind == "tool"
-                 and action.target_name in {READ_ARTIFACT_CAPABILITY, SEARCH_ACTION_OUTPUT_CAPABILITY}
-                 and resource_id in action.input_schema["properties"]["resource_id"].get("enum", ()))
+                 if action.kind == "tool" and action.target_name in FILE_READ_CAPABILITIES)
 
 
-def _artifact_reading_guidance(
-    resource_id: str,
+def _file_reading_guidance(
+    file_path: str,
     actions: Sequence[ModelActionDefinition],
     *,
     prompts: PromptCatalog,
 ) -> str:
     guidance = []
-    for action in artifact_read_actions(resource_id, actions):
-        template = ("conversation.service.artifact_repair_read" if action.target_name == READ_ARTIFACT_CAPABILITY
+    for action in file_read_actions(actions):
+        template = ("conversation.service.artifact_repair_read" if action.target_name == READ_FILE_CAPABILITY
                     else "conversation.service.artifact_repair_search")
-        guidance.append(prompts.render(template, tool=action.name, resource_id=resource_id))
+        guidance.append(prompts.render(template, tool=action.name, file_path=file_path))
     return " ".join(guidance) or prompts.render(
-        "conversation.service.artifact_repair_unavailable", resource_id=resource_id)
+        "conversation.service.artifact_repair_unavailable", file_path=file_path)
 
 
 def _materialize_artifact_repair(
@@ -60,7 +57,7 @@ def _materialize_artifact_repair(
     ref = feedback.artifact_recovery_ref
     if ref is None:
         return feedback
-    repair = _artifact_reading_guidance(ref.resource_id, actions, prompts=prompts)
+    repair = _file_reading_guidance(artifact_file_path(ref), actions, prompts=prompts)
     return feedback.model_copy(update={"required_repair": repair, "artifact_recovery_ref": None})
 
 
@@ -83,10 +80,8 @@ def _with_offloaded_preview(
     prompts: PromptCatalog,
 ) -> dict:
     retrieval = compact_payload["retrieval"]
-    resource_id = retrieval["resource_ref"].get("resource_id")
-    if not isinstance(resource_id, str) or not resource_id:
-        return compact_payload
-    guide = _artifact_reading_guidance(resource_id, actions, prompts=prompts)
+    path = artifact_file_path(ResourceRef.model_validate(retrieval["resource_ref"]))
+    guide = _file_reading_guidance(path, actions, prompts=prompts)
     projected = {**compact_payload, "retrieval": {**retrieval, "read_more": guide}}
     return fit_observation_preview(projected, preview or "", previously_omitted=previously_omitted)
 
@@ -177,7 +172,7 @@ def materialize_interaction_inputs(
                     })
         retrieval = item.payload.get("retrieval")
         if (
-            item.capability_id in ARTIFACT_OUTPUT_CAPABILITIES
+            item.capability_id in FILE_READ_CAPABILITIES
             or not isinstance(retrieval, dict)
             or not isinstance(retrieval.get("resource_ref"), dict)
         ):
@@ -208,7 +203,8 @@ def materialize_interaction_inputs(
         if actions is not None:
             omitted = item.payload.get("observation_excerpt_omitted_chars")
             compact_payload = _with_offloaded_preview(
-                compact_payload, _observation_preview(item.payload), actions,
+                compact_payload, _observation_preview(item.payload),
+                actions if item.status == "succeeded" else (),
                 previously_omitted=omitted if isinstance(omitted, int) and omitted >= 0 else None,
                 prompts=prompts,
             )
@@ -239,7 +235,6 @@ def select_visible_successful_observations(
 
 
 __all__ = [
-    "READ_ACTION_OUTPUT_CAPABILITY",
     "materialize_interaction_inputs",
     "select_visible_successful_observations",
 ]

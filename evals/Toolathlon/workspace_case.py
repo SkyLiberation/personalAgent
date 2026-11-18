@@ -16,10 +16,12 @@ from uuid import uuid4
 
 from evals.Toolathlon import runner
 from evals.Toolathlon.confirmation_probe import CREATE, MAPPINGS, MOVE, SERVER_ID, snapshot
+from evals.Toolathlon.workspace_inputs import upload_local_workspace_attachments
+from evals.conversation_http import UNVERIFIED_FLOW, effective_structured_model, resume_turn, submit_turn, turn_path
+from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest
 
 
 UPSTREAM = "9be8d8fe07a497b18ee61e3f2ae694e9797f39eb"
-CONVERSATION = "workspace-eval"
 PRINCIPAL = {"tenant_id": "personal-agent", "user_id": "toolathlon-arrange"}
 SOURCE = "/case/inbox/记录.txt"
 DESTINATION = "/case/归档/记录.txt"
@@ -110,23 +112,33 @@ def _within_requested_changes(changes: list[dict], initial: dict) -> bool:
     return True
 
 
-def _exercise(args, base, server_id, workspace, question, key, other_key, report):
-    request = {"conversation_id": CONVERSATION, "messages": [{"role": "user", "content": question}]}
-    report["turn"] = _send(base, "/api/conversation/turn", request, key)
+def _exercise(args, base, server_id, workspace, question, key, other_key, report, *, session_id: str):
+    def turn_result(request: ConversationTurnRequest) -> tuple[int, dict]:
+        response = submit_turn(base, request, timeout=210, api_key=key)
+        return response.status_code, response.json()
+
+    refs = upload_local_workspace_attachments(base, workspace, args.output, api_key=key)
+    request = ConversationTurnRequest.model_validate({
+        "session_id": session_id, "messages": [{"role": "user", "content": question}],
+        "input_artifact_refs": refs,
+        "client_request_id": "initial-workspace-request",
+    })
+    report["turn"] = turn_result(request)
     status, turn = report["turn"]
-    if status != 200 or turn.get("disposition") != "confirmation_required":
+    if status != 200 or turn.get("session_id") != session_id or turn.get("disposition") != "confirmation_required":
         return False
     confirmation = turn["pending_confirmation"]
     changes = confirmation["changes"]
     arrange = args.scenario == "arrange"
     if not (_within_requested_changes(changes, report["initial"]) if arrange else changes == [SINGLE_MOVE]):
         return False
-    run_ref = turn["interaction_run_ref"]
-    resume = {**request, "interaction_run_ref": run_ref}
-    route = f"/api/conversation/{run_ref}/workspace-changes/decision"
+    turn_id = turn["turn_id"]
+    route = turn_path(turn_id) + "/workspace-changes/decision"
     choice = "reject" if args.scenario == "reject" else "approve"
-    decision = {"conversation_id": CONVERSATION, "command_digest": confirmation["command_digest"], "decision": choice}
-    report["pending_replay"] = _send(base, "/api/conversation/turn", resume, key)
+    decision = {"command_digest": confirmation["command_digest"], "decision": choice}
+    response = resume_turn(base, turn_id, timeout=210, api_key=key)
+    report["pending_replay"] = response.status_code, response.json()
+    report["pending_duplicate"] = turn_result(request)
     report["cross_user"] = _send(base, route, decision, other_key)
     report["wrong_digest"] = _send(base, route, {**decision, "command_digest": "0" * 64}, key)
     report["changed_payload"] = _send(base, route, {**decision, "changes": []}, key)
@@ -138,6 +150,7 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
         snapshot(workspace) == report["initial"]
         and all(call["name"] not in WRITES for call in report["preapproval_calls"])
         and report["pending_replay"] == report["turn"]
+        and report["pending_duplicate"] == report["turn"]
         and report["cross_user"][0] == report["wrong_digest"][0] == 404
         and report["changed_payload"][0] == 422
         and report["direct_write"][0] == 200 and report["direct_write"][1]["ok"] is False
@@ -150,31 +163,39 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
     report["repeat_decision"] = _send(base, route, decision, key)
     opposite = "reject" if choice == "approve" else "approve"
     report["conflicting_decision"] = _send(base, route, {**decision, "decision": opposite}, key)
-    report["resumed_turn"] = _send(base, "/api/conversation/turn", resume, key)
+    response = resume_turn(base, turn_id, timeout=210, api_key=key)
+    resume_status, resumed = response.status_code, response.json()
+    report["resumed_turn"] = resume_status, resumed
+    report["resumed_duplicate"] = turn_result(request)
     report["post_resume_decision"] = _send(base, route, decision, key)
     if args.scenario == "reject":
-        new_request = {**request, "messages": [{"role": "user", "content": f"我现在重新提出这个请求。{question}"}]}
-        report["new_request"] = _send(base, "/api/conversation/turn", new_request, key)
+        new_request = ConversationTurnRequest.model_validate({
+            "session_id": session_id,
+            "messages": [{"role": "user", "content": f"我现在重新提出这个请求。{question}"}],
+            "input_artifact_refs": refs,
+        })
+        report["new_request"] = turn_result(new_request)
     report["calls"] = _calls(args.output)
     writes = [call for call in report["calls"] if call["name"] in WRITES]
     status, receipt = report["decision"]
     if (status != 200 or report["repeat_decision"] != report["decision"]
+            or report["resumed_duplicate"] != report["resumed_turn"]
             or report["post_resume_decision"] != report["decision"]
-            or report["conflicting_decision"][0] != 409):
+            or report["conflicting_decision"][0] != 409
+            or resume_status != 200 or resumed.get("turn_id") != turn_id or resumed.get("session_id") != session_id):
         return False
     if args.scenario in {"reject", "disconnect"}:
         expected = "rejected" if args.scenario == "reject" else "unknown"
-        resume_status, resumed = report["resumed_turn"]
         if args.scenario == "reject":
             new_status, new_turn = report["new_request"]
             new_confirmation = new_turn.get("pending_confirmation") or {}
             if (new_status != 200 or new_turn.get("disposition") != "confirmation_required"
-                    or new_turn["interaction_run_ref"] == run_ref
+                    or new_turn.get("session_id") != session_id or new_turn.get("turn_id") in (None, turn_id)
                     or new_confirmation.get("changes") != changes
                     or new_confirmation.get("command_digest") == confirmation["command_digest"]):
                 return False
         return (receipt["status"] == expected and not writes and snapshot(workspace) == report["initial"]
-                and resume_status == 200 and resumed["disposition"] == "limitation"
+                and resumed["disposition"] == "limitation"
                 and "pending_confirmation" not in resumed)
     return receipt["status"] == "applied" and writes == [
         {"name": change["kind"], "arguments": {k: v for k, v in change.items() if k != "kind"}}
@@ -183,6 +204,8 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
 
 
 def run(args, report):
+    session_id = "toolathlon-" + uuid4().hex
+    report["session_id"] = session_id
     workspace = args.output / "workspace"
     question, grader = _prepare_fixture(args, workspace, report)
     report["request"] = question
@@ -209,19 +232,23 @@ def run(args, report):
             PERSONAL_AGENT_E2E_TRACE_DIR=str(args.output / "e2e"),
             PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR=str(args.output / "product"),
             PERSONAL_AGENT_WORKSPACE_CHANGES=json.dumps({
-                "principal": PRINCIPAL, "conversation_id": CONVERSATION, "workspace_ref": args.output.name,
+                "principal": PRINCIPAL, "conversation_id": session_id, "workspace_ref": args.output.name,
                 "root": "/case", "server_id": SERVER_ID, "create_directory_tool": CREATE, "move_tool": MOVE,
             }),
         )
         report.update(
-            model=env["STRUCTURED_MODEL"], model_budget=budget.max_total_tokens,
+            model_budget=budget.max_total_tokens,
             model_turn_limit=budget.max_model_turns, tool_call_limit=budget.max_tool_calls,
             mappings=mappings, image_id=runner.docker("image", "inspect", args.image, "--format", "{{.Id}}"),
+            evidence_class=UNVERIFIED_FLOW, release_eligible=False,
         )
         with runner.product(args.output, env) as (base, process):
             if not runner.wait_for_product(base, process, 120):
                 raise RuntimeError("Product Web process exited before startup.")
-            report["approval_passed"] = _exercise(args, base, server_id, workspace, question, key, other_key, report)
+            report["model"] = effective_structured_model(args.output)
+            report["approval_passed"] = _exercise(
+                args, base, server_id, workspace, question, key, other_key, report, session_id=session_id,
+            )
     report["final"] = snapshot(workspace)
     if grader is not None:
         result = subprocess.run((sys.executable, "-X", "utf8", str(grader), str(workspace)), capture_output=True)

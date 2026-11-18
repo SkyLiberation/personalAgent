@@ -16,7 +16,7 @@ from .context_materialization import materialize_interaction_inputs
 from .goal_maintenance import goal_tool_result
 from .history_models import HistoryCompactionCheckpoint, HistoryRunCoverage
 from .model_history import decision_input_indices, goal_pending_rejection, render_control_disposition
-from .models import AcceptedArtifactToolRequest, AcceptedPythonToolRequest, ActionObservation, InteractionInput, InteractionTrace, ModelDecisionRecord
+from .models import AcceptedArtifactToolRequest, AcceptedBashToolRequest, ActionObservation, InteractionInput, InteractionTrace, ModelDecisionRecord
 
 
 def history_digest(value: object) -> str:
@@ -27,21 +27,21 @@ def history_digest(value: object) -> str:
 def main_decisions(trace: InteractionTrace) -> tuple[ModelDecisionRecord, ...]:
     switch_turn = task_switch_turn(trace)
     return tuple(record for record in trace.model_decisions
-                 if record.turn_index is not None and record.turn_index > switch_turn
+                 if record.step_no is not None and record.step_no > switch_turn
                  and record.assistant is not None and record.consumed)
 
 
 def decision_source(trace: InteractionTrace, record: ModelDecisionRecord) -> dict:
     rejected = goal_pending_rejection(trace, record)
     if rejected is not None:
-        return {"decision_turn": record.turn_index, "results_and_feedback": [
+        return {"decision_turn": record.step_no, "results_and_feedback": [
             rejected.model_dump(mode="json", exclude={"rejected_action_invocations"})
         ]}
     # Summaries need observable choices and results, not provider-private reasoning.
     assistant = {key: value for key, value in record.assistant.payload.items()
                  if key in {"role", "content", "tool_calls"}}
     return {
-        "decision_turn": record.turn_index,
+        "decision_turn": record.step_no,
         "assistant": assistant,
         "protocol_exchanges": [{"assistant": {
             key: value for key, value in exchange.assistant.payload.items()
@@ -60,7 +60,7 @@ def decision_source(trace: InteractionTrace, record: ModelDecisionRecord) -> dic
             field for field in ("resolve_clarification", "delivery")
             if item.patch is not None and getattr(item.patch, field) is None
         }}) for item in trace.goal_operations
-                            if item.decision_turn == record.turn_index],
+                            if item.decision_turn == record.step_no],
     }
 
 
@@ -70,7 +70,7 @@ def run_source(trace: InteractionTrace, through_turn: int, includes_final: bool,
         "run_ref": trace.interaction_run_ref,
         "user_request": trace.messages[-1].model_dump(mode="json"),
         "decisions": [decision_source(trace, record) for record in main_decisions(trace)
-                      if after_turn < record.turn_index <= through_turn],
+                      if after_turn < record.step_no <= through_turn],
         "delivered_result": trace.final_message.model_dump(mode="json")
                             if includes_final and trace.final_message is not None else None,
         "delivered": includes_final,
@@ -132,7 +132,7 @@ def select_coverage(
         if not records:
             continue
         if source.final_message is not None:
-            end = records[-1].turn_index
+            end = records[-1].step_no
         else:
             costs = [len(json.dumps(decision_source(source, record), ensure_ascii=True))
                      for record in records]
@@ -143,13 +143,13 @@ def select_coverage(
             pending = {item.action_id for item in source.accepted_tool_requests
                        if ((isinstance(item, AcceptedArtifactToolRequest)
                             and item.receipt is None and item.failure is None)
-                           or (isinstance(item, AcceptedPythonToolRequest) and item.receipt is None))}
+                           or (isinstance(item, AcceptedBashToolRequest) and item.receipt is None))}
             pending.update(item.action_id for item in source.experiment_records
                            if item.receipt is None or item.receipt.status == "unknown")
             for index, record in enumerate(records):
                 if pending.intersection(record.assistant.call_ids):
                     boundary = min(boundary, index)
-            end = records[boundary - 1].turn_index if boundary else 0
+            end = records[boundary - 1].step_no if boundary else 0
         prior = old.get(source.interaction_run_ref)
         if not end or (prior is not None and end < prior.through_turn):
             if prior is not None:
@@ -188,7 +188,7 @@ def _summarizer_observation(item: InteractionInput, *, prompts: PromptCatalog) -
 
 
 def _summarizer_decision(trace: InteractionTrace, record: ModelDecisionRecord, *, prompts: PromptCatalog) -> str:
-    parts = [prompts.render("conversation.context.history_decision", turn=record.turn_index)]
+    parts = [prompts.render("conversation.context.history_decision", turn=record.step_no)]
     rejected = goal_pending_rejection(trace, record)
     if rejected is not None:
         parts.append(_summarizer_observation(rejected, prompts=prompts))
@@ -202,7 +202,7 @@ def _summarizer_decision(trace: InteractionTrace, record: ModelDecisionRecord, *
     parts.extend(_assistant_history(record.assistant, prompts=prompts))
     parts.extend(_summarizer_observation(trace.inputs[index], prompts=prompts)
                  for index in decision_input_indices(trace, record))
-    goal_ops = {op.call_id: op for op in trace.goal_operations if op.decision_turn == record.turn_index}
+    goal_ops = {op.call_id: op for op in trace.goal_operations if op.decision_turn == record.step_no}
     for disposition in record.dispositions:
         text = (goal_tool_result(goal_ops[disposition.call_id], prompts=prompts)
                 if disposition.call_id in goal_ops else render_control_disposition(disposition, prompts=prompts))
@@ -220,7 +220,7 @@ def render_history_run(
     if after_turn < switch_turn <= coverage.through_turn and trace.first_goal_operation is not None:
         parts.append(goal_tool_result(trace.first_goal_operation, prompts=prompts))
     parts.extend(_summarizer_decision(trace, record, prompts=prompts) for record in main_decisions(trace)
-                 if after_turn < record.turn_index <= coverage.through_turn)
+                 if after_turn < record.step_no <= coverage.through_turn)
     final = trace.final_message
     if coverage.includes_final and final is not None:
         parts.append(prompts.render("conversation.context.history_final", disposition=final.disposition, text=final.message))
