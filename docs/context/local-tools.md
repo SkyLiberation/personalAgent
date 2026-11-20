@@ -19,7 +19,7 @@
 | 已装配个人知识读取器 | Conversation 提供面向当前主体的知识检索和清单动作，并隐藏 `list_recent_notes`、`get_note`、`find_similar_notes` 三个底层读取工具。本轮个人知识检索成功后，后续决策移除该检索动作。 |
 | 已获准执行 Bash 或检索实验 | 两者分别依赖已装配服务和当前运行的授权绑定。`bash` 检查执行预算。绑定了 MCP 工作区的部署在工具说明给出可写目录和只读输入根；其他部署使用只读 Artifact 工作区。 |
 | 启用内联任务理解且本轮目标待维护 | 主请求保留增量维护、已有目标的只读查询、澄清及受限结束动作。目标提交后按执行控制开放业务工具。 |
-| 提交回答 | 当前 Goal、Plan 和执行状态允许交付时，模型可直接输出正文，也可调用 `control_submit_final`。成功读取网页不会改变这项声明。 |
+| 提交回答 | 当前 Goal、Plan 和执行状态允许交付时，模型直接输出完整 Markdown 正文。成功读取网页后仍用相同入口。 |
 
 部署还决定网络和核验工具是否注册。网页读取和采集依赖采集服务，网页搜索依赖可用搜索配置，内部核验工具依赖结构化模型客户端。[Conversation 投影](../../src/personal_agent/application/conversation/service.py) · [目标动作声明](../../src/personal_agent/application/conversation/model_actions.py)
 
@@ -34,11 +34,11 @@
 | `web_search` | 按问题发现公网来源，返回标题、URL 和发现摘要。 | `query`（字符串，1–400 字符），搜索问题或关键词。 | `limit`（整数，1–10，默认 5），最大结果数。 |
 | `web_read` | 读取指定网页的提取正文，供当前任务取证。 | `url`（字符串，至少 8 字符），单个 HTTP 或 HTTPS URL。 | — |
 | `inspect_artifact` | 按问题检查当前可读文件，返回提取内容和引用。 | `resource_id`（非空字符串），文件引用 ID。 | `question`（字符串，默认空），针对该文件的问题或总结要求。 |
-| `write_artifact` | 创建或编辑本任务文稿，返回新快照。 | `request`（对象），以 `operation` 区分创建和补丁，字段见下文。 | — |
-| `bash` | 在隔离容器中执行命令，返回 stdout、stderr 和退出状态。默认在只读 `/workspace`，用 `ls` 或 `find` 查看 `attachments/` 及会话文件。 | `command`（字符串，最多 128 KiB），`description`（用途说明）。 | `workdir`（相对工作区目录，默认 `.`）。临时文件写入 `/tmp`。 |
+| `write_artifact` | 创建或编辑本任务文稿，返回新快照。 | `request`（对象），以 `operation` 区分创建和编辑，字段见下文。 | — |
+| `bash` | 在隔离容器中执行命令，返回 stdout、stderr 和退出状态。默认在只读 `/workspace`，用 `ls` 或 `find` 查看 `attachments/` 及会话文件。 | `command`（字符串，最多 128 KiB），`description`（用途说明）。 | `workdir`（相对工作区目录，默认 `.`）。任务工作区许可使 `/tmp` 随容器跨轮保留，普通模式逐命令清理。 |
 | `retrieval_experiment` | 在获准部署中运行开发实验、冻结结果或执行最终评测。 | `action`（对象），以 `operation` 区分操作，字段见下文。 | — |
 
-`write_artifact.request` 的 `operation=create` 分支要求 `filename`（显示文件名）、`content_type`（`text/x-python`、`application/json` 或 `text/markdown`）、`content`（完整正文）。`operation=patch` 分支要求 `base_resource_id`（确切基稿 ID）和 `edits`（1–32 项）。每项编辑含 `range.start` 和 `range.end`，两者都使用 `line` 与 `column`，以及 `new_text`（该范围的完整替换正文）。坐标以同一基稿为准，从 1 开始，终点不包含在替换范围内。可提交正整数或无前导零的十进制数字字符串。创建文稿和补丁新增文本另受 UTF-8 字节上限校验。[写入参数](../../src/personal_agent/application/conversation/tool_requests.py) · [文稿校验](../../src/personal_agent/application/artifacts/models.py)
+`write_artifact.request` 的 `operation=create` 分支要求 `filename`、`content_type`（`text/x-python`、`application/json` 或 `text/markdown`）、`content`。 `operation=edit` 使用 `tool_edit` 的四个字段，路径限当前可写草稿。Artifact 校验 UTF-8 字节上限并返回新引用。[写入参数](../../src/personal_agent/application/conversation/tool_requests.py) · [文稿校验](../../src/personal_agent/application/artifacts/models.py)
 
 | `retrieval_experiment.action.operation` | 对应字段 |
 | --- | --- |
@@ -112,20 +112,20 @@
 | 模型调用名 | 用途与可见性 | 参数 Schema 摘要 |
 | --- | --- | --- |
 | `tool_create_artifact` | 普通文稿写入阶段创建新草稿。 | 必填 `filename`（文件名）、`content_type`（三种类型见第 2.1 节）、`content`（正文），均为字符串。 |
-| `tool_patch_artifact` | 编辑现有业务草稿。 | 必填 `base_resource_id`（确切基稿 ID）和 `edits`（1–32 项）。每项必填 `start_line`、`start_column`、`end_line`、`end_column`（起止行列）与 `new_text`（替换文本）。坐标和替换规则同第 2.1 节。 |
-| `tool_read_file` | 按已提供的路径读取当前可用文本文件。 | 必填 `file_path`（材料或回执中的完整路径）。可选 `start_line`（起始行，默认 1）、`start_column`（长行续读起始列，默认 1）和 `limit`（最大行数，整数 1–2,000，默认 200）。 |
+| `tool_edit` | 精确替换可编辑草稿或已授权任务容器的 `/tmp` 中的现有文件。任务文件须先用 `tool_read_file` 读取。 | 必填 `file_path`、`old_string`、`new_string`。可选 `replace_all`，默认 `false` 并要求原文恰好匹配一次。匹配时统一换行，写回恢复文件的换行风格。 |
+| `tool_read_file` | 按已提供的路径读取文本文件，也可读取获准的 `/tmp` 文件并记录供编辑使用的版本。 | 必填 `file_path`。可选 `start_line`（起始行，默认 1）、`start_column`（长行续读起始列，默认 1）和 `limit`（最大行数，整数 1–2,000，默认 200）。 |
 | `tool_grep_file` | 已装配搜索时，按路径在当前可用文本文件中定位命中。 | 必填 `file_path`（材料或回执中的完整路径）与 `keyword`（1–400 字符的关键词或正则）。可选 `regex`（布尔，默认 `false`）和 `result_offset`（从回执取得的分页偏移，非负整数，默认 0）。 |
 | `tool_prepare_conversation_knowledge_save` | 已装配知识写入口时，准备待用户确认的保存。 | 必填 `selections`（至少一项），每项含 `source_message_index`（从 0 起计的消息索引）与 `text_span`（该用户消息的非空原文片段）。 |
 | `tool_search_personal_knowledge` | 已装配知识读取器且本轮尚未成功检索时，查用户明确要求使用的已存事实。 | 必填 `query`（1–4,000 字符的检索问题），可选 `limit`（整数 1–8，默认 8）。 |
 | `tool_list_personal_knowledge` | 已装配知识读取器时，列出条目供浏览或定位删除对象。 | 可选 `limit`（整数 1–50，默认 20）。 |
 | `tool_prepare_knowledge_delete` | 已装配知识读取与生命周期服务时，为清单中已观察到的条目准备待确认删除。 | 必填 `target_knowledge_item_id`（条目 ID）和 `reason`（1–1,000 字符的删除理由）。 |
 | `tool_prepare_workspace_changes` | 当前 Web 会话绑定获准工作区时，提交有序变更清单供一次确认。 | 必填 `changes`（1–64 项）。每项用 `kind` 区分 `create_directory`（含 `path`）和 `move_file`（含 `source`、`destination`）。路径为授权工作区内的规范 POSIX 绝对路径。 |
-| `submit_goal_patch` | 在内联分析中单独提交任务归属和目标增量。 | 必填 `base_version` 和 `changes`。首个补丁可用 `task` 选择 `continue`、`start`、`side_question`、`resume`，显式选择引用本轮原话，恢复附候选任务 ID。省略时沿用当前任务，无当前任务时新开。版本取选中的任务，空目标填 0。条目操作与执行控制见[目标维护契约](../optimization/to_verify/analysis-goal-maintenance.md#当前改造版本化目标条目和增量提交)。 |
+| `submit_goal_patch` | 在内联分析中单独提交任务归属和目标增量。 | 必填 `base_version` 和 `changes`。首个补丁可用 `task` 选择 `continue`、`start`、`side_question`、`resume`，显式选择提交逐字用户引文，恢复附候选任务 ID。`continue` 和 `resume` 可引用所选任务的历史，其余任务关系引用本轮。省略时沿用当前任务，无当前任务时新开。版本取选中的任务，空目标填 0。条目操作与执行控制见[目标维护契约](../optimization/to_verify/analysis-goal-maintenance.md#当前改造版本化目标条目和增量提交)。 |
 | `read_current_goal` | 已有目标时查询版本及本轮有效条目。 | 空对象 `{}`。读取保持目标状态和本轮维护前提。 |
 | `control_working_plan` | 读取或维护工作清单。用于复杂、跨阶段、跨轮任务，或用户要求展示计划时。 | 空参数读取。首次创建传 `goal`（目标）和非空 `steps`（最多 12 项）。更新传 `steps`，默认替换，`merge: true` 按已有 `step_id` 合并并追加新项。每项传 `description`（结果与完成条件），可选 `step_id` 和 `status`（`pending`、`in_progress`、`completed`、`cancelled`）。新项默认 `pending`。可选 `grounding` 记录事实依据。先审阅时单独提交并设 `wait_for_user: true`。 |
 | `control_request_clarification` | 向用户提出继续所需的澄清问题。 | 必填 `question`（1–2,000 字符，含非空白字符）。 |
-| `control_submit_final` | 按当前回答阶段提交正文和沟通状态。 | 必填 `message`（非空正文）和 `disposition`（`answer`、`limitation` 或 `failed`，以当轮枚举为准）。可选 `references`（引用字符串数组，默认空）。 |
+| `control_report_turn_status` | 单独报告本轮无法继续的明确限制或失败。 | 必填 `message`（原因及影响的非空正文）和 `disposition`（`limitation` 或 `failed`）。 |
 
 [读搜参数](../../src/personal_agent/application/conversation/file_reading.py) · [搜索参数](../../src/personal_agent/application/conversation/file_search.py) · [对话参数](../../src/personal_agent/application/conversation/models.py) · [工作区参数](../../src/personal_agent/application/conversation/workspace_changes.py) · [目标参数](../../src/personal_agent/application/conversation/goal_models.py) · [动作定义](../../src/personal_agent/application/conversation/model_actions.py) · [答复提交](../../src/personal_agent/application/conversation/answer_results.py)
 
-`changes` 为一层操作列表。模型在 `add` 或 `replace` 中通过 `criterion` 提交验收条件，多项时在同一字符串内逐行填写。空字符串表示无单列条件，替换时省略该字段表示保留已有条件。Runtime 将合法文本转换为快照中的 `acceptance_criteria` 列表。提问使用 `clarifications`，答复或撤回后用 `resolve_clarification` 提交显示的 `clarification_id` 与当前用户原话 `evidence`。[目标上下文](agent-loop.md#goal-快照与待澄清事项)
+`changes` 为一层操作列表。每项的 `evidence` 提交一段连续用户原话。Runtime 先匹配本轮，随后从近到远查找所选任务的历史用户消息。模型在 `add` 或 `replace` 中通过 `criterion` 提交验收条件，多项时在同一字符串内逐行填写。空字符串表示无单列条件，替换时省略该字段表示保留已有条件。Runtime 将合法文本转换为快照中的 `acceptance_criteria` 列表。收到已交付问题的答复或撤回后，用 `resolve_clarification` 提交显示的 `clarification_id` 与当前用户原话 `evidence`。新问题通过已声明的独立澄清工具提交。[目标上下文](agent-loop.md#goal-快照与待澄清事项)

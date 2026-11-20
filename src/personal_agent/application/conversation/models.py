@@ -8,7 +8,7 @@ from pydantic import (
     AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationInfo,
     field_validator, model_serializer, model_validator,
 )
-from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelHistoryEntry, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
+from personal_agent.capabilities.contracts.model import ModelActionInvocation, ModelAssistantMessage, ModelCapacityCheck, ModelHistoryEntry, ModelToolExchange, StructuredModelRequest, ModelActionDefinition, ModelOutputTransport, model_request_digest
 from personal_agent.capabilities.contracts.verification import (
     ActionGoalJudgment,
     ConversationAnswerSegment,
@@ -18,7 +18,7 @@ from personal_agent.application.knowledge_lifecycle.models import (
     KnowledgeDeleteOperationView,
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
-from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.contracts.answer_result import AnswerProtocolVersion, AnswerResultConfig
 from personal_agent.kernel.feature_flags import FeatureFlags
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.application.conversation.workspace_changes import WorkspaceChangeConfirmation, WorkspaceChangeOperation
@@ -244,10 +244,16 @@ class FinalMessage(_StrictModel):
         return "".join(segment.text for segment in self.segments)
 
 
-class SubmitFinalArguments(_StrictModel):
+class ReportTurnStatusArguments(_StrictModel):
     message: str = Field(min_length=1)
-    disposition: Literal["answer", "limitation", "failed"]
-    references: tuple[str, ...] = ()
+    disposition: Literal["limitation", "failed"]
+
+    @field_validator("message")
+    @classmethod
+    def require_visible_message(cls, message: str) -> str:
+        if not message.strip():
+            raise ValueError("a turn status requires a visible explanation")
+        return message
 
 
 class RequestClarificationArguments(_StrictModel):
@@ -388,7 +394,7 @@ class ActionObservation(_StrictModel):
     ]
     action_id: str
     capability_id: str
-    status: Literal["succeeded", "failed", "running", "cancelled"]
+    status: Literal["succeeded", "failed", "running", "cancelled", "unknown"]
     payload: dict[str, Any] = Field(default_factory=dict)
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
     execution_request_digest: str | None = Field(
@@ -444,6 +450,15 @@ AcceptedToolRequest = Annotated[
     AcceptedArtifactToolRequest | AcceptedExperimentToolRequest | AcceptedBashToolRequest,
     Field(discriminator="tool_name"),
 ]
+
+
+class MCPWriteDispatch(_StrictModel):
+    """An original MCP write that reached the dispatch boundary in this turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    action_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    request_digest: ContentDigest
 
 
 class RunExecutionBudget(_StrictModel):
@@ -581,6 +596,7 @@ class TurnContextComposition(_StrictModel):
     native_history_chars: int = Field(default=0, ge=0)
     prompt_version: str = ""
     input_tokens: int | None = None
+    capacity: ModelCapacityCheck | None = None
 
     @property
     def total_chars(self) -> int:
@@ -781,6 +797,7 @@ class InteractionTrace(_StrictModel):
     goal_compliance_history_compacted_through: int = Field(default=0, ge=0, validation_alias=AliasChoices(
         "goal_compliance_history_compacted_through", "action_goal_history_compacted_through"))
     goal_operations: tuple[GoalOperationRecord, ...] = ()
+    answer_protocol_version: AnswerProtocolVersion | None = None
     answer_result_binding: AnswerResultConfig | None = None
     feature_flags_binding: FeatureFlags = Field(default_factory=FeatureFlags)
     history_compaction: HistoryCompactionCheckpoint | None = None
@@ -792,6 +809,8 @@ class InteractionTrace(_StrictModel):
     messages: tuple[ConversationMessage, ...]
     input_artifact_refs: tuple[ResourceRef, ...] = ()
     accepted_tool_requests: tuple[AcceptedToolRequest, ...] = ()
+    # None identifies snapshots written before this dispatch checkpoint existed.
+    mcp_write_dispatches: tuple[MCPWriteDispatch, ...] | None = None
     experiment_records: tuple[ExperimentRecord, ...] = ()
     research_experiment_delivery: ResearchExperimentDelivery | None = None
     deployment_digest: ContentDigest | None = None

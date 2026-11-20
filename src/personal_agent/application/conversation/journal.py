@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import logging
-import os
 import re
 from hashlib import sha256
 from collections.abc import Callable
-from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from personal_agent.capabilities.contracts.model import (
     ModelInvocationContinuation, ModelInvocationUnavailable, ModelResponseRecord,
 )
@@ -36,6 +33,7 @@ from personal_agent.application.bash_execution.models import (
     BashExecutionCommand,
     BashExecutionFact,
     BashExecutionReceipt,
+    BashTaskWorkspaceAccess,
     BashWorkspaceFile,
     validate_workspace_path,
     BashJournalView,
@@ -63,20 +61,12 @@ from .models import (
     AcceptedArtifactToolRequest,
     AcceptedExperimentToolRequest,
     AcceptedBashToolRequest,
-    RunExecutionBudget,
+    MCPWriteDispatch, RunExecutionBudget,
     ModelDecisionRecord, StoredModelRequest, ModelRequestReference, ModelResponseReference,
 )
 
 
-logger = logging.getLogger(__name__)
-
-
-class _StoredSessionScope(BaseModel):
-    principal: AuthenticatedPrincipal
-    conversation_id: SessionId
-
-
-def _session_lock_key(principal: AuthenticatedPrincipal, session_id: SessionId) -> str:
+def session_lock_key(principal: AuthenticatedPrincipal, session_id: SessionId) -> str:
     return canonical_digest({"principal": principal.model_dump(mode="json"),
                              "conversation_id": session_id})
 
@@ -276,7 +266,7 @@ class InMemoryInteractionJournal:
         return exclusive_run_lock(f"memory:{id(self)}:{run_ref}", None)
 
     def exclusive_session(self, *, principal: AuthenticatedPrincipal, session_id: SessionId):
-        key = _session_lock_key(principal, session_id)
+        key = session_lock_key(principal, session_id)
         return exclusive_run_lock(f"memory:{id(self)}:conversation:{key}", None)
 
     @staticmethod
@@ -310,6 +300,7 @@ class InMemoryInteractionJournal:
             or previous.input_artifact_refs != trace.input_artifact_refs
             or previous.deployment_digest != trace.deployment_digest
             or previous.bash_authorization_digest != trace.bash_authorization_digest
+            or previous.answer_protocol_version != trace.answer_protocol_version
             or previous.answer_result_binding != trace.answer_result_binding
             or previous.feature_flags_binding != trace.feature_flags_binding
             or previous.run_deadline_at != trace.run_deadline_at
@@ -436,6 +427,32 @@ class InMemoryInteractionJournal:
                 "action_goal_reviews": (*latest.action_goal_reviews, *reviews),
             })
         self.update(scope, record)
+
+    def begin_mcp_write_dispatch(
+        self, scope: ExecutionScope, dispatch: MCPWriteDispatch, *, replaying_model_response: bool,
+    ) -> bool:
+        if scope.task_id != dispatch.action_id:
+            raise ConversationOperationConflict("MCP write dispatch is bound to another action")
+        registered = False
+
+        def record(latest: InteractionTrace) -> InteractionTrace:
+            nonlocal registered
+            previous = latest.mcp_write_dispatches
+            existing = next((item for item in previous or () if item.action_id == dispatch.action_id), None)
+            if existing is not None:
+                if existing != dispatch:
+                    raise ConversationOperationConflict("MCP write dispatch already has a different binding")
+                return latest
+            if previous is None and replaying_model_response:
+                return latest
+            registered = True
+            return latest.model_copy(update={
+                "revision": latest.revision + 1,
+                "mcp_write_dispatches": (*(previous or ()), dispatch),
+            })
+
+        self.update(scope, record)
+        return registered
 
     def accept_tool_request(
         self,
@@ -660,6 +677,10 @@ class InMemoryInteractionJournal:
                              if trace.principal == principal and trace.conversation_id == session_id),
                             key=lambda trace: (len(trace.messages), trace.interaction_run_ref)))
 
+    def last_turn(self, *, principal: AuthenticatedPrincipal, session_id: SessionId) -> InteractionTrace | None:
+        turns = self.session_runs(principal=principal, session_id=session_id)
+        return turns[-1] if turns else None
+
     def analysis_traces(self, trace: InteractionTrace) -> tuple[InteractionTrace, ...]:
         if trace.bash_authorization_digest is None:
             return (trace,)
@@ -671,13 +692,19 @@ class InMemoryInteractionJournal:
             raise ConversationOperationNotFound("分析运行尚未提交至Journal")
         return candidates
 
+    def _history_candidates(self, trace: InteractionTrace) -> tuple[InteractionTrace, ...]:
+        return tuple(item for item in self.session_runs(principal=trace.principal, session_id=trace.conversation_id)
+                     if len(item.messages) <= len(trace.messages))
+
     def task_traces(self, trace: InteractionTrace) -> tuple[InteractionTrace, ...]:
-        """Candidate Goal history within the original conversation and execution binding."""
-        candidates = (self.analysis_traces(trace) if trace.bash_authorization_digest is not None else
-                      self.session_runs(principal=trace.principal, session_id=trace.conversation_id))
+        """Ordered predecessors and the current turn within the original execution binding."""
+        if trace.bash_authorization_digest is not None:
+            self.analysis_traces(trace)
+        candidates = self._history_candidates(trace)
         return tuple(item for item in candidates if (
             item.bash_authorization_digest == trace.bash_authorization_digest
             and item.deployment_digest == trace.deployment_digest
+            and item.answer_protocol_version == trace.answer_protocol_version
             and item.answer_result_binding == trace.answer_result_binding
             and item.feature_flags_binding == trace.feature_flags_binding
         ))
@@ -764,7 +791,8 @@ class InMemoryInteractionJournal:
         )
 
     def load_bash_execution(
-        self, *, execution_scope: ExecutionScope, action_id: str, request_digest: str
+        self, *, execution_scope: ExecutionScope, action_id: str, request_digest: str,
+        retain_task_workspace: bool = False,
     ) -> BashJournalView:
         trace = self.get(execution_scope.execution_id)
         if (trace is None or trace.principal != execution_scope.principal
@@ -777,6 +805,9 @@ class InMemoryInteractionJournal:
             raise PermissionError("Bash execution is not authorized for this run")
         if accepted.execution is None:
             self.check_tool_goal(trace, accepted)
+        workspace = accepted.command.task_workspace if accepted.command is not None else (
+            self._bash_task_workspace(trace) if retain_task_workspace else None
+        )
         return BashJournalView(
             execution_scope=execution_scope, action_id=action_id,
             arguments=accepted.arguments, request_digest=request_digest,
@@ -784,6 +815,23 @@ class InMemoryInteractionJournal:
             run_deadline_at=trace.run_deadline_at,
             remaining_execution_seconds=self.execution_budget(trace).remaining_seconds,
             command=accepted.command, execution=accepted.execution, receipt=accepted.receipt,
+            task_workspace=workspace,
+        )
+
+    def _bash_task_workspace(self, trace: InteractionTrace) -> BashTaskWorkspaceAccess:
+        candidates = self.task_traces(trace)
+        selected = selected_analysis_turns(trace, candidates)
+        goal = current_analysis_goal(trace, selected)
+        first = trace.first_goal_operation
+        selection = first.patch.task if first is not None and first.patch is not None else None
+        if (goal is None or goal.goal.goal_id is None
+                or (selection is not None and selection.action == "side_question")):
+            raise PermissionError("Bash task workspace requires an accepted analysis task")
+        return BashTaskWorkspaceAccess(
+            task_id=goal.goal.goal_id,
+            predecessor_turn_ids=tuple(
+                item.interaction_run_ref for item in prior_analysis_turns(trace, candidates)
+            ),
         )
 
     def _update_bash(self, scope: ExecutionScope, action_id: str, change) -> None:
@@ -819,8 +867,11 @@ class InMemoryInteractionJournal:
                     or trace.run_deadline_at is None or command.deadline_at > trace.run_deadline_at):
                 raise PermissionError("Bash command binding mismatch")
             workspace_files = tuple(BashWorkspaceFile(name=item.name, resource_ref=item.resource_ref) for item in command.inputs)
-            if workspace_files != accepted.workspace_files or command.workdir != accepted.arguments.workdir:
+            if (workspace_files != accepted.workspace_files or command.workdir != accepted.arguments.workdir
+                    or command.workspace_file != accepted.arguments.workspace_file):
                 raise PermissionError("Bash command changed the authorized workspace")
+            if command.task_workspace is not None and command.task_workspace != self._bash_task_workspace(trace):
+                raise PermissionError("Bash task workspace binding changed")
             code = accepted.arguments.command.encode("utf-8")
             if (command.program.content_digest != sha256(code).hexdigest()
                     or command.program.size_bytes != len(code)):
@@ -1015,15 +1066,8 @@ class InMemoryInteractionJournal:
         conversation_id: str,
         principal: AuthenticatedPrincipal,
     ) -> ConversationWorkingPlan | None:
-        with self._lock:
-            traces = tuple(self._traces.values())
-        candidates = [
-            trace
-            for trace in traces
-            if trace.conversation_id == conversation_id
-            and trace.principal == principal
-            and trace.working_plan is not None
-        ]
+        traces = self.session_runs(principal=principal, session_id=conversation_id)
+        candidates = [trace for trace in traces if trace.working_plan is not None]
         if not candidates:
             return None
         latest = max(candidates, key=lambda trace: trace.working_plan.revision)
@@ -1052,12 +1096,9 @@ class InMemoryInteractionJournal:
     ) -> tuple[str, ...]:
         """Project scoped URL evidence produced by successful execution facts."""
 
-        with self._lock:
-            traces = tuple(self._traces.values())
+        traces = self.session_runs(principal=principal, session_id=conversation_id)
         refs: dict[str, str] = {}
         for trace in sorted(traces, key=lambda item: item.interaction_run_ref):
-            if trace.conversation_id != conversation_id or trace.principal != principal:
-                continue
             for observation in trace.inputs:
                 if (
                     not isinstance(observation, ActionObservation)
@@ -1081,174 +1122,7 @@ class InMemoryInteractionJournal:
                     )
         return tuple(refs.values())
 
-
-class FileInteractionJournal(InMemoryInteractionJournal):
-    """Durable append-only snapshots of committed interaction facts."""
-
-    def __init__(self, root: Path) -> None:
-        super().__init__()
-        self._root = root
-        self._root.mkdir(parents=True, exist_ok=True)
-
-    def _original_directory(self, run_ref: str, invocation_id: str) -> Path:
-        self._validate_run_ref(run_ref)
-        if not re.fullmatch(r"[0-9a-f]{32}", invocation_id):
-            raise ConversationOperationConflict("模型调用原件身份不合法")
-        return self._root / run_ref / invocation_id
-
-    @staticmethod
-    def _write_immutable_original(target, text):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        raw = text.encode("utf-8")
-        if target.exists():
-            if target.read_bytes() != raw:
-                raise ConversationOperationConflict("模型原件已存在且内容冲突")
-            return
-        temporary = target.parent / f".{uuid4().hex[:12]}.tmp"
-        try:
-            with temporary.open("xb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, target)
-        finally:
-            temporary.unlink(missing_ok=True)
-
-    def _write_request_original(self, run_ref, invocation_id, text):
-        self._write_immutable_original(self._original_directory(run_ref, invocation_id) / "request.json", text)
-
-    def _read_request_original(self, run_ref, invocation_id):
-        return (self._original_directory(run_ref, invocation_id) / "request.json").read_text(encoding="utf-8")
-
-    def _write_response_original(self, run_ref: str, invocation_id: str, sequence: int, text: str) -> None:
-        directory = self._original_directory(run_ref, invocation_id)
-        self._write_immutable_original(directory / f"{sequence}.json", text)
-
-    def _response_originals(self, run_ref: str, invocation_id: str) -> tuple[ModelResponseRecord, ...]:
-        directory = self._original_directory(run_ref, invocation_id)
-        response_names = {path.name for path in directory.glob("*.json")} - {"request.json"}
-        result = []
-        attempts = set()
-        for sequence in range(len(response_names)):
-            name = f"{sequence}.json"
-            if name not in response_names:
-                raise ConversationOperationConflict("模型响应原件序号不连续")
-            record = ModelResponseRecord.model_validate_json((directory / name).read_bytes())
-            if record.invocation_id != invocation_id or record.attempt_id in attempts:
-                raise ConversationOperationConflict("模型响应原件调用身份不匹配或尝试身份重复")
-            attempts.add(record.attempt_id)
-            result.append(record)
-        return tuple(result)
-
-    def exclusive_session(self, *, principal: AuthenticatedPrincipal, session_id: SessionId):
-        key = _session_lock_key(principal, session_id)
-        root = self._root.resolve()
-        return exclusive_run_lock(f"file:{os.path.normcase(str(root))}:conversation:{key}",
-                                  root.parent / "conversation_locks" / f"{key}.lock")
-
-    def session_runs(self, *, principal: AuthenticatedPrincipal, session_id: SessionId) -> tuple[InteractionTrace, ...]:
-        for run_dir in sorted(path for path in self._root.iterdir() if path.is_dir()):
-            snapshot = self._latest_snapshot(run_dir)
-            if snapshot is None:
-                continue
-            raw = snapshot.read_bytes()
-            try:
-                scope = _StoredSessionScope.model_validate_json(raw)
-            except ValidationError:
-                continue
-            if scope.principal == principal and scope.conversation_id == session_id:
-                self._load_snapshot(run_dir.name, raw)
-        return super().session_runs(principal=principal, session_id=session_id)
-
-    def exclusive_run(self, run_ref: str):
-        self._validate_run_ref(run_ref)
-        root = self._root.resolve()
-        return exclusive_run_lock(
-            f"file:{os.path.normcase(str(root))}:{run_ref}",
-            root / run_ref / ".writer.lock",
-        )
-
-    def put(
-        self, trace: InteractionTrace, *, expected_revision: int | None = None
-    ) -> None:
-        with self.exclusive_run(trace.interaction_run_ref):
-            previous = self.get(trace.interaction_run_ref)
-            self._check_revision(trace, previous, expected_revision)
-            if previous == trace:
-                return
-            run_dir = self._root / trace.interaction_run_ref
-            run_dir.mkdir(parents=True, exist_ok=True)
-            target = run_dir / f"{trace.revision:04d}.json"
-            if target.exists():
-                raise ConversationOperationConflict(
-                    "interaction snapshot already exists with different contents"
-                )
-            temporary = run_dir / f".{trace.revision:04d}.{uuid4().hex}.tmp"
-            try:
-                with temporary.open("xb") as stream:
-                    stream.write(trace.model_dump_json(indent=2).encode("utf-8"))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, target)
-            finally:
-                temporary.unlink(missing_ok=True)
-            with self._lock:
-                self._traces[trace.interaction_run_ref] = trace
-
-    def get(self, interaction_run_ref: str) -> InteractionTrace | None:
-        self._validate_run_ref(interaction_run_ref)
-        snapshot = self._latest_snapshot(self._root / interaction_run_ref)
-        return self._load_snapshot(interaction_run_ref, snapshot.read_bytes()) if snapshot is not None else None
-
-    @staticmethod
-    def _latest_snapshot(run_dir: Path) -> Path | None:
-        return max(run_dir.glob("*.json"), default=None)
-
-    def _load_snapshot(self, interaction_run_ref: str, raw: bytes) -> InteractionTrace:
-        self._validate_run_ref(interaction_run_ref)
-        try:
-            trace = InteractionTrace.model_validate_json(raw)
-        except ValidationError as error:
-            missing_principal = any(
-                tuple(item.get("loc", ())) == ("principal",)
-                and item.get("type") == "missing"
-                for item in error.errors()
-            )
-            if not missing_principal:
-                raise ConversationOperationConflict("无法按当前答复协议恢复原会话，请使用新会话。") from error
-            logger.warning(
-                "interaction.journal.unscoped | %s",
-                json.dumps(
-                    {"run_id": interaction_run_ref, "disposition": "quarantined"},
-                    sort_keys=True,
-                ),
-            )
-            raise ConversationOperationNotFound(
-                "interaction run has no trustworthy owner scope"
-            ) from error
-        with self._lock:
-            self._traces[interaction_run_ref] = trace
-        return trace
-
-    def working_plan(
-        self,
-        conversation_id: str,
-        principal: AuthenticatedPrincipal,
-    ) -> ConversationWorkingPlan | None:
-        self.session_runs(principal=principal, session_id=conversation_id)
-        return super().working_plan(conversation_id, principal)
-
-    def conversation_evidence_refs(
-        self,
-        conversation_id: str,
-        principal: AuthenticatedPrincipal,
-    ) -> tuple[str, ...]:
-        self.session_runs(principal=principal, session_id=conversation_id)
-        return super().conversation_evidence_refs(conversation_id, principal)
-
-
 __all__ = [
     "ConversationOperationNotFound",
-    "FileInteractionJournal",
     "InMemoryInteractionJournal",
 ]

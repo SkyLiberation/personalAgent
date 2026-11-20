@@ -1,5 +1,7 @@
 # 研究论断核验与最终交付验收边界
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 当前阶段分工已按 [ADR 0032](../../adr/0032-conversation-research-claims.md)接入 Conversation 主链。2026-09-30 的目标代码还把来源 URL 存在性移出研究事实覆盖判据，保留确定性 `ResearchBasis.sources` 交接。生产可达与结构化交接的局部证据不能替代完整用户结果；正式验收见[最新结果](../../evals/02-current-case-inventory.md#2026-09-29-研究来源-url-交接与事实覆盖职责复验)。以下早期隔离实验按原日期保留。
 
 `CLAIM-VERIFIER-STAGE-SCOPE-001` 属于[研究论断反馈修订无法收敛](../claim-revision-nonconvergence.md)的独立子问题。本页记录已接入目标生产路径但仍缺完整验收的阶段分工：研究 Verifier 只判断当前完整 claim 集合的来源支持与事实覆盖；独立汇总者负责把已核验论断写成用户答案并呈现官方 URL；最终 Verifier 与 Completion Gate 再判断用户要求的完整答复。它不改变[相同输入来源支持核验不一致](../claim-verifier-consistency.md)的独立事实。

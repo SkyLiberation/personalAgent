@@ -57,6 +57,7 @@ class AgentService:
                 mcp_tools=mcp_tools,
             )
 
+            resources.callback(self.runtime.close)
             self._resources = resources.pop_all()
 
     def close(self) -> None:

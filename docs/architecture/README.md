@@ -29,7 +29,7 @@
 | 实质架构决定、兼容及实施例外 | [ADR 准入](../devSpec/migration-release.md#2-adr-准入)与对应 ADR |
 | 尚未闭环的方案和实际产品结果 | [设计优化队列](../future/design-optimization-backlog.md)、[评测盘点](../evals/02-current-case-inventory.md) |
 
-代码地图标明物理布局与架构约束的差异。历史审计保留在 `summary/`；架构变更的同步要求由 [ARC](../devSpec/architecture-ownership.md#8-架构基线与持续演进)拥有。
+代码地图标明物理布局与架构约束的差异。架构变更按 [ARC](../devSpec/architecture-ownership.md#8-架构基线与持续演进)同步。
 
 既有取舍与证据分别见 [Runtime 装配整理](../optimization/completed/runtime-composition-boundary.md)、[旧模型流退役](../optimization/completed/model-streaming-retirement.md)和[策略审计隔离](../optimization/to_verify/runtime-policy-audit-isolation.md)。本入口不重复维护这些问题的验收状态。
 

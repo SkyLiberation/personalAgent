@@ -283,7 +283,7 @@ LangGraph checkpoint。
 
 ## Conversation
 
-下文记录 Turn 接口。首段切换资源身份，沿用调用方提交的消息。服务端历史与事务存储的后续设计见 [Session、Turn 与 Step 生命周期](optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)。
+普通对话按认证主体和 `session_id` 接续。请求只提交本轮用户原话。历史来源见 [Session、Turn 与 Step 生命周期](optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)。
 
 普通用户目标使用 canonical Conversation contract。模型从当前 EffectiveCapabilities 选择粗粒度
 业务能力；文件摄取等有独立交互的产品功能仍可进入明确 Personal Knowledge API，不由关键词 Router 猜测。
@@ -295,9 +295,8 @@ LangGraph checkpoint。
 ```json
 {
   "session_id": "personal-knowledge-1",
-  "messages": [
-    {"role": "user", "content": "总结我已经保存的知识"}
-  ],
+  "text": "总结我已经保存的知识",
+  "create_session": true,
   "client_request_id": "question-1",
   "user_id": "default"
 }
@@ -309,7 +308,9 @@ Web 响应由 `ConversationTurnResponse` 定义，包含 `turn_id`、`session_id
 `limitation` 或 `failed`。明确要求本次响应后继续运行并稍后查询或调整时，当前返回
 `limitation`，不会创建后台任务。
 
-同一主体在同一 Session 重用 `client_request_id` 时，消息和有序原件引用必须一致，差异返回 409。Turn 已登记时，重复提交返回已保存的答复、确认事项或其他结果。暂时没有可交付结果时返回 202、`disposition="pending"` 和原 `turn_id`，可用 `/resume` 显式恢复。首个请求还未登记 Turn 且占有 Session 写锁时返回 409，客户端可用相同输入与请求标识重试。省略客户端标识时每次提交创建新 Turn。
+首轮提交 `create_session: true`。续聊沿用 `session_id`，省略 `create_session`，提交新的 `client_request_id` 和本轮 `text`。会话不存在或不属于当前主体时返回 404。重复创建已有会话返回 409。
+
+同一主体在同一 Session 重用 `client_request_id` 时，原话、按序原件引用和创建意图必须一致，差异返回 409。重复提交返回原 Turn 的交付结果或确认事项。暂时无法交付时返回 202、`disposition="pending"` 和原 `turn_id`。末轮阻止下一轮提交时返回 409，已登记时 `detail.turn_id` 给出原轮次身份。处理原轮次后可重试本次新输入。
 
 用户要求先审阅时，`plan_ready` 返回待审 `working_plan`；恢复原 Turn 可取得原待审计划。请求继续接受 `interaction_mode` 字段，清单是否暂停由用户要求和计划工具的 `wait_for_user` 决定。[工作清单工具](context/local-tools.md#5-conversation-直接声明的本地动作)
 
@@ -347,37 +348,17 @@ Conversation Runtime 失败的 REST `detail` 为安全对象，含 message、rea
 
 配置入口允许名单时，对话、SSE 和直接工具 API 的未授权请求在执行前返回 403。认证与工作区部署配置见 [MCP 接入 Spec](mcpDesign/README.md#523-工作区变更确认与接续)。
 
-### `GET /api/entry/stream`
+### SSE 响应
 
-SSE 是 canonical Conversation loop 的传输适配器。它先返回处理状态，在一次 turn 完成后将最终文本分块发送为 answer delta；当前不是模型 token 原生流。
-失败时 `event: error` 的 data 使用同一安全错误对象；响应头已发送后不改变 HTTP 状态。界面显示该 message，真实网络断开才显示通用中断文案。
-最终 `done` 事件包含 `disposition`、`turn_id`、`session_id`，以及适用时的
-`pending_confirmation`。该入口不创建后台调查或 Task/GoalGraph，也不提供旧计划步骤和
-checkpoint snapshot。
+对同一个 `POST /api/conversation/turns` 请求发送 `Accept: text/event-stream`，通过常规 API Key 或 Bearer 头鉴权。校验失败且未登记时返回常规 HTTP 错误。登记后，第一条 `status` 事件携带 `turn_id` 与 `session_id`。运行完成后发送 `answer_delta` 和 `done`，`done` 携带处置、身份及适用的待确认事项。答案分块来自已交付文本。
 
-需要补充信息时会返回：
-
-```text
-event: done
-data: {
-  "reply": "...",
-  "answer": "...",
-  "disposition": "answer | clarification_required | limitation | failed",
-  "turn_id": "...",
-  "session_id": "..."
-}
-```
-
-缺少必要用户信息时，`ConversationService` 返回
-`disposition="clarification_required"`，`reply/answer` 中包含一个具体问题；客户端使用下一次
-Conversation 请求提交补充信息。旧 `pending_confirmation/clarify_entry/step_id/options` 形态不再
-属于该入口。
+原轮次暂未交付时发送 `pending`。登记后的错误通过 `error` 发送，数据含 `status_code` 及安全 `detail`。连接断开时，可凭 `turn_id` 查询，或用同一请求键、原话、附件和创建意图重提。恢复运行使用原 Turn 的 `/resume`。
 
 ### Turn 查询、恢复与知识保存确认
 
 - `GET /api/conversation/turns/{turn_id}` 读取当前主体拥有的已提交 Turn，包括主决策的
   `step_no`。该操作受 Web 入口权限和轮次归属约束。认证关闭且策略未限制主体的本地环境可用
-  `user_id` 查询参数选择测试主体。跨作用域、未知 Turn 或缺少可信 owner 的旧快照返回 `404`。
+  `user_id` 查询参数选择测试主体。跨作用域或未知 Turn 返回 `404`。
 - `POST /api/conversation/turns/{turn_id}/resume` 恢复原 Turn，请求体只含可选的 `user_id`。服务端读取
   已冻结的消息、原件引用和执行绑定。正在执行时按会话锁返回冲突，已交付则返回原结果。
 - `POST /api/conversation/turns/{turn_id}/knowledge-save-decision` 接受或拒绝已冻结的

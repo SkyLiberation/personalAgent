@@ -5,7 +5,9 @@ from dataclasses import dataclass
 
 from personal_agent.kernel.prompt_registry import PromptCatalog
 
-from .goal_changes import GoalPatchRejected, pending_goal_clarifications
+from .goal_changes import (
+    TASK_EVIDENCE_NOT_FOUND, GoalPatchRejected, find_goal_evidence_source, pending_goal_clarifications,
+)
 from .goal_maintenance import current_analysis_goal
 from .goal_models import CurrentAnalysisGoal, GoalOperationRecord, GoalPatch, GoalTaskAction, GoalTaskId
 from .models import InteractionTrace
@@ -131,17 +133,12 @@ def select_goal_task(
 ) -> GoalTaskCandidate:
     history = AnalysisTaskHistory.from_turns(branch)
     selection = patch.task
-    if patch.clarifications:
-        raise GoalPatchRejected("clarification_required")
     if selection is None:
         previous = history.selected_turns(trace)
         current = current_analysis_goal(trace, previous)
         return GoalTaskCandidate("continue" if current is not None else "start", previous, current, history)
     if trace.first_goal_operation is not None:
         raise GoalPatchRejected("task_already_bound")
-    user_message = next(message.content for message in reversed(trace.messages) if message.role == "user")
-    if not selection.evidence.strip() or selection.evidence not in user_message:
-        raise GoalPatchRejected("task_evidence_not_in_current_user_message")
     action = selection.action
     if (action == "resume") != (selection.task_id is not None):
         raise GoalPatchRejected("task_id_only_for_resume")
@@ -156,6 +153,12 @@ def select_goal_task(
         previous = history.selected_turns(trace)
     else:
         previous = history.for_selection(patch)
+    allow_historical_evidence = action in ("continue", "resume")
+    historic_evidence = previous if allow_historical_evidence else ()
+    if find_goal_evidence_source(selection.evidence, trace, historic_evidence) is None:
+        reason = (TASK_EVIDENCE_NOT_FOUND if allow_historical_evidence
+                  else "task_evidence_not_in_current_user_message")
+        raise GoalPatchRejected(reason, evidence_path="$.task.evidence")
     return GoalTaskCandidate(action, previous, current_analysis_goal(trace, previous), history)
 
 

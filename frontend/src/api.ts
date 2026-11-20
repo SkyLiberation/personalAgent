@@ -246,17 +246,129 @@ export type ExecutionStep = {
   output_preview?: string;
 };
 
-export function buildEntryStreamUrl(text: string, userId = "default", sessionId = "default"): string {
-  const params = new URLSearchParams({
-    text,
-    user_id: userId,
-    session_id: sessionId,
-  });
-  const key = getApiKey();
-  if (key) {
-    params.set("api_key", key);
+export type ConversationTurnRequest = {
+  session_id: string;
+  client_request_id: string;
+  text: string;
+  create_session: boolean;
+  user_id: string;
+};
+
+type ConversationTurnIdentity = { turn_id: string; session_id: string };
+
+export type ConversationTurnEvent =
+  | ({ type: "status" | "pending" } & ConversationTurnIdentity)
+  | ({ type: "done"; answer: string } & ConversationTurnIdentity)
+  | { type: "answer_delta"; answer: string };
+
+export class ConversationTurnError extends Error {
+  constructor(readonly status: number, detail: unknown) {
+    super(conversationErrorMessage(detail) ?? `对话请求失败（${status}）。`);
   }
-  return `/api/entry/stream?${params.toString()}`;
+}
+
+function conversationErrorMessage(detail: unknown): string | undefined {
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string") {
+    return detail.message;
+  }
+}
+
+function decodeConversationEvent(frame: string): ConversationTurnEvent | undefined {
+  const lines = frame.split(/\r?\n/);
+  const type = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+  if (type !== "status" && type !== "answer_delta" && type !== "done" && type !== "pending" && type !== "error") {
+    return;
+  }
+  const data = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+  const value: unknown = JSON.parse(data);
+  if (value && typeof value === "object") {
+    if (type === "error" && "status_code" in value && typeof value.status_code === "number") {
+      throw new ConversationTurnError(value.status_code, "detail" in value ? value.detail : undefined);
+    }
+    const answer = "answer" in value && typeof value.answer === "string" ? value.answer : undefined;
+    if (type === "answer_delta" && answer !== undefined) return { type, answer };
+    if ("turn_id" in value && typeof value.turn_id === "string"
+        && "session_id" in value && typeof value.session_id === "string") {
+      const identity = { turn_id: value.turn_id, session_id: value.session_id };
+      if (type === "status" || type === "pending") return { type, ...identity };
+      if (type === "done" && answer !== undefined) return { type, ...identity, answer };
+    }
+  }
+  throw new Error("对话服务返回了无效的流事件。");
+}
+
+export async function streamConversationTurn(
+  request: ConversationTurnRequest,
+  signal: AbortSignal,
+  onEvent: (event: ConversationTurnEvent) => void,
+): Promise<void> {
+  const response = await fetch("/api/conversation/turns", {
+    method: "POST",
+    headers: { Accept: "text/event-stream", "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+    signal,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { detail?: unknown } | null;
+    throw new ConversationTurnError(response.status, error?.detail);
+  }
+  if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) {
+    throw new Error("对话服务未返回事件流。");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let boundary = /\r?\n\r?\n/.exec(buffer);
+      while (boundary) {
+        const event = decodeConversationEvent(buffer.slice(0, boundary.index));
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        if (event) {
+          onEvent(event);
+          if (event.type === "done" || event.type === "pending") return;
+        }
+        boundary = /\r?\n\r?\n/.exec(buffer);
+      }
+    }
+    throw new Error("对话连接已中断，可以重试本轮。");
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+export async function resumeConversationTurn(
+  turnId: string,
+  userId: string,
+  signal: AbortSignal,
+): Promise<Extract<ConversationTurnEvent, { type: "done" }>> {
+  const response = await fetch(`/api/conversation/turns/${encodeURIComponent(turnId)}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ user_id: userId }),
+    signal,
+  });
+  const value = await response.json().catch(() => null) as {
+    detail?: unknown;
+    turn_id?: unknown;
+    session_id?: unknown;
+    message?: { content?: unknown };
+  } | null;
+  if (!response.ok) throw new ConversationTurnError(response.status, value?.detail);
+  if (typeof value?.turn_id !== "string" || typeof value.session_id !== "string"
+      || typeof value.message?.content !== "string") {
+    throw new Error("对话服务返回了无效的恢复结果。");
+  }
+  return {
+    type: "done",
+    turn_id: value.turn_id,
+    session_id: value.session_id,
+    answer: value.message.content,
+  };
 }
 
 export function uploadEntryFile(

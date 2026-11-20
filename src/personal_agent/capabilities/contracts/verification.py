@@ -44,20 +44,9 @@ class ActionGoalAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class ConversationEvidenceReference(BaseModel):
-    """A writer's reference to an exact returned document coordinate."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    evidence_id: str = Field(
-        pattern=r"^d[1-9][0-9]*:[1-9][0-9]*(?:-[1-9][0-9]*|:[1-9][0-9]*-[1-9][0-9]*)?$",
-        description="使用已返回的文档号:行号（d2:37）；同一文档已完整返回的连续多行可合并为 d2:37-40，含首尾且结束行大于起始行，中间不能缺行。部分行仅原样复制实际返回的字符范围（d2:37:1-80），不能扩大。非连续行或不同文档分别引用；网页正文与工具结果统一使用本格式。",
-    )
-
-
 class ConversationAnswerSegment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     text: str = Field(min_length=1, description="本段直接交付给用户的正文，不是来源摘录或正文定位副本。")
-    references: tuple[ConversationEvidenceReference, ...] = ()
 
 
 class CitationSource(BaseModel):
@@ -304,7 +293,7 @@ class GoalComplianceAnswerContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["answer"] = "answer"
     rounds: tuple[str, ...] = Field(min_length=1)
-    cited_units: tuple[CitedDraftUnit, ...] = ()
+    source_observations: tuple[str, ...] = ()
     workspace_execution_facts: tuple[str, ...] = ()
     submission_id: str = Field(min_length=1)
     disposition: Literal["answer", "clarification_required", "limitation", "failed"]

@@ -16,11 +16,10 @@ from urllib.request import urlopen
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from evals.conversation_http import UNVERIFIED_FLOW, benchmark_feature_flags
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.feature_flags import FeatureFlags, write_feature_flags
 
 from .longds_judge import JudgeScoreReport, MeteredJudge, require_qualification, score
@@ -29,7 +28,7 @@ from .longds_materials import (
     DATASET_REVISION, TASK_NAME, LongDSInput, LongDSPreparation, LongDSTurn,
     json_bytes, seal, verify_preparation, verify_seal,
 )
-from .run_longds import ROOT, LongDSCapture, _configuration, _source_identity, _source_paths, baseline
+from .run_longds import LONGDS_ANSWER_RESULT, ROOT, LongDSCapture, _configuration, _source_identity, _source_paths, baseline
 
 
 LITE_SHA256 = "51f03d65ce3149ae36fb283140ee9aaffca77d9d3bb13d5487d6cf04d443931f"
@@ -103,15 +102,6 @@ class SuiteProgress(BaseModel):
     results: tuple[TaskResult, ...] = ()
     state: Literal["running", "paused", "finished"] = "running"
     stop_reason: str = "running"
-
-
-class ReferenceAnswerResult(BaseModel):
-    """Answer settings in the sealed Lite preparation manifest."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    writer: Literal["direct"]
-    verification: Literal["required", "none"] = "required"
-    test_mode: StrictBool = False
 
 
 def _write(path: Path, value: BaseModel) -> None:
@@ -231,10 +221,8 @@ def configure(output: Path) -> Settings:
     load_dotenv(ROOT / ".env", override=True)
     settings = Settings.from_env()
     expected = json.loads(REFERENCE_CONFIGURATION.read_bytes())["expected_configuration"]
-    # The sealed reference had the direct writer. New captures use the common
-    # benchmark flags and have their own code and configuration identity.
-    reference_answer = ReferenceAnswerResult.model_validate(expected["answer_result"])
-    answer_config = AnswerResultConfig(test_mode=reference_answer.test_mode)
+    # New captures bind the shared unattended LongDS configuration.
+    answer_config = LONGDS_ANSWER_RESULT
     effective_flags = benchmark_feature_flags(FeatureFlags.model_validate(expected.get("feature_flags", {})))
     flag_path = (output / "feature_flags.toml").resolve()
     write_feature_flags(flag_path, effective_flags)
@@ -276,7 +264,7 @@ def _sources_unchanged(output: Path) -> bool:
 
 
 def _check_windows_paths(output: Path) -> None:
-    invocation = Path("server-data/interaction_runs") / ("irun_" + "f" * 32) / ("f" * 32)
+    invocation = Path("server-data/conversation_journal") / ("turn_" + "f" * 24) / ("f" * 32)
     temporary = invocation / ("." + "f" * 12 + ".tmp")
     paths = [output / "t23/capture/checkpoint-17" / temporary]
     paths.extend(output / "t23/capture/source-snapshot" / p.relative_to(ROOT) for p in _source_paths())

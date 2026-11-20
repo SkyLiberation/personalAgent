@@ -28,6 +28,12 @@
 
 2026-11-11 的基线在审计插入时返回 HTTP 500。修复后的两个回放均返回 HTTP 200，各存入一条成功审计。第一条响应仍含原始 NUL，审计副本已移除。第二条审计与响应的工具结果一致。[基线日志](../../.tmp/audit-nul-20261111/baseline/web.log#L91) · [回放报告](../../.tmp/audit-nul-20261111/verified/report.json)
 
+### 1.2 工具审计查询脱敏
+
+工具网关把同一份证据写入 `payload.evidence` 和 `payload.output.evidence`。工具审计列表和幂等追踪共用存储适配器的读取投影。两个字段分别按自身条数生成占位符，共用同一条格式规则，修改占位符时只需改一处。Web 入口只允许显式选择 `reveal` 的管理员读取原始载荷。默认查询对载荷副本处理，保留空证据，对非空证据返回 `<redacted:N items>`。[审计查询投影](../../src/personal_agent/infra/storage/audit_redaction.py)
+
+验收对照改动前后的查询投影，使用 2026-11-17 `canvas-arrange-exam` 归档工具审计日志第 303 行的非空证据记录，以及 §1.1 入库回放的 `call-10.json` 和 `call-11.json` 两条空证据记录。默认查询和显式显示原文时，完整载荷须与改动前一致，原载荷保持原值。三条记录的六项对照均通过，源码只保留一处证据计数和格式化。
+
 ## 2. LLM Trace 脱敏策略
 
 **LangSmith 默认关闭；启用后也只接收观测投影。** `PERSONAL_AGENT_TRACE_UPLOAD_INPUTS=false` 时，模型调用只上传用途、模型参数、消息数量、字符数、延迟和 token 等摘要，不上传用户消息、模型正文、工具参数或工具结果正文。

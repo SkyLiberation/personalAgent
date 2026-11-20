@@ -680,6 +680,13 @@ class DockerExperimentBackend:
             if stdout or stderr:
                 raise ValueError(self._prompts.render('experiment_backend.diagnostic_unbound_nonempty'))
             return ()
+        return self._project_candidate_diagnostics(
+            job.job_key, stdout, stderr, stderr_limit
+        )
+
+    def _project_candidate_diagnostics(
+        self, job_key: str, stdout: bytes, stderr: bytes, stderr_limit: int
+    ) -> tuple[BackendDiagnostic, ...]:
         stdout_limitations = ()
         try:
             stdout.decode("utf-8", errors="strict")
@@ -703,7 +710,7 @@ class DockerExperimentBackend:
                 .decode("utf-8", errors="ignore")
                 .encode("utf-8")
             )
-        prefix = "candidate-" + job.job_key[:16]
+        prefix = "candidate-" + job_key[:16]
         return (
             BackendDiagnostic(
                 filename=f"{prefix}-stdout.{stdout_suffix}",

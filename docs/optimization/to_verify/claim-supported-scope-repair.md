@@ -1,5 +1,7 @@
 # 用证据支持范围约束缺证修订
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 `CLAIM-SUPPORTED-SCOPE-REPAIR-001` 属于[研究未收敛问题](../claim-revision-nonconvergence.md)。上一正式轨迹第 5 版反馈“原文未把配置主体指定为应用”，下一实际 replacement 扩大成“原文未指定配置主体”。原文有 `You`，缺少映射到特定架构角色的前提，被写作者转换成了更广的否定。具体请求及反馈由[来源判决审查](../claim-verifier-consistency.md#2026-10-01-修订修复后的判决边界审查)拥有。
 
 ## 解决机制

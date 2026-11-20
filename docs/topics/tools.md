@@ -20,7 +20,7 @@ Application Service
 
 模型原生动作由 [model_actions.py](../../src/personal_agent/application/conversation/model_actions.py)投影和解码。工具参数表达业务动作；工作进度通过独立 `control_working_plan` 提交，执行系统从已准入工作清单关联活动项。主循环同时接受动作和合法 assistant 正文，回答模块将正文或显式提交恢复为同一种 `FinalMessage`。当前协议见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)，计划控制见 [ADR 0016](../adr/0016-separate-plan-control-from-action-execution.md)。
 
-原生 `function.parameters` 直接表达业务参数，控制动作同样直接提交。模型可见调用名来自同轮 `ModelActionDefinition.name`，解码器据此恢复内部 `Proposal`。检索工具保留 `action`。草稿创建和补丁有各自的直接参数声明，共用内部 `write_artifact` 执行能力。`strict` 按各动作声明投影，Python 使用 `strict=false` 保留可选参数。参数类型、权限、接受摘要与恢复仍由原责任主体校验。参数协议见 [ADR 0043](../adr/0043-direct-code-agent-tool-parameters.md)。
+原生 `function.parameters` 直接表达业务参数。模型可见调用名来自同轮 `ModelActionDefinition.name`，解码器据此构造内部 `Proposal`。检索工具保留 `action`。`tool_edit` 使用 `strict=false` 保留可选的 `replace_all`，本地声明仍校验字段形状。参数类型、权限、接受摘要与恢复由原责任主体校验。[参数协议](../adr/0043-direct-code-agent-tool-parameters.md)
 
 ## 注册与曝光
 
@@ -45,9 +45,9 @@ Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/applicat
 
 内建工具使用 Pydantic `ArgsSchema`，MCP 工具沿用 Server 的 `inputSchema`。Conversation 在执行前校验工具名和参数。原生工具调用的形状合法后，仍须通过 Application 准入。[MCP 输入契约](../mcpDesign/README.md#524-沿用上游输入-schema)
 
-模型用 `tool_create_artifact` 新建草稿，顶层提供 `filename`、`content_type` 和 `content`。用 `tool_patch_artifact` 编辑已有草稿，顶层提供基稿 `base_resource_id` 和非空 `edits`。每项编辑直接提供 `start_line`、`start_column`、`end_line`、`end_column` 和 `new_text`。两种动作的调用名确定操作。目标维护阶段只开放当前可读草稿的补丁。
+模型用 `tool_create_artifact` 新建草稿，提交 `filename`、`content_type` 和 `content`。用 `tool_edit` 编辑现有文件，提交 `file_path`、`old_string`、`new_string` 和可选 `replace_all`。
 
-补丁坐标基于同一基稿，行号和 Unicode 字符列从1开始，结束位置不含在内。起止相同表示插入，非空范围配合空字符串表示删除。原生参数接受正整数和无前导零的 ASCII 十进制数字字符串。Conversation 按当次 Schema 校验后构造内部写入请求，已接受请求及读搜回执使用整数坐标。原始模型调用留在交换记录，草稿引用和范围由原执行契约校验。
+当前可编辑草稿返回新 Artifact 快照。任务容器的 `/tmp` 文件须先用 `tool_read_file` 读取，通过版本校验后原地写回。默认要求唯一命中，空替换文本表示删除。字面匹配将 CRLF 和 LF 视作等价。工具结果用原调用 ID 回给模型。[编辑契约](../optimization/to_verify/program-artifact-contract.md#模型编辑工具)
 
 原生动作协议拒绝记录首个拒绝对象、字段诊断和同批原提议。整批均未执行。模型查看配对的原调用，或反馈中保留的未配对提议。未声明动作的反馈以当次可用工具和维护状态为依据，重复未知名共用原修复额度。参见[主循环拒绝反馈约定](../context/agent-loop.md#23-动作拒绝的重试上下文)和[名称反馈保真](../optimization/completed/unknown-action-name-feedback.md)。
 
@@ -84,9 +84,9 @@ Gateway 通过 `PolicyEvaluator` 获取并审计决定。只有 `allow` 才进�
 
 整稿核验注册为 `workflow_activity`，由运行系统在适用提交后调用，不进入主模型可见工具面。真实核验结果及确切候选交给 Completion，见[核验专题](verification-and-completion.md)。
 
-研究实验的模型工具分别为 `write_artifact` 与 `retrieval_experiment`：前者创建或按确切快照补丁生成不可变程序／配置版本；后者执行开发实验、冻结确切结果或评测冻结方案。结果摘要从同一不可变原件只读投影 publication，表达业务结果与子文件的对应关系；组合和冻结继续消费原业务结果引用。模型可以根据真实指标及原件选择后续工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。程序用途、输入输出及交付契约由[研究设计](../optimization/to_verify/research-experiment-protocol.md#2-受限实验能力)拥有。当前工具已装配；能力验收核对实际执行、结果消费与回答，下载和打包不在范围，不能由注册事实推断研究语义通过。
+研究实验用不可变 Artifact 程序和配置快照。模型可创建草稿或从确切快照编辑派生新版本，并通过 `retrieval_experiment` 执行开发实验、冻结结果或评测冻结方案。结果摘要从同一不可变原件投影 publication，组合和冻结消费原业务结果引用。模型按真实指标和原件选择工作，代码负责权限、输入绑定、评分、隔离、状态和交付不变量。[研究设计](../optimization/to_verify/research-experiment-protocol.md#2-受限实验能力)
 
-读取和搜索使用材料或回执提供的 `file_path`。Python 的每项输入带 `name` 和 `file_path` 或 `resource_id`。检查 Artifact 使用 `resource_id`，草稿补丁使用 `base_resource_id`。Runtime 从当前获准集合恢复唯一完整引用和不可变字节，未知、歧义及跨主体引用会被拒绝。续读参数由文件路径和正文坐标组成。[文件路径契约](../context/tool.md#会话文件替换决定)
+读取、搜索和编辑 Artifact 使用材料或回执提供的 `file_path`。检查 Artifact 使用 `resource_id`。Runtime 从当前获准集合恢复唯一完整引用和不可变字节，未知、歧义及跨主体引用会被拒绝。续读参数由文件路径和正文坐标组成。[文件路径契约](../context/tool.md#会话文件替换决定)
 
 `execute_python` 与检索实验并列，当前只要求完整 `code`，可选 `input_files` 省略默认空。已有程序绑定为只读输入，由模型用标准 Python 执行，Runtime 按原字节恢复；Command／Receipt 的程序引用仍保留实际执行身份。原 Artifact owner 保存确切源码、输入清单及 stdout／stderr，工具返回有界预览和原件引用；模型可以继续读取、修正程序或成文。它复用一次程序一个受限容器的技术沙箱，通用分析按显式对话许可聚合任务执行额度，检索部署保持原 run 内共享额度；两者沿用原 Journal 的不可变命令和未知终态对账。独立装配及跨轮原件接续见 [ADR 0040](../adr/0040-scoped-python-analysis-authorization.md)，实际验收状态由下述 Spec 拥有。程序输出不变成可信指标或完成事实；分析原件保留内部引用，完成时不生成用户清单／ZIP或触发下载；历史清单和CLI读取保持原离线身份。工具由模型自主选择，不以调用频次验收参数能力；详细契约及验证边界由 [Python 工具 Spec](../optimization/to_verify/python-data-analysis-tool.md)拥有。
 

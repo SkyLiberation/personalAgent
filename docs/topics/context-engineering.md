@@ -109,7 +109,7 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 
 `LoopBudgetPolicy.max_total_tokens` 约束已提交的累计用量。[Provider 末端检查](../../src/personal_agent/infra/model_capacity.py)则按显式 host／model 配置估算本轮完整文本请求，加上输出和协议预留后接受或拒绝。两者分别控制总消费与单次容量；单条字符数、主循环原消息长度或输出 `max_tokens` 不能替代完整请求检查。
 
-主请求达到80%估算压力时，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)对按 run 绑定的完整旧交互前缀生成摘要，保留用户原话、当前目标、未决反馈及近期配对尾部。Python 执行层已外置全文、限制预览；旧预览随已覆盖完整交互退出请求，原 stdout/stderr 引用仍可读取；已覆盖的模型交换和旧答复正文不再被历史重建恢复。纯请求构造同时服务候选和正式调用，经模型 Port 测量完整 wire 输入，严格缩小才激活、最多两次；末端仍按输出和协议预留执行硬容量检查。原件快照及 lineage 只用于工作恢复，不取得业务证据资格。摘要沿用部署参数，当前实施和验收状态见[目标维护 Spec §9.20](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
+主请求达到[压缩压力阈值](../context/context-management.md#1-历史压缩)时，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)对按 run 绑定的完整旧交互前缀生成摘要，保留用户原话、当前目标、未决反馈及近期配对尾部。Python 执行层已外置全文、限制预览；旧预览随已覆盖完整交互退出请求，原 stdout/stderr 引用仍可读取；已覆盖的模型交换和旧答复正文不再被历史重建恢复。纯请求构造同时服务候选和正式调用，经模型 Port 测量完整 wire 输入，严格缩小才激活、最多两次；末端仍按输出和协议预留执行硬容量检查。原件快照及 lineage 只用于工作恢复，不取得业务证据资格。摘要沿用部署参数，当前实施和验收状态见[目标维护 Spec §9.20](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
 
 LongDS 的 direct／none 流程已实际触发本地估算容量拒绝，完成摘要激活、后继消费和多次续跑；完整交付与答案正确性分别计分。本地估算压力不代表 Provider 实际 token 达到窗口极限，也不证明全文语义保真或净成本收益。较早的进程恢复不能证明压缩后检查点的跨进程复用。实际身份、分数及未覆盖项由 [Loop Schema §16](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)和[当前评测盘点](../evals/02-current-case-inventory.md)维护。
 
@@ -141,17 +141,17 @@ Intent 与主循环均在实际发送前使用同一容量门禁；因上下文�
 
 ### 拒稿后的完整基稿交接
 
-最新完整提交以 `SubmittedFinal` 保存在原交互日志中，后继请求展示其完整 `segments`、引用关系和带作用域的版本引用；旧提交保留供审计，不重复进入模型上下文。该提交是待核验数据，不是来源支持事实；完整稿及局部修订的消费边界见 [ADR 0031](../adr/0031-complete-final-revisions.md)。交接检查点及证据范围见[固化记录](../optimization/completed/complete-rejected-draft-handoff.md)，不据此声称模型修订稳定。
+最新完整提交以 `SubmittedFinal` 保存在原交互日志中，后继请求展示其完整 `segments` 和带作用域的版本引用；旧提交保留供审计，不重复进入模型上下文。该提交是待核验数据，不是来源支持事实；完整稿及局部修订的消费边界见 [ADR 0031](../adr/0031-complete-final-revisions.md)。交接检查点及证据范围见[固化记录](../optimization/completed/complete-rejected-draft-handoff.md)，不据此声称模型修订稳定。
 
 ### 可见证据的随文引用编号
 
-Action 和 Final 在同一可见输入上生成 `CitableInput`，全部引用统一放在 `citations` 中，使用文档号与行号，如 `d1:1698`；同文档版本同位置重复返回沿用身份，连续整行可写为 `d1:1697-1700`，每行都须实际完整返回，部分长行保留实际字符范围。网页正文保留原文行，结构化工具结果以明确的结果文档分行，搜索摘要不能当作网页正文；不再提供整条结果号。Conversation 选择单行、连续整行或实际返回的字符片段，运行系统按同一目录逐行恢复内容和来源；位置一致性断言拒绝同坐标不同内容，不读取隐藏 Artifact、不选择邻片、不代替支持判断。执行记录保持原值，文档号只是当前可见集合的派生别名，不能跨交互复用。失败、Verifier 输出和卸载摘要不产生引用，正文不因漏引被丢弃。契约和 Offline 验证范围见 [ADR 0030](../adr/0030-document-line-citation-identity.md)。
+Conversation 的普通 Markdown 答复可链接工具实际取得的 URL。读搜工具继续返回授权范围内的原文、文件位置和续读参数，语义核验从成功回执和工作区执行事实获得证据。答复契约由 [ADR 0055](../adr/0055-unified-conversation-answer.md)维护，旧行坐标机制见 [ADR 0030](../adr/0030-document-line-citation-identity.md)。
 
 ### 查询执行事实与来源证据
 
-当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_id`。文件选择只提交现有 ID，Runtime 从当前获准集合绑定完整 ResourceRef，见 [工具契约](tools.md#搜索读取与内部核验)。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`CitableInput.executed_query` 是请求内执行说明；引用恢复只使用排除查询字段的来源投影，位置规则由上节引用契约拥有。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
+当前接入代码由原搜索执行函数提供实际查询参数：网页为 `query/limit`，本地为 `keyword/regex/result_offset/resource_id`。文件选择只提交现有 ID，Runtime 从当前获准集合绑定完整 ResourceRef，见 [工具契约](tools.md#搜索读取与内部核验)。零命中保留这些条件，不按相同结果、URL 或 Plan 自述合并查询。`ProjectedInteractionInput.executed_query` 是请求内的执行说明，原回执保持查询与命中的对应关系。网页搜索卸载时，完整发现结果保存为可读 JSON，查询留在有界元数据，重读不会把查询词变成来源证据。
 
-查询说明由 `materialize_citation_context` 提取，随原生工具回执交给主模型。局部交接成果见[完成文档](../optimization/completed/query-execution-handoff.md)，历史取舍及限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
+查询说明由 `project_interaction_inputs` 提取，随原生工具回执交给主模型。局部交接成果见[完成文档](../optimization/completed/query-execution-handoff.md)，历史取舍及限制见 [ADR 0026](../adr/0026-separate-query-facts-from-cited-evidence.md)。
 
 ### 上下文构成度量
 

@@ -1,4 +1,4 @@
-"""Dispatch and recover fresh Bash processes in the Turn's Docker container."""
+"""Dispatch and recover fresh Bash processes in an authorized Docker container."""
 
 from __future__ import annotations
 
@@ -12,20 +12,22 @@ from threading import RLock
 import time
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from personal_agent.application.bash_execution.models import (
     BashBackendOutcome,
     BashExecutionCommand,
     BashExecutionFact,
     BashExecutionProfile,
-    BashInputContent,
+    Digest,
 )
+from personal_agent.application.bash_execution.ports import BashInputLoader
+from personal_agent.application.bash_execution.workspace_edit import WORKSPACE_VERSION_ENV
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
-from .run_container import BASH_USER, BashTurnContainers
+from .run_container import BASH_USER, BashTurnContainers, BashWorkspaceUnavailable
 from .sandbox import SandboxLimits, _OutputCapture, _POLL_SECONDS, _stop_and_confirm, _write_json
 
 if TYPE_CHECKING:
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from docker.models.containers import Container
 
 logger = logging.getLogger(__name__)
+_FILE_DIGEST = TypeAdapter(Digest)
 
 
 class _Job(BaseModel):
@@ -43,6 +46,7 @@ class _Job(BaseModel):
     run_key: str
     container_id: str
     exec_id: str
+    expected_file_version: Digest | None = None
 
 
 class _Result(BaseModel):
@@ -64,7 +68,7 @@ class DockerBashExecutionBackend:
         self._prompts = prompts
         self.work_root = work_root.resolve()
         self.profile = profile
-        self.containers = BashTurnContainers(endpoint, self.work_root, profile)
+        self.containers = BashTurnContainers(endpoint, self.work_root, profile, prompts=prompts)
         # The Conversation Journal serializes API owners across processes.
         # Also serialize actions dispatched concurrently by this Runtime.
         self._lock = RLock()
@@ -74,6 +78,7 @@ class DockerBashExecutionBackend:
             command.execution_scope.principal != self.profile.authorized_principal
             or command.deployment_digest != self.profile.deployment_digest
             or command.image_id != self.profile.image_id
+            or (command.task_workspace is None) != (self.profile.task_workspace is None)
             or command.limits.timeout_seconds > self.profile.limits.timeout_seconds
             or command.limits.model_dump(exclude={"timeout_seconds"})
             != self.profile.limits.model_dump(exclude={"timeout_seconds"})
@@ -95,12 +100,10 @@ class DockerBashExecutionBackend:
             raise ValueError(self._prompts.render("bash_backend.job_command_missing"))
 
     def execute(
-        self, command: BashExecutionCommand, inputs: tuple[BashInputContent, ...],
+        self, command: BashExecutionCommand, load_input: BashInputLoader,
         *, run_deadline_at: datetime,
     ) -> BashBackendOutcome:
         root = self._root(command)
-        if tuple(item.identity() for item in inputs) != (command.program, *command.inputs):
-            raise ValueError(self._prompts.render("bash_backend.input_command"))
         if command.deadline_at > run_deadline_at:
             raise ValueError(self._prompts.render("bash_backend.deployment"))
         with self._lock:
@@ -122,8 +125,14 @@ class DockerBashExecutionBackend:
             try:
                 with closing(self.containers.connect()) as client:
                     self._retire_unsettled(client, key)
-                    container = self.containers.prepare(client, key, run_deadline_at, inputs)
+                    container = (
+                        self.containers.prepare_task(client, key, command, load_input)
+                        if command.task_workspace is not None else
+                        self.containers.prepare(client, key, run_deadline_at, command, load_input)
+                    )
                     return self._execute_in(client, container, command, output, key)
+            except BashWorkspaceUnavailable:
+                return _unavailable(status="failed", error_code="workspace_unavailable")
             except Exception:
                 logger.exception("Bash Docker dispatch failed for %s", command.command_digest)
                 if (output / "job.json").is_file():
@@ -138,12 +147,19 @@ class DockerBashExecutionBackend:
             return _unavailable(status="timed_out", error_code="deadline")
         start = time.monotonic()
         deadline = start + min(remaining, command.limits.timeout_seconds)
+        file_action = command.workspace_file
+        expected_version = (
+            self.containers.observed_file_version(key, container.id, file_action.file_path)
+            if file_action is not None and file_action.operation == "edit" else None
+        )
         exec_id = client.api.exec_create(
             container.id,
             ["bash", "--noprofile", "--norc", f"{self.containers.inputs_path}/command.sh"],
             user=BASH_USER, workdir=f"{self.containers.workdir}/{command.workdir}",
+            environment={WORKSPACE_VERSION_ENV: expected_version} if expected_version is not None else None,
         )["Id"]
-        job = _Job(command_digest=command.command_digest, run_key=key, container_id=container.id, exec_id=exec_id)
+        job = _Job(command_digest=command.command_digest, run_key=key, container_id=container.id, exec_id=exec_id,
+                   expected_file_version=expected_version)
         _write_json(output / "job.json", job.model_dump(mode="json"))
         active = self.containers.active_record(key)
         _write_json(active, job.command_digest)
@@ -200,8 +216,16 @@ class DockerBashExecutionBackend:
                 "timed_out": "deadline", "output_limit": "output_limit",
             }[status] if not oom_killed else "oom",
         )
+        observed_version = None
+        if file_action is not None:
+            # The registered worker sends the version before the model-visible body.
+            digest, _, stdout = stdout.partition(b"\n")
+            if status == "succeeded" and not discarded:
+                observed_version = _FILE_DIGEST.validate_python(digest.decode("ascii"))
         outcome = BashBackendOutcome(execution=fact, stdout=stdout, stderr=stderr)
         self._persist(output, job, outcome)
+        if file_action is not None and observed_version is not None:
+            self.containers.record_file_version(key, container.id, file_action.file_path, observed_version)
         active.unlink()
         return outcome
 
@@ -322,7 +346,21 @@ class DockerBashExecutionBackend:
         if not self.containers.expiry_record(key).exists():
             return
         with self._lock, closing(self.containers.connect()) as client:
-            self.containers.close(client, key)
+            if self.profile.task_workspace is None:
+                self.containers.close(client, key)
+            elif self.containers.task_turn_owns_workspace(key, scope.execution_id):
+                self._retire_unsettled(client, key)
+                self.containers.close_task_turn(client, key)
+
+    def close_task_workspace(self) -> None:
+        if self.profile.task_workspace is None:
+            return
+        key = self.containers.task_key()
+        if not self.containers.expiry_record(key).exists():
+            return
+        with self._lock, closing(self.containers.connect()) as client:
+            self._retire_unsettled(client, key)
+            self.containers.invalidate_task(client, key)
 
     def sweep_expired(self) -> None:
         if not self.containers.root.is_dir():

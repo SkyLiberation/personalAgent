@@ -40,11 +40,12 @@ from .models import (
     ArtifactWriteReceipt,
     ArtifactWriteRequest,
     CreateArtifact,
+    DRAFT_MAX_BYTES,
     DRAFT_SUFFIXES,
     GeneratedArtifactPublication,
     MachineArtifactPublication,
     TOOL_OUTPUT_ID_PATTERN,
-    resolve_artifact_ref,
+    resolve_artifact_file,
     tool_output_directory,
     validate_display_filename,
 )
@@ -253,6 +254,23 @@ class ArtifactService:
         record, _, _ = self._read_verified(
             resource_ref, principal=principal, owner=owner
         )
+        return self._resource_item(record)
+
+    def describe_upload(
+        self,
+        resource_ref: ResourceRef,
+        *,
+        principal: AuthenticatedPrincipal,
+        owner: AuthenticatedPrincipal,
+    ) -> ArtifactResourceItem:
+        """Authorize a reference and read its identity before materializing bytes."""
+        record, path = self._load_record(resource_ref, principal=principal, owner=owner)
+        if not path.is_file() or path.stat().st_size != record.size_bytes:
+            raise RuntimeError("InvariantViolation: Artifact is missing or differs from canonical size")
+        return self._resource_item(record)
+
+    @staticmethod
+    def _resource_item(record: ArtifactRecord) -> ArtifactResourceItem:
         return ArtifactResourceItem(
             resource_ref=record.resource_ref,
             filename=record.filename,
@@ -378,8 +396,8 @@ class ArtifactService:
                 request.content,
             )
         else:
-            base_ref = resolve_artifact_ref(
-                request.base_resource_id, allowed_resource_refs,
+            base_ref = resolve_artifact_file(
+                request.file_path, allowed_resource_refs,
                 principal=execution_scope.principal, prompts=self._prompts,
             )
             base = self.read_snapshot(
@@ -395,15 +413,17 @@ class ArtifactService:
                 or base.record.execution_scope.thread_id != execution_scope.thread_id
             ):
                 raise PermissionError(
-                    "patch base is not a draft from this task execution"
+                    "edit target is not a draft from this task execution"
                 )
             filename = base.record.filename
             content_type = base.record.content_type
             if content_type not in DRAFT_SUFFIXES:
-                raise ValueError("patch base is not a supported text draft")
-            content = TextCoordinates(base.content).apply_edits(request.edits)
+                raise ValueError("edit target is not a supported text draft")
+            edited, edits_applied = request.replace(
+                base.content.encode("utf-8"), max_bytes=DRAFT_MAX_BYTES,
+            )
+            content = edited.decode("utf-8")
             source_refs = (base_ref,)
-            edits_applied = len(request.edits)
         binding = ArtifactProducerBinding(
             producer_key=f"draft:{execution_scope.execution_id}:{tool_call_id}",
             producer_ref=tool_call_id,

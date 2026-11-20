@@ -1,10 +1,6 @@
 # 待验证优化方案
 
-本目录按具体优化问题保留尚未充分证明、尚未覆盖或仅取得局部证据的方案，防止方案随会话与失败实验丢失。它不是第二份产品准入队列；产品准入仍由 [Future 队列](../../future/design-optimization-backlog.md)拥有，记录生命周期由[优化规则](../README.md#待验证方案与失效方案的保留规则)拥有。
-
-本目录同时保存生产候选与有证据价值的历史方案。现行答复和核验见 [ADR 0055](../../adr/0055-unified-conversation-answer.md)及[核验专题](../../topics/verification-and-completion.md)。旧 Conversation claim 的选证、写作、编辑及研究报告专属候选均已撤回，历史样本和通过边界保留。
-
-已解决问题统一见 [completed 索引](../completed/README.md)，本目录只维护仍待验证的方案入口。
+机制方案按问题维护，产品准入状态见 [Future 队列](../../future/design-optimization-backlog.md)，已解决问题见[完成记录](../completed/README.md)。保留规则由[优化记录规范](../README.md#待验证方案与失效方案的保留规则)维护。
 
 ## 近期候选入口
 
@@ -15,8 +11,7 @@
 | Prompt 语言及生成／评分配置替换 | [封存输入与验证](verify_results/prompt-language-mimo.md) | [语言与 MiMo 配置 Spec](prompt-language-selection.md)；已固化的工程提示与动态反馈见[完成记录](../completed/english-owned-feedback.md) |
 | `CONVERSATION-LOOP-BOUNDARIES-001`：模型交互 Schema、原生动作、交付与恢复 | [完整运行结果及适用边界](conversation-loop-schema.md#16-完整运行结果与实际边界) | [统一交互契约](conversation-loop-schema.md)、[终答职责收窄候选](conversation-loop-schema.md#17-终答入口的框架分析与职责收窄候选) |
 | `KNOWLEDGE-DECISION-DELIVERY-001`：实验、自主分析与长程分析状态 | [LongDS 设计与事实依据](longds-analysis.md#longds-长程数据分析-spec) | [执行目标维护 Spec](analysis-goal-maintenance.md)；此前约束呈现及核验尝试见[长程语义记录](longtask-semantic-consistency.md)，原件成文独立推进 |
-| `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主 Python 数据分析 | [执行链与成文边界](verify_results/research-experiment.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python 数据分析工具 Spec](python-data-analysis-tool.md) |
-| `RESEARCH-INPUT-MATERIALIZATION-BUDGET-001`：输入物化的费用与延迟 | [预算事实](research-input-budget.md) | [预算复审与待证收益](research-input-budget.md) |
+| `KNOWLEDGE-DECISION-DELIVERY-001`：模型自主 Python 数据分析 | [执行链与成文边界](verify_results/research-experiment.md#deepseek-接续-e1-的实际结果与错例分析缺口) | [Python 数据分析工具 Spec](python-data-analysis-tool.md)、[Bash 跨轮任务工作区](python-data-analysis-tool.md#bash-跨轮任务工作区候选) |
 
 独立新业务选型不再作为当前前置待办；[场景比较及未采纳会议规格](non-research-task-directions.md)保留取舍与来源，不单独推进日历接入。
 
@@ -30,9 +25,9 @@
 | SciFact 自然请求、R 需求、用例、评分及收益判据 | [实验请求与验收](research-experiment-acceptance.md) |
 | 共享程序／JSON 产物、快照及坐标 patch | [程序产物契约](program-artifact-contract.md) |
 | LongDS 逐轮依赖、LT 需求和 L0—L3 | [LongDS Spec](longds-analysis.md) |
-| 跨轮执行目标、每轮维护、按需读取及核验历史接续 | [目标与回答核验职责分离](analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)已接入专用提示及同职责滚动历史；前三轮原分[1,1,1]、用户结果通过／通过／失败，见[记录§34](verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)。随后原实现全量34轮尝试仅交付2轮、原分[1,0]，第三轮重复修订参数错误停止、后31轮未执行，见[记录§35](verify_results/analysis-correctness.md#35-当前实现的task2全量连续运行)。历史结果不改写 |
-| 普通回答拒稿后的原循环重生成 | [Spec §9.16](analysis-goal-maintenance.md#916-回答拒稿后沿原循环重新生成)及[ADR0049](../../adr/0049-answer-regeneration-in-original-loop.md)：取消普通答案按段修改工具，保留完整稿、反馈、引用及原核验。一次连续前三轮3/3交付、原分[1,1,0]；旧工具从实际SDK消失，该前三轮拒稿重生成未触发，见[记录§36](verify_results/analysis-correctness.md#36-普通回答改为原循环完整重提的连续前三轮)。随后全量尝试按用户要求第三轮后停止：前2轮交付，第3轮30次回答退回耗尽40次主决策，评分未启动，见[记录§37](verify_results/analysis-correctness.md#37-原循环重生成实现的task2在第3轮后停止) |
-| 完整核验反馈历史与压缩 | [现行修订§9.20](analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)已接入scoped完整交互摘要、结果卸载、最终请求缩减及快照lineage保护；旧真实阶段回放和原分保持。最新独立连续链交付20/34，107次主请求审计通过、5次自然压缩后继续；重启中断后已按用户要求补齐20份答案原评分，7/20通过。目标解释仍有错误、完整34轮未完成，见[记录§40](verify_results/analysis-correctness.md#40-原运行到期后的-task2-独立连续重验)。旧同号反馈及容量失败由[记录§38](verify_results/analysis-correctness.md#38-完整反馈历史候选的-task2-全量连续运行)保留 |
+| 跨轮执行目标、每轮维护及核验历史接续 | [目标与回答核验职责分离](analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史) |
+| 普通回答拒稿后的原循环重生成 | [实现决定](../../adr/0049-answer-regeneration-in-original-loop.md)、[实际结果](verify_results/analysis-correctness.md#36-普通回答改为原循环完整重提的连续前三轮) |
+| 完整核验反馈历史与压缩 | [结果卸载与完整交互压缩](analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)、[实际结果](verify_results/analysis-correctness.md#40-原运行到期后的-task2-独立连续重验) |
 | NUM 精度、自检、计算成文及原件提交候选 | [结果成文候选](analysis-result-correctness.md) |
 | 既有 SEM 约束呈现、成果适用性及语义核验尝试 | [长程语义候选与记录](longtask-semantic-consistency.md) |
 | 已执行验证、当时计划、失败归因及设计审阅 | [验证记录目录](verify_results/README.md) |
@@ -43,22 +38,21 @@
 
 | 具体问题 | 上位问题与事实入口 | 唯一候选正文 |
 | --- | --- | --- |
-| `CONVERSATION-LOOP-BOUNDARIES-001`：主循环、答复与核验适用性边界 | [当前主循环职责混合](../../architecture/core-architecture-current-state.md#31-当前主循环的职责混合) | [主循环与核验边界 Spec](conversation-loop-boundaries.md) |
+| `CONVERSATION-LOOP-BOUNDARIES-001`：主循环、答复与核验适用性 | [现行主循环](../../architecture/core-architecture-current-state.md#32-会话运行与主决策的现状) | [主循环与核验边界 Spec](conversation-loop-boundaries.md) |
 | `MODEL-PROVIDER-DIAGNOSTICS-001`：模型服务失败的具体诊断在异常转换中丢失 | [原研究 E2E 429 与失败边界](model-provider-diagnostics.md#失败事实与最早责任) | [有界诊断交接](model-provider-diagnostics.md) |
 
 ## 旧 Conversation 研究链证据
 
-下列方案只解释原实现及归档，不作为现行生产候选。原指标见[历史消融](../../ablation/claim-verifier.md)，正式结果见[当轮评测记录](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)。
+[ADR 0055](../../adr/0055-unified-conversation-answer.md)已退役旧 Conversation claim。以下入口用于追溯当时的机制、失败和取舍。原指标见[历史消融](../../ablation/claim-verifier.md)，正式结果见[当轮评测记录](../../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)。
 
 | 具体问题 | 原事实入口 | 历史方案 |
 | --- | --- | --- |
-| 选证计量、截断和输入成本 | [旧选证用量](../research-selection-usage-commit.md)、[原输入成本](research-input-budget.md) | [计量方案](research-selection-usage-commit.md)、[输出额度](research-provider-output-default.md) |
+| 选证计量、截断和输入成本 | [计量缺口与修复](../research-selection-usage-commit.md) | [截断与额度调整](../claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)、[输入成本审计](research-input-budget.md) |
 | 终稿列举边界及来源归属 | [列举范围变化](../claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)、[真实来源错配](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | [独立终稿核验](final-revision-comparison.md)、[归属候选](answer-source-attribution.md) |
 | `RESEARCH-GOAL-COVERAGE-001`：用户所问事实被相关格式和取证限制替代 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[实际覆盖漏放与候选](research-goal-coverage.md) | [逐项用户事实覆盖](research-goal-coverage.md) |
 | `CLAIM-SUPPORTED-SCOPE-REPAIR-001`：缺证修订扩大声明 | 同上；支持范围反馈被改写成更广否定的真实修订；引用交接见[完成记录](../completed/claim-atomic-evidence-revision.md) | [支持范围约束](claim-supported-scope-repair.md) |
 | `CLAIM-WRITER-TYPED-OUTPUT-001`：首次研究提交的空集合与字符串引用导致 503 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式入口失败与局部修正](claim-writer-typed-output.md) | [研究写作者 typed 提交契约](claim-writer-typed-output.md) |
-| `CLAIM-DUPLICATE-ADDITION-001`：增补后缺少单条撤回能力 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[重复增补反例](../claim-revision-nonconvergence.md#2026-09-29-暂停拆分与复合识别的正式对比) | [单条研究论断撤回候选](claim-deletion.md) |
-| `DOCUMENT-ABSENCE-PAUSE-001`：独立缺项识别反复拒稿后的剩余保护边界 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[正式调用与拒绝计数](../../evals/02-current-case-inventory.md#2026-09-29-拆分与复合识别停用对比) | [独立文档缺项识别暂停候选](document-absence-pause.md) |
+| 重复增补（`CLAIM-DUPLICATE-ADDITION-001`）与独立缺项识别停用（`DOCUMENT-ABSENCE-PAUSE-001`） | [重复增补反例](../claim-revision-nonconvergence.md#2026-09-29-暂停拆分与复合识别的正式对比) | [当时的决定与正式验证](../../adr/0033-claim-deletion-and-document-absence-pause.md) |
 | `CLAIM-EVIDENCE-SELECTION-001`：研究论断先于证据适合性判断 | `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`；[当前链路及历史错引](../claim-revision-nonconvergence.md#整体失败链与已有优化) | [先选合适证据，再生成论断](claim-evidence-selection.md) |
 | `CLAIM-PARAMETER-RECOVERY-001`：隔离实验在参数拒绝后终止，未让研究模型修复 | 同上；[参数恢复问题](claim-parameter-recovery.md#失败事实与责任边界) | [参数错误回传](claim-parameter-recovery.md) |
 | `CLAIM-EVIDENCE-REVISION-001`：真实缺证反馈后只改写正文，引用仍不支持论断 | 同上；[单项替换结果](../revision-feedback-loop.md#141-单个完整-claim-替换与工具分层评估) | [正文与引用独立修改](claim-evidence-revision.md) |

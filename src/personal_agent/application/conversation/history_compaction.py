@@ -8,7 +8,7 @@ import re
 from pydantic import ValidationError
 
 from personal_agent.capabilities.contracts.model import (
-    ModelActionDefinition, ModelAssistantMessage, ModelCapacityRefused, ModelInvocationUnavailable, StructuredModelRequest,
+    ModelActionDefinition, ModelAssistantMessage, ModelCapacityCheck, ModelCapacityRefused, ModelInvocationUnavailable, StructuredModelRequest,
     StructuredModelResponse, StructuredOutputFailure, sealed_context_projection_ref,
 )
 from personal_agent.kernel.contracts.scope import ExecutionScope
@@ -19,7 +19,7 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.application.artifacts.models import artifact_file_path
 from .file_search import GrepFileArguments
 from .artifact_sources import input_resource_refs, tool_result_artifact_refs
-from .citations import CitableInput
+from .interaction_projection import ProjectedInteractionInput
 from .context_materialization import FILE_READ_CAPABILITIES, READ_FILE_CAPABILITY, file_read_actions
 from .errors import ConversationOperationConflict
 from .history_models import (
@@ -46,11 +46,37 @@ from personal_agent.capabilities.contracts.verification_prompt import verificati
 
 # Keep source descriptions small even when a call includes a document body.
 _MAX_SOURCE_ARGUMENT_CHARS = 512
+_DEFAULT_COMPACTION_HEADROOM = 65_536
+
+
+def history_pressure_limit(capacity: ModelCapacityCheck) -> int:
+    message_budget = capacity.context_window_tokens - capacity.output_reserve_tokens - capacity.protocol_reserve_tokens
+    # A small route must still leave enough room for the working context.
+    headroom = min(_DEFAULT_COMPACTION_HEADROOM, message_budget // 5)
+    return min(capacity.context_window_tokens * 4 // 5, message_budget - headroom)
+
+
+def history_input_pressure(capacity: ModelCapacityCheck, sources: Sequence[InteractionTrace]) -> int:
+    """Price the current input from the latest matching measured wire request."""
+    estimate = capacity.estimated_input_tokens
+    if capacity.envelope_sha256 is None:
+        return estimate
+    latest = next((composition for source in reversed(sources)
+                   for composition in reversed(source.context_composition)
+                   if composition.input_tokens is not None), None)
+    if latest is None or latest.capacity is None or latest.input_tokens is None:
+        return estimate
+    previous = latest.capacity
+    if (previous.envelope_sha256 != capacity.envelope_sha256
+            or previous.provider_host != capacity.provider_host or previous.model != capacity.model
+            or previous.estimator_version != capacity.estimator_version):
+        return estimate
+    return estimate + max(0, latest.input_tokens - previous.estimated_input_tokens)
 
 
 @dataclass(frozen=True, slots=True)
 class HistoryProjection:
-    inputs: tuple[CitableInput, ...]
+    inputs: tuple[ProjectedInteractionInput, ...]
     summary: str
     recovery: str
 
@@ -306,9 +332,8 @@ class HistoryCompactor:
                 else self._prompts.get("conversation.history.covered_answer").template)
         return result
 
-    def project(self, trace: InteractionTrace, visible: Sequence[CitableInput],
-                *, protected_citations: frozenset[str] = frozenset(),
-                candidate: HistoryCompactionCheckpoint | None = None,
+    def project(self, trace: InteractionTrace, visible: Sequence[ProjectedInteractionInput],
+                *, candidate: HistoryCompactionCheckpoint | None = None,
                 actions: Sequence[ModelActionDefinition] = ()) -> HistoryProjection:
         validated = self._validated_history(trace, candidate)
         if validated is None:
@@ -349,8 +374,7 @@ class HistoryCompactor:
             key = covered_observation_key(observation) if isinstance(observation, (ActionObservation, DecisionFeedback)) else None
             if key in excluded:
                 continue
-            cited = any(citation.evidence_id in protected_citations for citation in item.citations)
-            if key not in covered or cited or key in protected:
+            if key not in covered or key in protected:
                 result.append(item)
                 continue
             if not actions or not isinstance(observation, ActionObservation):
@@ -360,7 +384,7 @@ class HistoryCompactor:
             outputs = tuple(ref for ref in published[run_ref].get(observation.action_id, ())
                             if ref in visible_artifacts and ref not in refs)
             position = positions.get((run_ref, record.step_no, ordinal))
-            if (not refs and not outputs and (position is None or not item.citations
+            if (not refs and not outputs and (position is None
                               or observation.capability_id in FILE_READ_CAPABILITIES)):
                 continue
             arguments = _source_arguments(record.assistant, observation.action_id)
@@ -373,7 +397,7 @@ class HistoryCompactor:
                     artifact_sources.append(self._prompts.render("conversation.context.history_artifact",
                         **source, file_path=artifact_file_path(ref),
                         readers=", ".join(reader.name for reader in snapshot_readers), arguments=argument_context))
-            if refs or position is None or not item.citations or observation.capability_id in FILE_READ_CAPABILITIES:
+            if refs or position is None or observation.capability_id in FILE_READ_CAPABILITIES:
                 continue
             label = self._prompts.render("conversation.context.history_source", **source)
             if snapshot_reader is not None:

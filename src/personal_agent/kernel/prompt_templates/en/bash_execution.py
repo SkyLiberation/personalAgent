@@ -18,6 +18,19 @@ TRANSLATIONS = {
         "deliverables there. Resolve relative paths for read-only attachments and saved tool results from "
         "{inputs_root}. Use /tmp for temporary files within a command. The result includes stdout, stderr, and exit status.",
     ),
+    "bash_execution.task_workspace": PromptTranslation(
+        "v2-task-tmp", "v2-task-tmp-en.1",
+        "Run Bash in an isolated container. The default directory is read-only /workspace, "
+        "with user attachments under attachments/. Save scripts, extracted data, and intermediate results in "
+        "{temp_dir}. These files are available to later commands and user turns in the same authorized "
+        "analysis task. They are cleared when the task container is removed. Each command starts a fresh "
+        "Bash process. The result includes stdout, stderr, and exit status.",
+    ),
+    "bash_execution.task_workspace_unavailable": PromptTranslation(
+        "v2", "v2-en.1",
+        "This command could not use the task's container workspace and did not run. Resume the original task "
+        "or create a workspace in a new authorized conversation.",
+    ),
     **{
         f"bash_execution.parameter.{name}": PromptTranslation(
             "v2" if name == "workdir" else "v1", "v2-en.1" if name == "workdir" else "v1-en.1", description,

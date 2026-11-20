@@ -41,13 +41,16 @@ def _redact_mapping(payload: dict[str, Any], keys: frozenset[str]) -> dict[str, 
     return redacted
 
 
-def redact_audit_payload(payload: dict[str, Any], *, reveal: bool) -> dict[str, Any]:
-    """Return a copy of a tool audit payload with user content masked.
+def _redact_evidence(payload: dict[str, Any]) -> None:
+    if payload.get("evidence"):
+        payload["evidence"] = f"<redacted:{len(payload['evidence'])} items>"
 
-    ``reveal=True`` (admin contexts only) returns the payload unchanged. By
-    default the user-supplied ``input`` fields, the tool ``output.data`` and any
-    ``evidence`` are masked so audit queries never leak knowledge content or PII
-    while still exposing the governance shape of the call.
+
+def redact_audit_payload(payload: dict[str, Any], *, reveal: bool) -> dict[str, Any]:
+    """Mask selected fields in a copy of a tool audit payload.
+
+    ``reveal=True`` returns the original payload. The masked view covers selected
+    ``input`` keys, ``output.data``, and evidence at the root and inside ``output``.
     """
     if reveal:
         return payload
@@ -61,10 +64,7 @@ def redact_audit_payload(payload: dict[str, Any], *, reveal: bool) -> dict[str, 
     if isinstance(output, dict):
         if output.get("data") is not None:
             output["data"] = _mask(output["data"])
-        if output.get("evidence"):
-            output["evidence"] = f"<redacted:{len(output['evidence'])} items>"
+        _redact_evidence(output)
 
-    if redacted.get("evidence"):
-        redacted["evidence"] = f"<redacted:{len(redacted['evidence'])} items>"
-
+    _redact_evidence(redacted)
     return redacted

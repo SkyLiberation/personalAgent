@@ -14,10 +14,10 @@ import httpx
 
 from dotenv import dotenv_values
 
-from evals.conversation_http import UNVERIFIED_FLOW, benchmark_feature_flags, submit_turn
+from evals.conversation_http import UNVERIFIED_FLOW, submit_turn
 from evals.Toolathlon import case_tools, runner
 from evals.Toolathlon.workspace_inputs import upload_gateway_attachments
-from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest
+from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest, submitted_turn_id
 from evals.Toolathlon.case_tools import EXECUTE_BASH, BashSandbox, TaskToolRequirements
 from evals.Toolathlon.compare import mcp_tools, redis_helm
 from personal_agent.infra.mcp import MCPJsonRpcClient
@@ -35,7 +35,7 @@ MODEL = redis_helm.MODEL
 REVISION = redis_helm.REVISION
 WALL_SECONDS = 1200
 BUDGET = Namespace(max_total_tokens=8_000_000, max_model_turns=64, max_tool_calls=128)
-FLAGS = benchmark_feature_flags(load_feature_flags())
+FLAGS = runner.benchmark_feature_flags(load_feature_flags())
 SHARED = {"canvas", "emails", "woocommerce", "notion", "github", "google_sheet", "google_calendar",
           "google_forms", "huggingface", "k8s"}
 SKIP = {"google-cloud", "snowflake"}
@@ -167,6 +167,8 @@ def personal(gateway, port, out, question, result, health, selection, *, session
             env["PERSONAL_AGENT_WEB_SEARCH_ALLOWED_DOMAINS"] = ",".join(web_allowed_domains)
         runner.configure_interaction_budget(env, BUDGET)
         env.update(PERSONAL_AGENT_E2E_TRACE_DIR=str(out / "e2e"), PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR=str(out / "product"))
+        client_request_id = uuid4().hex
+        turn_id = submitted_turn_id(PERSONAL_PRINCIPAL, session_id, client_request_id)
         turn = {}
         try:
             with runner.product(out, env) as (base, process):
@@ -183,16 +185,15 @@ def personal(gateway, port, out, question, result, health, selection, *, session
                 result["agent_started"] = True
                 started = monotonic()
                 try:
-                    body = ConversationTurnRequest.model_validate({
-                        "user_id": PERSONAL_PRINCIPAL.user_id, "session_id": session_id,
-                        "messages": [{"role": "user", "content": question}],
-                        "input_artifact_refs": refs,
-                    })
+                    body = ConversationTurnRequest(
+                        user_id=PERSONAL_PRINCIPAL.user_id, session_id=session_id, text=question,
+                        client_request_id=client_request_id, create_session=True, input_artifact_refs=refs,
+                    )
                     response = submit_turn(base, body, timeout=WALL_SECONDS)
                     response.raise_for_status()
                     turn = response.json()
-                    if turn["session_id"] != session_id:
-                        raise ValueError("PersonalAgent returned a different Session")
+                    if turn["session_id"] != session_id or turn["turn_id"] != turn_id:
+                        raise ValueError("PersonalAgent returned a different Session or turn")
                     result["turn_id"] = turn["turn_id"]
                 except httpx.HTTPStatusError as error:
                     result["http_error"] = error.response.status_code
@@ -207,23 +208,23 @@ def personal(gateway, port, out, question, result, health, selection, *, session
             result["shutdown_error"] = str(error)
     result.update(evidence_class=UNVERIFIED_FLOW, release_eligible=False,
                   disposition=turn.get("disposition"), formal_answer=turn.get("disposition") == "answer")
-    trace_root = out / "product-data/interaction_runs"
-    snapshots = sorted(trace_root.glob(f"{turn['turn_id']}/[0-9]*.json" if turn else "*/[0-9]*.json"))
-    if snapshots:
-        trace = read(snapshots[-1])
-        result.update(trace=canonical(snapshots[-1].relative_to(out)),
-                      trace_sha256=sha256(snapshots[-1].read_bytes()).hexdigest(), **trace["usage"])
+    committed = runner.read_turn_trace(out, turn_id)
+    if committed is not None:
+        trace = committed.model_dump(mode="json")
+        trace_path = out / "turn.trace.json"
+        write(trace_path, trace)
+        result.update(trace=trace_path.name, trace_sha256=sha256(trace_path.read_bytes()).hexdigest(), **trace["usage"])
         result["model_requests"] = trace["usage"]["model_calls"]
         result["trace_disposition"] = (trace["final_message"] or {}).get("disposition")
         result["flags"] = trace["feature_flags_binding"]
         assert result["flags"] == FLAGS.model_dump()
         assert "writer" not in trace["answer_result_binding"]
-        final_submissions = []
         blocked_research_actions = []
         inventories = []
         services = {service.replace("-", "_") for service in health["connected_servers"]}
+        originals = runner.conversation_journal_path(out) / turn_id
         for decision in trace["model_decisions"]:
-            request_path = snapshots[-1].parent / decision["invocation_id"] / "request.json"
+            request_path = originals / decision["invocation_id"] / "request.json"
             actual = read(request_path)
             inventories.append({
                 action["target_name"] for action in actual["action_definitions"]
@@ -232,14 +233,8 @@ def personal(gateway, port, out, question, result, health, selection, *, session
             for action in actual.get("action_definitions", ()):
                 if action["name"] in {"control_select_research_evidence", "control_create_claims"}:
                     blocked_research_actions.append(action["name"])
-                if action["name"] == "control_submit_final":
-                    options = action["input_schema"]["properties"]["disposition"]["enum"]
-                    if "answer" in options:
-                        final_submissions.append(decision["step_no"])
         assert not blocked_research_actions, blocked_research_actions
         result["mcp_model_tools"] = mcp_tools.audit_model_tools(selection.product_names, inventories)
-        result["normal_answer_available_steps"] = final_submissions
-        result["citation_rejections"] = sum(item.get("reason_code", "").startswith("citation_") for item in trace["inputs"])
         assert all(not goal["verification_ref"] for goal in trace["goal_operations"])
         assert not any(item.get("capability_id") == "verify_interaction_draft" for item in trace["inputs"])
         if deployment is not None:
@@ -250,10 +245,6 @@ def personal(gateway, port, out, question, result, health, selection, *, session
             if evidence["tool_request_count"] and not evidence["visible_request_count"]:
                 raise RuntimeError(f"Required local tool {EXECUTE_BASH} was absent from all model tool requests")
     return turn
-
-
-def canonical(path):
-    return path.as_posix()
 
 
 def export_workspace(gateway, out, allow_archive):

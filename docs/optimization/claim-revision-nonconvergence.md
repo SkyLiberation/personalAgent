@@ -1,6 +1,6 @@
 # 研究论断反馈修订无法收敛
 
-**当前推进以实际失败边界为单位，完整用户交付仍未通过。** 近期候选分别处理[具体来源归属](to_verify/answer-source-attribution.md)、[修订扩大列举范围](to_verify/final-revision-comparison.md)、[选证输出截断](to_verify/research-provider-output-default.md)和[已完成选证用量漏计](to_verify/research-selection-usage-commit.md)。2026-10-08 按当前稿独立核验与修订反馈分工开展隔离校准，预声明见下节；历史失败、未到达阶段和局部收益分别保留。
+**本文保存旧 Conversation 研究链的失败和试验结论。** 具体来源归属、列举范围扩大、选证截断和用量漏计分别按其真实输入归因。旧 claim 链已退役，现行答复的剩余准入见 [Future](../future/conversation-verification-false-positive.md)。
 
 下文记录 [ADR 0032](../adr/0032-conversation-research-claims.md) 与 [ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md) 的历史轨迹、已验边界和原失败。[ADR 0055](../adr/0055-unified-conversation-answer.md)已替换旧链路。当前答复核验见[核验专题](../topics/verification-and-completion.md)，正式结果见[评测盘点](../evals/02-current-case-inventory.md)。
 
@@ -96,7 +96,7 @@ SDK 使用现有 Adapter 前置 Schema 指令，原业务消息角色、顺序�
 
 本轮未创建 claims；writer、来源核验、覆盖、汇总及最终归属核验均未到达。该输出边界使用未改的 selector v6和8192额度，不能把结果归因为新的来源归属 Prompt，也不能由局部资格宣布正式修复成立。Provider五次均200，累计预算、回合和HTTP时限未耗尽；实际失败是截断后的输出契约违规，不是已确认的服务方拒绝。thinking和原始reasoning均保留。
 
-同日用户要求“改为使用默认限制，暂不运行测试”。[服务方默认输出额度候选](to_verify/research-provider-output-default.md)已接入研究请求、typed 调用意图与授权以及真实 Adapter；单次额度交由服务方默认值决定。原 Prompt、必填输出契约与 thinking 保持原身份，本次真实模型调用、Offline Eval 和 E2E 均为 0，截断恢复效果待验证。原封存失败继续保留，准入由[设计队列](../future/design-optimization-backlog.md)拥有。
+当时采用服务方默认单次输出额度（`RESEARCH-SELECTION-OUTPUT-TRUNCATION-001`）。研究请求将额度传为 `None`，准入保留原值，适配器据此省略输出上限。显式额度仍由原契约校验，结构修复沿用同一请求的额度选择。该轮只执行静态检查，原截断恢复未复验。现行模型配置见[环境说明](../env.md#llm-配置)。
 
 ## 2026-10-02 汇总将部分列举改为完整枚举
 
@@ -134,7 +134,7 @@ SDK 使用现有 Adapter 前置 Schema 指令，原业务消息角色、顺序�
 
 上一正式 target 的第 6 版含 6 条正文和引用均与旧项相同的新增 claim，当时动作协议没有撤回单条的入口；同次运行 8 个研究版本中第 2–5 版均被独立文档缺项识别形成覆盖拒绝。用户据此要求增加删除动作并继续停用该独立验证。当前目标代码让研究模型提交 `delete_claim`，由 Conversation 校验当前版本、目标 ID 和非空剩余集合，随后对新版本重做来源支持和事实覆盖。研究及普通 Final 的独立文档缺项模型请求、拒绝反馈和仅用于越过该分支的充分性字段已移除。保留来源支持、研究事实覆盖、最终忠实性及用户结果门禁；历史覆盖拦截收益不被改写为无效。
 
-[ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)拥有责任边界、外部机制比较、风险与退出条件；[撤回候选](to_verify/claim-deletion.md)及[分类暂停候选](to_verify/document-absence-pause.md)分别保留未验证边界。[本轮预声明](../../.tmp/claim-delete-no-absence-20260929/plan.json)固定原中文正式入口、模型、预算、结果契约、局部检查点及一次运行上限。两项改动合并验收只能报告描述性差异，不能从独立随机轨迹判断单项因果收益。
+[ADR 0033](../adr/0033-claim-deletion-and-document-absence-pause.md)记录采用机制、风险和历史验证。[当时的预声明](../../.tmp/claim-delete-no-absence-20260929/plan.json)固定正式入口、模型、预算、结果契约和局部检查点。两项改动合并运行，结果只支持描述性比较。
 
 [正式 target 与去重调用对比](../evals/02-current-case-inventory.md#2026-09-29-单条撤回与独立缺项识别暂停的正式-target)仍为 `0/1`：入口 7,200 秒等待超时，未交付答案；最后保存 19 个研究版本，首版 7 条、最后 8 条 claim。独立缺项分类响应 11→0，证明停用接入；`delete_claim` 已在实发 Schema 中，但模型自然输出及准入均为 0，撤回效果未到达。第 18 版全部 7 条逐项来源支持通过，整组事实覆盖误将架构页官方 URL 未写入 claim 当作缺口；模型回到工具阶段，两次 `web_search` 后新增一条 URL claim，第 19 版只复核到 c4 即超时。该轨迹显示局部取证与核验推进，也显示 84 次逐项来源支持响应的成本；[相同输入审计](claim-verifier-consistency.md#已确认的事实)又发现 55 次精确重复请求和 2 组通过／拒绝不一致。重复请求成本与核验稳定性需一起定位，不能直接缓存某一次判断制造收敛。没有汇总或 Final，不能判断余下核验是否拦住无据全文否定。原问题继续待验证，不把超时反推为上述局部检查点失效，也不声明已解决收敛。
 

@@ -122,7 +122,7 @@
 
 补设计必须先核对当前正式入口真正需要的保存、纠错、删除、恢复和身份隔离契约，再与带元数据和日志的最简单文件方案比较。已有 E2E 只按其原范围复用；仍缺证据的真实场景要固定自然请求、初始事实、用户结果和必要恢复反事实，不把必须落库或必须出现某张表写成用户成功标准。若文件方案以更低总成本满足同一契约，应据此简化；若数据库有可证明的必要约束，须说明最小存储范围，并单独论证 PostgreSQL 的部署选择。
 
-这里登记的是选型论证缺口，不是数据库故障或已获准迁移。机制事实由[Memory 权威正文](../topics/memory.md)拥有；后续设计补充与待证需求按[面试写作规范](00-writing-spec.md#3-从通用设计映射到当前工程)落到唯一正文和 Future 准入，不在本篇预建另一套存储方案。当前事务坐标：[知识删除确认](../../src/personal_agent/infra/storage/postgres_knowledge_lifecycle_store.py)。
+当前缺口在存储选型论证。机制事实见 [Memory 权威正文](../topics/memory.md)，设计补充与待证需求按[材料维护规范](00-material-maintenance.md#3-从通用设计映射到当前工程)处理。当前事务实现见[知识删除确认](../../src/personal_agent/infra/storage/postgres_knowledge_lifecycle_store.py)。
 
 ## 5. 上下文物化是 Memory 影响模型的出口
 

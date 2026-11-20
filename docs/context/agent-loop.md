@@ -12,15 +12,19 @@
 
 稳定 system prompt 表达主模型职责与通用规则；工具定义说明本次实际可用动作。当前目标、维护状态及有效修复要求由原权威状态派生，不把动态状态永久写进稳定模板。一次上下文就是一次实际模型调用的输入，不能将完整任务时间线一次性灌入早于这些事件的请求。
 
+**会话接续。** 主循环从 SQLite Journal 读取当前 Turn 冻结的有序前驱。它从已提交修订取用户原话、已交付答复和原生工具交互，再按可见性、任务选择和压缩规则物化模型请求。稳定 System Prompt 和工具声明位于历史前，动态预算位于本次请求末尾。[Session、Turn 与 Step 生命周期](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
+
 MCP 工具将 Server 的 `inputSchema` 交给模型工具定义和动作解码。可选字段可直接省略，校验错误仍通过现有动作反馈交给下一轮。[上游参数契约](../mcpDesign/README.md#524-沿用上游输入-schema)
 
-MCP 工具结果在请求内展示一份正文。保留行继续使用实际回执的引用坐标，工具调用与结果按原顺序配对。[普通 MCP 回执投影](tool.md#普通-mcp-回执正文去重)
+MCP 工具结果在请求内展示一份正文。工具调用与结果按原顺序配对。[普通 MCP 回执投影](tool.md#普通-mcp-回执正文去重)
 
 工作清单的调用条件与读写规则随 `control_working_plan` 的工具描述进入请求。每次成功读取或更新的原生工具回执绑定该次看到的清单和版本。只要当前版本的完整回执仍在可见历史中，主模型就沿原生历史读取计划。首条 System Prompt 只提供通用规则。[工作清单参数](local-tools.md#5-conversation-直接声明的本地动作)
 
 当压缩覆盖当前版本的回执，或当前任务的 Journal 状态更新后尚无同版本回执，Runtime 在原生历史之后的 Step Context 从当前清单派生接续信息。接续信息保留计划 ID、修订号、未完成事项、完成数量、进行中项以及已选定的下一步。已选定的下一步取当前进行中项。没有进行中项时说明下一步待选择。模型可用空参数读回完整清单。待确定任务归属的请求等待目标选择后再展示接续信息。
 
 每次主决策的 Step Context 在请求末尾以 `user` 角色承载运行系统预算。它位于本次保留的原生工具交换和反馈之后，以「当前步骤：运行系统预算」区别于用户原话。Conversation 预算组件从已提交用量投影模型决策、工具、子 Agent 和累计 token 余额。有截止时补充剩余秒数。系统提示说明预算的来源和约束，实时值只在当前 Step Context 中展示。已发送的快照保留在对应请求归档。
+
+主决策的硬上限由 Runtime 在能力物化前检查。普通工具额度耗尽时，下一次请求撤下已无额度的工具，仍可用剩余主决策处理已取得的结果。当前工具集确实发生变化时，允许工具声明随之更新。[预算执行](../budge/README.md#主决策与工具额度独立)
 
 低 token 提示由[独立实验开关](../ablation/experiment.md#实验组-2低-token-余额提示)控制，仓库配置为新运行开启。完成至少一轮主决策后，若下一轮可以发起且累计 token 余量大于零、严格低于有效额度的 10%，同一 Step Context 附加通用交付提醒并记录提示版本。预算组件继续按有效额度执行硬约束。状态与验证见[预算治理设计](../optimization/to_verify/conversation-loop-boundaries.md#319-对话预算治理的装配边界)。
 
@@ -32,11 +36,13 @@ MCP 工具结果在请求内展示一份正文。保留行继续使用实际回�
 
 ## 2. 每轮接续顺序
 
-模型缺少只能由用户提供的信息时，通过独立的 `control_request_clarification` 提问。Runtime 记录工具调用、处置和实际发给用户的问题，同一会话的后续用户回复继续进入主循环。模型能用现有材料或工具解决的缺口，继续执行相应动作。`control_submit_final` 接收答案、限制或失败。
+模型缺少只能由用户提供的信息时，通过当次已声明的独立 `control_request_clarification` 提问。Runtime 记录工具调用、处置和实际发给用户的问题，同一会话的后续用户回复继续进入主循环。模型能用现有材料或工具解决的缺口，继续执行相应动作。明确无法继续时，模型可单独调用 `control_report_turn_status` 报告限制或失败。
 
-用户目标、计划和执行状态允许交付时，网页工具回执与其他材料进入同一主循环；下一次请求仍支持完整正文和带属性提交。引用可空，提交的坐标由 Runtime 核对。[统一答复协议](../adr/0055-unified-conversation-answer.md)
+用户目标、计划和执行状态允许交付时，主循环将无工具调用的完整 Markdown 正文作为普通答复候选。工具正文、来源 URL 和原件续读位置随工具历史接续，答复可链接已获取的来源。[统一答复协议](../adr/0055-unified-conversation-answer.md)
 
-测试模式由部署配置 `PERSONAL_AGENT_ANSWER_RESULT` 的 `test_mode` 显式开启，默认为 `false`。Runtime 完成各阶段的工具组装后，统一按测试模式的禁用名单过滤模型工具。当前名单包含 `control_request_clarification`。调用校验使用同一份过滤后的声明，拒绝反馈随原调用进入主循环。[运行方式与验证](../topics/runtime.md#回答测试模式)
+MiniMax 主请求保留当次工具声明并省略 `tool_choice`。处于目标准备阶段时，Step Context 提示独立提交目标操作。混批反馈配对原调用并指出可独立提交的动作。[机制与验收](../optimization/to_verify/conversation-loop-schema.md#177-普通正文与按用途装配的终答)
+
+测试模式由部署配置 `PERSONAL_AGENT_ANSWER_RESULT` 的 `test_mode` 开启，生产部署默认为 `false`。LongDS 入口启用该配置。Runtime 统一从各阶段的模型工具中移除 `control_request_clarification`，调用校验使用同一份声明。目标补丁只维护目标与已有问答的接受事实。[运行方式与验证](../topics/runtime.md#回答测试模式)
 
 “第一轮”指用户轮次，“第一次工具调用”指目标维护通过后的业务动作序号，不预定模型必须选择的业务工具。
 
@@ -71,7 +77,7 @@ system prompt + 本次工具定义
 
 ### 2.1 目标失败后强制修改
 
-Conversation 按[增量目标契约](../optimization/to_verify/analysis-goal-maintenance.md#当前改造版本化目标条目和增量提交)维护目标。模型先看到当前有效条目、版本、执行控制及原用户请求。此时仅声明目标维护、可用的只读目标查询和澄清或限制出口。提交 `submit_goal_patch` 后，Runtime 保留未操作条目，并按配置核验候选。空操作保留版本。澄清保存问题并结束本轮。
+Conversation 按[增量目标契约](../optimization/to_verify/analysis-goal-maintenance.md#当前改造版本化目标条目和增量提交)维护目标。模型先看到当前有效条目、版本、执行控制及原用户请求。此时仅声明目标维护、可用的只读目标查询和澄清或限制出口。提交 `submit_goal_patch` 后，Runtime 保留未操作条目，并按配置核验候选。空操作保留版本。独立澄清工具保存问题并结束本轮。
 
 目标核验失败的反馈进入下一次主请求，指向具体被拒操作。维护成功后，执行请求使用已提交目标、执行控制、计划、进度和真实工具结果。目标区块是 Runtime 注入的应用数据，稳定规则由 system 提供。调用、结果、提交及反馈按实际顺序配对保留。
 
@@ -79,7 +85,7 @@ Conversation 按[增量目标契约](../optimization/to_verify/analysis-goal-mai
 
 状态：已接入。WiDS 第 21 轮复验通过本次切换判据，固定输入的核验反馈未达到组级门槛。当次 WiDS 运行使用独立 Python 授权。WiDS Task 1 第 20 轮仍在比较建筑能耗，第 21 轮开始独立的 2019 年空气质量分析。原分支按会话前缀恢复单条 Goal 链，且执行请求重复附带全量用户原话。第 21 轮由此会看到建筑任务仍有效的条目。既有 WiDS 采集在第 1 轮因环境失败停止，旧轨迹未到达切换点。
 
-每轮首次成功的 `submit_goal_patch` 同时提议任务关系和目标补丁。维护输入按顺序提供当前任务的历史、本轮原话、当前快照和可恢复任务视图。候选视图给出服务端 ID、版本、原始任务入口、有效条目与待澄清事项，供一次提议完成切换和增量修改。任务关系取决于交付对象、对既有结果的依赖和用户表达的继续或恢复意图。
+每轮首次成功的 `submit_goal_patch` 同时提议任务关系和目标补丁。维护输入按顺序提供当前任务的历史、本轮原话、当前快照和可恢复任务视图。候选视图给出服务端 ID、版本、原始任务入口、有效条目与待澄清事项，供一次提议完成切换和增量修改。任务关系取决于交付对象、对既有结果的依赖和用户表达的继续或恢复意图。目标工具说明声明各引文的范围。Runtime 按所选任务查找并绑定原用户消息。[跨轮原话引用](../optimization/to_verify/analysis-goal-maintenance.md#跨轮原话引用)
 
 采用 Hermes 的当前会话绑定与按 ID 恢复，以及 Codex 的主任务与临时侧线状态隔离。两者依赖用户显式操作。本工程接收自然语言任务请求，由已有维护调用提出关系，再用已接纳 Goal 操作持久化。新增作用域选择和只读投影，复用原 Journal、锁、Goal 版本链和核验调用。[Hermes 会话重绑](https://github.com/NousResearch/hermes-agent/blob/9dfbde19db7b108f9e961eec367ca5b54c8ad7d6/gateway/session.py#L3419-L3591) · [Codex 侧线会话](https://github.com/openai/codex/blob/69231e119bfca0b14453515e97d99688ce1c47c9/codex-rs/tui/src/app/side.rs#L737-L829)
 
@@ -116,7 +122,7 @@ WiDS 固定原始英文题面及官方材料归档，关闭独立意图分类，
 
 设计：两个阶段从同一授权分支的 Journal 恢复快照。主循环和两个核验时点用同一份双语字段说明解释 Goal 数据。版本用于提交补丁，`goal_id` 用于定位任务，`objective` 是工作摘要。条目键是服务端分配的可操作 ID。每项说明类型、适用范围、文本、状态、来源消息和可核对的验收条件。执行控制另有模式及来源。空条目表示没有本轮适用条目，`execution_control: null` 表示没有持久执行限制，现有权限仍适用。[目标核验的快照说明](goal-verifier.md#快照字段与来源)
 
-用户已收到的澄清问题从选中任务实际交付的 `clarification_required` 恢复。归属尚未确定时提出的澄清进入当前任务的维护视图，供下轮判断。下轮在新开、插问或恢复时可一并关闭这项已显示的未绑定问题。接纳后旧任务退出该未决问题，选中任务保留问答来源。每次交付以运行 ID 为一项，按原顺序显示 ID 和问题正文。新消息、读取、目标沿用或压缩均不关闭问题。关闭须由后继维护提议引用显示的 ID 和当前用户的原话，并经 Runtime 接纳。开启核验时，核验器核对该原话是否回答问题或明确撤回；未通过的提议保留待澄清事项。提交新问题结束本轮，不应用该次补丁。与问题无关的工作可以继续，依赖答案的动作等待澄清。未决状态是现有交付及接纳事件的只读投影。
+用户已收到的澄清问题从选中任务实际交付的 `clarification_required` 恢复。归属尚未确定时提出的澄清进入当前任务的维护视图，供下轮判断。下轮在新开、插问或恢复时可一并关闭这项已显示的未绑定问题。接纳后旧任务退出该未决问题，选中任务保留问答来源。每次交付以运行 ID 为一项，按原顺序显示 ID 和问题正文。新消息、读取、目标沿用或压缩均不关闭问题。关闭须由后继维护提议引用显示的 ID 和当前用户的原话，并经 Runtime 接纳。开启核验时，核验器核对该原话是否回答问题或明确撤回；未通过的提议保留待澄清事项。独立澄清工具提交问题后结束本轮。未决状态是现有交付及接纳事件的只读投影。
 
 摘要只替换覆盖范围内的历史。当前快照、原用户消息和待澄清事项由 Journal 重新投影，和摘要分开发送。原交付正文及旧工具回执仍可通过覆盖快照恢复。验证比较同一实际轮次压缩前、激活检查点后及新进程恢复后的输入，核对版本、未改条目、来源、执行控制、未决问题和原件读取。LongDS 第二轮真实续接与压缩恢复的执行规格见[目标维护 Spec](../optimization/to_verify/analysis-goal-maintenance.md#第二轮接续与压缩恢复)。
 
@@ -167,7 +173,7 @@ Toolathlon `notion-hr` 第 16 至 17 次请求曾在工具历史前重复发送�
 - 单次超限回执的预览和窗口续读见[工具输出超限的处理](tool.md)。原生回执被历史压缩覆盖后，按下节投影原件定位。
 - 摘要覆盖以 run 和模型决策范围绑定，跨轮同号反馈不互相消费。历史已交付回答可由有来源的摘要替代，用户原话保持原文；当前轮尾部交换及其反馈保留配对原件。卸载只改变模型投影，不改变执行、核验、授权或完成事实；原件通过现有读搜工具按需恢复。
 - 原生历史与压缩直接读取 Journal 的主决策记录及其对应结果。`invocation_id` 定位该次调用，Turn 内的 `step_no` 提供历史顺序和摘要覆盖边界。[生命周期 Spec](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
-- 在主请求实际组装完毕后，由模型 Port 对最终 Provider 请求进行无网络容量测量，达到 80% 压力阈值先摘要安全前缀，最多两次；保留约 16% 近期原生交互且至少最近两次决定。始终预留单次输出和协议空间；无可压缩前缀时，硬容量内可继续，硬容量外明确停止。摘要必须缩小实际投影，原件保存失败或未缩减不得激活。具体采用、基线、验收与实施状态见目标维护 Spec §9.20。
+- 在主请求组装完毕后，模型 Port 对最终 Provider 请求无网络计量。达到[压力阈值](context-management.md#1-历史压缩)优先摘要安全前缀，最多两次。当前轮保留约 16% 近期原生交互且至少最近两次决定。无可压缩前缀时，硬容量内可继续，硬容量外明确停止。摘要必须缩小实际投影，原件保存失败或未缩减不得激活。[完整交互压缩规格](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)
 
 ### 3.1 压缩后如何定位工具原件
 
@@ -177,7 +183,7 @@ Toolathlon `notion-hr` 第 16 至 17 次请求曾在工具历史前重复发送�
 
 每条定位用一行说明运行、决策轮次、来源工具、调用 ID、会话文件路径和本次可用的读取工具。简短的原调用参数另起一行保留原样，供辨认来源。参数超长时按调用身份到历史快照查找。
 
-已外置的回执直接指向原件资源。成功且包含可引用内容的业务工具回执若未单独外置，逐条指向当前有效历史快照中该条回执的起始行和列。只开放搜索时，提供能唯一匹配该回执开头的关键词，搜索只返回命中片段。定位以经校验的快照与 Journal 为来源，在主请求内派生，不增加持久化索引或复制回执。定位区也保留按运行 ID 和决策轮次查阅整份快照的入口。快照回执的 `payload` 保存当时的工具结果。读取快照可恢复历史上下文，业务证据资格仍由原有引用契约决定。
+已外置的回执直接指向原件文件。逐条快照定位适用于读搜工具以外的成功内联回执，由 Runtime 从已校验的快照中取得起始行和列。只开放搜索时，Runtime 在能唯一匹配回执开头时提供搜索关键词。定位区也提供整份快照入口，可按运行 ID 和决策轮次查阅。快照回执的 `payload` 保存当时的工具结果，供恢复历史上下文。[原件定位投影](../../src/personal_agent/application/conversation/history_compaction.py) · [快照坐标](../../src/personal_agent/application/conversation/history_compaction_source.py)
 
 已有适用检查点且至少存在一条可用读取路径时，Runtime 在原生交换前提供“已压缩工具结果的原件定位”。回执引用的 Bash、写文件或检索实验产物也用对应回执的调用定位恢复。当前运行仅覆盖部分历史且仍有保留交换时，工作摘要紧接在首个保留交换之前。近期原生调用和回执保持配对。定位区块只列当前任务允许读取或搜索的文件，旧回执正文随被覆盖交换退出。
 
@@ -217,7 +223,7 @@ Toolathlon `notion-hr` 第 16 至 17 次请求曾在工具历史前重复发送�
 | 多轮原生调用、结果及核验反馈顺序 | [历史投影](../../src/personal_agent/application/conversation/model_history.py)：查找 `project_model_history`、`project_conversation_history` 与 `runtime_feedback` |
 | 可见输入和最终发送消息 | [输入物化](../../src/personal_agent/application/conversation/context_materialization.py)、[模型契约](../../src/personal_agent/capabilities/contracts/model.py)、[服务方适配](../../src/personal_agent/infra/structured_model.py)：核对选材、模型历史交换及最终角色和顺序 |
 | 主循环压缩后的原件定位 | [历史压缩](../../src/personal_agent/application/conversation/history_compaction.py)的 `HistoryCompactor.project` 关联回执与原件，[主请求](../../src/personal_agent/application/conversation/service.py)的 `_build_decision_request` 将定位加入执行上下文，[服务方适配](../../src/personal_agent/infra/structured_model.py)的 `_chat_kwargs` 按角色和顺序发送 |
-| 核验器输入职责与压缩 | [核验 Context](../../src/personal_agent/application/conversation/verification_context.py)、[历史压缩](../../src/personal_agent/application/conversation/history_compaction.py)：分别核对主循环与核验输入，不混用两者历史 |
+| 核验器输入职责与压缩 | [目标定义核验](goal-verifier.md#3-历史范围与压缩)使用独立摘要检查点，[目标遵循核验](goal-compliance-verifier.md#3-历史范围与压缩)在执行前和回答交付前共享历史覆盖边界 |
 | 稳定职责、工具说明及动态反馈文字 | [主循环 Prompt](../../src/personal_agent/kernel/prompt_templates/conversation.py)、[目标维护 Spec](../optimization/to_verify/analysis-goal-maintenance.md)：追踪实际版本与构造链，不能只搜索模板目录 |
 
 修改上下文模式时，先用[模型上下文管理 skill](../../.agents/skills/manage-model-context/SKILL.md)更新本页的顺序、分支条件、来源与状态，再同步受影响的唯一生产设计、实现和引用。新增其他模型任务时，在[目录索引](README.md)增加独立正文，不把其上下文混入本页。

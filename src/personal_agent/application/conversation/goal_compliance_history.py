@@ -13,6 +13,7 @@ from .analysis_tasks import task_switch_turn
 from .errors import ConversationOperationConflict
 from .goal_models import CurrentAnalysisGoal
 from .models import AcceptedBashToolRequest, ActionGoalReview, ActionObservation, DecisionFeedback, InteractionTrace, SubmittedFinal
+from .model_actions import decode_bash_call
 from .verification_context import verification_events
 
 
@@ -65,8 +66,8 @@ def project_goal_compliance_history(
         delivered_id = next(reversed(answers), None) if source.final_message is not None else None
         operations = {item.decision_turn: item for item in source.goal_operations if item.operation != "read"}
         reviews = {item.binding.action_id: item for item in source.action_goal_reviews}
-        outputs = {item.action_id: item.receipt.stdout_ref for item in source.accepted_tool_requests
-                   if isinstance(item, AcceptedBashToolRequest) and item.receipt is not None}
+        accepted = {item.action_id: item for item in source.accepted_tool_requests if isinstance(item, AcceptedBashToolRequest)}
+        outputs = {action_id: item.receipt.stdout_ref for action_id, item in accepted.items() if item.receipt is not None}
         producers = {action_id for action_id, stdout in outputs.items() if stdout in input_refs}
         observations = {item.action_id: item for item in source.inputs if isinstance(item, ActionObservation)
                         and item.capability_id == "bash" and item.action_id in reviews.keys() | producers}
@@ -96,7 +97,8 @@ def project_goal_compliance_history(
                 observation = observations.get(action_id)
                 if review is None and observation is None:
                     continue
-                arguments = BashArgs.model_validate_json(call["function"]["arguments"], context=prompts)
+                arguments = (accepted[action_id].arguments if action_id in accepted
+                             else decode_bash_call(call["function"], prompts=prompts))
                 if review is not None:
                     digest = accepted_tool_request_digest(execution_scope=scope.model_copy(update={"task_id": action_id}),
                         action_id=action_id, tool_name="bash", arguments=arguments)

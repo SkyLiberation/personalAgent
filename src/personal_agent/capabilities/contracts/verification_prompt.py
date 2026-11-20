@@ -30,11 +30,10 @@ def goal_compliance_answer_request(context: GoalComplianceAnswerContext, draft: 
     pending = prompts.render("interaction_verification.compliance.pending_answer",
         submission_id=context.submission_id, disposition=context.disposition, draft=draft)
     version = prompt.version
-    evidence = [item.model_dump(mode="json") for unit in context.cited_units for item in unit.execution_evidence]
-    if evidence or context.workspace_execution_facts:
+    if context.source_observations or context.workspace_execution_facts:
         evidence_prompt = prompts.get("interaction_verification.compliance.answer_evidence")
         pending += "\n\n" + prompts.render(evidence_prompt.name, evidence=json.dumps({
-            "cited_text": evidence, "workspace_execution_facts": context.workspace_execution_facts,
+            "source_observations": context.source_observations, "workspace_execution_facts": context.workspace_execution_facts,
         }, ensure_ascii=False))
         version += "+" + evidence_prompt.version
     rounds = (*context.rounds[:-1], context.rounds[-1] + "\n\n" + pending)

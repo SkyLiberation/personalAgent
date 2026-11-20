@@ -225,7 +225,7 @@ def _extract_action_invocations(
             reason_code="provider_action_type_unsupported",
         )
     if not tool_calls:
-        if request.action_choice == "auto":
+        if request.action_choice != "required":
             return ()
         raise StructuredOutputFailure(
             request.operation,

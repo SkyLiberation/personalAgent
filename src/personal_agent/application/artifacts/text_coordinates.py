@@ -1,10 +1,10 @@
-"""One lossless splitlines coordinate map for reading, searching and editing."""
+"""One lossless splitlines coordinate map for reading and searching."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import DRAFT_MAX_BYTES, TextEdit, TextPosition
+from .models import TextPosition
 
 _LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
 
@@ -52,33 +52,3 @@ class TextCoordinates:
         if position.column > len(line.text) + 1:
             raise ValueError("text position is beyond the line or inside a newline")
         return line.start_offset + position.column - 1
-
-    def apply_edits(self, edits: tuple[TextEdit, ...]) -> str:
-        ranges: list[tuple[int, int, str]] = []
-        for edit in edits:
-            start, end = self.offset(edit.range.start), self.offset(edit.range.end)
-            if start > end:
-                raise ValueError("patch range starts after its end")
-            ranges.append((start, end, edit.new_text))
-        # All offsets refer to the same original snapshot. Validate before writes.
-        for index, (start, end, _) in enumerate(ranges):
-            for other_start, other_end, _ in ranges[index + 1 :]:
-                if start == end and other_start == other_end:
-                    conflict = start == other_start
-                elif start == end:
-                    conflict = other_start < start < other_end
-                elif other_start == other_end:
-                    conflict = start < other_start < end
-                else:
-                    conflict = max(start, other_start) < min(end, other_end)
-                if conflict:
-                    raise ValueError("patch ranges overlap or repeat an insertion")
-        result = self.content
-        # Replacement precedes insertion at an equal start, placing insertion first.
-        for start, end, text in sorted(
-            ranges, key=lambda item: (item[0], item[1]), reverse=True
-        ):
-            result = result[:start] + text + result[end:]
-        if len(result.encode("utf-8")) > DRAFT_MAX_BYTES:
-            raise ValueError(f"patched draft exceeds the {DRAFT_MAX_BYTES}-byte UTF-8 limit")
-        return result

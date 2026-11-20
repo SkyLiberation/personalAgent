@@ -26,7 +26,7 @@ Conversation 的主要消费者位于 [interaction_prompt.py](../src/personal_ag
 
 ## 答复提交与领域交付
 
-中英文 `conversation.action` 指示模型默认直接输出回答正文。需要声明限制、失败或绑定实际读取的来源时，按 `control_submit_final` 的当次 Schema 提交。两种输入由 Runtime 恢复为同一类候选，适用反馈沿原主循环接续。[ADR 0055](adr/0055-unified-conversation-answer.md)
+中英文 `conversation.action` 指示模型在目标就绪后直接输出普通 Markdown 答复，所用来源可链接实际获取的 URL。明确无法继续时，单独调用 `control_report_turn_status` 报告限制或失败。两种输入由 Runtime 恢复为同一类候选，适用反馈沿原主循环接续。[ADR 0055](adr/0055-unified-conversation-answer.md)
 
 部署绑定的检索实验由领域提示说明提交与文件检查，沿同一输入协议交回候选。领域范围见 [ADR 0037](adr/0037-experiment-submission-first-delivery.md)。
 

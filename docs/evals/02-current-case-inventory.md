@@ -1856,7 +1856,7 @@ Conversation 自然提出长调查
 
 2026-09-18 至 19 日，按用户要求只验证 [ADR 0030](../adr/0030-document-line-citation-identity.md) 的局部引用协议，没有执行 E2E 或单元测试。历史失败输入中的 1264 条证据保真回放通过，3 次真实模型 Offline 样本均通过坐标选择与绑定检查；完整结果、成本、脚手架更正和语义限制由[引用坐标记录](../optimization/citation-coordinate-confusion.md#9-月-18-日逐行坐标替换的历史-offline-结果)拥有。原始请求、响应和前后源码身份保存于[归档](../../.tmp/citation-document-lines-20260918)。
 
-本轮没有执行语义交付验收，不增加 Product E2E 通过数，不改写上一节失败。长期观察仍为 0，后续随正常 E2E 按[预声明条件](../future/citation-coordinate-identity.md#后续-e2e-观察与-completed-条件)记录；本轮局部通过不证明概率性混用已经长期消失。
+本轮没有执行语义交付验收，不增加 Product E2E 通过数，不改写上一节失败。长期观察仍为 0，后续随正常 E2E 按[当时的预声明条件](../optimization/citation-coordinate-confusion.md#原-e2e-观察条件)记录；本轮局部通过不证明概率性混用已经长期消失。
 
 ## 修订引用保留约束的 Offline 对照
 

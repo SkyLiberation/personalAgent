@@ -4,24 +4,11 @@
 
 ## 目录分工与入口
 
-本目录拥有优化推进过程；[Future 队列](../future/design-optimization-backlog.md)唯一拥有问题准入状态，Future 专题拥有产品活动设计；尚未充分证明的机制候选正文由 [`to_verify/`](to_verify/README.md)按具体问题拥有，Future 只链接候选及其准入条件。正式用例结果与发布资格由[评测文档](../evals/02-current-case-inventory.md)拥有，当前生产行为由[工程架构](../architecture/README.md)及对应专题拥有。原始请求、响应、代码身份和校验和继续独立封存，不把大体积日志、密钥或私人数据复制进本目录。
+优化过程按问题记录。[Future 队列](../future/design-optimization-backlog.md)维护准入状态与活动设计入口，机制方案从[待验证索引](to_verify/README.md)进入。旧 Conversation 研究链的输入和取舍见[历史证据索引](to_verify/README.md#旧-conversation-研究链证据)。正式用例结果与发布资格由[评测文档](../evals/02-current-case-inventory.md)拥有，当前生产行为由[工程架构](../architecture/README.md)及对应专题拥有。原始请求、响应、代码身份和校验和继续独立封存，不把大体积日志、密钥或私人数据复制进本目录。
 
 设计与验收顺序由 [EVD](../devSpec/change-evidence.md#7-强制开发与设计流程)拥有，用例来源、成功和重新打开由[闭环规则](../devSpec/change-evidence.md#14-真实用例驱动优化与验收闭环)拥有；本目录记录实际过程与取舍，不替代先行设计。
 
 测试存放位置遵守[评测归档规则](../../evals/AGENTS.md#5-比较身份与归档)：后续临时脚本和测试产物统一放在项目根目录 `.tmp/<专题>-<日期>/`，不再向 `C:/pae` 写入。本文档保存可复用经验及真实证据坐标；历史证据未迁移时保留原引用，不能批量替换路径制造失效链接。
-
-| 问题编号与范围 | 推进记录 | 活动设计 |
-| --- | --- | --- |
-| `CONVERSATION-RESEARCH-STOP-001`：来源支持修正及其取证前置条件 | [问题总览与经验索引](conversation-source-support.md)、[取证记录](evidence-acquisition.md) | [来源语义与修订设计](../future/conversation-verification-false-positive.md) |
-| `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`：验证漏放与循环修订 | [对象错位](answer-object-mismatch.md)、[文档缺项](document-absence.md)、[反馈修订](revision-feedback-loop.md)、[研究论断无法收敛及子问题](claim-revision-nonconvergence.md)、[按问题关联的待验证方案](to_verify/README.md)、[阶段动作选择](claim-action-selection.md)、[相同输入核验不一致](claim-verifier-consistency.md) | [Verifier 设计](../future/conversation-verification-false-positive.md) |
-| `CITATION-COORDINATE-CONFUSION-001`：原文行号与临时引用编号混用 | [失败事实与记录](citation-coordinate-confusion.md) | [统一文档坐标与后续观察条件](../future/citation-coordinate-identity.md) |
-| `ANSWER-NORMATIVE-SCOPE-001`：规范主体、来源与义务强度对应 | [独立问题与反馈验收边界](normative-scope-attribution.md) | [最终稿具体来源归属候选](to_verify/answer-source-attribution.md)、[重复失败后的方案复审](completed/source-proof-boundary-isolation.md#生产接入与真实消费)；准入由 [Future 队列](../future/design-optimization-backlog.md)拥有 |
-| `ANSWER-ENUMERATION-SCOPE-001`：真实反馈修订扩大列举范围 | [实际修订反例](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举) | [旧稿核验证据](to_verify/final-revision-comparison.md) |
-| `MODEL-PROVIDER-TRANSPORT-001`：服务传输与 deadline 阻断核验 | [独立服务阻塞与恢复](model-provider-transport.md) | 按原失败完整请求恢复后继续原候选 |
-
-[旧 Conversation 研究链的专项证据](to_verify/README.md#旧-conversation-研究链证据)按原身份保留。
-
-同一队列项可以有不同机制域的设计；记录必须写清覆盖范围。本表不代表同编号的网页搜索/抓取分离、来源生成或评测工作已经全部完成，也不维护第二份准入状态。
 
 ## 记录如何组织
 
@@ -29,7 +16,7 @@
 
 | 阅读目的 | 入口 |
 | --- | --- |
-| 定位问题、责任边界与历史编号 | [问题总览](conversation-source-support.md#当前核心问题与责任边界)、[完整记录导航](conversation-source-support.md#阅读顺序与完整记录) |
+| 定位问题、责任边界与历史编号 | [旧研究链的问题记录](conversation-source-support.md#当前核心问题与责任边界) |
 | 查找仍待验证的方案与设计 | [候选索引](to_verify/README.md)；产品准入状态见 [Future 队列](../future/design-optimization-backlog.md) |
 | 查找已解决问题的方案与失败经验 | [完成记录索引](completed/README.md) |
 | 查网页正文边界、补读与取证反馈 | [正文提取](source-extraction.md)、[取证记录](evidence-acquisition.md) |
@@ -45,7 +32,7 @@
 
 每份问题记录先说明问题范围、最新证据、有效收益和剩余边界，再列同一问题的连续尝试。历史章节中的“当前”“下一步”只适用于当轮，不能当作今天的活动方案。早期综合盘点原文作为历史保留，不再接收其他问题的新实验。
 
-待验证的研究工具方案见[按问题关联的候选索引](to_verify/README.md)。章节迁移必须更新全部仓库内引用，核对决定性证据与结论不丢失；已解决问题按下节删除中间正文，不要求永久保留每轮流水。原始 `.tmp` 归档保持原样；面试材料只提炼经验，不复制实验流水或发布状态。未来新问题建立具体问题记录，先更新总览导航；同一问题不能因更换方法或新一轮会话另建文件。
+章节迁移必须更新全部仓库内引用，核对决定性证据与结论不丢失；已解决问题按下节删除中间正文，不要求永久保留每轮流水。原始 `.tmp` 归档保持原样；面试材料只提炼经验，不复制实验流水或发布状态。未来新问题建立具体问题记录，先更新总览导航；同一问题不能因更换方法或新一轮会话另建文件。
 
 ## 待验证方案与失效方案的保留规则
 

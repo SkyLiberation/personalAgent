@@ -67,7 +67,7 @@ Conversation 把本轮 `EffectiveCapabilities` 物化为逐动作 `ModelActionDe
 
 Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answer 为边界。未交付任务的修订保持 Plan 身份，跨轮恢复保留该 Plan 的成功执行资料。普通进度更新直接继续，用户要求先审阅时用工具进入等待。读写字段及可见性见[本地工具](../context/local-tools.md#5-conversation-直接声明的本地动作)，整体决定见 [ADR 0025](../adr/0025-revisable-plan-progress.md)。
 
-普通可见正文形成默认 `answer` 候选；`control_submit_final(message, disposition, references)` 可显式选择沟通状态与行引用，两者进入同一 `FinalMessage` 出口。提交工具独占批次；有工具调用时正文只作当轮说明，非法调用不能降为文字答案。空白、reasoning、截断或非法角色不形成候选。交付前检查引用、适用核验、预算、计划及未决执行。回答被拒后，原稿及真实反馈回原循环，模型继续取证或重新提交完整回答，见 [ADR 0049](../adr/0049-answer-regeneration-in-original-loop.md)。
+目标就绪后的完整 Markdown 正文形成 `answer` 候选。模型单独调用 `control_report_turn_status(message, disposition)` 时形成 `limitation` 或 `failed` 候选。两者进入同一 `FinalMessage` 出口。有工具调用时，正文用于说明当前动作。空白、reasoning、截断或非法角色不形成候选。交付前执行适用核验、预算、计划及未决执行检查。回答被拒后，原稿及真实反馈回原循环，模型继续取证或重新提交完整回答，见 [ADR 0049](../adr/0049-answer-regeneration-in-original-loop.md)。
 
 意图判断及后台来源修订使用 `prompted_json`，以通用 Schema 指令、原始 JSON 文本和严格类型／来源校验承载，不请求工具或 API 格式功能。其他已迁移的内部 typed 能力使用原生输出声明，由 Infra 通过 LangChain 公共转换导出参数。两类承载都保留原件，按请求执行有限修复，不强转业务值。模板与版本见 [Prompt Registry](../llm-prompts.md)，验证范围见[统一设计 §15](../optimization/to_verify/conversation-loop-schema.md#15-内部意图判断采用提示式json的候选)。
 
@@ -77,15 +77,15 @@ Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answe
 
 使用 `PERSONAL_AGENT_ANSWER_RESULT={"test_mode":true}` 启动测试部署。`test_mode` 默认 `false`。Runtime 在创建对话运行时绑定这项配置。
 
-普通模式通过独立的 `control_request_clarification` 提交需要用户回答的问题。它独占当次模型调用。Runtime 保存调用身份和实际问题，并以 `clarification_required` 向客户端返回。客户端在同一会话继续发送用户回复，主循环按原时间顺序消费问题和回复。正常答案、限制和失败由 `control_submit_final` 接收。
+普通模式通过独立的 `control_request_clarification` 提交需要用户回答的问题。它独占当次模型调用。Runtime 保存调用身份和实际问题，并以 `clarification_required` 向客户端返回。客户端在同一会话继续发送用户回复，主循环按原时间顺序消费问题和回复。普通答案由无工具调用的完整正文提交，限制或失败由独立状态报告提交。
 
-测试模式使用 Runtime 的专用模型工具禁用名单。当前唯一一项是 `control_request_clarification`。各阶段先组装可用动作，再应用该名单。请求构造和运行时参数校验消费同一份过滤后的声明。配置随原回答配置绑定到运行及会话。
+LongDS 无人值守入口采用测试模式。各阶段先组装可用动作，再滤掉 `control_request_clarification`。请求构造和 Runtime 解码消费同一份声明。配置随答复协议绑定到运行及会话。目标补丁保存既有问答的接受事实，新问题统一走独立澄清工具。[澄清协议和验收](../adr/0055-unified-conversation-answer.md#澄清由独立工具提交)
 
 离线回放已核对 Task2 第 24 轮的原调用在两种模式下均被拒绝。独立澄清在普通模式可提交并接续用户回复，测试模式拒绝该调用并保留目标读取。回放覆盖中英文和目标待维护、普通答复两个阶段。[原实发请求](../../.tmp/gc34/c-recovery/sdk/9dfd11b4d60544d1b1dcea3ff65f461c.http.request.json) · [原第 24 轮轨迹](../../.tmp/gc34/c-recovery/turn-24.trace.json)
 
 整稿 verifier 注册为 `workflow_activity`，由运行系统调用并生成 `SemanticVerificationReceipt`，不进入模型可见能力。Verifier 聚合 `passed|failed`；运行系统将失败反馈交回主循环，模型可重新作答或继续取证。下一轮额度耗尽时停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已完成的 `search_personal_knowledge`，其他可见能力和交付入口保持可用。
 
-新增请求前检查预算和截止；额度耗尽后仍可解码已付费原件，或完成无需新模型的同稿交付，新的核验和执行继续受预算约束。`max_tool_calls=0` 允许正常无工具回答，预算耗尽不生成替代答案或额外 Final 宽限。阈值按已知消费检查，未知不填零也不单独停止；在途请求可超出阈值。实际用户结果见[评测盘点](../evals/02-current-case-inventory.md)。
+新主决策在能力物化前检查步数、token 和截止。普通工具额度耗尽后撤下受限工具，有决策余额时仍可基于已取得的结果作答。已有付费原件可继续解码，交付仍经过适用核验。用量阈值按已知消费检查，在途请求可超出阈值。[预算执行](../budge/README.md#主决策与工具额度独立) · [评测盘点](../evals/02-current-case-inventory.md)
 
 正常动作批次在 Plan／continue 准入后、工具持久接受前，先由现有 Journal 提交本批已发生的模型费用、Context 和已接纳 Plan。后续提交写完整用量并保留 latest 业务事实，两个动作不重复累加同一响应费用；提交失败不继续派发。该顺序的真实阶段反事实已验收，完整重启与交付仍独立验收，见[研究 Spec](../optimization/to_verify/verify_results/research-experiment.md#2-决策状态先于持久接受)与 [ADR 0035](../adr/0035-research-experiment-artifact-delivery.md)。
 
@@ -105,7 +105,7 @@ Conversation 的查询执行说明与可引用来源由[Context 专题](context-
 
 ## Durable execution
 
-- Conversation journal 保存 committed messages、typed inputs、usage、execution order、final message 及工作清单；
+- Conversation Journal 保存会话顺序、冻结的前驱修订、本轮原话、typed inputs、用量、执行顺序、最终消息和工作清单。全量会话消息由已提交事实重建。
 - Knowledge save/delete 分别由自己的 Command/operation/Receipt owner 恢复；
 - 周期研究、投递和 Agent 运行按各自 Store 与 provider task identity 恢复；
 - replay 复用冻结 Command 和已提交副作用，不重新调用模型生成它们。当前不提供响应结束后继续运行的动态调查能力。
@@ -141,6 +141,6 @@ Model Port 统一拥有传输重试；Schema 或语义错误按各自输出协�
 - 一个业务事实只有一个 owner 和写入口；
 - 没有失败 baseline 与生产消费者时，不增加 Planner、Workflow、checkpoint、Registry 或兼容层。
 
-REST／SSE 共享安全错误投影，分别标明模型输出协议、上游请求或本地运行错误；字段与状态映射见 [API](../api.md#post-apiconversationturn)。
+REST／SSE 共享安全错误投影，分别标明模型输出协议、上游请求或本地运行错误；字段与状态映射见 [API](../api.md#post-apiconversationturns)。
 
 独立分析的目标核验与回答核验已按职责拆分，当前契约见[Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)。两者分别输出`UserRequirementAssessment`并聚合为原回执；新连续前三轮已交付，原分[1,1,1]、预声明用户结果通过／通过／失败，见[记录§34](../optimization/to_verify/verify_results/analysis-correctness.md#34-分离目标与回答核验的空会话连续前三轮)；旧失败由[记录§33](../optimization/to_verify/verify_results/analysis-correctness.md#33-逐项用户要求核验的空会话连续前三轮)保留。

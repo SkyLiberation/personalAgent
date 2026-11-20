@@ -25,6 +25,7 @@
 | 无研究稿时选证 Schema 允许无效 `answered` 身份 | [按实际状态呈现选证契约](research-selection-state-contract.md) |
 | 目录拒绝抢先绕过反馈、非法 JSON 没有进入已有一次纠正 | [Conversation 动作协议恢复](conversation-action-protocol-recovery.md) |
 | 未声明动作拒绝丢失已知具体名称，且补齐名称须保持原停止额度 | [未知动作名称反馈保真](unknown-action-name-feedback.md) |
+| 单条参数错误连带阻断已声明且独立的只读工具 | [只读工具逐调用处置](readonly-tool-batch-decoding.md) |
 | 被拒稿只有正文、缺少逐段引用关系 | [完整基稿交接](complete-rejected-draft-handoff.md) |
 | 搜索返回结果时丢失实际查询参数，查询与来源证据混用 | [搜索执行参数的保真交接](query-execution-handoff.md) |
 | 验收项重抄漏标点或同义改写导致最终回执被拒 | [最终验收项引用恢复](final-criterion-transcription.md) |

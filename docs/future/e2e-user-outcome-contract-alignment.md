@@ -1,16 +1,16 @@
 # E2E 用户结果契约对齐方案
 
-> **本设计只保留 `ASK-001B` 尚未解决的评测缺口，不改变生产行为。** 准入状态由[设计优化队列](design-optimization-backlog.md)中的 `E2E-USER-OUTCOME-CONTRACT-001` 唯一拥有；`ASK-001A` 已落地的 typed grader、Application Integration 分类和实际检查结果由[当前评测用例盘点](../evals/02-current-case-inventory.md)拥有。
+本文维护 `ASK-001B` 的结果判定缺口。准入见[设计队列](design-optimization-backlog.md)，当时的运行身份见[评测盘点](../evals/02-current-case-inventory.md#1-conversation-与-knowledge)。
 
 ## 1. 当前只剩工具机制解释没有结果级判定
 
-**`ASK-001B` 仍可能在只返回项目代号和 OpenAI 官方 URL、却没有解释工具使用机制时得到通过。** 当前用例已经从正式 HTTP 入口经过生产 Composition Root、真实模型和目标 Agent 完整链路；缺口只在最终回答 grader，不授权修改 Agent、Prompt、工具、Context 或预算。
+**原用例只核对项目代号、官方 URL、作用域和零写入。** 只附 URL 也能满足这些断言，工具使用机制是否得到解释仍无结果级判定。
 
-| 当前自然目标 | 当前可执行断言 | 尚未验收的用户结果 |
+| 原用户目标 | 原可执行断言 | 尚未验收的用户结果 |
 | --- | --- | --- |
 | 结合个人资料与 OpenAI 官方 Agents SDK 文档，说明 Agent 如何使用工具并逐项给来源 | 随机项目代号、至少一个 OpenAI 官方 URL、作用域隔离和零写入 | 回答是否基于相关官方来源解释工具定义或选择、调用和结果使用，而不是只附带 URL |
 
-`ASK-001A` 已由 case-specific grader 判断两条随机原文是否完整进入最终回答。`E05/E13` 已归类为 Application Integration，只证明研究与投递流水线事实。上述已落地事实不在本文维护第二份实施计划。
+重启验收前先确认该用例在现行[共用 HTTP 评测入口](../evals/04-running-and-release.md#conversation-评测共用入口)的接入状态和同一结果契约。
 
 ## 2. 结果判定不得固定 Agent 的实现策略
 

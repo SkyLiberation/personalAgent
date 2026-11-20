@@ -20,7 +20,7 @@
 
 正文落点按[文档目录分工](README.md#目录分工)确定，当前事实、历史诊断、候选与评测证据分别保存。
 
-- `architecture/` 拥有现行全局架构、代码地图和横切装配事实；设计开发约束由开发细则拥有。专题维护详细契约，`summary/` 保留明确身份的历史审计。框架变化按 [ARC](devSpec/architecture-ownership.md#8-架构基线与持续演进)同步。
+- `architecture/` 拥有现行全局架构、代码地图和横切装配事实。开发细则维护设计与开发约束，专题文档维护详细契约。框架变化按 [ARC](devSpec/architecture-ownership.md#8-架构基线与持续演进)同步。
 - Future 的准入状态、收敛与退出由 [Future 规则](future/README.md)拥有。
 - 过程记录、候选保留、失效清理与成果固化由[优化规则](optimization/README.md)拥有。
 - ADR 结构由[写作规范](chinese-writing-spec.md#6-各类文档的附加要求)拥有；评测分类与归档分别遵守 [QLT](devSpec/quality-security.md#1-测试职责与覆盖)和 [EVM](../evals/AGENTS.md#5-比较身份与归档)，不在文档中重建发布清单。

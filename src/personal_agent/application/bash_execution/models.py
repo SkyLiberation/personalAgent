@@ -14,6 +14,7 @@ from pydantic import (
     Field,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -28,6 +29,7 @@ STDOUT_PREVIEW_CHARS = 4000
 STDERR_PREVIEW_CHARS = 2000
 BASH_SHARED_INPUTS_DIR = "/run/personal-agent-inputs"
 BASH_RUNTIME_DIR = "/opt/personal-agent-runtime"
+BASH_TEMP_DIR = "/tmp"
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Identifier = Annotated[str, Field(min_length=1)]
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -47,6 +49,7 @@ ErrorCode = Literal[
     "invalid_output",
     "output_unavailable",
     "oom",
+    "workspace_unavailable",
 ]
 _FILENAME = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 _DEVICES = frozenset(
@@ -93,7 +96,7 @@ def validate_workspace_path(value: str, *, prompts: PromptCatalog = DEFAULT_PROM
     return value
 
 
-class BashArgs(BashModel):
+class BashShellArgs(BashModel):
     command: str = Field(description=DEFAULT_PROMPTS.get("bash_execution.parameter.command").template)
     description: str = Field(min_length=1, max_length=512,
                              description=DEFAULT_PROMPTS.get("bash_execution.parameter.description").template)
@@ -115,6 +118,22 @@ class BashArgs(BashModel):
             return workdir
         prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
         return validate_workspace_path(workdir, prompts=prompts)
+
+
+class BashWorkspaceFileAction(BashModel):
+    operation: Literal["read", "edit"]
+    file_path: str = Field(pattern=rf"^{BASH_TEMP_DIR}/[^\x00-\x1f]+$", max_length=4096)
+
+
+class BashArgs(BashShellArgs):
+    workspace_file: BashWorkspaceFileAction | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_workspace_file(self, handler):
+        value = handler(self)
+        if self.workspace_file is None:
+            value.pop("workspace_file", None)
+        return value
 
 
 class BashWorkspaceFile(BashModel):
@@ -145,12 +164,23 @@ class BashWorkspaceBinding(BashModel):
     network_container_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class BashTaskWorkspacePolicy(BashModel):
+    conversation_id: Identifier
+    expires_at: AwareDatetime
+
+
+class BashTaskWorkspaceAccess(BashModel):
+    task_id: Identifier
+    predecessor_turn_ids: tuple[Identifier, ...]
+
+
 class BashExecutionProfile(BashModel):
     authorized_principal: AuthenticatedPrincipal
     deployment_digest: Digest
     image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     limits: BashExecutionLimits
     workspace: BashWorkspaceBinding | None = None
+    task_workspace: BashTaskWorkspacePolicy | None = None
 
 
 class BashExecutionAuthorization(BashModel):
@@ -165,10 +195,21 @@ class BashExecutionAuthorization(BashModel):
     image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     limits: BashExecutionLimits = Field(default_factory=BashExecutionLimits)
     workspace: BashWorkspaceBinding | None = None
+    retain_task_workspace: Literal[True] | None = None
+
+    @model_validator(mode="after")
+    def validate_workspace_modes(self) -> BashExecutionAuthorization:
+        if self.workspace is not None and self.retain_task_workspace:
+            raise ValueError("Task workspaces require the standalone Bash profile")
+        return self
 
     @property
     def authorization_digest(self) -> Digest:
-        return canonical_digest(self.model_dump(mode="json", exclude_none=True))
+        payload = self.model_dump(mode="json", exclude_none=True)
+        if self.retain_task_workspace:
+            # A retained container must match the directory bound by its permit.
+            payload["task_workspace_root"] = BASH_TEMP_DIR
+        return canonical_digest(payload)
 
     def execution_profile(self) -> BashExecutionProfile:
         return BashExecutionProfile(
@@ -177,6 +218,9 @@ class BashExecutionAuthorization(BashModel):
             image_id=self.image_id,
             limits=self.limits,
             workspace=self.workspace,
+            task_workspace=BashTaskWorkspacePolicy(
+                conversation_id=self.conversation_id, expires_at=self.expires_at,
+            ) if self.retain_task_workspace else None,
         )
 
 
@@ -224,10 +268,27 @@ class BashExecutionCommand(BashModel):
     deadline_at: AwareDatetime
     reserved_seconds: PositiveSeconds
     command_digest: Digest
+    task_workspace: BashTaskWorkspaceAccess | None = None
+    workspace_file: BashWorkspaceFileAction | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_workspace_file(self, handler):
+        value = handler(self)
+        if self.workspace_file is None:
+            value.pop("workspace_file", None)
+        return value
+
+    def bound_digest(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"command_digest"})
+        if self.task_workspace is None:
+            payload.pop("task_workspace")
+        return canonical_digest(payload)
 
     @model_validator(mode="after")
     def validate_command(self, info: ValidationInfo) -> BashExecutionCommand:
         prompts = info.context if isinstance(info.context, PromptCatalog) else DEFAULT_PROMPTS
+        if self.workspace_file is not None and self.task_workspace is None:
+            raise ValueError("file operations require an authorized task workspace")
         if self.deadline_at <= self.accepted_at:
             raise ValueError(prompts.render('bash_validation.deadline'))
         if (
@@ -241,7 +302,7 @@ class BashExecutionCommand(BashModel):
             or self.program.size_bytes > PROGRAM_MAX_BYTES
         ):
             raise ValueError(prompts.render('bash_validation.program_identity'))
-        names = [item.name.casefold() for item in self.inputs]
+        names = [item.name.casefold() for item in (self.program, *self.inputs)]
         if self.workdir != ".":
             validate_workspace_path(self.workdir, prompts=prompts)
         if (
@@ -255,9 +316,7 @@ class BashExecutionCommand(BashModel):
             for item in (self.program, *self.inputs)
         ):
             raise ValueError(prompts.render('bash_validation.input_owner'))
-        if self.command_digest != canonical_digest(
-            self.model_dump(mode="json", exclude={"command_digest"})
-        ):
+        if self.command_digest != self.bound_digest():
             raise ValueError(prompts.render('bash_validation.command_digest'))
         return self
 
@@ -302,6 +361,7 @@ class BashJournalView(BashModel):
     command: BashExecutionCommand | None = None
     execution: BashExecutionFact | None = None
     receipt: BashExecutionReceipt | None = None
+    task_workspace: BashTaskWorkspaceAccess | None = None
 
 
 class BashBackendOutcome(BashModel):
@@ -334,6 +394,8 @@ class BashToolResult(BashModel):
             parts.append(f"[stderr]\n{self.stderr_preview}")
         if self.stderr_omitted_chars:
             parts.append("[stderr truncated]")
+        if self.receipt.error_code == "workspace_unavailable":
+            parts.extend(self.limitations)
         if self.receipt.status not in {"failed", "succeeded"} or self.receipt.process_exit_code is None:
             parts.append(f"[{self.receipt.status}]")
         if self.receipt.process_exit_code is not None:

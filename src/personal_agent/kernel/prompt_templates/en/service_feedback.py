@@ -79,16 +79,6 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template='Background tasks that continue after this response ends, or can be queried or adjusted later, are not currently supported. No background work was started. You can continue the work in the current conversation.',
     ),
-    'conversation.service.rejected_draft_details': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='{error}\nSee the latest submitted_final for the complete rejected draft and its per-segment references.',
-    ),
-    'conversation.service.citation_repair': PromptTranslation(
-        source_version='2026-11-15.v1',
-        version="2026-11-15.en.v1",
-        template='Resubmit the complete answer. Fix required references or read their source text first. Remove optional coordinates that are unavailable.',
-    ),
     'conversation.service.verification_budget_exhausted': PromptTranslation(
         source_version='2026-10-27.v1',
         version="2026-10-27.en.v1",
@@ -187,6 +177,10 @@ TRANSLATIONS = {
     'conversation.service.duplicate_call_repair': PromptTranslation(
         source_version='v1', version='en.v1',
         template='Use the committed result first. If a new operation is necessary, issue a new valid call. The native tool protocol binds its identity.',
+    ),
+    'conversation.context.tool.outcome_unknown': PromptTranslation(
+        source_version='v1', version='en.v1',
+        template='Recovery found no recorded result for {tool_name}. The write may already have taken effect. Check the target system with a read-only tool before trying the write again. If the outcome cannot be verified, tell the user it is unknown.',
     ),
     'conversation.knowledge.exclusive': PromptTranslation(
         source_version='v1', version='en.v1',

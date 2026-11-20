@@ -1,6 +1,6 @@
 # 逐行引用丢失来源归属
 
-**独立问题 `CITATION-SOURCE-ATTRIBUTION-001`：执行记录能够确定引文来自 OpenAI 官方页，局部核验输入却只包含正文，核验器因此以无法确认来源为由拒绝。** 准入状态由 [Future 队列](../future/design-optimization-backlog.md)拥有；本次确定性修复已进入目标代码，契约与局部真实核验通过，完整 E2E 未验收；决定见 [ADR 0028](../adr/0028-preserve-citation-source-binding.md)。
+**2026-09-18，局部核验因缺少来源归属拒绝了已有官方引文的研究稿。** 原确定性修复恢复来源，并通过当时的局部检查。2026-11-18 答复行坐标退役，原投影的正式复验随旧协议退出。见 [ADR 0028](../adr/0028-preserve-citation-source-binding.md)和[现行答复契约](../adr/0055-unified-conversation-answer.md)。
 
 ## 正式输入与失败事实
 
@@ -10,7 +10,7 @@
 
 ## 信息丢失的责任边界
 
-失败发生时的[引用构造](../../src/personal_agent/application/conversation/citations.py)在生成逐行 `AvailableCitation` 时保留 `line.text`，随后构造的 `CitedEvidence` 只有局部 `id` 和 `text`。[局部核验器](../../src/personal_agent/tools/interaction_verifier.py)只接收本段的 `CitedDraftUnit`，没有收到该行原有的来源归属。
+失败发生时的引用构造在生成逐行 `AvailableCitation` 时保留 `line.text`，随后构造的 `CitedEvidence` 只有局部 `id` 和 `text`。[局部核验器](../../src/personal_agent/tools/interaction_verifier.py)只接收本段的 `CitedDraftUnit`，没有收到该行原有的来源归属。
 
 引用目录仍能关联所属观察；来源读取投影也能从执行记录关联到官方 URL。缺口位于引用到核验输入的投影，不是模型声明“取证充分”改变了来源事实。完整观察引用和逐行引用的上下文不同，本条证据只定位逐行引用，不能概括为所有引用都会丢失来源。
 
@@ -57,4 +57,4 @@
 
 模型为 `mimo-v2.5`，局部核验提示仍是 `v1-writer-citations`。每次上限为 8,192 输出 tokens、120 秒，共 13,509 tokens；输入经生产 Adapter 构造并保存实际请求和原始响应。第二个样本耗时超过 60 秒，本批已结束，不追加样本。判定门槛、输入、源码身份、反事实及结果由[本次归档](../../.tmp/citation-source-fix-20260918)保存；真实结果见[结果文件](../../.tmp/citation-source-fix-20260918/results.json)。
 
-这支持确定性来源恢复及该局部语义边界，不证明整稿交付或长期稳定率。本轮按用户要求不重复长 E2E；引句绑定和修订收敛仍是独立事项，不能据局部通过声明发布。剩余正式验收和退出条件见[活动设计](../future/citation-source-binding.md)。
+结果支持原投影的确定性来源恢复，以及来源正确时仍能拒绝无据保证。原入口完整交付未复验。来源错绑、原文变化和可见范围扩大仍是检查新协议实际输入与回执时需要区分的失败边界。

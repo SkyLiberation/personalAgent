@@ -10,8 +10,12 @@ class FeishuIncomingMessage(BaseModel):
     open_id: str | None = None
     sender_user_id: str | None = None
     user_id: str = "default"
-    session_id: str = "default"
+    session_id: str | None = None
     message_id: str | None = None
     message_type: str = "text"
     text: str = ""
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def client_request_id(self) -> str | None:
+        return self.event_id or self.message_id or None

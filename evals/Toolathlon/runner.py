@@ -21,6 +21,8 @@ from evals.conversation_http import (
     submit_turn, wait_for_product,
 )
 from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest
+from personal_agent.application.conversation.models import InteractionTrace
+from personal_agent.infra.storage.sqlite_conversation_journal import SqliteInteractionJournal
 from personal_agent.kernel.config_models import InteractionLoopConfig
 from personal_agent.kernel.feature_flags import FeatureFlags, load_feature_flags, write_feature_flags
 
@@ -38,6 +40,7 @@ _INTERACTION_BUDGET_ENV = {
     field: f"PERSONAL_AGENT_INTERACTION_{field.upper()}"
     for field in INTERACTION_BUDGET_OPTIONS.values()
 }
+
 
 
 def _positive_int(value: str) -> int:
@@ -144,8 +147,19 @@ def _configure_pdf_integer_fields(tool: dict) -> dict:
     return tool
 
 
+def conversation_journal_path(output: Path) -> Path:
+    return output / "product-data" / "conversation_journal"
+
+
+def read_turn_trace(output: Path, turn_id: str) -> InteractionTrace | None:
+    root = conversation_journal_path(output)
+    if not (root / "sessions.sqlite3").is_file():
+        return None
+    return SqliteInteractionJournal(root).get(turn_id)
+
+
 def model_request_paths(output: Path) -> list[Path]:
-    return sorted((output / "product-data" / "interaction_runs").glob("*/*/request.json"))
+    return sorted(conversation_journal_path(output).glob("*/*/request.json"))
 
 
 def product_environment(
@@ -251,10 +265,11 @@ def run(args: argparse.Namespace, report: TimeRunReport) -> None:
                     report["restarted_implicitly"] = running(time_server)
                 if args.model_env is not None:
                     report["model"] = effective_structured_model(args.output)
-                    response = submit_turn(base, ConversationTurnRequest.model_validate({
-                            "session_id": session_id, "user_id": "toolathlon",
-                            "messages": [{"role": "user", "content": QUESTION}],
-                        }), timeout=90)
+                    body = ConversationTurnRequest(
+                        session_id=session_id, user_id="toolathlon", text=QUESTION,
+                        client_request_id=uuid4().hex, create_session=True,
+                    )
+                    response = submit_turn(base, body, timeout=90)
                     if response.is_success:
                         report["conversation"] = response.json()
                     else:

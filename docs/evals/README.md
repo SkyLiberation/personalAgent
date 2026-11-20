@@ -10,6 +10,7 @@
 | [MultiHopRAG](../../evals/multihoprag/README.md) | [MultiHopRAG 数据集](https://huggingface.co/datasets/yixuantt/MultiHopRAG) |
 | [Galileo RAGBench](../../evals/galileo_ragbench/README.md) | [Galileo 数据集](https://huggingface.co/datasets/galileo-ai/ragbench) |
 | [LongDS](04-running-and-release.md#公开数据集运行) | [LongDS 数据集](https://huggingface.co/datasets/zjunlp/LongDS) |
+| [Agent Durability Lab 对照](../problems/Agent-Durability-Lab/ambiguous-effect.md) | [公开故障用例 `ambiguous-effect`](https://github.com/sjarmak/agent-durability-lab/blob/68a3d73a9d1bafe12d5be188624a802fc11404df/benchmarks/agent-durability/contract-v1.json#L31-L36) |
 
 [Toolathlon MCP 接线、文件隔离与 PDF 交付](04-running-and-release.md#toolathlon-mcp-验证)使用上游工具配置和镜像，按实际边界记录支持证据。工作区和 PDF 用例共享[对话预算配置](04-running-and-release.md#对话预算)，可通过[并行入口](04-running-and-release.md#多用例并行执行)批量调度。
 

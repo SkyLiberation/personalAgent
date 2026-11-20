@@ -31,8 +31,7 @@ FEISHU_BASE_URL=https://open.feishu.cn
 
 - `PERSONAL_AGENT_POSTGRES_URL` 为必填项。Personal Knowledge/知识、Review、受治理执行、
   Research、worker queue 等各自通过生产 Store 使用 Postgres。普通 Conversation
-  的 Interaction trace 当前由 `PERSONAL_AGENT_DATA_DIR/interaction_runs` 下的
-  `FileInteractionJournal` 保存；历史 LangGraph checkpoint 表不是当前普通对话真源。
+  的 Turn 修订和模型原件保存在 `PERSONAL_AGENT_DATA_DIR/conversation_journal`。
 - `uploads/` 仍用于保存原始上传文件；数据库保存其引用及提取后的知识内容。
 
 `PERSONAL_AGENT_ACTION_DIAGNOSTICS_REVEAL_FIELD_NAMES` 控制动作协议失败日志是否显示未知字段名。默认值 `false` 把未知字段写为 `<unexpected>`；显式设置为 `true` 后，只显示符合标识符格式的字段名。字段值、完整 `arguments`、用户文本和服务提供方原始响应始终不写入该日志。该开关只应用于有界的本地诊断，修改后需要重启进程；生产环境应保持 `false`。
@@ -636,8 +635,7 @@ PERSONAL_AGENT_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:15432/perso
 说明：
 
 - Personal Knowledge、Research、Knowledge Lifecycle、Tool governance、Agent run 与 worker queue 共享该 PostgreSQL 连接，但各自拥有事实表和恢复语义；
-- 普通 Conversation 使用 `data/interaction_runs` 下的 `FileInteractionJournal`，不是 LangGraph
-  checkpoint；
+- 普通 Conversation 通过 `SqliteInteractionJournal` 使用 `conversation_journal/sessions.sqlite3` 和同目录下的模型原件。
 - 数据库仍可能包含历史 LangGraph checkpoint/迁移表；它们用于旧数据与运维兼容，不定义当前
   Conversation 主链；
 - `scripts/export_thread_checkpoints.py` 只用于历史 checkpoint 诊断，不能作为当前 Interaction

@@ -56,7 +56,7 @@ HTTPX 观测状态附着在单次 Request 的 extensions，随 deadline 工作�
 
 Loop 已将逐响应记录和续接接入同一 Port：response_sink 在 typed 解码前交原 Journal 保存一次原件；before_send 只对新增物理发送执行原预算准入；continuation 先解码已付费原件。它们是具名记录／准入接口，不是通用业务 hook；包装器透明传递，不保存进程全局当前 run。主循环修复由 Application 唯一负责，内层原有限输出修复仍按请求计量；中性错误由 REST／SSE 统一安全投影。实现与未验收边界见 [ADR 0045](../adr/0045-native-intent-loop-and-recorded-model-output.md)。
 
-正式 [SSE 入口](../../src/personal_agent/adapters/web/routes/entry_stream.py)调用 `AgentService.converse()`，将 Conversation 已验收答案分块返回，协议见 [API](../api.md)。子 Agent 的事件流由 [AgentGateway](../../src/personal_agent/agents/gateway.py)承接。旧模型 token 流 Port 与包装器没有当前消费者，已退役，删除及行为保持证据见[完成记录](../optimization/completed/model-streaming-retirement.md)。
+正式 [SSE 入口](../../src/personal_agent/adapters/web/routes/conversation.py)调用 `AgentService.converse()`，将 Conversation 已验收答案分块返回，协议见 [API](../api.md)。子 Agent 的事件流由 [AgentGateway](../../src/personal_agent/agents/gateway.py)承接。旧模型 token 流 Port 与包装器没有当前消费者，已退役，删除及行为保持证据见[完成记录](../optimization/completed/model-streaming-retirement.md)。
 
 主模型调用用 Turn 标识和 `invocation_id` 定位请求及响应原件。文件 Journal 内部沿用 `interaction_run_ref` 字段保存 Turn 标识。`step_no` 为轮内主决策顺序，响应记录与 HTTP 诊断各有 `attempt_id`。[生命周期 Spec](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
 

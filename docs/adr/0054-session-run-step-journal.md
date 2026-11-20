@@ -1,11 +1,13 @@
 # ADR 0054：会话拥有轮次历史
 
-2026-11-17 已切换 Turn 接口和 Step 身份。现行存储为文件 Journal，主循环仍按客户端提交的消息前缀选择分支。服务端 Session 接管有序历史及 SQLite 事务存储属于后续设计。[现行实现](../architecture/core-architecture-current-state.md#32-会话运行与主决策的现状) · [生命周期规格](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
+Turn 接口和 Step 身份于 2026-11-17 切换。2026-11-19 的 LongDS 归档对照定位到续聊依赖客户端全量历史。现行实现由服务端持有有序历史，SQLite 提交 Turn 及其修订。[现行实现](../architecture/core-architecture-current-state.md#32-会话运行与主决策的现状) · [生命周期规格和证据](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
 
-## 后续决定
+## 决定
 
-单条消息入口需要服务端确定前驱。拟由一个事务型 Journal 同时拥有会话、轮次输入、冻结的前驱与步骤身份。开始首轮时一并提交 Session，主模型调用前确定 Step 位置。前驱缺失、归属不符或版本冲突时拒绝提交。授权、执行、核验和交付沿领域边界，Artifact 保留确切原件。以单一提交点避免独立会话索引和轮次记录发生部分写入。[DeepSeek Harness 固定实现](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/session/session-persistence-sqlite/src/store.ts#L175)
+借鉴 DeepSeek Harness 按会话身份装载持久历史再追加输入的做法。每个认证主体下的 Session 保存一条有序 Turn 历史。首次创建显式声明，续聊根据 `session_id` 和新输入进入，由 Journal 冻结已提交的前驱。单个 SQLite Journal 原子提交会话身份、轮次和请求幂等绑定。已有未结束轮次时从原 `turn_id` 恢复或确认，执行事实及未决副作用继续由原责任主体处理。相同 Session 的历史不再通过回传助手全文定位。[DeepSeek Harness 恢复源码](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/index.ts#L793-L818)
 
-## 迁移与验收
+## 存储启用与验收
 
-先在隔离存储核对实际历史、响应续接和回执归属，再验证正式入口与恢复。离线迁移保留旧原件；前驱无法确定或存在未决副作用时停止迁移对应会话。回退前封存新执行事实并对账。原用例、迁移和启用判据由生命周期规格维护。
+SQLite 在 `conversation_journal` 下初始化。既有文件归档原样保留，新入口只读取新库。原模型请求与响应仍按调用另存，Turn 修订保存其引用。验收使用真实历史回放和正式入口续聊，结果由[生命周期规格](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)维护。
+
+普通 MCP 写调用在派发前向同一个 Turn Journal 登记。恢复已保存的模型响应时，已有登记且尚无结果的原调用以未知结果进入原生工具消息。SQLite 保存登记，目标端仍拥有实际写入和回执。这项决定避免用模型响应是否已消费来猜测外部写入。依据、保守恢复边界和复验由 [MCP 进程恢复规格](../mcpDesign/README.md#普通-mcp-写调用的进程恢复)维护。

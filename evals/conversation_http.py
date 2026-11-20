@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from hashlib import file_digest
 import json
 import mimetypes
@@ -91,6 +91,15 @@ def submit_turn(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key is not None else None
     return httpx.post(
         base + TURNS_PATH, json=body.model_dump(mode="json"), headers=headers, timeout=timeout,
+    )
+
+
+def stream_turn(
+    base: str, body: ConversationTurnRequest, *, timeout: float, api_key: str,
+) -> AbstractContextManager[httpx.Response]:
+    return httpx.stream(
+        "POST", base + TURNS_PATH, json=body.model_dump(mode="json"), timeout=timeout,
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "text/event-stream"},
     )
 
 

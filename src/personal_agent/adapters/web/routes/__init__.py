@@ -9,7 +9,6 @@ from personal_agent.adapters.web.routes.audit import register_audit_routes
 from personal_agent.adapters.web.routes.artifacts import register_artifact_routes
 from personal_agent.adapters.web.routes.conversation import register_conversation_routes
 from personal_agent.adapters.web.routes.digest import register_digest_routes
-from personal_agent.adapters.web.routes.entry import register_entry_routes
 from personal_agent.adapters.web.routes.graph import register_graph_routes
 from personal_agent.adapters.web.routes.notes import register_note_routes
 from personal_agent.adapters.web.routes.review import register_review_routes
@@ -34,11 +33,6 @@ def register_api_routes(app: FastAPI, context: WebAppContext) -> None:
     register_audit_routes(app, settings=settings, service=context.service)
     register_research_routes(app, settings=settings, service=context.service)
     register_conversation_routes(app, settings=settings, service=context.service)
-    register_entry_routes(
-        app,
-        settings=settings,
-        service=context.service,
-    )
     register_graph_routes(app, settings=settings, service=context.service)
     register_knowledge_routes(
         app,

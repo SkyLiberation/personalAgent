@@ -1,6 +1,6 @@
 # 研究回答来源支持：问题总览与经验索引
 
-**当前推进需要区分来源支持、用户事实覆盖和最终表达保真。** 三者的局部通过不能相互替代，也不能覆盖原用户结果。近期失败集中在[具体来源归属](normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配)、[修订扩大列举范围](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)及[选证输出截断](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)。本轮按[当前稿独立核验的预声明](claim-revision-nonconvergence.md#2026-10-08-当前稿独立核验的预声明)先执行隔离校准。
+旧研究链的证据分别回答三个问题：来源能否支持论断、答复是否覆盖用户所问事实、最终表达是否保持原范围。实际反例和历史输入从下表进入。
 
 本文按问题导航旧研究链的取证与核验实验；原始结论及代码身份保持。[ADR 0055](../adr/0055-unified-conversation-answer.md)已撤回 Conversation claim。当前行为见[核验专题](../topics/verification-and-completion.md)，剩余准入见 [Future 队列](../future/design-optimization-backlog.md)，原始用户结果见[评测盘点](../evals/02-current-case-inventory.md)。
 
@@ -15,11 +15,11 @@
 | 相关事实没有回答用户所问对象 | [对象与适用范围](answer-object-mismatch.md)、[事实覆盖候选](to_verify/research-goal-coverage.md) |
 | 同一请求得到冲突判断 | [核验一致性与实际请求审计](claim-verifier-consistency.md) |
 | 缺证反馈后扩大主体、条件或义务强度 | [支持范围修订](to_verify/claim-supported-scope-repair.md)、[研究修订总问题](claim-revision-nonconvergence.md) |
-| 局部观察被写成全文缺项 | [历史缺项问题](document-absence.md)、[停用后的保护边界](to_verify/document-absence-pause.md) |
+| 局部观察被写成全文缺项 | [历史缺项问题](document-absence.md)、[停用后的保护边界](../adr/0033-claim-deletion-and-document-absence-pause.md#历史验证) |
 | 原文行号与临时引用编号混用 | [引用坐标问题](citation-coordinate-confusion.md) |
 | 引用原文没有可核对的来源信息 | [来源绑定问题及剩余验收](citation-source-attribution.md) |
 | 后置失败遮蔽已完成模型成本 | [选证及时提交](research-selection-usage-commit.md)、[工具内部用量交接](tool-model-usage-handoff.md) |
-| 选证截断使后续阶段未到达 | [正式失败](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)、[默认额度候选](to_verify/research-provider-output-default.md) |
+| 选证截断使后续阶段未到达 | [正式失败](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究)、[当时的额度调整](claim-revision-nonconvergence.md#2026-10-02-选证输出截断阻断正式研究) |
 | 拒稿后的取证、计划恢复和自主补证 | [反馈与修订](revision-feedback-loop.md)、[取证](evidence-acquisition.md) |
 
 ### 缺项问题的状态更正
@@ -34,7 +34,7 @@
 
 ## 核验点、反馈与能力用例映射
 
-**核验点决定判断哪种语义关系，反馈字段解释同一个发现，正式轨迹用例覆盖对应能力。** 当前来源报告每项用 `category` 分类，`error_description` 同时解释实际表述、依据支持范围与具体缺口或冲突；片段首尾和证据ID绑定原文。多个独立问题分别输出发现。具体问题、资料、角色及答案来自正式输入，Prompt只表达通用职责。所有新增用例保留完整阶段输入，不改写、裁剪、补证或注入理想反馈，执行 [QLT 真实轨迹规则](../devSpec/quality-security.md#12-通用核验点与真实轨迹用例)。
+**核验点决定判断哪种语义关系，反馈字段解释同一个发现，正式轨迹用例覆盖对应能力。** 当时的来源报告每项用 `category` 分类，`error_description` 同时解释实际表述、依据支持范围与具体缺口或冲突；片段首尾和证据ID绑定原文。多个独立问题分别输出发现。具体问题、资料、角色及答案来自正式输入，Prompt只表达通用职责。所有新增用例保留完整阶段输入，不改写、裁剪、补证或注入理想反馈，执行 [QLT 真实轨迹规则](../devSpec/quality-security.md#12-通用核验点与真实轨迹用例)。
 
 来源核验的“引用不支持”检查必要前提是否进入本条已绑定引用，规范性质一致性比较有明确依据的性质归属，两项能力分别计分。引用不足不能证明规范性质比较正确，也不表示全部已返回资料没有该内容。N1 原预声明将两者合并；按实际能力解释，原始分数和封存记录保持原身份。反馈对实际断言的忠实解释是共同验收点，不因反馈提到某种性质就自动归为该性质比较失败。
 
@@ -42,15 +42,15 @@
 
 Source v31 单次输出交给 writer v23、移除自动反馈复核，以及当时六类来源报告的结论均保留历史身份，见[生产接入与真实消费记录](completed/source-proof-boundary-isolation.md#生产接入与真实消费)。十项局部核验、P1／C7 真实修订和完整 Source／Coverage 的原通过范围由[固化证据](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)拥有；U1 按实际同意确认范围允许忠实宽读法或空发现，原成绩不改写。统一链后续的正式用户结果另见[评测盘点](../evals/02-current-case-inventory.md#2026-10-16-统一研究与最终回答的正式验证)，不能把旧成绩当作现行统一契约的完整证明。
 
-下表是现有职责与真实样本的唯一映射导航，不声明所有能力已通过。`M` 表示已封存正式中文 HTTP 运行 `irun_d46adae369924211`；数字是该运行 `product-model-calls/24340/` 的物理 SDK 请求编号。原始输入及同轨迹修订可以回放，回放属于 Offline Eval；原报告按原版本保留，新单点结果独立登记。没有资格充分的正反样本时，明确记为覆盖缺口，后续经正式入口取得。
+下表映射旧核验职责和真实样本，适用范围由各样本的代码及输入身份限定。`M` 表示已封存正式中文 HTTP 运行 `irun_d46adae369924211`；数字是该运行 `product-model-calls/24340/` 的物理 SDK 请求编号。原始输入及同轨迹修订可以回放，回放属于 Offline Eval；原报告按原版本保留，新单点结果独立登记。没有资格充分的正反样本时，明确记为覆盖缺口，后续经正式入口取得。
 
-| 通用核验点与责任 | 对应能力及反馈 | 正式输入后的真实样本 | 当前边界 |
+| 通用核验点与责任 | 对应能力及反馈 | 正式输入后的真实样本 | 当时的证据边界 |
 | --- | --- | --- | --- |
-| 来源支持：引用不支持 | 判断实际断言所需主体、对象、条件、范围或性质前提是否受本条已绑定引用支持；功能转述及忠实的原文指代补证均有合法出口 | M `0049`、`0058` 的完整原输入及 N1、K1、A2／A6 真实回放及 v6 多项提示诊断 | 判据与历史证据见[固化记录](completed/source-feedback-classification.md)；新候选输出 citation_not_supported，引用不足不计性质冲突比较通过 |
+| 来源支持：引用不支持 | 判断实际断言所需主体、对象、条件、范围或性质前提是否受本条已绑定引用支持；功能转述及忠实的原文指代补证均有合法出口 | M `0049`、`0058` 的完整原输入及 N1、K1、A2／A6 真实回放及 v6 多项提示诊断 | 判据与历史证据见[固化记录](completed/source-feedback-classification.md)；当时的候选输出 citation_not_supported，引用不足不计性质冲突比较通过 |
 | 来源支持：主体与关系 | 核对实际主体及动作关系，不从另一项职责推出未给出的关系 | M `0018` 协作闭环缺证及同轨迹 `0039` 修订 | 原反馈与修订可回放；缺证只覆盖充分性，主体关系正误须按前提充分的实际输入另验，本轮不重采样 |
 | 来源支持：条件与范围 | 保持条件、量词、局部与完整范围，明确反证不能只由一种未确定解析或措辞差异推出 | [正式枚举失败](claim-revision-nonconvergence.md#2026-10-02-汇总将部分列举改为完整枚举)；新正式 P1 同轨迹真实 Q1 及 c7 第十二版多项范围 | Q1 及原八项资格由[固化记录](completed/source-feedback-classification.md#明确反证与缺证的类别资格)拥有；c7 多项被扩大由[统一核验复审](completed/source-proof-boundary-isolation.md#失败尝试与取舍)拥有，不反写原通过 |
-| 来源支持：证据用途与引用支持 | 外部事实由本条引用支持；已返回但未引用，不等于当前引用充分 | P1 客户端主体与 SHOULD 前提未绑定 c4 却获通过；A6 回传步骤缺少本条引用 | 生产统一归 citation_not_supported；v28在完整输入识别并解释 P1、A6，真实 P1 修订补入引用后通过；[局部资格](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)保持，历史失败不改写 |
-| 来源支持：证据缺失误判 | 稿件称未取得、未返回或所查资料未说明，而实际返回原文明示对应内容；生产输出 evidence_presence_conflict | S1 声称五步未返回；c7 原稿称仅说明审批请求；U1 是同意确认范围边界，C7-after 为真实修复对照 | v28 完整识别 S1、C7-before，C7-after 不重报已修复问题；U1 按实际范围允许空报告或忠实宽读法，最终为空。[十项资格](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)关闭局部问题，已接入生产，正式用户结果待验收 |
+| 来源支持：证据用途与引用支持 | 外部事实由本条引用支持；已返回但未引用，不等于当前引用充分 | P1 客户端主体与 SHOULD 前提未绑定 c4 却获通过；A6 回传步骤缺少本条引用 | 当时的生产实现统一归 citation_not_supported；v28在完整输入识别并解释 P1、A6，真实 P1 修订补入引用后通过；[局部资格](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)保持，历史失败不改写 |
+| 来源支持：证据缺失误判 | 稿件称未取得、未返回或所查资料未说明，而实际返回原文明示对应内容；当时的生产实现输出 evidence_presence_conflict | S1 声称五步未返回；c7 原稿称仅说明审批请求；U1 是同意确认范围边界，C7-after 为真实修复对照 | v28 完整识别 S1、C7-before，C7-after 不重报已修复问题；U1 按实际范围允许空报告或忠实宽读法，最终为空。[十项资格](completed/source-proof-boundary-isolation.md#统一核验的局部问题关闭)关闭局部问题，当时已接入生产，局部记录未验收完整用户结果 |
 | 来源支持：具体出处 | 内容有据与被指定文档或章节支持分别判断 | M `0041` 章节归因缺证及 `0047` 真实修订；明确页面错配见[正式来源失败](normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配) | 缺证计充分性，明确出处错配另验；出处与规范性质分别计点，已有样本不代表新候选通过 |
 | 来源支持：规范性质一致性 | 在性质依据充分且原稿断言明确时，比较规范性条款、非规范性指导等归属是否一致 | M `0064` 真实修订；`0047` 为含混及缺前提边界；详见[原单点诊断](completed/source-feedback-classification.md#失败尝试与评测校准) | 正式充分性质冲突样本仍缺失；缺前提只计充分性，规则见[固化记录](completed/source-feedback-classification.md) |
 | 来源支持：义务强度 | 区分必须、推荐、允许与可能，保留条件，不把“应”夸大为“必须” | M `0064` 的真实 MUST／SHOULD 条款 | 已有合法真实稿；清晰强度错配负例待正式轨迹登记，历史人工负例不计覆盖 |

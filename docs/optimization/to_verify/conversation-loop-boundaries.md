@@ -1,8 +1,8 @@
 # Conversation 主循环与能力边界 Spec
 
-问题编号：`CONVERSATION-LOOP-BOUNDARIES-001`。架构设计草案，准入由 [Future 队列](../../future/design-optimization-backlog.md)拥有。现行实现见[架构主链](../../architecture/core-architecture-current-state.md#31-当前主循环的职责混合)。本页保留主循环组织、容量治理、反馈和生命周期的设计及证据。
+问题编号为 `CONVERSATION-LOOP-BOUNDARIES-001`。本页记录主循环、容量治理与生命周期的设计和验证边界。现行实现见[对话主链](../../architecture/core-architecture-current-state.md#3-正式入口与对话主链)，剩余验收见 [Future 队列](../../future/design-optimization-backlog.md)。
 
-2026-10-24 的 Schema 统一重设由[独立唯一正文](conversation-loop-schema.md)拥有，源码已替换，真实生成与完整 E2E 待验收。本文涉及两步提交、旧阶段和模型类型的段落说明改前实现；不作为当前 wire 契约，当前传输统一见 [ADR 0045](../../adr/0045-native-intent-loop-and-recorded-model-output.md)及 [Runtime](../../topics/runtime.md)。
+2026-10-24 的 Schema 统一重设见[交互协议及实跑记录](conversation-loop-schema.md#16-完整运行结果与实际边界)。两步提交、旧研究阶段和对应模型类型只解释迁移前的失败。现行交付见 [ADR 0055](../../adr/0055-unified-conversation-answer.md)和 [Runtime](../../topics/runtime.md)。
 
 [ADR 0055](../../adr/0055-unified-conversation-answer.md)撤回独立 Conversation claim 研究流程、选证和统一研究报告。下列依赖该流程的旧设计、代码坐标和验收只用于解释历史基线，不进入现行主循环实施计划。容量治理、计划、动作、检索实验交付及生命周期仍按各自契约推进。
 
@@ -22,9 +22,9 @@ rg -n 'in_research_mode|_research_selection_request|validate_research_selection|
 
 核验另有真实失败：[计算任务拒稿](../../../.tmp/runtime-policy-audit-isolation-20261016/blocking-feedback.json)中正确答案因无执行来源被拒，之后才进入搜索与研究。源码显示普通核验器把通用来源判据追加到每次核验输入；但当次完整实发请求、意图构造与后续消费尚未完成联合审计。修正其语义契约须单独取得依据，不能与保持行为的职责拆分一起改变。
 
-普通交付还存在协议调用成本：当前先用无正文的 `prepare_final` 切换相位，再请求 typed `FinalSubmission`。这个两次调用的源码事实不证明其当前必要性，也不代表简单请求已有正式成本 baseline；该问题经 §3.10 纳入整个 Loop 的统一设计，不把职责分离等同于必须拆成两次模型调用。
+旧普通答复先发送空的 `prepare_final`，再请求 typed `FinalSubmission`。这两次调用构成原协议问题，缺少可用于量化收益的简单请求基线。§3.10 记录当时的替换取舍。
 
-长任务另有整体输入容量边界：现行外置和分页限制单条结果，不能约束历史、当前稿和来源合并后的实际请求。§3.11 记录按模型窗口构造工作集及必要历史压缩的候选，L-10／C6 单独取证，不混入行为保持职责抽取。
+单条结果外置无法控制历史、当前稿与来源合并后的请求体积。§3.11 记录整体容量防护与真实压缩证据。原 C6 剩余验收见 [Future 队列](../../future/design-optimization-backlog.md)。
 
 ## 2. 需求与行为规格
 
@@ -445,7 +445,13 @@ Conversation → 研究能力入口（目标、有效引用、约束）
 
 具体配置为 `kernel.config_models.ModelCapacityConfig`，由 OpenAIConfig／StructuredConfig 的可选 `capacity` 引用；环境变量 `OPENAI_MODEL_CAPACITY`／`STRUCTURED_MODEL_CAPACITY` 读取严格 JSON。对象只含 `provider_host`、`model`、`context_window_tokens`、`max_output_tokens`、`protocol_reserve_tokens`（默认 8,192），其余字段无默认；本部署分别固定上述 host／model、1,048,576 和 131,072。输出上限加预留须小于窗口；配置不能适用于不同 host 或模型。未显式传输出额度的请求保持原 Provider 默认语义，但检查保守预留完整技术最大输出，记录 requested 为 None，不暗写 SDK 参数。
 
-在最终 SDK body 构造完毕后、每次发送前检查，覆盖 schema、tools、repair 和支持的 extra_body；未知媒体或扩展不得当零开销。首版文本估算固定为 `ascii_json_bytes_v1`：完整 body 的 NFC 副本按稳定 ASCII JSON 序列化后的字节数作为估计输入，原 body 摘要及实发内容保持。协议额外预留 `8,192` tokens，属于本工程政策；方法和结果始终标记 `estimated`，不称精确 tokenizer 计数或数学上界。估计输入＋本次输出额度＋预留不得超过窗口，本次输出另不得超过技术上限和原政策额度。运行前冻结该值，不能为过样本临时调低。
+在最终 SDK body 构造完毕后、每次发送前检查，覆盖 schema、tools、repair 和支持的 extra_body；未知媒体或扩展不得当零开销。主循环和工作摘要使用[现行文本估算](../../context/context-management.md#1-历史压缩)。其余调用沿用 `ascii_json_bytes_v1`，取完整 body 的 NFC 副本按稳定 ASCII JSON 序列化后的字节数。协议默认额外预留 `8,192` tokens。计量属于估算，原 body 摘要及实发内容保持。估计输入＋本次输出额度＋预留不得超过窗口，本次输出另不得超过技术上限和原政策额度。
+
+**主循环压力计量对照（2026-11-20）。** LongDS Task 2 复跑主模型回包最高输入约 18.8 万 tokens，本地 100 万窗口仍触发七次摘要。相同模型窗口下，DeepSeek Harness `2e39e704` 在 Task 2、Task 3 原评测均无压缩事件，最大提示用量为 237,873、295,305。其 token meter 对匹配请求参数使用最近一次服务方输入用量加本次消息增量，`compaction-basic` 将窗口 80% 与保留输出和压缩余量后的上限取较小值。本工程采用同一锚点、增量和压力分工。适配器使用完整 UTF-8 JSON 的字节数除以四估算输入，将 Schema、原生工具历史和非 ASCII 序列均计入。Journal 继续拥有服务方用量，按主决策存小型计量，后继请求仅在模型路由及消息外请求参数一致时借用。沿已有 Conversation 装配和检查点，移除主循环按 ASCII 字节触发的分支。[DeepSeek token meter](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/llm/token-meter/src/index.ts#L151-L190) · [压力配置](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/compaction/compaction-basic/src/config.ts#L162-L202) · [本地实测](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#本-agent-复跑耗时分解)
+
+区分自动压力判断与摘要请求策略。原有快照覆盖、结构化摘要、原件授权及两类核验保留。本次针对已确认的过早触发，不改变历史正文投影或摘要模型的请求前缀。验收离线消费最新 Task 2、Task 3 完整发送的主请求及对应同路由用量，确认消息和工具 Schema 逐字相同、压力口径与新规则一致。使用同一真实体与不同窗口的隔离副本核对越过压力阈值、硬容量、锚点失配和候选必须缩减。历史记录继续保持原成绩及真实摘要次数；当时未发送的候选和推迟摘要后的任务耗时不从已发送样本外推。
+
+实现后的离线回放核对了 349 次主请求和 9 次摘要请求的完整请求体摘要，计量迁移前后一致。用 Task 2 第 11 轮压缩前的 SQLite 修订重建请求，两版正文摘要一致。旧估算为 768,922，叠加预留后触发原阈值。新估算为 191,554，低于压力阈值。匹配锚点的回放按实际用量调整，路由参数变更后回到估算。缩小隔离窗口可覆盖压力触发及硬拒绝，已有检查点仍必须严格缩小重建请求方可激活。该回放没有调用模型或改变历史分数。[基线](../../../.tmp/nyc-history-pressure-20261120/old.json) · [候选](../../../.tmp/nyc-history-pressure-20261120/new.json)
 
 容量检查记录 operation、host／model、原 payload 摘要、估算版本、输入估计、输出／协议预留和窗口，沿现有受限观测保存，不新增预算事实表。修复每次重新检查；拒绝不发送、不自动重试、不裁文，前面已收费响应仍沿原 usage 链提交。typed 容量拒绝须穿过意图业务修订和 Conversation 两处通用捕获，不能退成普通回答或默认为无需核验。
 
@@ -672,6 +678,8 @@ Conversation 解码器继续生成基于实际路径的修复说明。数组外�
 
 该诊断已[结束封存](../../../.tmp/research-capability-20261020/t5/unknown-action-basis-neutral-2-final-seal.json)：一次物理／一次完整、66,257 tokens、28.563 秒、零新增未知，314 份源码／ZIP、原组与拒绝准备原件保持，实际进程已停。答复指出当前合法声明与原坏调用的名称不一致，也指出对象声明与字符串形状的区别；同时又称缺完整 Schema、合法性无法确定，与实际完整目录矛盾。没有由此确认新的输入缺项、原隐藏原因或 parser 身份；按一次边界关闭，不补问、不据此添加提示。完整用户结果及原模型消费组保持未通过，后续仅可按[研究 Spec 的独立选型分支](verify_results/research-experiment.md#另一实际模型的协议筛选)重新讨论能力筛选。
 
+同批合法只读动作被参数拒绝阻断的问题已在动作阶段关闭。现行适用范围与证据见[只读工具逐调用处置](../completed/readonly-tool-batch-decoding.md)。
+
 ### 3.13 已停止的直接参数候选
 
 此前只准入隔离实验，生产从未迁入直接参数。pilot-1 为 19.578 秒／16,520 tokens，Plan 根参数正确，但业务调用采用 canonical 名而非声明的 tool_ wire 名；原结果 failed／StopIteration 保留。按原 EVD 独立阻塞条件，只修候选的模型名称投影并移除多余 canonical 身份标签后执行 pilot-2：12.812 秒／16,554 tokens，名称及 Plan 正确，业务 action 却是 JSON 字符串，声明的 oneOf 分支要求对象，整项仍失败。两例均 0 reasoning／动作／未知费用，没有10+10组或生产准入。
@@ -828,70 +836,96 @@ Toolathlon 的 `detect-revised-terms` 要求比较五份判决 PDF 和一份新�
 
 ### 3.20 Session、Turn 与 Step 生命周期
 
-**状态（2026-11-17）**。首段身份切换已接入 REST、SSE 响应、评测、主决策与 Bash 执行。当前仍由客户端提交 `messages`，由文件 Journal 保存轮次。服务端历史、SQLite 存储及存量迁移待实施。[现行架构](../../architecture/core-architecture-current-state.md#32-会话运行与主决策的现状) · [ADR 0054](../../adr/0054-session-run-step-journal.md)
+**状态（2026-11-19）**。服务端持有有序会话历史，正式入口只提交本次用户输入。SQLite 接管新轮次及其修订。验收范围见下文。[现行架构](../../architecture/core-architecture-current-state.md#32-会话运行与主决策的现状) · [ADR 0054](../../adr/0054-session-run-step-journal.md)
 
 #### 问题与目标
 
-切换前，REST 提交使用 `/api/conversation/turn`，查结果和知识保存决策使用 `/api/conversation/runs/{interaction_run_ref}`。两者处理同一份 `InteractionTrace`，主模型决策序号也称为 `turn_index`。同一轮在接口和记录中出现了多种称呼，评测的用例会话与轮次也缺少独立标识。
-
-历史问题依旧存在。LongDS 的真实第 17、18 轮中，客户端提交完整消息可找到第 17 轮，单独提交第 18 轮原始输入则找不到前驱。该差异出现在模型调用前。task2 第四轮曾误删第二轮同号的四份核验回执，说明局部动作引用必须带上所属轮次。[LongDS 基线](../../../.tmp/session-run-step-20261115/history-baseline.json) · [task2 反例](analysis-goal-maintenance.md#919-保留完整核验历史后的-task2-全量连续运行)
+用户换设备或重启服务后，希望凭原 `session_id` 和一句新问题继续。优化前，文件 Journal 能找到同主体的候选轮次，但 `prior_analysis_turns` 还要求客户端消息以候选轮次的原输入开头，紧接该轮已交付的助手消息。LongDS 第 17、18 轮的同一真实输入反事实中，提交原前缀匹配到 1 个前驱，只提交第 18 轮原话匹配到 0 个。差异发生在模型派发前。任务 2 第四轮还曾误删第二轮的同号核验回执，跨轮历史中的动作身份必须带所属 Turn。[LongDS 基线](../../../.tmp/session-run-step-20261115/history-baseline.json) · [同号回执反例](analysis-goal-maintenance.md#919-保留完整核验历史后的-task2-全量连续运行)
 
 | 编号 | 行为规格 |
 | --- | --- |
-| L-12 会话接续 | Session 由认证主体和 `session_id` 定位。用户只提交当前输入，服务端从该 Session 的可见分支读取历史。不同主体使用同一字面标识时只接续各自历史。 |
-| L-13 轮次与恢复 | 新输入在 Session 中创建 Turn，冻结输入、附件、历史前驱及执行绑定。确认、断连或进程重启沿原 `turn_id` 续接。终态查询或重复请求返回原结果，身份或绑定失配时拒绝。 |
+| L-12 会话接续 | 每个认证主体下的 `session_id` 对应一条有序历史。续聊只提交本次用户输入，Journal 确定可接续的上一轮。会话不存在或对当前主体不可见时拒绝。同一 Session 内只允许追加。 |
+| L-13 轮次与恢复 | 新输入创建一个 Turn，冻结原话、附件、前驱和执行绑定。重试取回同一 Turn。审批、断连和进程重启按原 `turn_id` 恢复，未决副作用由原业务执行边界核对。 |
 | L-14 步骤推进 | 每次主模型决策在请求前登记一个 Step。技术重试沿用原 Step；消费反馈后发起下一次主决策时分配下一 Step。同一个 Turn 可以有多个 Step，也可在首次决策前因前置条件结束。 |
-| L-15 评测与 Bash | Toolathlon 每次用例执行先分配独立 Session，再提交题面创建首个 Turn。回放或续跑同一执行时保留原身份。Bash 容器按 Turn 延迟创建，跨该 Turn 的 Step 复用，每条命令独立启动进程。 |
+| L-15 评测与 Bash | Toolathlon 每次用例执行先分配独立 Session，再提交题面创建首个 Turn。回放或续跑同一执行时保留原身份。Bash 容器默认按 Turn 延迟创建，跨该 Turn 的 Step 复用，每条命令独立启动进程。 |
 
 #### 从 DeepSeek Harness 采用的边界
 
-DeepSeek Harness 的 `session/prompt` 按 `sessionId` 查找或创建 Session，再交付用户输入。Agent Loop 在 Session 的有序记录中先写 `turn/start`，每次主决策前写 `step/start`，分别在退出边界记录结束。SDK 的 `run()` 提交消息后，从该消息的接收事件开始收集，等 Session 空闲后返回。这里采用 Session 中的 Turn 和 Step 身份；一次 REST 请求、SSE 连接或客户端等待区间没有额外的持久化资源身份。[提交入口](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/sdk/server/src/server.ts#L132) · [Agent Loop](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/core/agent-loop/src/agent.ts#L246) · [SDK 等待](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/sdk/client/src/api.ts#L146)
+DeepSeek Harness 固定于 `2e39e70496aa02986ca6a820c5d497e816b69d7e`。headless 指定 Session ID 时，先检查已有会话，取得写句柄并读取持久事件，重建 Session，再将新问题交给 `agent.followup`。模型请求从 Session 派生消息。LangGraph 的独立对照也由服务端根据 `thread_id` 和可选检查点身份读取持久状态及未决写入。本工程采用身份定位、有序提交和从已提交事实重建历史。[headless 恢复](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/bundle/headless/src/index.ts#L255-L302) · [追加新输入](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/bundle/headless/src/index.ts#L416-L421) · [模型消息派生](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/agent.ts#L732-L749) · [LangGraph 检查点消费者](https://github.com/langchain-ai/langgraph/blob/7d6b5790ba84ce38c26f27a533d8419a31103c36/libs/langgraph/langgraph/pregel/main.py#L1428) · [SQLite 读取](https://github.com/langchain-ai/langgraph/blob/7d6b5790ba84ce38c26f27a533d8419a31103c36/libs/checkpoint-sqlite/langgraph/checkpoint/sqlite/__init__.py#L216-L270)
 
-本项目保留业务完成和确认的责任边界。Session 空闲和连接断开都不能证明 Turn 已完成。用户批准冻结命令属于原 Turn 的控制动作。澄清答复或新需求作为新的自然语言输入，开启同一 Session 的后继 Turn。
+DeepSeek Harness 的冷恢复会给中断尾部补结尾与缺失工具结果。本工程有待确认 Command 和按原轮次接续的契约，因此保留原 Turn 及其已提交的执行事实。遇到已派发而无回执的动作，由原执行责任主体核对，结果未知时禁止盲重派。已交付澄清问题或计划审阅提示属于可接续的轮次边界，用户自然语言回复开启下一 Turn。工作区批准和知识保存决定仍作用于原 Turn。知识删除沿既有生命周期 Command 决定入口处理，Conversation 按原 Turn 读取其结果。[DeepSeek Harness 尾部修复](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/index.ts#L793-L818) · [现行原轮次接续](../../../src/personal_agent/application/conversation/service.py#L580)
 
-#### 事实归属
+#### 事实归属与提交
 
 | 对象 | 权威事实 | 责任 |
 | --- | --- | --- |
-| **Session** | 认证主体、`session_id`、Turn 的顺序和归属 | Conversation 接收输入，Journal 在事务中创建或找到 Session，分配 Turn 序号。历史物化使用已选分支和已有可见性规则。 |
-| **Turn** | `turn_id`、所属 Session、序号、本次输入、已冻结前驱和执行绑定、用量、终态结果 | Conversation 驱动原决策、授权、执行、核验和交付链路。Journal 保存本轮事实。Bash 容器是该轮的执行资源。 |
-| **Step** | `(turn_id, step_no)`、逻辑主模型调用和处理结果引用 | 主循环在派发前登记。用 `invocation_id` 定位原件，传输尝试用 `attempt_id`。同一步的工具请求与回执按原动作身份配对。核验与压缩的独立调用按各自职责记录。 |
+| **Session** | 认证主体、`session_id`、所属 Turn 的序号 | Conversation 接收新输入。Journal 依据同一 Session 的已提交顺序确定末轮，分配下一序号。 |
+| **Turn** | `turn_id`、会话内序号、本次用户原话、附件、前驱的 `turn_id` 和已提交修订、执行绑定、已有状态和结果 | Conversation 驱动原决策、授权、执行、核验和交付。前驱修订冻结当时接受的事实，后续读取不因旧轮次更新而改写前史。 |
+| **Step** | `(turn_id, step_no)`、逻辑主模型调用及原件引用 | 主循环在派发前登记。逻辑调用用 `invocation_id`，传输尝试用 `attempt_id`。工具请求和回执沿原动作身份配对。 |
 
-沿用一个事务型 Conversation Journal，按 [ADR 0054](../../adr/0054-session-run-step-journal.md) 使用本机 SQLite。锁顺序为 Session 到 Turn，短事务提交幂等绑定、历史前驱、Step 原件引用和终态。模型和外部派发仍在事务外，原始大正文由 Artifact 保管。新 Turn 的前驱一经冻结，较早 Turn 后续发布的结果不会重写它。已知副作用按原幂等和授权边界核对。Verification 和 Completion 仍对实际交付负责。
+Web、CLI 和飞书进入同一个 Conversation 提交用例。认证后，Journal 按主体和 Session 读取最近提交的轮次。首次提交在一个 SQLite 事务中登记带会话身份和幂等键的首轮及其初始修订。续聊在事务中分配下一序号并冻结前驱修订。会话锁约束同一 Session 的运行和恢复。SQLite 存放于单主机持久卷，模型调用、外部执行和等待确认都在数据库事务外。登记成功后才派发模型。[Runtime 装配](../../../src/personal_agent/orchestration/runtime.py) · [提交用例](../../../src/personal_agent/application/conversation/service.py) · [SQLite Journal](../../../src/personal_agent/infra/storage/sqlite_conversation_journal.py)
+
+历史消费者按已提交顺序恢复原话、答复和适用的原生交互。SQLite 每轮保存本轮原话和前驱的已交付答复投影，各修订保存 typed 事实及原件引用。投影同前驱修订绑定，每一轮只保存一次。原始模型请求和响应仍按调用保存为文件。现有任务选择、可见性、工具配对及压缩决定最终入模范围。[主循环上下文](../../context/agent-loop.md#1-目标与输入责任)
 
 #### 正式入口与评测
 
-| 操作 | 新契约 |
+| 操作 | 入口契约 |
 | --- | --- |
-| 提交新输入 | `POST /api/conversation/turns` 接受 `session_id`、`client_request_id`、当前输入和附件引用，返回 `session_id`、`turn_id` 及当前结果或状态。未存在的 Session 与首个 Turn 一起提交。同一主体、Session、请求标识和冻结输入重复提交时读取原 Turn 的结果或确认事项，无可交付结果时返回 202。首段文件 Journal 在 Session 写锁已占用且 Turn 尚未登记时返回可重试的 409，冻结输入不符时拒绝。 |
-| 查询与恢复 | `GET /api/conversation/turns/{turn_id}` 只读查询原 Turn，`POST /api/conversation/turns/{turn_id}/resume` 从已提交事实恢复。服务端从 Turn 查回 Session，核对认证主体、原执行绑定和入口权限。恢复无需重传消息；已结束则返回原结果，待确认仍走原决定入口。跨进程执行由原 Session→Turn 锁串行。执行中重复提交只读取原身份与状态，未决副作用不能因恢复而再派发。 |
-| 用户决定 | 工作区与知识保存决策路由挂在 `/api/conversation/turns/{turn_id}` 下，沿原 Command 摘要、授权和幂等契约。允许后续执行时恢复同一 Turn。 |
-| 其他入口 | SSE、CLI、飞书复用相同启动和恢复用例。SSE 在首次提交前绑定客户端请求标识，断连重连沿原 Turn 收取结果。飞书用原事件身份做幂等绑定。 |
+| 创建与续聊 | `POST /api/conversation/turns` 接收 `session_id`、`client_request_id`、本次 `text` 和可选附件引用。首轮明确传 `create_session: true`，可使用准备阶段预分配的 Session ID。续聊省略该字段。未知或不可见的 Session 返回 404，已有 Session 的不同创建请求返回 409。 |
+| 重复提交 | 沿用 `submitted_turn_id` 根据主体、Session 和 `client_request_id` 得到稳定 `turn_id`，先查原 Turn。冻结操作类型、输入、附件和执行绑定相同则返回原 ID 和状态，仍执行中返回 202。请求键相同但绑定有变化时返回 409，且零新派发。 |
+| 新输入遇到未结束轮次 | 若末轮正在执行、可恢复未结束、等待阻塞性结构化决定或还有未决副作用，返回 409，并在权限允许时指向原 `turn_id`。恢复或决定处理完，且原轮已到可接续边界后，用户可再次提交新输入。已交付的澄清或计划审阅提示允许下一条自然语言输入。 |
+| 查询、恢复与决定 | `GET /api/conversation/turns/{turn_id}` 只读。原 `resume` 和各决定入口继续定位同一 Turn，检查认证主体、入口权限和原执行绑定。从原输入、Step 和回执接续，已结束则返回原结果。 |
+| CLI | 显式选择新会话或传已有 `session_id`。新会话可由 CLI 生成 ID；提交时携带请求键，结果显示 Session 与 Turn 身份。脚本重提沿用原请求键，显式恢复使用 `--resume-turn-id`。 |
+| 飞书 | 已认证事件提供现有渠道 Session ID 和 `event_id`。Conversation 在同一事务内为首个合法事件创建 Session，后续事件只追加。事件重投读取原 Turn 及已登记附件。用户可以在原会话发送 `恢复轮次 <turn_id>`。 |
+| SSE | 与 JSON 共用 `POST /api/conversation/turns`，`Accept: text/event-stream` 选择 SSE 响应。Turn 登记后首个事件返回 `turn_id`。断连后按已知身份查询；未收到身份时按原请求键及原输入重提。浏览器保留待完成的原请求，刷新后仍可重提同一轮。 |
+
+例如，第 17 轮列出了五个待复核的市场。客户端丢失本地聊天记录后提交 `{"session_id":"S","client_request_id":"r18","text":"复核上一轮列出的五个市场"}`。Journal 读取已提交的第 17 轮答复，建立第 18 轮并冻结前驱。若第 17 轮仍待工作区批准，返回 409，用户从原轮次处理批准。
+
+前驱确定本次可读取的历史。Agent 依据用户原话和可见历史解释新请求。统计口径等指代有多种合理解释且会影响结果时，沿现有澄清流程询问用户。[每轮接续顺序](../../context/agent-loop.md#2-每轮接续顺序)
 
 Toolathlon 的 Runner 为每次用例执行生成独立 `session_id`，同一个值进入 Bash 部署授权、首个请求和归档。批准操作恢复原 Turn。新的用户输入创建同一 Session 的下一 Turn。原题、工具集合和评分器由现有评测负责。[Toolathlon 比较入口](../../../evals/Toolathlon/compare/suite.py)
 
-Bash 执行适配器通过现有 `ExecutionScope.execution_id` 接收 `turn_id`。普通输入、Toolathlon 共享工作区和部署网络许可仍由现有授权决定。Toolathlon 的任务卷由该次用例环境管理，同一 Turn 的 Bash 命令和评分器继续消费同一份交付文件。Turn 终态释放容器，可恢复暂停保留原身份、期限和未决执行处理。[Bash 生命周期及历史验收](python-data-analysis-tool.md#在同一-turn-内复用-bash-容器)
+Bash 执行适配器通过现有 `ExecutionScope.execution_id` 接收 `turn_id`。普通输入、Toolathlon 共享工作区和部署网络许可由现有授权决定。Toolathlon 的任务卷由该次用例环境管理，Bash 命令和评分器消费同一份交付文件。普通和 MCP 许可在 Turn 终态释放容器，可恢复暂停保留原身份、期限和未决执行处理。显式启用分析任务工作区时，命令仍保留各自的 Turn 身份，Docker 容器由任务许可回收。[Bash 生命周期](python-data-analysis-tool.md#在同一-turn-内复用-bash-容器) · [分析任务工作区](python-data-analysis-tool.md#bash-跨轮任务工作区候选)
 
-#### 迁移与验收
+#### 存储启用与验收
 
-实施先切换身份链，REST、流式响应、评测与 Bash 执行统一使用 Turn，主决策序号改用 `step_no` 并在请求前登记。该纵向切片沿用当前消息输入与文件 Journal；客户端发送的 `messages` 冻结在同一个 Turn。下一阶段切换事务型 Journal 和服务端历史物化，统一 Web、CLI、飞书与评测的当前输入契约，再删除客户端前缀匹配。Conversation 旧运行路由随 REST 切换删除。检索实验和运行时基础设施中有独立职责的 Run 不纳入替换。
-
-迁移器读取原归档，旧 Run 标识的原值就是相应 Turn 的标识。认证主体、会话、输入和前驱校验后再导入。授权、命令及回执继续按原规范载荷验证摘要，保持原件及摘要备份。待决副作用先按原协议对账。前驱无唯一解、原件失配或副作用未知时停止该 Session 切换。写入新副作用前可由备份回退，写入后先对账再处理回退。若核实存在需要旧接口的外部消费者，按 [REL](../../devSpec/migration-release.md#1-迁移与兼容边界)登记范围和退出日期后再实施切换。
+运行时在 `conversation_journal` 下初始化 SQLite。既有 `interaction_runs` 保留为原始归档。新库从新会话开始，旧会话不会由新入口接续。LongDS 的真实归档只用作隔离验收输入。
 
 | 验收 | 实际用例及通过条件 |
 | --- | --- |
-| L-12 | 回放 LongDS 第 17、18 轮。只提交第 18 轮输入时仍按原顺序找到第 17 轮可见输入和答复。异主体、异 Session 拒绝。正式 Web SSE 的第二轮只提交新输入，实际答复使用前轮事实。 |
-| L-13 | 回放已付费响应和真实工作区批准、拒绝与断连归档。重复提交取得同一 Turn，恢复读取原输入、响应、用量和回执。异主体或绑定失配时零写入、零派发，批准或断线重试不重复副作用。 |
+| L-12 | 对 LongDS 第 17、18 轮原档，旧契约和新契约各回放一次。在新进程只提交第 18 轮输入，在主模型适配器派发边界截获拟发请求，第 17 轮的可见原话、答复、授权工具回执及原生配对应和旧正确分支一致。两个对照固定模型和适配器配置。未知 Session 或另一主体的 Session 零披露、零写入。随后用现有 LongDS 自然请求沿正式 Web 入口验证跨进程继续，只发新输入，交付须满足前轮口径和本轮结果判据。SSE 同一用例核对首事件身份，断连后读回同一 Turn。 |
+| L-13 | 用首轮 REST、工作区批准及拒绝的真实归档回放。覆盖相同键重复、同键改正文、两个不同键争同一 Session，以及已接纳无回执、已支付响应的恢复。CLI 和飞书各回放首轮和一条重复输入。单次接续只有一个新 Turn，首轮未结束时并发请求未创建新轮次，原 Step 和回执仍归原 Turn，未知副作用时新增派发为零。 |
 | L-14 | 复用 task2 第四轮第 7 至 11 次实际请求及 Toolathlon 压缩检查点。四份同号反馈仍归属原 Turn 和 Step，已保存响应落回原 Step，下一主决策取得后继序号。 |
 | L-15 | 回放 Canvas 8 条、LongDS 2 条正式轨迹的 Bash 命令，分别验证同 Turn 只创建一个容器、命令进程独立、输出和可写位置保持。用两个 Toolathlon 用例执行身份验证 Session 及卷相互隔离，含一次确认恢复和同 Session 后续新 Turn 的边界对照。接入后由现有 Canvas 官方评分与普通附件哈希复验用户结果。 |
 
 首段 Web 验收用真实模型从附件计算正确的 SHA-256。记录 4 个主决策 Step，2 条 Bash 命令共用一个容器。登记前的并发提交返回 409，登记后未结束的重复提交返回同一 Turn 的 202；完成后的重复提交及显式恢复返回同一结果，用量和 Journal 版本保持一致。修改输入返回 409，跨主体访问返回 404。SSE 的结束事件交付正确回答，REST 可以按事件中的 `turn_id` 读取对应 Step。[REST](../../../.tmp/turn-v1/rest-final/report.json) · [SSE](../../../.tmp/turn-v1/sse/report.json)
 
-Toolathlon Time 读取和工作区批准、拒绝三例通过，使用各自的 Session。待批准及已批准或拒绝的重复提交读回原 Turn，拒绝后新的自然输入建立同一 Session 的新 Turn。Canvas 真归档的 6 项 Step 局部回放覆盖派发前登记、重试、保存响应恢复、后继编号与压缩位置。task2 的 4 组历史核验回执保持原轮次归属。正式服务端历史和 SQLite 迁移仍待验收。[Time 读取](../../../.tmp/turn-v1/time/report.json) · [工作区批准](../../../.tmp/turn-v1/workspace-keyed/report.json) · [工作区拒绝](../../../.tmp/turn-v1/workspace-reject/report.json)
+Toolathlon Time 读取和工作区批准、拒绝三例通过，使用各自的 Session。待批准及已批准或拒绝的重复提交读回原 Turn，拒绝后新的自然输入建立同一 Session 的新 Turn。Canvas 真归档的 6 项 Step 局部回放覆盖派发前登记、重试、保存响应恢复、后继编号与压缩位置。task2 的 4 组历史核验回执保持原轮次归属。该组证据对应 Turn 和 Step 首次切换。[Time 读取](../../../.tmp/turn-v1/time/report.json) · [工作区批准](../../../.tmp/turn-v1/workspace-keyed/report.json) · [工作区拒绝](../../../.tmp/turn-v1/workspace-reject/report.json)
 
 切换后的 Canvas 原题提交正式答复和工作簿，官方评分匹配 9/9 门课程。Journal 保存 47 个连续 Step。19 条 Bash 命令使用 19 个不同 Exec，均在同一容器中完成。评分器从任务网关导出共享工作簿，Turn 结束后 Docker 已回收 Bash 容器。[正式用例](../../../.tmp/tv1canvas/canvas-arrange-exam/personal/report.json) · [官方评分](../../../.tmp/tv1canvas/canvas-arrange-exam/personal/grader.log) · [容器与 Step 检查](../../../.tmp/turn-v1/canvas-report.json)
 
 历史隔离 Journal 已复建 LongDS 第 1 至 18 轮并在重开数据库后逐条恢复第 18 轮历史。另用 29 个旧 Run 复建历史，58 份目标输入摘要与原记录一致。已付费响应按原 Step 恢复，原请求和响应逐字节一致。这些归档记录原隔离 Journal 的局部机制。[历史回放](../../../.tmp/session-run-step-20261114/after-simplification.json) · [隔离 Journal 结果](../../../.tmp/session-run-step-20261115/candidate-report.json)
+
+本次 SQLite 回放从真实 LongDS 归档重建 17 轮，逐字节核对 84 次模型调用的原件，并由现行 Conversation 用例从本次输入还原第 18 轮的消息列表和选定前驱。重开库后以已提交修订定位历史，跨主体查询无可见轮次。[回放记录](../../../.tmp/session-journal-20261119/replay-report.json)
+
+正式 Web 入口用真实模型通过 1 个两轮会话，停止服务后只提交原会话 ID 和第二轮问题，返回首轮约定的代号。SSE 首事件与最终答复指向同一 Turn，同键重试读回原轮次，改写已登记原话返回 409，换主体返回 404。浏览器另用回环传输验证了同键重试、刷新后恢复轮次身份及显式恢复。[Web 实跑](../../../.tmp/session-journal-20261119/product-report.json)
+
+LongDS 第 18 轮沿正式 Web 入口在隔离服务续跑。提交原会话 ID、当轮原话和原附件引用，真实模型交付的六个目标名称与原归档一致。首个主请求的 40 条稳定消息与 11 组原生交换逐项相同，变化位于动态预算消息。该轮产生 8 次模型调用，771,699 tokens。审批和拒绝的两个真实阶段回放均保留原回执，等待确认时新输入指回原 Turn。LongDS 完整数据集官方评分和飞书真实投递尚未执行。[LongDS 定向实跑](../../../.tmp/session-journal-20261119/longds-target-report.json) · [回放记录](../../../.tmp/session-journal-20261119/replay-report.json)
+
+#### 长会话历史读取与回执匹配
+
+LongDS NYC Task 2 在最后 7 轮的相邻模型请求间隔中位数为 45.4 秒。第 33 轮最后一次请求的只读回放耗时 27.8 秒，其中反复重建已提交前驱与逐条比较历史回执是两项独立开销。分别去掉重复读取和全列表匹配后，局部回放降至 16.9 秒和 12.5 秒，两项一起降至 2.3 秒。[真实运行](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md) · [隔离诊断](../../../.tmp/nyc23-20261119/t2/local_gap_counterfactual.log)
+
+DeepSeek Harness `2e39e70496aa02986ca6a820c5d497e816b69d7e` 冷启动先从持久日志装载 Session。`SurfaceManager` 记录最近处理的事件序号，将新事件折入已有视图。`Agent.buildRequest` 从该视图派生本步输入。正式 Task 2 通过 SDK、Session 和 agent loop 装配走这条路径。本工程采用复用已装载历史与按身份查找这两个原则。SQLite 继续提交完整修订，现有前驱绑定、视图筛选和恢复规则继续拥有业务语义。[DeepSeek 会话恢复](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/index.ts#L793-L818) · [增量视图](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/session/src/surface.ts#L618-L704) · [请求消费](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/agent.ts#L732-L749)
+
+| 需求 | 实施与验收 |
+| --- | --- |
+| L-16 复用不可变前驱 | SQLite Journal 在现有 `exclusive_session` 内读取数据库选出的身份及修订，按会话主体、Session、Turn 和修订复用已解码的前驱。尾轮照常重建，读到不同修订时重新校验，退出锁作用域即释放。正式 `respond` 和工作区确认续接沿已有组合根消费。无锁查询照常读取原记录。验证固定前驱与最新修订的读取差异、不同主体和新会话锁作用域，以及重开 Journal 后从存储重建。 |
+| L-17 加速回执匹配 | 历史投影按观察类型和动作或资源身份缩小候选集，再执行原对象相等比较。保留原消息顺序和运行反馈，身份相同而内容不同的回执仍须遵守原配对规则。替换全列表成员查找，变更局限于现有 Journal 与历史投影。 |
+
+验证固定为同一 Task 2 的既有实际请求状态。用早期未压缩、后期已压缩和含失败回执的归档，在同一解释器回放现行及候选。固定计时预算字段，比较原生历史、消息、动作定义、投影摘要和拟发 HTTP 正文。第 33 轮局部请求构造至少减半。请求或修订读取出现差异即撤回对应改动。此项只验收确定性路径与局部耗时，整题耗时和评分按另一次完整运行记账。
+
+实现与验证已完成。六份拟发请求正文一致，最新修订及被冻结前驱按原选择重建。第 33 轮回放达到局部耗时判据。[耗时与回放证据](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#task-2-长会话优化回放)
 
 ## 4. 是否所有流程都需要答案核验
 

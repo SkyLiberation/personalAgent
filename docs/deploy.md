@@ -254,6 +254,4 @@ PERSONAL_AGENT_RESEARCH_SCHEDULER_ENABLED=false
 
 即使 cron 被重复触发，ResearchRun、worker task 和 delivery ledger 的数据库唯一键仍会阻止同一时间窗口重复执行或投递。
 
-Conversation 历史由 `FileInteractionJournal` 的 committed messages 和 observations 持有，通过
-公开 `interaction_run_ref` 查询。已删除的 `/api/entry/runs` 与 LangGraph run snapshot 不再是
-前端或恢复入口。
+Conversation 使用本机持久卷下的 `PERSONAL_AGENT_DATA_DIR/conversation_journal`。SQLite 文件、模型原件及同一数据目录的锁随服务重启保留。旧 `interaction_runs` 归档保存在原处，新会话使用新库。客户端通过公开 `turn_id` 查询或恢复原轮次。[Conversation API](api.md#turn-查询恢复与知识保存确认)

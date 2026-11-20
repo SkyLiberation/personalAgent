@@ -1,4 +1,5 @@
 """Native model exchanges projected from the run's canonical decision facts."""
+from collections import defaultdict
 from collections.abc import Sequence
 import json
 
@@ -6,10 +7,10 @@ from personal_agent.capabilities.contracts.model import (
     ModelAssistantMessage, ModelHistoryEntry, ModelRuntimeFeedback, ModelToolExchange, ModelToolResult, StructuredModelResponse,
 )
 from personal_agent.kernel.prompt_registry import PromptCatalog
-from personal_agent.kernel.prompts import DEFAULT_PROMPTS, create_prompt_catalog
+from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .artifact_sources import tool_result_artifact_refs
-from .citations import CitableInput, render_citable_input, render_decision_feedback
+from .interaction_projection import ProjectedInteractionInput, render_interaction_input, render_decision_feedback
 from .analysis_tasks import AnalysisTaskHistory, task_message_indices, task_switch_turn
 from .errors import ConversationOperationConflict
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
@@ -185,16 +186,16 @@ def _paired_rejection_content(
         diagnostic.error_type == "schema_type" and f"`{diagnostic.field_path}`" in repair
         for diagnostic in rejection.action_diagnostics
     ):
-        return repair
+        return f"{rejection.message}\n{repair}" if rejection.action_id == call_id else repair
     return render_decision_feedback(rejection.model_copy(update={"rejected_action_invocations": unpaired}),
         prompts=prompts, submitted_arguments=_submitted_arguments(assistant, call_id, rejection.action_name))
 
 
 def project_model_history(
-    trace: InteractionTrace, visible: Sequence[CitableInput],
+    trace: InteractionTrace, visible: Sequence[ProjectedInteractionInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, covered_through: int = 0,
     working_plan: ConversationWorkingPlan | None = None,
-) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...], bool]:
+) -> tuple[tuple[ModelHistoryEntry, ...], tuple[ProjectedInteractionInput, ...], bool]:
     """Use only already materialized/visible facts, never raw tool payloads."""
     keyed = {input_identity(item.observation): item for item in visible
              if input_identity(item.observation) is not None}
@@ -228,7 +229,7 @@ def project_model_history(
             rejected_key = record.blocked_by
             if rejected_key is not None and rejected_key in keyed:
                 exchanges.append(ModelRuntimeFeedback(
-                    feedback=render_citable_input(keyed[rejected_key], prompts=prompts)))
+                    feedback=render_interaction_input(keyed[rejected_key], prompts=prompts)))
                 consumed.add(rejected_key)
                 continue
         dispositions = {item.call_id: item for item in record.dispositions}
@@ -241,9 +242,9 @@ def project_model_history(
                 item = candidates[-1]
                 content = (_paired_rejection_content(item.observation, record.assistant, call_id, prompts)
                            if isinstance(item.observation, DecisionFeedback)
-                           else render_citable_input(item, prompts=prompts, native_tool_result=True))
+                           else render_interaction_input(item, prompts=prompts, native_tool_result=True))
                 if isinstance(item.observation, ActionObservation):
-                    materials = (render_citable_input(artifacts[ref], prompts=prompts)
+                    materials = (render_interaction_input(artifacts[ref], prompts=prompts)
                                  for ref in published.get(call_id, ()) if ref in artifacts)
                     content = "\n\n".join((content, *materials))
                 results.append(ModelToolResult(call_id=call_id, content=content))
@@ -271,7 +272,7 @@ def project_model_history(
         feedback = tuple(keyed[key] for index in indices
                          if (key := input_identity(trace.inputs[index])) not in consumed)
         exchanges.append(ModelToolExchange(assistant=record.assistant, results=tuple(results),
-            runtime_feedback=tuple(render_citable_input(item, prompts=prompts) for item in feedback)))
+            runtime_feedback=tuple(render_interaction_input(item, prompts=prompts) for item in feedback)))
         emitted_turns.add(record.step_no)
         consumed.update(input_identity(item.observation) for item in feedback)
     # A submission records the answer decoded from its original decision.
@@ -286,43 +287,12 @@ def project_model_history(
     return tuple(exchanges), remaining, current_plan_visible
 
 
-_PLAN_REVIEW_DELIVERIES = tuple(create_prompt_catalog(language).render("conversation.service.plan_review_ready")
-                                for language in ("zh", "en"))
-
-
-def _matches_analysis_delivery(trace: InteractionTrace, content: str) -> bool:
-    if trace.final_message is not None:
-        return trace.final_message.message == content
-    last = next(iter(reversed(trace.responded_steps)), None)
-    waiting = next((item for item in last.dispositions if item.plan_waiting), None) if last else None
-    if waiting is None:
-        return False
-    # Older waiting plans used the localized fallback from the native action.
-    if waiting.plan_review_message is None:
-        return content in _PLAN_REVIEW_DELIVERIES
-    return waiting.plan_review_message == content
-
 
 def prior_analysis_turns(
     trace: InteractionTrace, candidates: Sequence[InteractionTrace],
 ) -> tuple[InteractionTrace, ...]:
-    """Select completed runs on this exact conversation branch, without new authority."""
-    matched: dict[int, InteractionTrace] = {}
-    for source in candidates:
-        end = len(source.messages)
-        if (source.interaction_run_ref == trace.interaction_run_ref
-                or source.principal != trace.principal or source.conversation_id != trace.conversation_id
-                or source.bash_authorization_digest != trace.bash_authorization_digest
-                or end >= len(trace.messages)
-                or source.messages != trace.messages[:end]
-                or trace.messages[end].role != "assistant"):
-            continue
-        if not _matches_analysis_delivery(source, trace.messages[end].content):
-            continue
-        if end in matched:
-            raise ConversationOperationConflict("会话历史存在同一轮的多个已结束运行，不能选择原生历史")
-        matched[end] = source
-    return tuple(matched[end] for end in sorted(matched))
+    """Exclude the current turn from the Journal's scoped timeline."""
+    return tuple(source for source in candidates if source.interaction_run_ref != trace.interaction_run_ref)
 
 
 def selected_analysis_turns(
@@ -331,11 +301,18 @@ def selected_analysis_turns(
     return AnalysisTaskHistory.from_turns(prior_analysis_turns(trace, candidates)).selected_turns(trace)
 
 
+def _observation_lookup_key(item: ProjectedInteractionInput) -> tuple[str, str]:
+    observation = item.observation
+    if isinstance(observation, ArtifactSourceInput):
+        return observation.kind, observation.resource.resource_ref.resource_id
+    return observation.kind, observation.action_id
+
+
 def project_conversation_history(
-    trace: InteractionTrace, previous: Sequence[InteractionTrace], visible: Sequence[CitableInput],
+    trace: InteractionTrace, previous: Sequence[InteractionTrace], visible: Sequence[ProjectedInteractionInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, candidate: HistoryCompactionCheckpoint | None = None,
     working_plan: ConversationWorkingPlan | None = None,
-) -> tuple[tuple[ModelHistoryEntry, ...], tuple[CitableInput, ...], bool]:
+) -> tuple[tuple[ModelHistoryEntry, ...], tuple[ProjectedInteractionInput, ...], bool]:
     """Place prior complete exchanges before their displayed final answer."""
     exchanges: list[ModelHistoryEntry] = []
     remaining = tuple(visible)
@@ -347,7 +324,7 @@ def project_conversation_history(
         # These Runtime facts are from an already scoped, exact predecessor.
         # Keep them on their original exchange, never in current pending feedback.
         original_visible = remaining
-        feedback = tuple(CitableInput(observation=item) for item in source.inputs
+        feedback = tuple(ProjectedInteractionInput(observation=item) for item in source.inputs
                          if isinstance(item, DecisionFeedback)
                          or (isinstance(item, ActionObservation)
                              and item.capability_id == INTERACTION_VERIFICATION_CAPABILITY))
@@ -358,8 +335,13 @@ def project_conversation_history(
             covered_through=coverage.get(source.interaction_run_ref, 0), working_plan=working_plan)
         predecessor_plan_visible |= plan_visible
         history = _with_prefix_summary(history, source.interaction_run_ref, checkpoint, prompts)
+        by_observation: dict[tuple[str, str], list[ProjectedInteractionInput]] = defaultdict(list)
+        for item in projected:
+            by_observation[_observation_lookup_key(item)].append(item)
+        # Identity narrows the search. Equal IDs can still carry different results.
         remaining = tuple(item for item in original_visible
-                          if is_runtime_feedback(item.observation) or item in projected)
+                          if is_runtime_feedback(item.observation)
+                          or item in by_observation.get(_observation_lookup_key(item), ()))
         # The request's stable system prefix occupies position zero.
         position = indices.index(len(source.messages)) + 1
         exchanges.extend(item.model_copy(update={"before_message_index": position}) for item in history)

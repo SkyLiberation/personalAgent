@@ -69,8 +69,8 @@ Fill the Schema field for each proposed action using its slot, such as a1. Each 
         "v1", "v1-en.1", "#### Pending answer\n\nSubmission {submission_id}, disposition {disposition}\n\n{draft}",
     ),
     "interaction_verification.compliance.answer_evidence": PromptTranslation(
-        "v2", "v2-en.1",
-        "##### Evidence for the pending answer\n\ncited_text contains original text and its source location. workspace_execution_facts contains the workspace operation statuses and paths committed by Runtime. Check the answer against the facts each source covers.\n\n{evidence}",
+        "v3", "v3.en.1",
+        "##### Evidence for the pending answer\n\nsource_observations contains authorized successful tool receipts from the current task, including observed text and sources. workspace_execution_facts contains the workspace operation statuses and paths committed by Runtime. Check the answer against the facts each source covers.\n\n{evidence}",
     ),
     "interaction_verification.compliance.history_action": PromptTranslation(
         "v1", "v1-en.1", "##### Historical action, corresponding judgment, and execution observation\n\n{action}",
@@ -103,8 +103,8 @@ Fill the Schema field for each proposed action using its slot, such as a1. Each 
     'interaction_verification.history.goal_delta': PromptTranslation(
         'v1-goal-draft', 'v1-goal-draft-en.1',
         '## Actual changes from the effective goal to the candidate\n\nRuntime compared the complete texts. Use these changes to examine revisions and deletions; original user wording remains authoritative.\n\n```diff\n{delta}\n```'),
-    'interaction_verification.goal.task_review': PromptTranslation('v2-task-evidence', 'v2-task-evidence-en.1',
-        "## Proposed task for this turn\n\nRelationship: {action}\nEvidence from this turn: {evidence}\nTask request before selection: {current_task_request}\n\nFirst check the relationship against the current wording and deliverable. continue extends the current task, start opens an independent task, side_question is a one-turn detour, and resume returns to the selected earlier task. For start and side_question, the preceding task request only helps check the relationship. Check each substantive condition in the candidate, including precision, formatting, ordering, statistical methods and acceptance criteria. Conditions require support from current user wording, and older rules require an explicit reference in this turn. Leave optional implementation methods for execution. If the candidate makes such methods or old rules obligatory, mark not_satisfied and identify the condition and missing support. For later revisions, check the still-applicable requirements of the selected task."),
+    'interaction_verification.goal.task_review': PromptTranslation('v3-historical-basis', 'v3-historical-basis-en.1',
+        "## Proposed task for this turn\n\nRelationship: {action}\nUser excerpt supporting the task relationship: {evidence}\nTask request before selection: {current_task_request}\n\nFirst check the relationship against the current wording and deliverable. continue extends the current task, start opens an independent task, side_question is a one-turn detour, and resume returns to the selected earlier task. For start and side_question, the preceding task request only helps check the relationship. Check each substantive condition in the candidate, including precision, formatting, ordering, statistical methods and acceptance criteria. Conditions require support from current user wording, and older rules require an explicit reference in this turn. Leave optional implementation methods for execution. If the candidate makes such methods or old rules obligatory, mark not_satisfied and identify the condition and missing support. For later revisions, check the still-applicable requirements of the selected task."),
     'interaction_verification.goal.clarification_resolution': PromptTranslation('v1', 'v1-en.1',
         """## Application data: proposed clarification resolution
 

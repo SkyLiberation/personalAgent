@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from evals.conversation_http import (
     ROOT, UNVERIFIED_FLOW, benchmark_feature_flags, local_attachments, product, submit_turn, turn_path,
@@ -30,9 +30,8 @@ from personal_agent.adapters.web.routes.conversation import (
     ConversationTurnResponse,
     PendingConversationTurn,
 )
-from personal_agent.application.conversation import ConversationMessage
-from personal_agent.application.conversation.journal import FileInteractionJournal
 from personal_agent.application.bash_execution.models import BashExecutionAuthorization
+from personal_agent.infra.storage.sqlite_conversation_journal import SqliteInteractionJournal
 from personal_agent.infra.bash_execution.deployment import BashExecutionDeploymentConfig
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.feature_flags import write_feature_flags
@@ -41,7 +40,9 @@ from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.contracts.resource import ResourceRef
 
 from .longds_materials import json_bytes, prepare, seal, verify_preparation, verify_seal
-from .retrieval_capture_audit import _digest, _wire_groups
+from .retrieval_capture_audit import (
+    GenerationTokenBreakdown, GenerationUsage, _digest, read_generation_usage,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,7 @@ class LongDSOutcomeContract:
     assertion_owner: str
 
 
+LONGDS_ANSWER_RESULT = AnswerResultConfig(test_mode=True)
 LONGDS_OUTCOME = LongDSOutcomeContract(
     outcome_id="LONGDS-NETFLIX-003",
     persona="持续调整市场分析条件并回看历史口径的中文分析用户",
@@ -89,6 +91,7 @@ class LongDSCapture(BaseModel):
     physical_model_requests: int = Field(ge=0)
     known_tokens: int = Field(ge=0)
     unknown_usage_attempts: int = Field(ge=0)
+    token_breakdown: GenerationTokenBreakdown | None = None
     actual_process_stopped: bool
     wall_seconds: float = Field(ge=0)
     semantic_score: Literal["not_scored"] = "not_scored"
@@ -98,8 +101,7 @@ class LongDSRecoveryInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     next_user_turn: Literal[18] = 18
     principal: AuthenticatedPrincipal
-    session_id: str = Field(validation_alias=AliasChoices("session_id", "conversation_id"))
-    messages: tuple[ConversationMessage, ...]
+    session_id: str
     input_artifact_refs: tuple[ResourceRef, ...]
     preparation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -107,31 +109,32 @@ class LongDSRecoveryInput(BaseModel):
     known_tokens: int = Field(ge=0)
 
 
-def _checkpoint(directory: Path, *, turn_id: str, messages: list[ConversationMessage],
-                references: tuple[ResourceRef, ...], materials: Path) -> None:
+def _checkpoint(directory: Path, *, result: ConversationTurnResponse,
+                references: tuple[ResourceRef, ...], materials: Path, usage: GenerationUsage) -> None:
     deployment = BashExecutionDeploymentConfig.model_validate_json((directory / "bash-deployment.json").read_bytes())
     authorization = deployment.authorization
-    journal = FileInteractionJournal(directory / "server-data/interaction_runs")
-    trace = journal.get(turn_id)
+    journal = SqliteInteractionJournal(directory / "server-data/conversation_journal")
+    trace = journal.get(result.turn_id)
     if (trace is None or trace.final_message is None or trace.final_message.disposition != "answer"
             or trace.bash_authorization_digest != authorization.authorization_digest
             or trace.principal != authorization.authorized_principal
-            or trace.conversation_id != authorization.conversation_id
-            or len(messages) != 34 or tuple(messages[:-1]) != trace.messages
-            or messages[-1].role != "assistant" or messages[-1].content != trace.final_message.message
+            or trace.interaction_run_ref != result.turn_id
+            or trace.conversation_id != result.session_id or result.session_id != authorization.conversation_id
+            or len(trace.messages) != 33 or trace.input_artifact_refs != references
+            or result.message.role != "assistant" or result.message.content != trace.final_message.message
             or journal.execution_budget(trace).unsettled_action_ids):
         raise ValueError("第17轮尚无完整Final或仍存在未决工具执行，不能建立恢复检查点")
-    _, used, _ = _usage(directory / "sdk")
     snapshot = directory / "checkpoint-17"
     snapshot.mkdir(exist_ok=False)
     shutil.copytree(directory / "server-data", snapshot / "server-data")
     shutil.copyfile(directory / "bash-deployment.json", snapshot / "bash-deployment.json")
     shutil.copyfile(directory / "configuration.json", snapshot / "configuration.json")
     recovery = LongDSRecoveryInput(principal=trace.principal, session_id=trace.conversation_id,
-        messages=tuple(messages), input_artifact_refs=references,
+        input_artifact_refs=references,
         preparation_sha256=sha256((materials / "preparation.json").read_bytes()).hexdigest(),
         source_digest=json.loads((directory / "repository.json").read_bytes())["source_digest"],
-        configuration_sha256=sha256((directory / "configuration.json").read_bytes()).hexdigest(), known_tokens=used)
+        configuration_sha256=sha256((directory / "configuration.json").read_bytes()).hexdigest(),
+        known_tokens=usage.known_tokens)
     _write(snapshot / "recovery-input.json", recovery.model_dump(mode="json"))
     seal(snapshot)
 
@@ -165,15 +168,6 @@ def _configuration(settings: Settings) -> dict[str, object]:
             "feature_flags": settings.feature_flags.model_dump(mode="json"),
             "prompt_language": settings.prompt_language,
             "web_search_available": settings.web_search_available}
-
-
-def _usage(sdk: Path) -> tuple[int, int, int]:
-    groups, _ = _wire_groups(sdk)
-    return (
-        sum(len(g.http_ids) for g in groups),
-        sum(g.known_tokens for g in groups),
-        sum(g.unknown_usage_attempts for g in groups),
-    )
 
 
 def _source_paths() -> list[Path]:
@@ -240,13 +234,16 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
 def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "target"] = "baseline",
              user_turns: int = 2, bash_image_id: str | None = None,
              docker_endpoint: str | None = None, recovery_checkpoint: Path | None = None,
-             task_token_limit: int | None = None, stop_after_checkpoint: bool = False) -> LongDSCapture:
+             task_token_limit: int | None = None, stop_after_checkpoint: bool = False,
+             retain_task_workspace: bool = False) -> LongDSCapture:
     prepared = verify_preparation(materials)
     total_turns = len(prepared.turns)
     if not 2 <= user_turns <= total_turns or (purpose == "baseline" and user_turns != 2):
         raise ValueError("baseline固定两轮；target须显式选择2至原题总轮数的连续前缀")
     if (bash_image_id is None) != (docker_endpoint is None):
         raise ValueError("分析镜像和Docker端点须同时显式提供")
+    if retain_task_workspace and (bash_image_id is None or stop_after_checkpoint):
+        raise ValueError("任务工作区须绑定独立 Bash 镜像并连续执行")
     if user_turns > 2 and bash_image_id is None and recovery_checkpoint is None:
         raise ValueError("L2须使用已固定的通用分析环境")
     if task_token_limit is not None and (type(task_token_limit) is not int or task_token_limit <= 0):
@@ -273,7 +270,10 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         if recovery.preparation_sha256 != sha256((materials / "preparation.json").read_bytes()).hexdigest():
             raise ValueError("恢复检查点与本次原题准备身份不同")
     settings = Settings.from_env()
-    settings = settings.model_copy(update={"feature_flags": benchmark_feature_flags(settings.feature_flags)})
+    settings = settings.model_copy(update={
+        "feature_flags": benchmark_feature_flags(settings.feature_flags),
+        "answer_result": LONGDS_ANSWER_RESULT,
+    })
     if recovery is not None and recovery.configuration_sha256 != sha256(json_bytes(_configuration(settings))).hexdigest():
         raise ValueError("恢复必须保持原模型、容量、预算和调用配置")
     for model in (settings.structured, settings.openai):
@@ -324,6 +324,7 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
             expires_at=datetime.now(UTC) + timedelta(seconds=user_turns * 3600),
             max_total_tokens=effective_task_limit, max_execution_seconds=user_turns * 3600,
             image_id=bash_image_id,
+            retain_task_workspace=True if retain_task_workspace else None,
         )
         deployment = BashExecutionDeploymentConfig(authorization=authorization, endpoint=docker_endpoint)
         authorization_file = directory / "bash-deployment.json"
@@ -351,17 +352,18 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                     manifest=directory / "fixture-uploads.json", api_key=api_key,
                 )
                 _write(directory / "initial-attachments.json", [ref.model_dump(mode="json") for ref in references])
-                messages = list(recovery.messages) if recovery is not None else []
                 first = recovery.next_user_turn if recovery is not None else 1
+                preceding_known_tokens = recovery.known_tokens if recovery is not None else 0
+                sdk_directory = directory / "sdk"
+                usage = read_generation_usage(sdk_directory)
                 for turn in prepared.turns[first - 1:user_turns]:
-                    _, used, _ = _usage(directory / "sdk")
-                    if used + (recovery.known_tokens if recovery is not None else 0) >= effective_task_limit:
+                    if usage.reaches_case_limit(effective_task_limit, preceding_known_tokens=preceding_known_tokens):
                         stop_reason = "case_budget_exhausted"
                         break
-                    messages.append(ConversationMessage(role="user", content=turn.user_message(language=prepared.language)))
                     request = ConversationTurnRequest(
                         session_id=session_id, client_request_id=uuid4().hex,
-                        messages=list(messages), interaction_mode="auto", input_artifact_refs=references)
+                        text=turn.user_message(language=prepared.language), create_session=turn.turn_id == 1,
+                        interaction_mode="auto", input_artifact_refs=references)
                     prefix = directory / f"turn-{turn.turn_id:02}"
                     _write(prefix.with_suffix(".request.json"), request.model_dump(mode="json"))
                     requested += 1
@@ -378,6 +380,8 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                     if (result.session_id != session_id or trace_identity["session_id"] != session_id
                             or trace_identity["turn_id"] != result.turn_id):
                         raise ValueError("正式响应和查询返回的会话或轮次身份不匹配")
+                    usage = read_generation_usage(sdk_directory)
+                    _write(prefix.with_suffix(".generation-usage.json"), usage.model_dump(mode="json"))
                     if isinstance(result, PendingConversationTurn):
                         stop_reason = "turn_pending"
                         break
@@ -385,11 +389,9 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                         stop_reason = "terminal_" + result.disposition
                         break
                     answered += 1
-                    messages.append(result.message)
                     stop_reason = "planned_turns_finished"
                     if turn.turn_id == 17 and recovery is None:
-                        _checkpoint(directory, turn_id=result.turn_id, messages=messages,
-                                    references=references, materials=materials)
+                        _checkpoint(directory, result=result, references=references, materials=materials, usage=usage)
                         if stop_after_checkpoint:
                             stop_reason = "checkpoint_17_completed"
                             break
@@ -398,15 +400,14 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         stop_reason = "entry_or_environment_failure"
         _write(directory / "failure.json", {"exception_type": failure, "requested_turns": requested,
                                             "potential_inflight_usage": isinstance(error, httpx.TimeoutException)})
-    physical, used, unknown = _usage(directory / "sdk")
+    usage = read_generation_usage(directory / "sdk")
     result = LongDSCapture(
         evidence_class=UNVERIFIED_FLOW,
         answer_result=settings.answer_result,
         purpose=purpose, planned_user_turns=user_turns - (17 if recovery is not None else 0),
         preceding_source_turns=17 if recovery is not None else 0,
         requested_turns=requested, answered_turns=answered, unexecuted_turns=total_turns - requested - (17 if recovery is not None else 0),
-        stop_reason=stop_reason, exception_type=failure, physical_model_requests=physical,
-        known_tokens=used, unknown_usage_attempts=unknown,
+        stop_reason=stop_reason, exception_type=failure, **usage.model_dump(mode="python"),
         actual_process_stopped=process is not None and process.stopped,
         wall_seconds=monotonic() - started)
     _write(directory / "report.json", result.model_dump(mode="json"))
@@ -430,6 +431,7 @@ def main() -> None:
     run.add_argument("--recovery-checkpoint", type=Path)
     run.add_argument("--task-token-limit", type=int)
     run.add_argument("--stop-after-checkpoint", action="store_true")
+    run.add_argument("--task-workspace", action="store_true")
     args = parser.parse_args()
     if args.command == "prepare":
         result = prepare(args.output, source_directory=args.source_directory)
@@ -439,7 +441,8 @@ def main() -> None:
         result = baseline(args.materials, args.output, purpose=args.purpose,
                           user_turns=args.user_turns, bash_image_id=args.bash_image_id,
                           docker_endpoint=args.docker_endpoint, recovery_checkpoint=args.recovery_checkpoint,
-                          task_token_limit=args.task_token_limit, stop_after_checkpoint=args.stop_after_checkpoint)
+                          task_token_limit=args.task_token_limit, stop_after_checkpoint=args.stop_after_checkpoint,
+                          retain_task_workspace=args.task_workspace)
         print(result.model_dump_json())
 
 

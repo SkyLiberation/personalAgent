@@ -40,12 +40,6 @@ PROMPTS = {
         template="模型尚未返回非空可见正文；reasoning 不能作为回答。",
         owner="conversation",
     ),
-    "conversation.answer.citation_repair": PromptSpec(
-        name="conversation.answer.citation_repair",
-        version="2026-11-15.v1",
-        template="重新提交完整答复。需要引用时修正坐标或补读原文，可省略不必要且不可用的坐标。",
-        owner="conversation",
-    ),
     "conversation.plan.active_step_limit": PromptSpec(
         name="conversation.plan.active_step_limit",
         version="2026-10-27.v1",
@@ -100,12 +94,6 @@ PROMPTS = {
         template="Bash程序、输入或执行清单原件不存在。",
         owner="conversation",
     ),
-    "conversation.answer.citation_feedback": PromptSpec(
-        name="conversation.answer.citation_feedback",
-        version="2026-10-27.v1",
-        template="{error}\n完整提交及逐段引用见最新 submitted_final。",
-        owner="conversation",
-    ),
     "conversation.plan.step_binding_invalid": PromptSpec(
         name="conversation.plan.step_binding_invalid",
         version="v2-list-control",
@@ -115,11 +103,5 @@ PROMPTS = {
     "conversation.plan.goal_binding_invalid": PromptSpec(
         name="conversation.plan.goal_binding_invalid", version="v1", owner="conversation",
         template="每个未完成的计划步骤须填写其服务的当前有效目标条目 ID。请按最新目标修订步骤。",
-    ),
-    "conversation.experiment.citations_unbound": PromptSpec(
-        name="conversation.experiment.citations_unbound",
-        version="2026-10-27.v1",
-        template="报告引用未绑定实际来源：{error}",
-        owner="conversation",
     ),
 }

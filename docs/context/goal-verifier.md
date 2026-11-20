@@ -12,7 +12,7 @@
 
 这里的“目标维护结果”是由实际补丁确定的候选快照。它在 Runtime 提交后才生效。用户原话是权威依据。判决绑定候选内容、用户轮次及提交身份。
 
-同一对话出现任务切换时，本次请求以提议选中的任务为基础恢复核验历史。已有 Goal 核验同时检查任务关系，使用本轮原话、选中任务入口及当前任务的必要对照信息。新开或插问以空目标为基础，旧任务材料只供判断归属。通过后由 Journal 同次提交归属和补丁。[主循环任务切换](agent-loop.md#同一对话中的任务切换)
+同一对话出现任务切换时，本次请求以提议选中的任务为基础恢复核验历史。已有 Goal 核验同时检查任务关系，使用本轮原话、选中任务入口及当前任务的必要对照信息。关系引文可来自所选任务历史，显示为「任务关系的用户引文」。新开或插问以空目标为基础，旧任务材料只供判断归属。通过后由 Journal 同次提交归属和补丁。[主循环任务切换](agent-loop.md#同一对话中的任务切换)
 
 ### 快照字段与来源
 
@@ -23,7 +23,7 @@
 | `goal_id`、`objective` | 服务端任务身份及工作摘要。判断以本轮适用条目、用户原话和真实证据为准。 |
 | `items` 的键 | 服务端分配的条目 ID，用于增量修改和定位核验意见。空对象表示本轮没有适用条目。 |
 | `kind`、`scope`、`text`、`status` | `requirement` 是结果要求，`constraint` 是限制。`task` 跨轮适用，`turn` 仅用于所属轮次。`text` 保存含义和条件。`active` 为有效条目，撤销条目由历史保留。 |
-| `source_message_ids`、`acceptance_criteria` | 来源 ID 定位服务器绑定的用户消息，可与原话核对。验收条件说明检查什么，空数组表示没有单列标准。 |
+| `source_message_ids`、`acceptance_criteria` | 来源 ID 可定位引用的历史用户消息及本轮绑定。最后一项绑定本轮目标操作，用于判断仅本轮条目的适用范围。验收条件说明检查什么，空数组表示没有单列标准。 |
 | `execution_control` | `null` 表示没有持久执行限制，权限仍按现行策略判定。`running`、`read_only`、`paused` 分别表示按权限运行、只读和暂停业务动作。`source_message_id` 定位设置该模式的用户原话。 |
 
 待验提议若关闭一个已交付的澄清事项，核验请求另提供问题原文和当前用户的答复或撤回引文。核验按该材料判断问题是否已解决；Runtime 只在同一次补丁接纳时关闭。题目无待澄清事项或提议未请求关闭时，省略这一核验区块。[主循环待澄清投影](agent-loop.md#goal-快照与待澄清事项)
@@ -77,8 +77,7 @@ system prompt
 
 核验历史按同一可见分支的用户轮次和轮内目标提交顺序接续。仅滚动加入本职责所需的用户原话、目标维护结果、目标判决、问题反馈与实际 goal 修订；不拼接结果核验历史或主循环全部工具轨迹。历史指代确需其他材料时，按实际判断需要提供来源，不因此继承另一职责的全量历史。
 
-目标核验历史使用自己的既有压缩检查点，不混用主循环或结果核验摘要。压缩保留用户原话、当前完整待验 goal、当前未决反馈及必要修订关系；旧过程的合法摘要须能区分原目标、失败、实际修订、通过与仍未解决，并可恢复原件。历史筛选和摘要继续消费原 Journal 事实，不新增独立可写的核验历史。
-
+目标定义核验使用独立的摘要检查点。核验输入超过专用预算时，Runtime 从已交付答案且最后一次目标判决通过的旧轮次选择过程，保存原件后调用模型生成摘要，再估算核验请求。摘要区分原目标、退回、实际修订和判决。各轮用户原话和当前轮次的待验目标、未决反馈继续按原文提供。
 
 核验标准按条列出，退回时逐条显示判据、结论和原反馈。待验目标与原始用户要求逐字保留。判决、稿件和引用身份继续由 typed 回执绑定，模型按原输出 Schema 提交判决。
 
@@ -90,7 +89,7 @@ system prompt
 | system prompt、逐轮用户原话与历史展示 | [核验请求物化](../../src/personal_agent/capabilities/contracts/verification_prompt.py)：查找 `verification_messages`，再追踪[目标核验模板](../../src/personal_agent/kernel/prompt_templates/interaction_verification.py) |
 | 核验模型调用与 typed 判决 | [核验工具实现](../../src/personal_agent/tools/interaction_verifier.py)：查找 `task_context`、`interaction_goal_verification` 与回执绑定 |
 | 反馈交回及强制 goal 修复 | [Conversation Service](../../src/personal_agent/application/conversation/service.py)：查找 `_verify_goal_maintenance`、`goal_required` 与工具暴露；[目标维护](../../src/personal_agent/application/conversation/goal_maintenance.py)拥有目标前置判断和实际提交 |
-| 职责历史与压缩契约 | [目标维护 Spec §9.14](../optimization/to_verify/analysis-goal-maintenance.md#914-分离目标核验与回答核验的职责及历史)、[历史压缩](../../src/personal_agent/application/conversation/history_compaction.py)：核对目标与结果核验检查点分别消费 |
+| 目标定义核验的压缩预算与检查点 | [Conversation Service](../../src/personal_agent/application/conversation/service.py)的 `_goal_verification_context` 检查输入预算，[历史压缩](../../src/personal_agent/application/conversation/history_compaction.py)的 `compact_verification` 生成并保存摘要 |
 
 修改本模式前调用[模型上下文管理 skill](../../.agents/skills/manage-model-context/SKILL.md)，同步本页、[上下文索引](README.md)及受影响生产契约；与主循环的交接变化同时维护 [Agent loop 模式](agent-loop.md)，不在两页各自复制核验器的完整输入定义。
 

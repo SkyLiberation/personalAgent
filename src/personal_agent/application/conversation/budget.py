@@ -50,14 +50,13 @@ class ConversationBudget:
     def tool_calls_exhausted(self, usage: CommittedUsage) -> bool:
         return usage.tool_calls >= self.limits.max_tool_calls
 
-    def tool_stop_reached(self, usage: CommittedUsage) -> bool:
-        # A zero tool quota blocks ordinary tool dispatch without stopping main decisions.
+    def counted_tool_quota_exhausted(self, usage: CommittedUsage) -> bool:
+        # Zero disables ordinary tools while leaving built-in goal and verification operations available.
         return self.limits.max_tool_calls > 0 and self.tool_calls_exhausted(usage)
 
     def new_decision_exhausted(self, trace: InteractionTrace, usage: CommittedUsage) -> bool:
         return (usage.model_turns >= self.limits.max_model_turns
-                or self.remaining_model_tokens(trace, usage) <= 0
-                or self.tool_stop_reached(usage))
+                or self.remaining_model_tokens(trace, usage) <= 0)
 
     def model_send_rejection(
         self, trace: InteractionTrace, usage: CommittedUsage,

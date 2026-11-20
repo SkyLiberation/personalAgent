@@ -47,7 +47,7 @@ def parse_p2_message_event(
         open_id=open_id or None,
         sender_user_id=sender_user_id or None,
         user_id=user_id,
-        session_id=chat_id or open_id or "default",
+        session_id=chat_id or open_id or sender_user_id or None,
         message_id=str(message.message_id or ""),
         message_type=str(message.message_type or "text"),
         text=text,

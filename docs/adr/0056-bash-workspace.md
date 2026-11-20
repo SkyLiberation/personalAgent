@@ -14,4 +14,8 @@ Toolathlon 的 GDP 用例已有可读原件。模型连续五次抄错会话目�
 
 2026-11-17 接受替换 Bash 容器生命周期。执行适配器以主体、Turn 和部署许可绑定一个 Docker 容器，每条命令使用独立的非 root Docker Exec 进程。回收或重用前须确认容器中无前次命令的遗留进程。普通及共享工作区的挂载权限由原许可决定。执行恢复按原命令身份核对，未落盘的完整双流不从退出码推断。Turn 终态释放容器，到期自行退出。基线、迁移、替代方案和验收由 [Bash 容器复用 Spec](../optimization/to_verify/python-data-analysis-tool.md#在同一-turn-内复用-bash-容器)维护。
 
+独立分析许可可配置 `retain_task_workspace: true`。Conversation Journal 将任务及对话分支绑定进冻结命令。Docker 适配器为该任务保留容器的 `/tmp`，沿用 DeepSeek LongDS 的单目录做法。许可摘要绑定该路径。对于冻结命令仍可见、内容摘要一致的只读输入，Docker 适配器复用同一任务的暂存文件。Bash 进程与 IPC 仍按调用检查，任务关停、授权到期或工作区失效时回收容器和文件。普通 Bash 和 MCP 许可逐命令清理 `/tmp`，按 Turn 回收容器。[任务工作区设计及证据](../optimization/to_verify/python-data-analysis-tool.md#bash-跨轮任务工作区候选)
+
+精确编辑通过 `tool_edit` 进入同一 Bash 接受、执行与恢复链。Conversation 按授权声明 `/tmp` 的读取和编辑。适配器在任务容器记录中保存专用读写产生的文件摘要，按进程原生回执确认，编辑时用它复核当前字节。版本属于容器生命周期，容器回收时随工作区记录清除。Artifact owner 继续以确切快照提交草稿新版本。[编辑契约和验收](../optimization/to_verify/program-artifact-contract.md#模型编辑工具)
+
 采用 DeepSeek Harness 的 shell 工具接口及进程回执。应用沿用会话授权、临时盘及进程限额，检索实验沿用固定 worker。Bash 容器默认禁网，具名 MCP 工作区的部署许可可以显式指定任务网关的 Docker 容器 ID。Bash 共享该网关的网络命名空间，在独立容器内执行已授权的文件操作。Toolathlon 配对入口按任务装配这项权限。[网络装配和验收](../mcpDesign/README.md#可比的执行环境) · [Bash 工具契约](../optimization/to_verify/python-data-analysis-tool.md#bash-替换脚本执行工具)

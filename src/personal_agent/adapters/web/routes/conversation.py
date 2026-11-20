@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from hashlib import sha256
-import json
+from collections.abc import Callable
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.application.conversation import (
@@ -20,7 +20,9 @@ from personal_agent.application.conversation import (
     ConversationTurnView,
     ConversationWorkingPlan,
 )
-from personal_agent.application.conversation.errors import ConversationTurnPending
+from personal_agent.application.conversation.errors import ConversationTurnBlocked, ConversationTurnPending
+from personal_agent.application.conversation.service import submitted_turn_id
+from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, sse_event
 from personal_agent.application.conversation.models import InteractionTrace, KnowledgeDeleteConfirmation
 from personal_agent.application.conversation.workspace_changes import (
     Decision as WorkspaceDecision, Digest as WorkspaceDigest, WorkspaceChangeConfirmation, WorkspaceChangeReceipt,
@@ -52,8 +54,9 @@ class ConversationTurnRequest(BaseModel):
     session_id: str = Field(
         min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$"
     )
-    messages: list[ConversationMessage] = Field(min_length=1, max_length=100)
-    client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
+    text: str = Field(min_length=1)
+    client_request_id: str = Field(min_length=1, max_length=200)
+    create_session: bool = False
     user_id: str | None = Field(default=None, min_length=1, max_length=200)
     interaction_mode: ConversationInteractionMode = Field(
         default="default",
@@ -116,15 +119,6 @@ class ConversationTurnTraceResponse(InteractionTrace):
     conversation_id: str = Field(serialization_alias="session_id")
 
 
-def submitted_turn_id(
-    principal: AuthenticatedPrincipal, session_id: str, client_request_id: str,
-) -> str:
-    identity = json.dumps(
-        [principal.tenant_id, principal.user_id, session_id, client_request_id], separators=(",", ":"),
-    )
-    return f"turn_{sha256(identity.encode('utf-8')).hexdigest()[:24]}"
-
-
 def conversation_turn_response(
     view: ConversationTurnView,
     *,
@@ -143,6 +137,12 @@ def conversation_turn_response(
         pending_confirmation=view.pending_confirmation,
         working_plan=view.working_plan,
     )
+
+
+def _observe_stream_completion(task: asyncio.Task) -> None:
+    # A disconnected subscriber no longer awaits the result. The registered turn remains queryable.
+    if not task.cancelled():
+        task.exception()
 
 
 def register_conversation_routes(
@@ -185,6 +185,7 @@ def register_conversation_routes(
         request: Request,
         *,
         turn_id: str | None = None,
+        on_registered: Callable[[str], None] | None = None,
     ) -> ConversationTurnResponse | JSONResponse:
         try:
             require_entry_identity(request, settings)
@@ -193,38 +194,38 @@ def register_conversation_routes(
                 settings,
                 body.user_id,
             )
-            submit_only = False
             if isinstance(body, ConversationTurnRequest):
-                session_id, messages = body.session_id, body.messages
-                input_refs, interaction_mode = body.input_artifact_refs, body.interaction_mode
-                if body.client_request_id is not None:
-                    turn_id = submitted_turn_id(principal, session_id, body.client_request_id)
-                    submit_only = True
+                session_id = body.session_id
+                turn_id = submitted_turn_id(principal, session_id, body.client_request_id)
+                try:
+                    message = ConversationMessage(role="user", content=body.text)
+                except ValueError as exc:
+                    raise ConversationInputError("当前用户消息不合法") from exc
+                try:
+                    view = service.converse(
+                        conversation_id=session_id, message=message, client_request_id=body.client_request_id,
+                        create_session=body.create_session, principal=principal, source_platform="web",
+                        interaction_mode=body.interaction_mode, input_artifact_refs=body.input_artifact_refs,
+                        on_registered=on_registered,
+                    )
+                except ConversationTurnPending:
+                    pending = PendingConversationTurn(turn_id=turn_id, session_id=session_id)
+                    return JSONResponse(status_code=202, content=pending.model_dump(mode="json"))
             else:
                 if turn_id is None:
                     raise ConversationOperationNotFound("conversation turn not found")
                 existing = require_turn(turn_id, principal)
-                session_id, messages = existing.conversation_id, list(existing.messages)
-                input_refs, interaction_mode = existing.input_artifact_refs, "default"
-            try:
                 view = service.converse(
-                    conversation_id=session_id,
-                    messages=messages,
-                    interaction_run_ref=turn_id,
-                    principal=principal,
-                    source_platform="web",
-                    interaction_mode=interaction_mode,
-                    input_artifact_refs=input_refs,
-                    submit_only=submit_only,
+                    conversation_id=existing.conversation_id, interaction_run_ref=turn_id,
+                    principal=principal, source_platform="web",
                 )
-            except ConversationTurnPending:
-                pending = PendingConversationTurn(turn_id=turn_id, session_id=session_id)
-                return JSONResponse(status_code=202, content=pending.model_dump(mode="json"))
             return conversation_turn_response(
                 view, principal=principal, settings=settings
             )
         except ConversationInputError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ConversationTurnBlocked as exc:
+            raise HTTPException(status_code=409, detail={"message": str(exc), "turn_id": exc.turn_id}) from exc
         except ConversationOperationConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except EntryPolicyDenied as exc:
@@ -243,9 +244,56 @@ def register_conversation_routes(
             ) from exc
 
     @app.post("/api/conversation/turns", response_model=ConversationTurnResponse,
-              response_model_exclude_none=True, responses={202: {"model": PendingConversationTurn}})
-    def conversation_turn(body: ConversationTurnRequest, request: Request):
-        return web_turn(body, request)
+              response_model_exclude_none=True, responses={
+                  200: {"content": {"text/event-stream": {}}},
+                  202: {"model": PendingConversationTurn},
+              })
+    async def conversation_turn(body: ConversationTurnRequest, request: Request):
+        if "text/event-stream" not in request.headers.get("accept", "").lower():
+            return await asyncio.to_thread(web_turn, body, request)
+        loop = asyncio.get_running_loop()
+        registered: asyncio.Future[str] = loop.create_future()
+
+        def record_registration(turn_id: str) -> None:
+            if not registered.done():
+                registered.set_result(turn_id)
+
+        def registered_in_thread(turn_id: str) -> None:
+            loop.call_soon_threadsafe(record_registration, turn_id)
+
+        result = asyncio.create_task(asyncio.to_thread(web_turn, body, request, on_registered=registered_in_thread))
+        result.add_done_callback(_observe_stream_completion)
+        await asyncio.wait((registered, result), return_when=asyncio.FIRST_COMPLETED)
+        if not registered.done():
+            return await result
+
+        async def events():
+            turn_id = registered.result()
+            yield sse_event("status", {"turn_id": turn_id, "session_id": body.session_id})
+            try:
+                response = await asyncio.shield(result)
+            except HTTPException as exc:
+                yield sse_event("error", {"status_code": exc.status_code, "detail": exc.detail})
+                return
+            if isinstance(response, JSONResponse):
+                yield sse_event("pending", {"turn_id": turn_id, "session_id": body.session_id})
+                return
+            answer = response.message.content
+            built_answer = ""
+            for chunk in chunk_answer(answer):
+                built_answer += chunk
+                yield sse_event("answer_delta", {"delta": chunk, "answer": built_answer})
+            yield sse_event("done", {
+                "reply": answer, "answer": answer, "disposition": response.disposition,
+                "turn_id": turn_id, "session_id": body.session_id,
+                "pending_confirmation": (
+                    response.pending_confirmation.model_dump(mode="json") if response.pending_confirmation else None
+                ),
+            })
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+        })
 
     @app.post("/api/conversation/turns/{turn_id}/resume", response_model=ConversationTurnResponse,
               response_model_exclude_none=True)

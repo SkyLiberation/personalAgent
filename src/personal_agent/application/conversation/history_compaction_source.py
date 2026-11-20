@@ -11,7 +11,7 @@ from personal_agent.kernel.prompt_registry import PromptCatalog
 
 from .artifact_sources import input_resource_refs
 from .analysis_tasks import task_switch_turn
-from .citations import CitableInput, render_citable_input
+from .interaction_projection import ProjectedInteractionInput, render_interaction_input
 from .context_materialization import materialize_interaction_inputs
 from .goal_maintenance import goal_tool_result
 from .history_models import HistoryCompactionCheckpoint, HistoryRunCoverage
@@ -184,7 +184,7 @@ def _summarizer_observation(item: InteractionInput, *, prompts: PromptCatalog) -
             projected = projected.model_copy(update={"payload": {
                 **projected.payload, "retrieval": {key: value for key, value in retrieval.items() if key != "read_more"},
             }})
-    return render_citable_input(CitableInput(observation=projected), prompts=prompts)
+    return render_interaction_input(ProjectedInteractionInput(observation=projected), prompts=prompts)
 
 
 def _summarizer_decision(trace: InteractionTrace, record: ModelDecisionRecord, *, prompts: PromptCatalog) -> str:

@@ -91,7 +91,11 @@ class _GoalChange(BaseModel):
     evidence: EvidenceQuote = Field(description="支持这项变更的本轮用户原话片段。逐字引用。")
 
 
-class _GoalItemContent(_GoalChange):
+class _GoalItemChange(_GoalChange):
+    evidence: EvidenceQuote = Field(description="支持本项变更的连续用户原话。可引用本轮或所选任务的历史消息。逐字引用。")
+
+
+class _GoalItemContent(_GoalItemChange):
     text: GoalText = Field(description="按用户原话写明要求或约束及其适用关系。")
 
 
@@ -112,7 +116,7 @@ class ReplaceGoalItem(_GoalItemContent):
     )
 
 
-class RevokeGoalItem(_GoalChange):
+class RevokeGoalItem(_GoalItemChange):
     op: Literal["revoke"]
     item_id: GoalItemId = Field(description="用户明确撤销的现有有效条目 ID。")
 
@@ -126,6 +130,9 @@ class ResolveGoalClarification(_GoalChange):
 
 
 class SelectGoalTask(_GoalChange):
+    evidence: EvidenceQuote = Field(
+        description="支持该任务关系的连续用户原话。continue 和 resume 可引用所选任务的历史消息。逐字引用。",
+    )
     action: GoalTaskAction = Field(
         description="continue 延续当前任务，start 开始独立任务，side_question 临时插问，resume 恢复旧任务。",
     )
@@ -147,9 +154,6 @@ class _GoalPatchEnvelope(BaseModel):
     task: SelectGoalTask | None = Field(default=None, description="本轮首次提交选择任务，后续修订省略。")
     delivery: SetGoalDelivery | None = Field(default=None, description="仅在本轮首次提交时声明用户明确指定的交付方式。普通交付省略。")
     base_version: int = Field(strict=True, ge=0, description="选中任务的快照版本。新开和插问填 0。")
-    clarifications: tuple[GoalText, ...] = Field(
-        default=(), max_length=8, description="影响执行且原话无法解决时，填写需要用户回答的具体问题。",
-    )
     execution_control: ChangeExecutionControl | None = Field(
         default=None, description="仅在用户明确改变执行限制时填写。省略时保留现有限制。",
     )
@@ -159,10 +163,12 @@ class _GoalPatchEnvelope(BaseModel):
 
 
 class GoalPatch(_GoalPatchEnvelope):
+    # Accepted patches always had an empty slot. Preserve immutable history digests.
+    clarifications: tuple[()] = ()
     changes: tuple[GoalChange, ...] = Field(max_length=64)
 
 
-class GoalChangeProposal(_GoalChange):
+class GoalChangeProposal(_GoalItemChange):
     op: Literal["add", "replace", "revoke"] = Field(
         description="add 填 kind、scope、text。replace 填 item_id、text。revoke 只填 item_id 和 evidence。",
     )

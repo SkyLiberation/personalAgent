@@ -373,7 +373,7 @@ def admit_continue_turn_progress(
         immutable_fields=("messages", "inputs"),
         required_repair=(
             "Keep an unchanged plan unchanged and submit the next necessary concrete "
-            "action, a genuinely revised plan, wait for the user, or call control_submit_final with the complete answer."
+            "action, a genuinely revised plan, wait for the user, or provide the complete answer as your reply."
         ),
     )
 

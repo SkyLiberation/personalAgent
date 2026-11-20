@@ -1,6 +1,12 @@
 """Deployment-owned answer composition, shared by configuration and run binding."""
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, SerializerFunctionWrapHandler, StrictBool, model_serializer
+
+
+class AnswerProtocolVersion(StrEnum):
+    MARKDOWN_STATUS = "markdown-status-v1"
 
 
 class AnswerResultConfig(BaseModel):

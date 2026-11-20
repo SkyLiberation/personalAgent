@@ -111,6 +111,22 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 
 区分启动或握手错误、配置或 Schema 不匹配、准入拒绝、远端工具错误，以及执行结果未知。环境配置错误由 Runner 归为环境失败。工具错误进入现有反馈链。写调用超时或断线时，在能够从权威终态确认结果之前按未知处理。连接恢复可以重新握手。重发写操作必须满足该工具的幂等或状态核对契约，产品执行仍使用原授权与执行事实。
 
+#### 普通 MCP 写调用的进程恢复
+
+`ambiguous-effect` 的正式 Web 失败轨迹显示，目标端提交后 Web 在收到回执前被中断。恢复复用了原模型响应中的调用，第二次写入先于重启后的新模型请求发生。已有工作区确认路径独立持久化派发事实，覆盖范围是获准的文件清单。普通 MCP 直调需要在现有 Conversation 执行入口登记本轮已进入派发的写调用。[失败轨迹与验收](../problems/Agent-Durability-Lab/ambiguous-effect.md)
+
+| 需求 | 决定与验收 |
+| --- | --- |
+| MCP-R1 安全恢复 | Conversation 在最终工具端口调用前为已准入、声明副作用的普通 MCP 调用原子登记调用 ID、工具名和参数摘要。Journal 拥有此轮次内的派发登记。登记到真正发出之间中断也按结果未知处理。原业务参数继续从已保存的模型响应获取。工具注册表按实际 MCP 注册元数据和已有副作用分类提供登记条件。 |
+| MCP-R2 原调用反馈 | 同一调用已登记而当前决策还未消费其结果时，恢复生成绑定原调用 ID 的 `unknown` 工具结果。反馈说明先按权威外部状态核对，有副作用时避免盲重发。下一次模型决定仍走常规入口，已提交结果沿现有 Journal 链路恢复。旧快照缺少登记字段且在回放已保存响应时，对该响应涉及的普通 MCP 写入保守报告未知。 |
+| MCP-R3 影响范围 | 使用 Conversation 现有 Journal、tool port 和结果投影。只读调用继续按既有方式执行。工作区变更、Bash、Artifact 和实验执行继续使用各自的执行 owner。新增事实只有普通 MCP 写调用的派发登记，不另建执行服务或外部操作结果镜像。 |
+
+DeepSeek Harness 从已持久化的 `tool/call` 恢复原调用，对缺结果的调用补 `TOOL_OUTCOME_UNKNOWN`。本工程复用这一安全区分，并沿现有原轮次以工具结果消费既有模型响应。保持已付费响应复用，去掉该恢复分支重新派发原写操作的行为。[上游恢复](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/index.ts#L793-L816) · [上游结果语义](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/session/src/repair.ts#L157-L192)
+
+使用已命中的 `ambiguous-effect` 失败样本，固定题面、目标端、模型、两边恢复入口及评分器，各运行一组。验收同时要求原轮次接续、重启后首个模型请求包含原调用的未知结果、目标端只写一次、最终交付原回执。只读对账的模型选择及真实工具返回由同一轨迹记录。没有可靠的执行结果时，恢复仍保留未知。若派发前未能持久化登记则停止该调用，避免引入不可追溯写入。本轮变更仅解决进程恢复时的盲重发，普通调用重试策略沿既有契约。
+
+2026-11-20 定向复验满足 MCP-R1 和 MCP-R2 的同轨迹要求。新增一个 Journal 登记和一个原生工具结果状态，复用当前 tool port 派发及消息组装。实际请求、两边流水和局部反例见[修复复验](../problems/Agent-Durability-Lab/ambiguous-effect.md#修复复验)。
+
 #### 5.2.1 工具策略决定与派发门禁
 
 V4 的真实反例中，Policy 已返回 `require_confirmation`，网关仍派发了 `move_file`。网关还把业务参数 `confirmed` 传入 Policy，调用方可以用同一个字段跳过规则。修复恢复通用派发边界。`PolicyEngine` 负责规则、优先级和风险判断，`ToolGateway` 通过 `PolicyEvaluator` 消费决定并记录审计，只有 `allow` 可进入域名、限流和执行。`deny`、`require_confirmation` 和 `require_escalation` 统一返回权限失败，工具派发次数为零。业务 payload 中的 `confirmed` 不能提供授权证据，审计中的确认状态也不由该参数推导。

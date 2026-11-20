@@ -21,7 +21,6 @@ from personal_agent.application.conversation.models import (
     WorkingPlanStepProposal,
 )
 from personal_agent.application.conversation.journal import (
-    FileInteractionJournal,
     InMemoryInteractionJournal,
 )
 from personal_agent.application.conversation.errors import (
@@ -52,7 +51,6 @@ __all__ = [
     "DecisionFeedback",
     "EffectiveCapabilities",
     "FinalMessage",
-    "FileInteractionJournal",
     "InMemoryInteractionJournal",
     "InteractionTrace",
     "KnowledgeSaveArguments",

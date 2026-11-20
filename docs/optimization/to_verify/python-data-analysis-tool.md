@@ -49,6 +49,56 @@ Canvas 正式入口暴露 Windows 路径长度回归。已经冻结的真实工�
 
 修正后的 Canvas 正式入口有 11 个不同 Exec，均在同一 Bash 容器内。模型利用命令结果最终交付工作簿和答复，官方评分退出 0。评测结束后检查 Docker 容器已删除，Run 暂存记录已清除。该次运行使用评测部署显式指定的网关网络，禁网与工作区隔离的反事实另由边界诊断覆盖。[Canvas 正式报告](../../../.tmp/bash-run-reuse-20261117/canvas-acceptance/canvas-arrange-exam/personal/report.json) · [官方评分](../../../.tmp/bash-run-reuse-20261117/canvas-acceptance/canvas-arrange-exam/personal/grader.log) · [最终隔离探测](../../../.tmp/bash-run-reuse-20261117/short-path-boundaries/report.json)
 
+## Bash 跨轮任务工作区候选
+
+已接入显式任务工作区许可，真实 Docker 回放通过。LongDS NYC Task 1 第 26 轮的第 5 次 Bash 已成功写入并执行 `/tmp/s27.py`，第 6 次仍在同一容器，却因调用前清理 `/tmp` 读不到脚本。第 25 至 27 轮的追踪使用相同分析任务 ID，各自使用独立轮次容器。DeepSeek Harness 第 26 轮新写的 `prepenalty.py` 直接导入已有 `base.py`。本设计处理重复写脚本、解压和计算的执行环境前提。轨迹里的 `KeyError` 来自 Python 统计逻辑，独立归因。[任务对照](../../problems/longds/2026-11-18-nyc-restaurants-task1.md) · [本 Agent 第 26 轮执行日志](../../../.tmp/nyc-longds-20261118/personal-aligned/server.log#L1003) · [DeepSeek Harness 第 26 轮事件](../../../.tmp/nyc-longds-20261118/harness-aligned/turn-26.json)
+
+DeepSeek Harness 的会话工作目录提供可复用文件，每条普通 Bash 命令通过独立 `bash -c` 执行。本次对照由 LongDS 启动脚本在首轮前创建容器，末轮收尾时回收。Gemini CLI 的 Docker 路径也把容器放在多次命令之外。本候选采用同样的生命周期分工，用 Docker `tmpfs` 提供有容量上限、随容器停止而清空的工作区，减少短期脚本所需的存储管理。[DeepSeek 工作目录策略](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/sandbox/sandbox-policy/src/index.ts#L207-L233) · [独立命令入口](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/shell/bash-sandbox/src/index.ts#L181-L188) · [LongDS 启动脚本](../../../.tmp/nyc-longds-20261118/harness.py#L81) · [Gemini 容器启动](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/cli/src/utils/sandbox.ts#L383) · [Docker tmpfs](https://docs.docker.com/engine/storage/tmpfs/)
+
+2026-11-19 决定在任务模式直接采用该 LongDS 启动器的单目录做法。第 13 轮写入的 `/tmp/base.py` 可在第 26 轮导入，已验证跨轮复用由容器和清理时机决定。Docker 适配器只挂载一个可写 `/tmp`，任务模式只检查进程、IPC 和输入授权，普通模式仍在命令间清理临时文件。模型工具声明和精确编辑路径同步改为 `/tmp`。部署许可将任务目录纳入身份摘要，新的任务从新会话开始。历史容器按原许可到期回收，历史轨迹按原配置归档。[实跑记录](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#已落盘脚本的回查与上下文) · [评测执行器](../../../.tmp/nyc-longds-20261118/bash-container-aligned.mjs#L4)
+
+| 需求 | 设计和通过条件 |
+| --- | --- |
+| BASH-8 授权与归属 | 在已有会话 Bash 许可中显式开启任务工作区。首条合法调用将该许可绑定到 Conversation Journal 已接受的分析任务身份 `GoalTaskId`。相同主体、会话、任务 ID 和许可摘要才能复用。同任务修订目标或恢复任务时，当前轮须与最近一次接管工作区的轮次相同，或在现有对话历史选择中继承该轮。旁支和其他任务无法沿用该许可执行 Bash。尚未接受任务时等待任务绑定。 |
+| BASH-9 文件与命令 | 首条合法调用惰性创建任务容器。可写目录 `/tmp` 使用默认 32 MiB 的 `tmpfs`，模式 1777，限制为 `noexec,nosuid,nodev`，纳入原内存限额。`/workspace` 是默认工作目录，展示冻结命令绑定的只读输入。任务模式复用内容未变化的输入文件，新增或变化项从原 Artifact 加载。工具说明提示将脚本和中间文件写进 `/tmp`，精确编辑工具也使用该路径。每次 Docker Exec 启动独立非 root Bash。复用前检查进程退出和 IPC 残留。 |
+| BASH-10 回收与恢复 | 健康的任务容器、`/tmp` 和只读输入暂存随同一任务跨轮保留。关停、到期或工作区失效时回收容器和文件。服务重启后仅接回容器 ID、Docker 启动时刻均匹配且健康空闲的原容器。重提原命令只能恢复已有事实，工作区失效后明确报告。新工作区使用新会话及新许可。 |
+
+Conversation 从分析任务和会话许可提供类型化的工作区身份，Command 冻结这项绑定。Docker 适配器拥有容器身份、活动命令和输入暂存。分支归属、输入更新、执行和收尾使用同一工作区锁。Journal 在接受调用时校验当前输入与已挂载原件仍可读。任一原件失去权限即拒绝复用并回收整个工作区。Journal 与 Artifact 持有确切命令、输入原件、双流和已交付产物，任务容器的 `/tmp` 保留运行中可重做的文件。[ADR 0056](../../adr/0056-bash-workspace.md)
+
+### 只读输入复用
+
+LongDS Task 2 第 33 轮最后两条冻结命令带入 436 和 440 个输入，新增四个均为前次工具产物。第二次重新读取、暂存了原有 436 份。DeepSeek Harness `2e39e704` 从会话解析工作目录，将命令交给 Bash 执行器。LongDS 装配在容器启动时把数据目录只读挂载一次，每次调用向已有容器发出 `docker exec`。本项目采用任务级挂载生命周期，通过现有 Artifact 引用支持运行中新增的只读输入。[复跑耗时与轨迹](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#本-agent-复跑耗时分解) · [DeepSeek Bash 入口](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/shell/tool-bash/src/index.ts#L523-L570) · [对照装配](../../../.tmp/nyc23-20261119/harness.py#L88) · [对照执行器](../../../.tmp/nyc23-20261119/bash-container-aligned.mjs#L4)
+
+Artifact 核对当前主体、版本及原件存在性，Command 冻结路径和摘要。Bash Application 向执行端提供仅限该命令的惰性字节读取。Docker 适配器用冻结的输入与实际暂存文件逐项核对路径、大小、内容摘要，只为缺失或变化的文件加载已验证的原始字节。多余路径触发清理再准备。复用前继续检查工作区归属和原输入集合，撤销输入授权须使旧容器失效。正在执行的命令与准备过程在同一工作区锁下串行；准备失败后不得启动命令，下一次从原 Artifact 补齐。普通及 MCP 路径继续每次更新完整快照。暂存是只读投影，无独立业务写入口或新增持久索引。
+
+验收复用封存的 436／440 个输入，使用同镜像和真实 Docker，比较首次准备和下一次准备的文件数、身份、完整文件指纹和耗时。第二次须只加载新增的四个输入及当次脚本。覆盖同轮、继承轮、容器只读、撤权回收、暂存内容损坏重建及普通模式。复用时间以同机输入阶段对照为准，回放属于 Offline Eval；新整题用时和评分另行实测。如果授权或字节保真出现回归，撤回差量准备并恢复逐命令快照。
+
+已实现并完成局部回放。Task 2 第二次准备从 441 次原件字节读取减到 5 次（四个新增输入及当次脚本），用时从 2.54 秒降到 1.11 秒。合法的下一轮复用相同输入时读取 0 次，文件指纹全量一致。只读、撤权回收和损坏单文件重建均通过。Task 1 第 26 轮两条原命令通过正式 Docker Bash 适配器回放，任务模式同轮和继承轮成功，普通模式仍按原契约清理脚本，后一次命令返回缺文件。原命令结果可从既有作业记录恢复，关停均回收容器。[基线](../../../.tmp/nyc-bash-stage-20261120/baseline-real/report.json) · [候选](../../../.tmp/nyc-bash-stage-20261120/candidate/report.json) · [实际执行回放](../../../.tmp/nyc-bash-stage-20261120/exec-replay.json)
+
+### 验收与撤回条件
+
+1. 用相同镜像、附件及正式 Bash 适配器回放第 26 轮第 5、6 次原命令，保持原 `/tmp` 路径。普通模式应复现缺文件。任务模式分别在当轮和后续一轮取得相同脚本摘要和命令结果。
+2. 核对任务容器仅挂载 `/tmp`、新 Bash 不继承环境变量、输入只读、其他任务或旁支被拒绝，以及任务关停后 Docker 容器被删除。IPC 残留应使当前任务环境失效。
+3. 经实际 HTTP 入口用英文指令验证模型创建、编辑并执行 `/tmp` 脚本，下一轮继续修改同一文件。核对实发 Bash 说明、编辑路径声明和执行结果。32 轮整例评分单独记录。
+
+隔离、命令恢复或回收不满足判据时，停止该候选准入，使用现行 Turn 容器模式。沙箱的贡献以可确认的文件复用和减少的补算调用为准，整场延迟与答题效果需要另外的同口径证据。
+
+### 初版实施顺序
+
+1. 在当前 Docker 适配器回放第 26 轮第 5、6 次冻结命令及其已挂载输入，确认基线缺文件。候选复跑覆盖同轮、跨轮、第三个任务、同任务旁支、超时或未知执行、容器重启与关停。
+2. 扩展现有 Bash 许可和冻结命令。Conversation Journal 根据原 Goal、精确分支和已接纳输入提供任务工作区绑定。Docker 容器适配器复用同一暂存、活动命令与期限机制，记录工作区拥有者和容器实例。普通许可和 MCP 许可继续经过已有路径。服务关停沿现有资源释放入口回收工作区。
+3. 在 LongDS 入口显式启用任务工作区，更新中英文工具说明。真实回放和边界通过后，从新会话运行原始英文 32 轮，沿用每轮 40 次主决策及任务 6,000 万 tokens 上限。生成封存后用原评分器单独打分。用这一次完整运行同时覆盖前 26 轮的工具说明与工作区检查点。
+
+### 初版验证
+
+现行普通 Bash 模式用第 26 轮原命令和原附件快照复现读失败。启用任务工作区后，同一轮与下一轮均读取相同 SHA-256 的脚本且成功运行。真实 Docker 探测同时覆盖新 Shell、临时目录清理、只读挂载、断网、任务与分支隔离、输入撤权、容器重启、到期、主动回收及未知执行恢复。原有 MCP 卷探测通过，隔离子目录中的写入由独立容器读回。[普通模式](../../../.tmp/bw18/ordinary-current/report.json) · [跨轮与关停](../../../.tmp/bw18/close/report.json) · [重启](../../../.tmp/bw18/restarted/report.json) · [未知执行](../../../.tmp/bw18/unknown/report.json) · [撤权](../../../.tmp/bw18/revoked/report.json) · [到期](../../../.tmp/bw18/expiry/report.json) · [MCP](../../../.tmp/bw18/mcp-final/report.json)
+
+LongDS 正式入口实跑验证了模型对 `/work` 的轮内和跨轮复用，并确认服务关停回收资源。第 8 轮在独立的模型动作批次错误处终止，正式轨迹未到达第 26 轮。原第 26 轮命令的回放和本次整例结果分别记录。[正式复跑](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#启用任务工作区后的本-agent-复跑)
+
+### 单目录验证
+
+现行任务模式使用原命令和附件复验。第 26 轮的 `/tmp/s27.py` 在同轮和下一轮均可读取，脚本摘要一致。Docker 探测确认只挂载一个 `/tmp`、新 Bash、只读根目录、无网络、拒绝旁支及 IPC 残留、关停回收。普通模式复现原来的临时文件清理。正式 HTTP 的两轮定向验证覆盖 `tool_edit` 和实际出站工具声明。[LongDS 验证](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#任务沙箱单目录验证)
+
 ## 历史 Python 专用工具
 
 以下记录属于替换前的版本。

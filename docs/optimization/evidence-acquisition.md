@@ -1,6 +1,6 @@
 # 相关证据可取得却未自主补到
 
-**截至第 120 节：正文搜索、按行读取、引用和缺项门禁继续在正式路径生效，自主获取与最终有据都未整体闭环；同代码复验的日志已证明“带声明、来源未读完、进入来源支持核验”的路径真实发生，其 7 条越界意见全部成立。** 网页查询回显的受控续跑产生两份被拒新稿和两次本地零命中搜索，没有扩源或新增正文证据，最后因模型传输错误停止；整体 Context 正式候选在四稿未完整修订后误转保存确认并已撤回；取证充分性候选的正式 target 命中 64 个决策回合上限、覆盖拒绝为 0，且该归档不保存验证入参，无法判断覆盖分支是否被触发。归因表明越界最早发生在生成侧的断言与所提交条款未对齐。尚无新增查询投影或缓存的接入收益证据；此前整体 Context 重组的补证收益保持，不能被孤立组件的结果覆盖。GPT Researcher 保持暂停，独立获取未作为新生产循环接入。
+**旧研究链能返回网页正文和续读位置，但曾在取得足够依据前提交无据结论。** 第 120 节保留完整来源支持输入及七条越界意见。整体 Context 候选曾取得补证收益，也曾将研究任务误转保存确认，随后撤回。现行网页发现与读取见[工具专题](../topics/tools.md)，活动准入见[网页工具剩余验收](../future/conversation-web-research-tools.md)。
 
 ## 问题范围与责任
 
@@ -384,7 +384,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 先执行真实 rg Contract 和原服务 Integration，覆盖中文、0/1/多匹配、跨片段、元数据排除、正则错误、输出受限、权限拒绝、搜索后读取、覆盖保真和旧参数拒绝；临时新增测试仅保存在根 .tmp。适用检查通过后，以原自然中文入口的单例验证工具真实可用与完整用户结果，分别计证，不扩展昂贵 cohort。保持 MiMo thinking 与现有来源验证，先 collect-only 和成本复核；服务故障或同一阻塞一次有界修正后复现即停止追加候选，并保存与撤回被否定部分。原长任务的引用和语义独立阻塞不能覆盖已到达的搜索检查点，也不能因此声明整个任务通过。
 
-本轮代码身份、脚本、测试与结果统一在[归档目录](../../.tmp/artifact-grep-20260916)，不写 C:/pae。后续结果在本节补齐，活动取舍与[Future](../future/conversation-verification-false-positive.md#3-下一准入边界)及[面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)相互引用。
+本轮代码身份、脚本、测试与结果统一在[归档目录](../../.tmp/artifact-grep-20260916)，不写 C:/pae。后续结果在本节补齐，活动取舍与[Future](../future/conversation-verification-false-positive.md#2-下一准入边界)及[面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)相互引用。
 
 
 ### §102 首轮边界结果与方案收敛
@@ -399,7 +399,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 归档及完整预声明：[本轮记录](../../.tmp/plain-source-tools-20260916/predeclaration.md)。原 §95 中文正式任务只执行一个原子 target，沿用 MiMo thinking、64 轮、48 次工具、4,000,000 Conversation token 上限；独立 Verifier 用量另记，不改 grader。不以静态工具调用次数断言用户结果；工具坐标、权限、引用还原与原用户交付分别判断。新增临时测试均在根 `.tmp`；原失败、脚手架异常与后续修正不删除。
 
-跨模块责任与旧实现保留例外见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。活动边界联动 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，引用子问题及历史失败继续归 [对象与来源支持记录](answer-object-mismatch.md)，经验回链 [面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)。运行结果在此节补齐，不以此前 220 项替代新表示的验证。
+跨模块责任与旧实现保留例外见 [ADR 0024](../adr/0024-plain-source-tools-and-inline-citations.md)。活动边界联动 [Future](../future/conversation-verification-false-positive.md#2-下一准入边界)，引用子问题及历史失败继续归 [对象与来源支持记录](answer-object-mismatch.md)，经验回链 [面试复盘](../interview/10-development-pitfalls.md#3-引用协议要求模型重复维护正文)。运行结果在此节补齐，不以此前 220 项替代新表示的验证。
 
 
 ### 确定性验证与启动环境
@@ -454,7 +454,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 随后复用候选的同一次真实决策继续执行原 Conversation 服务，不重抽首步，不把模型自述理解当成动作执行。最多追加 12 次模型请求、1,000,000 已知 tokens、2,400 秒，包含 Verifier 与结构修复；服务错误、自然终态或边界到达均保留。重点检查实际扩源、发现后的正文读取、被拒结论修订和完整交付，不能仅凭调用 `web_search` 宣布成功。新增脚本与产物统一位于根 `.tmp/query-result-reuse-20260917`；运行结果在本节补齐。
 
-活动条件回链 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)，已有机制保留及产品结果分离的经验回链[面试复盘](../interview/10-development-pitfalls.md#5-把减少文本当成保留有效正文)。本轮没有新增生产改动，离线状态回放不能冒充正式接入。
+活动条件回链 [Future](../future/conversation-verification-false-positive.md#2-下一准入边界)，已有机制保留及产品结果分离的经验回链[面试复盘](../interview/10-development-pitfalls.md#5-把减少文本当成保留有效正文)。本轮没有新增生产改动，离线状态回放不能冒充正式接入。
 
 查询与来源证据的交接边界现由[完成文档](completed/query-execution-handoff.md)拥有；本节只保留孤立提示没有改善完整修订的历史结论。
 
@@ -524,7 +524,7 @@ Conversation 拥有搜索目标、取舍和最终答案。Artifact 拥有资源�
 
 当前代码正式 baseline 已执行：原中文请求、MiMo v2.5、真实工具和入口不变；一次覆盖拒绝后继续取证，随后 Final 引用格式两次不合法而以 HTTP 503 结束，未交付答案。原始结果及脚手架标签问题见[评测登记](../evals/02-current-case-inventory.md#取证充分性契约的正式验证)。后一个问题在新契约之前存在，不将其归因为取证不足，也不在本轮改引用协议。
 
-候选在原 Final 中携带本稿充分性判断；覆盖反馈明确给出继续检索、修订和维持本稿的出口。声明由原服务投影至验证参数，存在时让稿件进入原局部支持与整稿核验，理由不作为来源证据。没有新工具、循环、缓存或持久状态。接口与责任归 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)，活动剩余门禁归 [Future](../future/conversation-verification-false-positive.md#3-下一准入边界)。
+候选在原 Final 中携带本稿充分性判断；覆盖反馈明确给出继续检索、修订和维持本稿的出口。声明由原服务投影至验证参数，存在时让稿件进入原局部支持与整稿核验，理由不作为来源证据。没有新工具、循环、缓存或持久状态。接口与责任归 [ADR 0027](../adr/0027-model-owned-evidence-sufficiency.md)，活动剩余门禁归 [Future](../future/conversation-verification-false-positive.md#2-下一准入边界)。
 
 固定同稿、同来源、同缺项分类的反事实已执行：去掉声明恢复覆盖拒绝；加上声明保持原文进入后续核验；无据保证、用户目标缺失和非法引用仍拒绝；后一稿不自动继承声明。相关测试 183 项通过。这些是 Contract / Runtime Conformance，不是模型自主行为或完整 E2E 通过。
 

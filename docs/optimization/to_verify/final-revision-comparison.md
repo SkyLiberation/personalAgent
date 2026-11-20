@@ -1,5 +1,7 @@
 # 最终稿独立核验与修订反馈分工
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 `ANSWER-ENUMERATION-SCOPE-001` 属于[研究修订未收敛问题](../claim-revision-nonconvergence.md)。本页保存枚举范围失败、v6 已接入机制及其证据；[Future 队列](../../future/design-optimization-backlog.md)拥有准入状态。v6 的实际拒稿、汇总修订和新稿核验链已成立，完整用户结果保持原失败，实际证据由[连续记录](../claim-revision-nonconvergence.md#独立阻塞恢复与原方案续验)拥有。
 
 2026-10-15 用户最新要求由同一研究模型生成 claims 和最终回答，并由一个核验器检查事实、融合和原目标；缺最终回答由完成门禁拦截。下一次职责及契约变更统一由[研究核验合并设计](research-goal-coverage.md#2026-10-15-sourcecoverage-与-final-合并设计)拥有，本页不再维护独立的 Final 目标覆盖方案。下文机制及预声明按原 v6 身份保留；新设计尚未实施，不能把旧局部结果记成新统一核验通过。

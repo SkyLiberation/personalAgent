@@ -94,18 +94,6 @@ PROMPTS = {
         template='当前不支持在本次响应结束后继续运行、稍后查询或调整的后台任务；系统没有启动后台工作。你可以改为在当前对话中继续完成。',
         owner="conversation",
     ),
-    'conversation.service.rejected_draft_details': PromptSpec(
-        name='conversation.service.rejected_draft_details',
-        version='2026-10-27.v1',
-        template='{error}\n完整被拒稿及逐段引用见最新 submitted_final。',
-        owner="conversation",
-    ),
-    'conversation.service.citation_repair': PromptSpec(
-        name='conversation.service.citation_repair',
-        version='2026-11-15.v1',
-        template='重新提交完整答复。需要引用时修正坐标或补读原文，可省略不必要且不可用的坐标。',
-        owner="conversation",
-    ),
     'conversation.service.verification_budget_exhausted': PromptSpec(
         name='conversation.service.verification_budget_exhausted',
         version='2026-10-27.v1',
@@ -219,6 +207,10 @@ PROMPTS = {
     'conversation.service.duplicate_call_repair': PromptSpec(
         name='conversation.service.duplicate_call_repair', version='v1', owner='conversation',
         template='先使用已提交操作的结果。确需新操作时发起新的合法调用，调用身份由原生工具协议绑定。',
+    ),
+    'conversation.context.tool.outcome_unknown': PromptSpec(
+        name='conversation.context.tool.outcome_unknown', version='v1', owner='conversation',
+        template='恢复时未找到工具 {tool_name} 的原始执行结果，这次写入可能已经生效。先用只读工具核对目标系统的实际状态，核实前不要重发写入。无法核实时，向用户说明结果未知。',
     ),
     'conversation.knowledge.exclusive': PromptSpec(
         name='conversation.knowledge.exclusive', version='v1', owner='conversation',

@@ -1,5 +1,7 @@
 # 参数拒绝未回传研究模型
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-PARAMETER-RECOVERY-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 的实验恢复边界。它与[调用前范围不明确](../completed/claim-argument-scope.md)分别验收；本项不判断引用是否支持论断。

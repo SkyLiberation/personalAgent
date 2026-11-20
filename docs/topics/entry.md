@@ -84,7 +84,7 @@
 - 注册飞书群聊消息加载端口，由明确的业务入口按需调用
 - 文本对话转换成 canonical Conversation contract；文件和固定业务命令进入对应 Application
   use case
-- 将结果回复到飞书消息或群聊
+- 将结果回复到飞书消息或群聊。已登记的事件重投读取原轮次，在原会话发送 `恢复轮次 <turn_id>` 可显式恢复。
 
 ## Web API 入口
 
@@ -98,7 +98,7 @@ Web 提供 Conversation、知识摄取与生命周期、Artifact、工具、简�
 
 ```text
 HTTP request
-  -> web/routes/entry.py
+  -> web/routes/conversation.py
   -> ConversationMessage + authenticated principal
   -> AgentService.converse()
   -> ConversationService.respond()
@@ -106,7 +106,7 @@ HTTP request
 
 适用于：
 
-- `GET /api/entry/stream`
+- `POST /api/conversation/turns` 支持 JSON 和 SSE。续聊提交原 Session ID、本次原话和新请求 ID。
 
 ### 飞书 entry
 
@@ -116,7 +116,7 @@ HTTP request
 Feishu long connection event
   -> FeishuIncomingMessage
   -> optional file download
-  -> text conversation: AgentService.converse()
+  -> text conversation: AgentService.converse() with channel session and event identity
   -> file/group/business command: corresponding explicit Application use case
   -> Feishu reply
 ```
@@ -131,6 +131,8 @@ CLI command
   -> AgentService.converse(source_platform="cli")
   -> ConversationService.respond()
 ```
+
+省略 `--session-id` 创建新会话。后续用 `--session-id <session_id>` 续聊，脚本重试沿用原 `--client-request-id`。恢复运行用 `--resume-turn-id <turn_id>`。
 
 ## 当前能力
 
@@ -152,11 +154,11 @@ CLI 命令见上文。文件上传、知识生命周期确认和图谱重同步�
 
 ### 4. 用户身份模型仍较轻量
 
-Web 侧通过 API Key 映射用户，SSE 也支持 query 参数传 key；飞书侧可配置是否使用默认用户。身份及隔离的实际边界见 [Context](context-engineering.md#visibility-的定义与分层)，不从入口数量推导组织级权限能力。
+Web 侧通过 API Key 映射用户，SSE 使用同一请求头鉴权。飞书侧可配置是否使用默认用户。身份及隔离的实际边界见 [Context](context-engineering.md#visibility-的定义与分层)，不从入口数量推导组织级权限能力。
 
 ### 5. 流式语义仍有限
 
-`entry_stream` 先完成一次 Conversation turn，再将最终文本切片为 SSE。该入口没有模型 token 原生流，也没有独立的可恢复执行状态；事件字段见 [API](../api.md#get-apientrystream)。
+SSE 在 Turn 登记后返回原轮次身份，交付完成后再发送答案分块。断连后，浏览器重试会沿用原请求。已收到轮次身份时，也可以显式选择恢复执行。[SSE 响应](../api.md#sse-响应)
 
 ## 证据与后续准入
 

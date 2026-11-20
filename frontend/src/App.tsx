@@ -1,7 +1,7 @@
 import { FormEvent, type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
   askKnowledge,
-  buildEntryStreamUrl,
+  ConversationTurnError,
   confirmPendingAction,
   fetchDigest,
   fetchInvestigationProject,
@@ -11,13 +11,17 @@ import {
   getApiKey,
   rejectPendingAction,
   resetDebugData,
+  resumeConversationTurn,
   retryGraphSync,
   setApiKey,
   setInvestigationProjectPaused,
+  streamConversationTurn,
   submitReviewFeedback,
   uploadEntryFile,
   type AskHistoryItem,
   type Citation,
+  type ConversationTurnEvent,
+  type ConversationTurnRequest,
   type DigestResponse,
   type GraphTopology,
   type Note,
@@ -77,7 +81,7 @@ type TimelineEvent = {
 };
 
 type AskHistoryView = AskHistoryItem & {
-  status: "streaming" | "done" | "error";
+  status: "streaming" | "pending" | "done" | "error";
   error?: string;
   steps?: ExecutionStep[];
   execution_trace?: string[];
@@ -88,6 +92,12 @@ type AskHistoryView = AskHistoryItem & {
   project_reference?: ProjectReference;
   project_state?: string;
   project_status_reason?: string;
+};
+
+type ConversationAttempt = {
+  request: ConversationTurnRequest;
+  item: AskHistoryView;
+  turnId?: string;
 };
 
 type SessionSummary = {
@@ -131,7 +141,10 @@ export default function App() {
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [isSearchingHistory, setIsSearchingHistory] = useState(false);
   const [activeCitationKey, setActiveCitationKey] = useState<string | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const conversationStreamRef = useRef<AbortController | null>(null);
+  const conversationAttemptsRef = useRef(new Map<string, ConversationAttempt>());
+  const conversationKey = conversationSessionKey(userId, sessionId);
+  const currentAttempt = conversationAttemptsRef.current.get(conversationKey);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Tracks the session the user is actually viewing, so a refresh that started
   // before a session switch can't clobber the newly-opened session's thread.
@@ -144,6 +157,15 @@ export default function App() {
   useEffect(() => {
     activeSessionRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (conversationAttemptsRef.current.has(conversationKey)) return;
+    const attempt = restoreConversationAttempt(userId, sessionId);
+    if (!attempt) return;
+    conversationAttemptsRef.current.set(conversationKey, attempt);
+    setAskHistory((current) => [attempt.item, ...current].slice(0, 20));
+    setSelectedAskId(attempt.item.id);
+  }, [conversationKey, sessionId, userId]);
 
   useEffect(() => {
     if (activeCitationKey) {
@@ -169,8 +191,7 @@ export default function App() {
 
     return () => {
       window.clearInterval(intervalId);
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
+      closeConversationStream();
     };
   }, [sessionId]);
 
@@ -327,353 +348,106 @@ export default function App() {
     setIsSearchingHistory(false);
   }
 
+  function closeConversationStream() {
+    conversationStreamRef.current?.abort();
+    conversationStreamRef.current = null;
+  }
+
   function onEntry(event: FormEvent) {
     event.preventDefault();
+    if (isUploading || conversationStreamRef.current || conversationAttemptsRef.current.has(conversationKey)) return;
     const text = question.trim();
 
     if (pendingFile) {
       void submitFileWithText(pendingFile, text || undefined);
       return;
     }
+    if (!text) return;
 
-    if (!text) {
-      return;
-    }
-
-    eventSourceRef.current?.close();
-    const prompt = text;
-    const historyItem: AskHistoryView = {
-      id: crypto.randomUUID(),
-      user_id: userId,
+    const request: ConversationTurnRequest = {
       session_id: sessionId,
-      question: prompt,
-      answer: "",
-      citations: [],
-      graph_enabled: false,
-      created_at: new Date().toISOString(),
-      status: "streaming",
+      client_request_id: crypto.randomUUID(),
+      text,
+      create_session: !conversationSessionExists(conversationKey),
+      user_id: userId,
     };
-
+    const item = conversationHistoryItem(request, "streaming");
+    const attempt = { request, item };
+    conversationAttemptsRef.current.set(conversationKey, attempt);
+    rememberPendingTurn(conversationKey, request);
     setActiveTab("ask");
     setQuestion("");
-    setSelectedAskId(historyItem.id);
-    setAskHistory((current) => [historyItem, ...current].slice(0, 20));
-    setStatus("正在理解你的意图...");
-
-    const source = new EventSource(buildEntryStreamUrl(prompt, userId, sessionId));
-    eventSourceRef.current = source;
-
-    source.addEventListener("intent", (streamEvent) => {
-      const payload = parseSsePayload<{ intents?: string[]; reason?: string }>(streamEvent);
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                intents: payload.intents ?? item.intents,
-                intent_reason: payload.reason ?? item.intent_reason,
-              }
-            : item
-        )
-      );
-      setStatus(payload.reason ?? "正在处理...");
-    });
-
-    source.addEventListener("steps_projected", (streamEvent) => {
-      const payload = parseSsePayload<{ steps?: ExecutionStep[] }>(streamEvent);
-      if (payload.steps?.length) {
-        setAskHistory((current) =>
-          current.map((item) =>
-            item.id === historyItem.id
-              ? { ...item, steps: payload.steps }
-              : item
-          )
-        );
-        setExpandedPlans((current) => {
-          const next = new Set(current);
-          next.add(historyItem.id);
-          return next;
-        });
-        setStatus(`已生成执行步骤，共 ${payload.steps.length} 步，正在执行...`);
-      }
-    });
-
-    source.addEventListener("execution_trace", (streamEvent) => {
-      const payload = parseSsePayload<{ execution_trace?: string[] }>(streamEvent);
-      if (payload.execution_trace?.length) {
-        setAskHistory((current) =>
-          current.map((item) =>
-            item.id === historyItem.id
-              ? { ...item, execution_trace: payload.execution_trace }
-              : item
-          )
-        );
-      }
-    });
-
-    // step execution progress events
-    const updateExecutionStepStatus = (
-      stepId: string,
-      newStatus: string,
-      output?: Pick<ExecutionStep, "output_label" | "output_title" | "output_preview">
-    ) => {
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id && item.steps
-            ? {
-                ...item,
-                steps: item.steps.map((ps) =>
-                  ps.step_id === stepId ? { ...ps, status: newStatus, ...output } : ps
-                ),
-              }
-            : item
-        )
-      );
-    };
-
-    source.addEventListener("step_started", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string; description?: string }>(streamEvent);
-      if (payload.step_id) {
-        updateExecutionStepStatus(payload.step_id, "running");
-        setStatus(payload.description ? `正在执行：${payload.description}` : "正在执行步骤...");
-      }
-    });
-
-    source.addEventListener("step_completed", (streamEvent) => {
-      const payload = parseSsePayload<{
-        step_id?: string;
-        description?: string;
-        output_label?: string;
-        output_title?: string;
-        output_preview?: string;
-      }>(streamEvent);
-      if (payload.step_id) {
-        updateExecutionStepStatus(payload.step_id, "completed", {
-          output_label: payload.output_label,
-          output_title: payload.output_title,
-          output_preview: payload.output_preview,
-        });
-        setStatus(payload.description ? `已完成：${payload.description}` : "步骤已完成，正在继续...");
-      }
-    });
-
-    source.addEventListener("step_failed", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
-      if (payload.step_id) updateExecutionStepStatus(payload.step_id, "failed");
-    });
-
-    source.addEventListener("step_skipped", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string }>(streamEvent);
-      if (payload.step_id) updateExecutionStepStatus(payload.step_id, "skipped");
-    });
-
-    source.addEventListener("pending_action_created", (streamEvent) => {
-      const payload = parseSsePayload<{
-        action_id?: string;
-        token?: string;
-        action_type?: string;
-        note_id?: string;
-        title?: string;
-        summary?: string;
-        expires_at?: string;
-        message?: string;
-      }>(streamEvent);
-      if (payload.action_id && payload.token) {
-        const newAction: PendingActionItem = {
-          id: payload.action_id,
-          user_id: userId,
-          action_type: payload.action_type ?? "delete_note",
-          target_id: payload.note_id ?? "",
-          title: payload.title ?? "待确认操作",
-          description: payload.message ?? payload.summary ?? "",
-          status: "pending",
-          token: payload.token,
-          created_at: new Date().toISOString(),
-          expires_at: payload.expires_at ?? new Date(Date.now() + 3600000).toISOString(),
-          resolved_at: null,
-        };
-        setPendingActions((current) => {
-          if (current.some((a) => a.id === newAction.id)) return current;
-          return [newAction, ...current];
-        });
-        setStatus(payload.message ?? "有操作需要你的确认。");
-      }
-      void refreshPendingActions();
-    });
-
-    source.addEventListener("draft_ready", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string; draft_text?: string }>(streamEvent);
-      if (payload.draft_text) {
-        if (payload.step_id) {
-          updateExecutionStepStatus(payload.step_id, "completed", {
-            output_label: "生成草稿",
-            output_preview: payload.draft_text,
-          });
-        }
-        setStatus("知识草稿已生成，正在写入知识库...");
-      }
-    });
-
-    source.addEventListener("tool_result", (streamEvent) => {
-      const payload = parseSsePayload<{
-        tool_name?: string;
-        title?: string;
-        content_preview?: string;
-      }>(streamEvent);
-      if (!payload.content_preview) return;
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                captured_title: payload.title ?? item.captured_title,
-                captured_preview: payload.content_preview,
-              }
-            : item
-        )
-      );
-    });
-
-    source.addEventListener("step_replan_attempt", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string; reason?: string }>(streamEvent);
-      if (payload.step_id) {
-        setStatus(`步骤 ${payload.step_id} 失败，正在尝试重新规划...`);
-      }
-    });
-
-    source.addEventListener("steps_replanned", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string; revised_step_count?: number }>(streamEvent);
-      if (payload.step_id) {
-        setStatus(`已重新规划，生成 ${payload.revised_step_count ?? 0} 个新步骤。`);
-      }
-    });
-
-    source.addEventListener("step_replan_failed", (streamEvent) => {
-      const payload = parseSsePayload<{ step_id?: string; reason?: string }>(streamEvent);
-      if (payload.step_id) {
-        setStatus(`重新规划失败：${payload.reason ?? "无法恢复"}`);
-      }
-    });
-
-    source.addEventListener("capture_result", (streamEvent) => {
-      const payload = parseSsePayload<{ note?: Note; reply?: string }>(streamEvent);
-      const reply = payload.reply ?? "已采集完成。";
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? { ...item, answer: reply, status: "done" as const }
-            : item
-        )
-      );
-      setStatus(reply);
-    });
-
-    source.addEventListener("status", (streamEvent) => {
-      const payload = parseSsePayload<{ message?: string }>(streamEvent);
-      setStatus(payload.message ?? "正在生成回答...");
-    });
-
-    source.addEventListener("metadata", (streamEvent) => {
-      const payload = parseSsePayload<{
-        citations?: Citation[];
-        graph_enabled?: boolean;
-      }>(streamEvent);
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                citations: payload.citations ?? item.citations,
-                graph_enabled: payload.graph_enabled ?? item.graph_enabled,
-              }
-            : item
-        )
-      );
-    });
-
-    source.addEventListener("answer_delta", (streamEvent) => {
-      const payload = parseSsePayload<{ answer?: string }>(streamEvent);
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                answer: payload.answer ?? item.answer,
-              }
-            : item
-        )
-      );
-    });
-
-    source.addEventListener("done", (streamEvent) => {
-      const payload = parseSsePayload<{
-        answer?: string;
-        reply?: string;
-        citations?: Citation[];
-        graph_enabled?: boolean;
-        project_reference?: ProjectReference;
-      }>(streamEvent);
-      const finalAnswer = payload.answer ?? payload.reply ?? historyItem.answer;
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                answer: finalAnswer,
-                citations: payload.citations ?? item.citations,
-                graph_enabled: payload.graph_enabled ?? item.graph_enabled,
-                project_reference: payload.project_reference ?? item.project_reference,
-                project_state: payload.project_reference?.state ?? item.project_state,
-                status: "done",
-              }
-            : item
-        )
-      );
-      setSelectedAskId(historyItem.id);
-      setStatus(finalAnswer);
-      void refreshAskHistorySelection(historyItem);
-      source.close();
-      eventSourceRef.current = null;
-    });
-
-    source.onerror = (streamEvent) => {
-      const payload = streamEvent instanceof MessageEvent
-        ? parseSsePayload<{ message?: unknown }>(streamEvent)
-        : {};
-      const message = typeof payload.message === "string" && payload.message.trim()
-        ? payload.message
-        : "流式返回被中断，请检查后端日志后重试。";
-      setAskHistory((current) =>
-        current.map((item) =>
-          item.id === historyItem.id
-            ? {
-                ...item,
-                status: "error",
-                error: message,
-              }
-            : item
-        )
-      );
-      setStatus(message);
-      source.close();
-      eventSourceRef.current = null;
-    };
+    setSelectedAskId(item.id);
+    setAskHistory((current) => [item, ...current].slice(0, 20));
+    void runConversation(attempt);
   }
 
-  function refreshAskHistorySelection(fallbackItem?: AskHistoryView) {
-    setAskHistory((currentHistory) => {
-      const merged = mergeAskHistory([], currentHistory, fallbackItem);
-      setAllAskHistory((allHistory) => mergeAskHistory([], allHistory, fallbackItem));
-      setSelectedAskId((currentSelectedId) =>
-        currentSelectedId && merged.some((item) => item.id === currentSelectedId)
-          ? currentSelectedId
-          : fallbackItem?.id ?? merged[0]?.id ?? null
-      );
-      return merged;
-    });
+  async function runConversation(attempt: ConversationAttempt, resumeTurnId?: string) {
+    if (conversationStreamRef.current) return;
+    const controller = new AbortController();
+    conversationStreamRef.current = controller;
+    const key = conversationSessionKey(attempt.request.user_id, attempt.request.session_id);
+    const previousAttemptUncertain = attempt.item.status === "pending";
+    const updateTurn = (update: Partial<AskHistoryView>) => {
+      const item = { ...attempt.item, ...update };
+      attempt.item = item;
+      setAskHistory((current) => current.map((existing) => existing.id === item.id ? item : existing));
+    };
+    const clearAttempt = () => {
+      conversationAttemptsRef.current.delete(key);
+      rememberPendingTurn(key);
+    };
+
+    updateTurn({ status: "streaming", error: undefined });
+    setStatus(resumeTurnId ? "正在恢复执行..." : "正在提交消息...");
+    const receive = (event: ConversationTurnEvent) => {
+      if (controller.signal.aborted) return;
+      if ("turn_id" in event) {
+        if (event.session_id !== attempt.request.session_id || (attempt.turnId && event.turn_id !== attempt.turnId)) {
+          throw new Error("对话服务返回了不同的会话或轮次。");
+        }
+        if (!attempt.turnId) rememberPendingTurn(key, attempt.request, event.turn_id);
+        attempt.turnId = event.turn_id;
+        rememberConversationSession(key);
+      }
+
+      if (event.type === "status") {
+        setStatus("正在生成回答...");
+      } else if (event.type === "answer_delta") {
+        updateTurn({ answer: event.answer });
+      } else if (event.type === "pending") {
+        const message = "本轮仍在处理，稍后可重试本轮以查看结果。";
+        updateTurn({ status: "pending", error: message });
+        setStatus(message);
+      } else if (event.type === "done") {
+        clearAttempt();
+        updateTurn({ status: "done", answer: event.answer });
+        setAllAskHistory((current) => [attempt.item, ...current].slice(0, 20));
+        setStatus(event.answer);
+        void refreshPendingActions();
+      }
+    };
+    try {
+      if (resumeTurnId) {
+        receive(await resumeConversationTurn(resumeTurnId, attempt.request.user_id, controller.signal));
+      } else {
+        await streamConversationTurn(attempt.request, controller.signal, receive);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const rejected = !previousAttemptUncertain && !attempt.turnId && error instanceof ConversationTurnError
+        && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
+      const message = error instanceof Error && error.message ? error.message : "对话连接已中断，可以重试本轮。";
+      if (rejected) clearAttempt();
+      updateTurn({ status: rejected ? "error" : "pending", error: message });
+      setStatus(message);
+    } finally {
+      if (conversationStreamRef.current === controller) conversationStreamRef.current = null;
+    }
   }
 
   function startNewDialog() {
+    closeConversationStream();
     const nextSessionId = crypto.randomUUID();
     setAskHistory([]);
     setSelectedAskId(null);
@@ -691,8 +465,15 @@ export default function App() {
       setActiveTab("ask");
       return;
     }
-    setAskHistory([]);
-    setSelectedAskId(null);
+    closeConversationStream();
+    const attempt = conversationAttemptsRef.current.get(conversationSessionKey(userId, targetSessionId));
+    const history = allAskHistory.filter((item) => item.session_id === targetSessionId && item.user_id === userId);
+    if (attempt) {
+      attempt.item = { ...attempt.item, status: "pending" };
+      history.unshift(attempt.item);
+    }
+    setAskHistory(history);
+    setSelectedAskId(history[0]?.id ?? null);
     setQuestion("");
     setHistorySearchQuery("");
     setExpandedPlans(new Set());
@@ -799,8 +580,9 @@ export default function App() {
     setStatus("正在清空调试数据...");
     try {
       const result = await resetDebugData();
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
+      closeConversationStream();
+      conversationAttemptsRef.current.clear();
+      clearPendingTurns();
       setQuestion("");
       setAskHistory([]);
       setAllAskHistory([]);
@@ -1202,7 +984,17 @@ export default function App() {
                     >
                       {isUploading ? "上传中..." : "上传文件"}
                     </button>
-                    <button type="submit">发送</button>
+                    {currentAttempt?.item.status === "pending" ? (
+                      <>
+                        <button type="button" onClick={() => void runConversation(currentAttempt)}>重试本轮</button>
+                        {currentAttempt.turnId ? (
+                          <button type="button" onClick={() => void runConversation(currentAttempt, currentAttempt.turnId)}>
+                            恢复执行
+                          </button>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <button type="submit" disabled={Boolean(currentAttempt) || isUploading}>发送</button>
                   </div>
                 </form>
                 </div>
@@ -1550,10 +1342,6 @@ function formatDateTime(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function parseSsePayload<T>(event: MessageEvent<string>): T {
-  return JSON.parse(event.data) as T;
-}
-
 function translateExecutionStep(actionType: string): string {
   switch (actionType) {
     case "retrieve": return "检索";
@@ -1594,6 +1382,9 @@ function translateAskStatus(status: AskHistoryView["status"]): string {
   if (status === "done") {
     return "已完成";
   }
+  if (status === "pending") {
+    return "等待结果";
+  }
   return "出错";
 }
 
@@ -1624,6 +1415,91 @@ function describeGraphStatus(note: Note): string {
     return "图谱同步失败，可以查看错误提示后重新发起同步。";
   }
   return "这条笔记还没有进入图谱同步流程。";
+}
+
+function conversationSessionKey(userId: string, sessionId: string): string {
+  return `personal-agent-conversation-session:${JSON.stringify([userId, sessionId])}`;
+}
+
+const pendingTurnPrefix = "personal-agent-pending-turn:";
+
+function conversationHistoryItem(
+  request: ConversationTurnRequest,
+  status: "streaming" | "pending",
+): AskHistoryView {
+  return {
+    id: request.client_request_id,
+    user_id: request.user_id,
+    session_id: request.session_id,
+    question: request.text,
+    answer: "",
+    citations: [],
+    graph_enabled: false,
+    created_at: new Date().toISOString(),
+    status,
+  };
+}
+
+function restoreConversationAttempt(userId: string, sessionId: string): ConversationAttempt | undefined {
+  try {
+    const key = pendingTurnPrefix + conversationSessionKey(userId, sessionId);
+    const value: unknown = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    if (value && typeof value === "object"
+        && "user_id" in value && value.user_id === userId
+        && "session_id" in value && value.session_id === sessionId
+        && "text" in value && typeof value.text === "string"
+        && "client_request_id" in value && typeof value.client_request_id === "string"
+        && "create_session" in value && typeof value.create_session === "boolean") {
+      const request = {
+        user_id: userId, session_id: sessionId, text: value.text,
+        client_request_id: value.client_request_id, create_session: value.create_session,
+      };
+      const turnId = "turnId" in value && typeof value.turnId === "string" ? value.turnId : undefined;
+      return { request, item: conversationHistoryItem(request, "pending"), turnId };
+    }
+  } catch {
+    return;
+  }
+}
+
+function rememberPendingTurn(key: string, request?: ConversationTurnRequest, turnId?: string): void {
+  try {
+    if (request) sessionStorage.setItem(pendingTurnPrefix + key, JSON.stringify({ ...request, turnId }));
+    else sessionStorage.removeItem(pendingTurnPrefix + key);
+  } catch {
+    // The active tab still retains the request in memory.
+  }
+}
+
+function clearPendingTurns(): void {
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith(pendingTurnPrefix)) sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Storage can be disabled.
+  }
+}
+
+const admittedConversationSessions = new Set<string>();
+
+function conversationSessionExists(key: string): boolean {
+  if (admittedConversationSessions.has(key)) return true;
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberConversationSession(key: string): void {
+  if (admittedConversationSessions.has(key)) return;
+  admittedConversationSessions.add(key);
+  try {
+    localStorage.setItem(key, "1");
+  } catch {
+    // The current page can still continue the session.
+  }
 }
 
 function getOrCreateSessionId(): string {
@@ -1725,58 +1601,6 @@ function summarizeSessionsFromHistory(history: AskHistoryView[]): SessionSummary
       turnCount: ordered.length,
     };
   });
-}
-
-function mergeAskHistory(
-  serverItems: AskHistoryView[],
-  currentItems: AskHistoryView[],
-  fallbackItem?: AskHistoryView
-): AskHistoryView[] {
-  const merged: AskHistoryView[] = [];
-  const seen = new Set<string>();
-
-  for (const item of serverItems) {
-    const localItem = currentItems.find(
-      (candidate) =>
-        candidate.id === item.id ||
-        sameHistoryItem(candidate, item),
-    );
-    merged.push(
-      localItem
-        ? {
-            ...item,
-            steps: item.steps?.length ? item.steps : localItem.steps,
-            execution_trace: item.execution_trace?.length ? item.execution_trace : localItem.execution_trace,
-          }
-        : item,
-    );
-    seen.add(item.id);
-    if (localItem) seen.add(localItem.id);
-  }
-
-  const localCandidates = fallbackItem ? [fallbackItem, ...currentItems] : currentItems;
-  for (const item of localCandidates) {
-    if (seen.has(item.id)) {
-      continue;
-    }
-    const matchedServerItem = serverItems.find(
-      (serverItem) => sameHistoryItem(serverItem, item)
-    );
-    if (matchedServerItem) {
-      continue;
-    }
-    merged.push(item);
-    seen.add(item.id);
-  }
-
-  return merged
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
-    .slice(0, 20);
-}
-
-function sameHistoryItem(left: AskHistoryView, right: AskHistoryView): boolean {
-  if (left.id === right.id) return true;
-  return left.session_id === right.session_id && left.question === right.question;
 }
 
 function MarkdownAnswer({ text }: { text: string }) {

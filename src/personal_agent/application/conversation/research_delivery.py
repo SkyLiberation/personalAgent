@@ -12,7 +12,6 @@ from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
-from .citations import CitationBindingError, materialize_cited_draft
 from .models import (
     ActionObservation, DecisionFeedback, InteractionInput, InteractionTrace,
     SubmittedFinal,
@@ -39,14 +38,6 @@ def experiment_submission(
     if (ref.owner != trace.principal or ref.resource_type != "conversation_final"
             or ref.resource_id != f"{trace.interaction_run_ref}:final"):
         raise DeliveryIncomplete(DeliveryGap(code="identity_mismatch", message=prompts.render("conversation.experiment.submission_identity_mismatch")))
-    try:
-        materialize_cited_draft(submission.final.segments, trace.inputs, prompts=prompts)
-    except CitationBindingError as exc:
-        raise DeliveryIncomplete(DeliveryGap(
-            code="identity_mismatch", message=prompts.render(
-                "conversation.experiment.citations_unbound", error=str(exc)[:1500]
-            ),
-        )) from exc
     return submission
 
 

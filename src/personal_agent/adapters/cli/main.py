@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import json
 import logging
+from uuid import uuid4
 
+from pydantic import ValidationError
 import typer
 
 from personal_agent.application.capture import CaptureService
 from personal_agent.application.conversation import ConversationMessage, ConversationTurnView
+from personal_agent.application.conversation.errors import (
+    ConversationInputError,
+    ConversationOperationConflict,
+    ConversationOperationNotFound,
+    ConversationTurnBlocked,
+    ConversationTurnPending,
+)
+from personal_agent.application.conversation.service import submitted_turn_id
 from personal_agent.kernel.contracts.scope import (
     AuthenticatedPrincipal,
 )
@@ -51,17 +61,74 @@ def _build_service() -> AgentService:
     )
 
 
-def _format_conversation_result(result: ConversationTurnView) -> str:
-    return result.model_dump_json(indent=2)
+def _format_conversation_result(result: ConversationTurnView, client_request_id: str | None) -> str:
+    payload = {
+        "session_id": result.conversation_id,
+        "turn_id": result.interaction_run_ref,
+        **result.model_dump(mode="json", exclude={"conversation_id", "interaction_run_ref"}),
+    }
+    if client_request_id is not None:
+        payload["client_request_id"] = client_request_id
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _resume_conversation(
+    service: AgentService,
+    *,
+    principal: AuthenticatedPrincipal,
+    session_id: str | None,
+    turn_id: str,
+) -> ConversationTurnView:
+    service.authorize_entry(principal, "cli", preflight=True)
+    try:
+        trace = service.conversation_trace(turn_id, principal=principal)
+    except PermissionError:
+        raise ConversationOperationNotFound("轮次不存在。") from None
+    except ValueError as exc:
+        raise typer.BadParameter("轮次 ID 无效。", param_hint="--resume-turn-id") from exc
+    if trace is None or (session_id is not None and trace.conversation_id != session_id):
+        raise ConversationOperationNotFound("轮次不存在。")
+    return service.converse(
+        conversation_id=trace.conversation_id,
+        interaction_run_ref=turn_id,
+        principal=principal,
+        source_platform="cli",
+    )
 
 
 @app.command()
 def entry(
-    text: str = typer.Argument(..., help="入口文本（问题、指令或待采集内容）"),
+    text: str | None = typer.Argument(None, help="入口文本（问题、指令或待采集内容）"),
     user_id: str | None = None,
-    session_id: str = "default",
+    session_id: str | None = typer.Option(None, help="续聊使用已有会话 ID。省略时创建新会话。"),
+    create_session: bool = typer.Option(False, "--create-session", help="使用指定会话 ID 创建新会话。"),
+    client_request_id: str | None = typer.Option(None, help="重试时沿用原会话 ID 和请求 ID。"),
+    resume_turn_id: str | None = typer.Option(None, help="按原轮次 ID 恢复会话。"),
 ) -> None:
     """通过 canonical interaction loop 处理一轮用户消息。"""
+    if session_id == "":
+        raise typer.BadParameter("会话 ID 不能为空。", param_hint="--session-id")
+    if client_request_id == "":
+        raise typer.BadParameter("请求 ID 不能为空。", param_hint="--client-request-id")
+    if (text is None) == (resume_turn_id is None):
+        raise typer.BadParameter("请提供消息文本或 --resume-turn-id，二者只能选一项。")
+    if resume_turn_id is not None and (not resume_turn_id or create_session or client_request_id is not None):
+        raise typer.BadParameter("恢复需要轮次 ID，且不能指定新会话或请求 ID。", param_hint="--resume-turn-id")
+    message = None
+    if text is not None:
+        if not text.strip():
+            raise typer.BadParameter("消息不能为空。", param_hint="text")
+        try:
+            message = ConversationMessage(role="user", content=text)
+        except ValidationError as exc:
+            raise typer.BadParameter("消息超过长度限制。", param_hint="text") from exc
+
+    registered_turn_id: str | None = None
+
+    def remember_registered_turn(turn_id: str) -> None:
+        nonlocal registered_turn_id
+        registered_turn_id = turn_id
+
     with _build_service() as service:
         try:
             if service.settings.policy.restricts_principals:
@@ -70,17 +137,50 @@ def entry(
                     raise EntryPolicyDenied("启用主体名单时，命令行不能切换部署配置的主体。")
             else:
                 assigned_user = user_id or "default"
-            logger.info("CLI entry invoked user=%s session=%s", assigned_user, session_id)
-            result = service.converse(
-                conversation_id=session_id,
-                messages=[ConversationMessage(role="user", content=text.strip())],
-                principal=AuthenticatedPrincipal(tenant_id="personal-agent", user_id=assigned_user),
-                source_platform="cli",
-            )
-        except EntryPolicyDenied as exc:
+            principal = AuthenticatedPrincipal(tenant_id="personal-agent", user_id=assigned_user)
+            if resume_turn_id is not None:
+                result = _resume_conversation(
+                    service, principal=principal, session_id=session_id, turn_id=resume_turn_id,
+                )
+            else:
+                if session_id is None:
+                    session_id = f"session_{uuid4().hex}"
+                    create_session = True
+                client_request_id = client_request_id or uuid4().hex
+                logger.info("CLI entry invoked user=%s session=%s", assigned_user, session_id)
+                try:
+                    result = service.converse(
+                        conversation_id=session_id,
+                        message=message,
+                        principal=principal,
+                        source_platform="cli",
+                        create_session=create_session,
+                        client_request_id=client_request_id,
+                        on_registered=remember_registered_turn,
+                    )
+                except ConversationTurnPending:
+                    typer.echo(json.dumps({
+                        "session_id": session_id,
+                        "turn_id": registered_turn_id or submitted_turn_id(principal, session_id, client_request_id),
+                        "client_request_id": client_request_id,
+                        "status": "pending",
+                    }, ensure_ascii=False, indent=2))
+                    return
+                except (Exception, KeyboardInterrupt):
+                    if registered_turn_id is not None:
+                        typer.echo(f"轮次已登记，可用 --resume-turn-id {registered_turn_id} 恢复。", err=True)
+                    raise
+        except ConversationTurnBlocked as exc:
+            typer.echo(f"{exc}。可使用 --resume-turn-id {exc.turn_id} 恢复。", err=True)
+            raise typer.Exit(code=1) from exc
+        except PermissionError as exc:
+            typer.echo("当前入口无法访问或恢复该轮次。", err=True)
+            raise typer.Exit(code=1) from exc
+        except (EntryPolicyDenied, ConversationInputError, ConversationOperationConflict,
+                ConversationOperationNotFound) as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
-        typer.echo(_format_conversation_result(result))
+        typer.echo(_format_conversation_result(result, client_request_id))
 
 
 @app.command("worker")

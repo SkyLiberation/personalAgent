@@ -5,19 +5,19 @@ import json
 import logging
 import threading
 import time
+from uuid import NAMESPACE_OID, uuid5
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
     GetMessageResourceRequest,
-    ListMessageRequest,
     P2ImMessageReceiveV1,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
 
-from personal_agent.adapters.feishu.message_parser import parse_p2_message_event, safe_json_loads
+from personal_agent.adapters.feishu.message_parser import parse_p2_message_event
 from personal_agent.adapters.feishu.models import FeishuIncomingMessage
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class FeishuClientMixin:
         if incoming_message is None:
             logger.info("Feishu long connection ignored empty message event")
             return
-        if self._is_duplicate_event(incoming_message.event_id):
+        if self._is_duplicate_event(incoming_message.client_request_id):
             logger.info(
                 "Feishu long connection duplicate event ignored event_id=%s message_id=%s",
                 incoming_message.event_id,
@@ -150,15 +150,23 @@ class FeishuClientMixin:
             logger.info("Skip Feishu reply because app credentials are not configured event_id=%s", incoming_message.event_id)
             return
 
+        request_id = incoming_message.client_request_id
+        reply_uuid = str(uuid5(NAMESPACE_OID, request_id)) if request_id is not None else None
         if incoming_message.message_id:
-            self._reply_via_message_id(incoming_message, reply_text)
+            self._reply_via_message_id(incoming_message, reply_text, reply_uuid=reply_uuid)
             return
 
         chat_id = incoming_message.chat_id or incoming_message.metadata.get("chat_id")
         if not chat_id:
             logger.warning("Skip Feishu reply because both message_id and chat_id are missing event_id=%s", incoming_message.event_id)
             return
-        self._send_via_chat_id(incoming_message, reply_text, chat_id)
+        self._create_chat_message(
+            chat_id=chat_id,
+            text=reply_text,
+            event_id=incoming_message.event_id,
+            message_id=incoming_message.message_id,
+            reply_uuid=reply_uuid,
+        )
 
     def send_text_to_chat(self, chat_id: str, text: str) -> None:
         """Send a proactive text message to a Feishu chat."""
@@ -171,15 +179,19 @@ class FeishuClientMixin:
         """Send a review digest to a Feishu chat."""
         self.send_text_to_chat(chat_id, digest_text)
 
-    def _reply_via_message_id(self, incoming_message: FeishuIncomingMessage, reply_text: str) -> None:
+    def _reply_via_message_id(
+        self, incoming_message: FeishuIncomingMessage, reply_text: str, *, reply_uuid: str | None
+    ) -> None:
+        body = (
+            ReplyMessageRequestBody.builder()
+            .content(json.dumps({"text": reply_text}, ensure_ascii=False))
+            .msg_type("text")
+        )
+        if reply_uuid is not None:
+            body.uuid(reply_uuid)
         request = ReplyMessageRequest.builder() \
             .message_id(incoming_message.message_id or "") \
-            .request_body(
-                ReplyMessageRequestBody.builder()
-                .content(json.dumps({"text": reply_text}, ensure_ascii=False))
-                .msg_type("text")
-                .build()
-            ) \
+            .request_body(body.build()) \
             .build()
 
         response = self._client_value().im.v1.message.reply(request)
@@ -195,20 +207,6 @@ class FeishuClientMixin:
             incoming_message.message_id,
         )
 
-    def _send_via_chat_id(self, incoming_message: FeishuIncomingMessage, reply_text: str, chat_id: str) -> None:
-        self._create_chat_message(
-            chat_id=chat_id,
-            text=reply_text,
-            event_id=incoming_message.event_id,
-            message_id=incoming_message.message_id,
-        )
-        logger.info(
-            "Feishu reply sent event_id=%s message_id=%s chat_id=%s mode=create",
-            incoming_message.event_id,
-            incoming_message.message_id,
-            chat_id,
-        )
-
     def _create_chat_message(
         self,
         *,
@@ -216,16 +214,19 @@ class FeishuClientMixin:
         text: str,
         event_id: str | None = None,
         message_id: str | None = None,
+        reply_uuid: str | None = None,
     ) -> None:
+        body = (
+            CreateMessageRequestBody.builder()
+            .receive_id(chat_id)
+            .content(json.dumps({"text": text}, ensure_ascii=False))
+            .msg_type("text")
+        )
+        if reply_uuid is not None:
+            body.uuid(reply_uuid)
         request = CreateMessageRequest.builder() \
             .receive_id_type("chat_id") \
-            .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(chat_id)
-                .content(json.dumps({"text": text}, ensure_ascii=False))
-                .msg_type("text")
-                .build()
-            ) \
+            .request_body(body.build()) \
             .build()
 
         response = self._client_value().im.v1.message.create(request)
@@ -236,7 +237,7 @@ class FeishuClientMixin:
             message_id=message_id,
             chat_id=chat_id,
         )
-        logger.info("Feishu proactive message sent chat_id=%s", chat_id)
+        logger.info("Feishu chat message sent event_id=%s chat_id=%s", event_id, chat_id)
 
     def _client_value(self) -> lark.Client:
         if self._client is None:
@@ -289,45 +290,12 @@ class FeishuClientMixin:
                 )
                 return None
             filename = response.file_name or file_key
-            return response.file, filename
+            return (response.file.read(), filename) if response.file is not None else None
         except Exception:
             logger.exception(
                 "Feishu file download exception message_id=%s file_key=%s", message_id, file_key
             )
             return None
-
-    def fetch_recent_messages(self, chat_id: str, limit: int = 20) -> list[dict[str, str]]:
-        """Fetch recent messages from a Feishu chat. Returns list of {role, content} dicts."""
-        if not (self.settings.feishu.app_id and self.settings.feishu.app_secret):
-            logger.warning("Skip Feishu message fetch because app credentials are not configured")
-            return []
-        try:
-            request = ListMessageRequest.builder() \
-                .receive_id_type("chat_id") \
-                .receive_id(chat_id) \
-                .page_size(min(limit, 50)) \
-                .sort_type("ByCreateTimeDesc") \
-                .build()
-            response = self._client_value().im.v1.message.list(request)
-            if not response.success():
-                logger.error(
-                    "Feishu message list failed code=%s msg=%s chat_id=%s",
-                    response.code, response.msg, chat_id,
-                )
-                return []
-            messages: list[dict[str, str]] = []
-            items = response.data.items if response.data else []
-            for item in reversed(items):
-                if item.msg_type == "text":
-                    content = safe_json_loads(item.body.content if item.body else "{}")
-                    text = str(content.get("text") or "").strip()
-                    if text:
-                        role = "user" if item.sender.id != "bot" else "assistant"
-                        messages.append({"role": role, "content": text})
-            return messages
-        except Exception:
-            logger.exception("Feishu message fetch exception chat_id=%s", chat_id)
-            return []
 
     def _resolve_user_id(self, open_id: str, sender_user_id: str) -> str:
         if self.settings.feishu.use_default_user:

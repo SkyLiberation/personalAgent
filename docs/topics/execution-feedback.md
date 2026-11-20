@@ -13,7 +13,7 @@ Application / Aggregate canonical facts
 
 入口只转换协议、解析身份并校验输入。入口不得从事件名称补业务语义，也不得把工具成功、Agent Artifact 或单个步骤完成升级为用户目标完成。
 
-当前 Web SSE 在一次 Conversation turn 完成后对最终文本分块；执行状态由原业务服务维护，SSE 本身没有独立的可恢复状态。传输字段与失败响应见 [API](../api.md#get-apientrystream)。
+Web SSE 在 Turn 登记后发送轮次身份，在交付完成后发送答案分块。断连后通过原 Turn 查询或恢复。[SSE 响应](../api.md#sse-响应)
 
 ## 权威文档
 

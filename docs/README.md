@@ -23,8 +23,7 @@ personalAgent 是个人知识智能体 Runtime。用户表达目标，系统协�
 | [`mcpDesign/`](mcpDesign/README.md) | MCP 客户端、Server 接入及 Toolathlon 评测隔离的候选设计与验收规格 |
 | `topics/` | 入口、运行系统、工具、记忆、上下文、检索与验收的详细契约，入口见下方主题表 |
 | [`workflow/`](workflow/README.md) | 具体业务用例的信息流与固定执行流程 |
-| `summary/` | 明确标注身份的历史架构审计；现行架构进入 `architecture/`，指标报告进入 `evals/` |
-| [`interview/`](interview/INDEX.md) | 基于已有事实和证据的面试材料；写法见[目录规则](interview/00-writing-spec.md) |
+| [`interview/`](interview/INDEX.md) | 基于已有事实和证据的面试材料，见[材料维护规范](interview/00-material-maintenance.md) |
 | `mermaid/` | 工具与记忆的依赖图；正文契约由对应专题拥有 |
 | `future/` | 尚未闭环的准入项；状态收敛与退出见 [Future 规则](future/README.md) |
 | [`optimization/`](optimization/README.md) | 按问题维护过程与取舍；[待验证方案](optimization/to_verify/README.md)和[已解决问题](optimization/completed/README.md)各有索引 |
@@ -42,7 +41,6 @@ personalAgent 是个人知识智能体 Runtime。用户表达目标，系统协�
 | 主题 | 权威文档 |
 | --- | --- |
 | 当前核心架构、代码地图与横切机制 | [工程架构入口](architecture/README.md) |
-| 面经、JD 与工程证据对照的差距审视 | [2026-10-16 工程审视](summary/agent-engineering-gap-review-20261016.md)；当日分析快照，问题状态仍见 Future 队列 |
 | 当前未解决问题与优化准入 | [future/design-optimization-backlog.md](future/design-optimization-backlog.md) |
 | 优化推进过程与经验 | [优化索引](optimization/README.md) |
 | 当前用例、机制证据与发布限制 | [当前评测用例盘点](evals/02-current-case-inventory.md) |

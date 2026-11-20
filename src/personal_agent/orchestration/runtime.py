@@ -98,6 +98,7 @@ from personal_agent.tools import (
     build_web_read_tool,
 )
 from personal_agent.agents import AgentGateway, GPTResearcherA2AAdapter
+from personal_agent.infra.storage.sqlite_conversation_journal import SqliteInteractionJournal
 from personal_agent.planning.step_projection_validator import StepProjectionValidator
 from personal_agent.runtime.procedure_runtime import (
     PROCEDURE_CATALOG,
@@ -111,7 +112,6 @@ from personal_agent.application.artifacts import ArtifactService
 from personal_agent.application.capture.ingestion_pipeline import IngestionPipeline
 from personal_agent.application.conversation import (
     ConversationService,
-    FileInteractionJournal,
     LoopBudgetPolicy,
 )
 from personal_agent.application.conversation.knowledge_reading import (
@@ -352,7 +352,7 @@ class AgentRuntime:
             build_research_verify_digest_tool(self._research_service)
         )
         self._register_tools()
-        conversation_journal = FileInteractionJournal(self.settings.data_dir / "interaction_runs")
+        conversation_journal = SqliteInteractionJournal(self.settings.data_dir / "conversation_journal")
         experiment_deployment = None
         experiment_completion = None
         bash_profile = None
@@ -430,6 +430,7 @@ class AgentRuntime:
                 profile=bash_profile, prompts=self._prompts,
             )
             self._tool_executor.register(build_bash_tool(bash_service, prompts=self._prompts))
+        self._bash_backend = bash_execution
         from personal_agent.application.conversation.answer_results import DirectAnswerResult
         answer_result = DirectAnswerResult(self.settings.answer_result, feature_flags=self.settings.feature_flags)
         workspace_changes, mcp_tools = bind_workspace_changes(
@@ -490,6 +491,10 @@ class AgentRuntime:
         self._step_projection_validator = StepProjectionValidator(
             tool_executor=self._tool_executor
         )
+
+    def close(self) -> None:
+        if self._bash_backend is not None:
+            self._bash_backend.close_task_workspace()
 
     @property
     def agent_gateway(self) -> AgentGateway:

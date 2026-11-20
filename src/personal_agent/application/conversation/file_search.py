@@ -13,7 +13,6 @@ from personal_agent.application.artifacts.models import (
     artifact_file_path,
     ContentDigest,
     TextPosition,
-    TextRange,
 )
 from personal_agent.application.artifacts.text_coordinates import TextCoordinates
 from personal_agent.kernel.prompt_registry import PromptCatalog
@@ -59,8 +58,6 @@ class SourceSearchResult(GrepFileArguments):
     total_lines: int
     matched_record_count: int
     next_offset: int | None
-    match_ranges: tuple[TextRange, ...] = ()
-    match_ranges_truncated: bool = False
     explanation: str = Field(
         default_factory=lambda: DEFAULT_PROMPTS.render("conversation.search.explanation")
     )
@@ -87,7 +84,6 @@ def grep_file_text(
     body = text
     match_columns: dict[int, int] = {}
     hits: set[int] = set()
-    editable_ranges: list[TextRange] = []
     for match in matcher.find(body, keyword=arguments.keyword, regex=arguments.regex):
         if not 0 <= match.start <= match.end <= boundaries[-1]:
             raise ValueError(prompts.render("conversation.search.match_out_of_bounds"))
@@ -95,11 +91,6 @@ def grep_file_text(
             continue
         first = bisect_right(boundaries, match.start)
         last = bisect_right(boundaries, max(match.start, match.end - 1))
-        if snapshot.record.purpose == "draft":
-            start = _match_position(match.start, boundaries, coordinates)
-            end = _match_position(match.end, boundaries, coordinates)
-            if start is not None and end is not None:
-                editable_ranges.append(TextRange(start=start, end=end))
         hits.update(range(first, last + 1))
         for number in range(first, last + 1):
             if number not in match_columns:
@@ -144,36 +135,9 @@ def grep_file_text(
             break
         selected.append(line)
     after = arguments.result_offset + len(selected)
-    result = result.model_copy(
+    return result.model_copy(
         update={
             "lines": tuple(selected),
             "next_offset": after if after < len(ordered) else None,
         }
     )
-    selected_lines = {item.line for item in selected}
-    for match_range in editable_ranges:
-        if match_range.start.line not in selected_lines:
-            continue
-        candidate = result.model_copy(update={"match_ranges": (*result.match_ranges, match_range)})
-        if serialized_length({"ok": True, **candidate.model_dump(mode="json")}) > max_chars:
-            return result.model_copy(update={"match_ranges_truncated": True})
-        result = candidate
-    return result
-
-
-def _match_position(byte_offset: int, boundaries: list[int],
-                    coordinates: TextCoordinates) -> TextPosition | None:
-    if byte_offset == boundaries[-1]:
-        return coordinates.eof_position
-    line_index = bisect_right(boundaries, byte_offset) - 1
-    line = coordinates.lines[line_index]
-    local = byte_offset - boundaries[line_index]
-    encoded = line.text.encode("utf-8")
-    if local > len(encoded):
-        # A CRLF interior has no editable coordinate; line search remains valid.
-        return None
-    try:
-        column = len(encoded[:local].decode("utf-8")) + 1
-    except UnicodeDecodeError:
-        return None
-    return TextPosition(line=line.line, column=column)

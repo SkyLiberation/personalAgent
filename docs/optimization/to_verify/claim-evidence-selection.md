@@ -1,10 +1,12 @@
 # 从用户问题选择证据后再生成研究论断
 
-`CLAIM-EVIDENCE-SELECTION-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 下的[研究论断无法收敛问题](../claim-revision-nonconvergence.md)。2026-09-28 两次正式 target 均失败后撤回；2026-09-30 用户明确要求恢复 evidence-first 并继续优化，现已按下节接回生产路径。最新完整 target 仍未交付；局部的选证、定向修订与来源支持检查点不能代替完整交付，候选仍在本目录。
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
+`CLAIM-EVIDENCE-SELECTION-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001` 下的[研究论断无法收敛问题](../claim-revision-nonconvergence.md)。2026-09-28 两次正式 target 均失败后撤回；2026-09-30 用户明确要求恢复 evidence-first 并继续优化，当时按下节接回旧生产路径。完整 target 未交付；局部的选证、定向修订与来源支持检查点不能代替完整交付，候选仍在本目录。
 
 2026-10-01 的片段地址、当前参数范围和重试计量已分别固化，当前选证机制保持唯一生产路径。已有绑定与新增选择的修订边界见[引用继承完成记录](../completed/claim-retained-references.md)；完整结果统一由[正式评测](../../evals/02-current-case-inventory.md)拥有，选证的整体收益继续按原用户结果验收。
 
-2026-10-02 研究目标对照与历史反馈适用性组合的前轮资格为 2/3，按当时预声明撤回。本轮按用户要求恢复这一研究候选，联合接入覆盖 Verifier 的原项目标绑定与独立已返回原文视图，当前为 `selection:v6-goal-source-feedback`、`writer:v15-goal-source-feedback` 与 `coverage:v5-goal-source-view`。已读条款删除例连续经历覆盖拒绝、实际修订、来源通过及覆盖复验；旧未读条款稿仍被覆盖放行。原正式 E2E 已实际运行，来源阶段第 9 版 c3 未通过，随后 writer 429 导致入口 503，用户结果 0/1。两侧组合保留于目标代码，局部成立条件与完整结果分开；正式覆盖未到达，详见[联合保留决定](research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)。
+2026-10-02 研究目标对照与历史反馈适用性组合的前轮资格为 2/3，按当时预声明撤回。本轮按用户要求恢复这一研究候选，联合接入覆盖 Verifier 的原项目标绑定与独立已返回原文视图，当时版本为 `selection:v6-goal-source-feedback`、`writer:v15-goal-source-feedback` 与 `coverage:v5-goal-source-view`。已读条款删除例连续经历覆盖拒绝、实际修订、来源通过及覆盖复验；旧未读条款稿仍被覆盖放行。原正式 E2E 已实际运行，来源阶段第 9 版 c3 未通过，随后 writer 429 导致入口 503，用户结果 0/1。两侧组合当时保留于该版本，局部成立条件与完整结果分开；正式覆盖未到达，详见[联合保留决定](research-goal-coverage.md#2026-10-02-联合正式验证与保留决定)。
 
 ## 2026-09-30 按用户要求恢复并连续验证
 
@@ -42,7 +44,7 @@
 
 当前研究入口在有一段可引用 `source_text` 后即可打开；研究写作者指令（旧版 `research.py`）要求“形成足以回答全部事实问题的完整研究 claim 集合”，`CreateClaims` 接收正文及引用。实发研究请求（原归档 `.tmp/claim-production-integration-20260928/target-source-entry/model-calls/6296/0006-request.json`）包含原始用户消息、已读来源正文和引用坐标，说明本问题不能简单归因为来源完全没有进入模型输入。该请求仍处于“从现有资料直接提交完整 claim 集合”的协议；是否会优先判断资料适合回答哪一个用户问题，没有独立、可观察的选择步骤。
 
-`admit_claim_change`确定性校验引用来自实际返回的坐标，却不负责判断来源是否适合回答用户问题；[`materialize_cited_draft`](../../../src/personal_agent/application/conversation/citations.py)再从 claim 自选引用重建核验输入。来源支持 Verifier 因而只能判断所交片段与既有 claim 的关系，无法反向证明研究模型最初选了恰当的来源、覆盖了原问题，或没有为了保留先写的 claim 而补找条款。历史结构先行候选曾在来源支持前结束该版核验；当前生产已停用复合结构识别。
+`admit_claim_change`确定性校验引用来自实际返回的坐标，却不负责判断来源是否适合回答用户问题；`materialize_cited_draft`再从 claim 自选引用重建核验输入。来源支持 Verifier 因而只能判断所交片段与既有 claim 的关系，无法反向证明研究模型最初选了恰当的来源、覆盖了原问题，或没有为了保留先写的 claim 而补找条款。历史结构先行候选曾在来源支持前结束该版核验；当前生产已停用复合结构识别。
 
 历史反例给出需要改变方向的理由，但尚不构成新机制的因果证明：[c7 的反馈后修订](../claim-revision-nonconvergence.md#整体失败链与已有优化)曾删去又带回无据判断；[同轨迹来源审计](../evidence-acquisition.md#120-生成侧越界的最早责任边界归因)发现应引的条款已在已读资料中，修订稿却遗漏或错配；[结构先行连续样本](claim-multi-proposition.md#已执行结果与未验证边界)在 256 次结构调用后仍未到来源支持。三类事实分别指向证据选择、论断改写和核验顺序，不能合并成“多搜或多拆就会通过”的结论。历史 `target-source-entry` 样本主动中止，不能用这些 Offline 轨迹或中止样本替代产品 baseline。
 

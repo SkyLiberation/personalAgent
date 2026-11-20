@@ -1,5 +1,7 @@
 # 未经核验的研究修订持续累积
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-REVISION-PROGRESS-001` 属于 `CONVERSATION-VERIFICATION-FALSE-POSITIVE-001`，只处理[修订无法收敛总览](../claim-revision-nonconvergence.md#子问题分别归因)中的“多次编辑却不重新核验”。复合论断、正文重新带入争议判断和相同输入核验不一致仍是独立子问题。[集成隔离候选](../../../.tmp/claim-integrated-20260926/run.py)已把合法创建或编辑后的复验触发交给协调运行系统；[首轮](../../../.tmp/claim-integrated-20260926/result.json)在创建前因输出截断停止，未到达复验检查点，也未进入生产。

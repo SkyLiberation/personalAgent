@@ -5,7 +5,9 @@ import json
 
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from .errors import ConversationOperationConflict
-from .goal_changes import GoalPatchCandidate, pending_goal_clarifications
+from .goal_changes import (
+    GOAL_EVIDENCE_NOT_FOUND, TASK_EVIDENCE_NOT_FOUND, GoalPatchCandidate, pending_goal_clarifications,
+)
 from .goal_models import (
     AnalysisGoal, AnalysisGoalRef, CurrentAnalysisGoal, GoalMaintenanceInvocation,
     GoalOperationRecord,
@@ -71,11 +73,21 @@ def goal_prepared(trace: InteractionTrace, current: CurrentAnalysisGoal | None) 
 
 
 def goal_feedback(call_id: str, code: str, details: object, *, prompts: PromptCatalog,
-                  action_name: str = "") -> DecisionFeedback:
+                  action_name: str = "", evidence_path: str | None = None) -> DecisionFeedback:
+    if code == "constraint_change_requires_verification":
+        repair = prompts.get("conversation.goal.constraint_change_repair").template
+    elif evidence_path is None:
+        repair = prompts.get("conversation.goal.repair").template
+    else:
+        repair_prompt = ("conversation.goal.historical_evidence_repair"
+                         if code in (GOAL_EVIDENCE_NOT_FOUND, TASK_EVIDENCE_NOT_FOUND)
+                         else "conversation.goal.evidence_repair")
+        repair = prompts.render(repair_prompt, field_path=evidence_path)
     return DecisionFeedback(action_id=call_id, action_name=action_name, reason_code=code,
         message=prompts.render("conversation.goal.rejected", reason_code=code,
                                details_json=json.dumps(details, ensure_ascii=False)),
-        required_repair=prompts.get("conversation.goal.repair").template)
+        repairable_fields=(evidence_path,) if evidence_path is not None else (),
+        required_repair=repair)
 
 
 def admit_goal_maintenance(

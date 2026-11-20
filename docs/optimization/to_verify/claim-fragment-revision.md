@@ -1,5 +1,7 @@
 # 论断内部片段的有界修订
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 正文目标的寻址契约与证据由[Runtime 片段地址完成记录](../completed/claim-fragment-addressing.md)拥有。本页独立拥有选中范围外内容保真与编辑后的语义验收；下文旧字符串机制与试验解释只对应历史代码身份。
 
 2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。

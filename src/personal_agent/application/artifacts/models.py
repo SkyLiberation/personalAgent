@@ -10,13 +10,13 @@ import re
 import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from personal_agent.application.text_edit import LiteralTextEdit
 
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.kernel.decimal_integer import POSITIVE_DECIMAL_PATTERN, read_decimal_integer
 
 DRAFT_MAX_BYTES = 65_536
-DRAFT_MAX_EDITS = 32
 ArtifactPurpose = Literal["upload", "draft", "machine", "generated"]
 DraftContentType = Literal["text/x-python", "application/json", "text/markdown"]
 DRAFT_SUFFIXES = {"text/x-python": ".py", "application/json": ".json", "text/markdown": ".md"}
@@ -116,16 +116,6 @@ class TextPosition(_ArtifactModel):
         return number if number is not None else value
 
 
-class TextRange(_ArtifactModel):
-    start: TextPosition = Field(description="范围的起点，包含该位置。")
-    end: TextPosition = Field(description="范围的终点，不包含该位置。补丁中与 start 相同表示在该处插入。")
-
-
-class TextEdit(_ArtifactModel):
-    range: TextRange
-    new_text: str
-
-
 class CreateArtifact(_ArtifactModel):
     operation: Literal["create"]
     filename: str = Field(description="新草稿的显示文件名。后缀须与 content_type 对应。")
@@ -146,23 +136,12 @@ class CreateArtifact(_ArtifactModel):
         return self
 
 
-class PatchArtifact(_ArtifactModel):
-    operation: Literal["patch"]
-    base_resource_id: str = Field(min_length=1)
-    edits: tuple[TextEdit, ...] = Field(min_length=1, max_length=DRAFT_MAX_EDITS)
-
-    @model_validator(mode="after")
-    def validate_added_bytes(self) -> PatchArtifact:
-        if (
-            sum(len(edit.new_text.encode("utf-8")) for edit in self.edits)
-            > DRAFT_MAX_BYTES
-        ):
-            raise ValueError(f"patch additions exceed the {DRAFT_MAX_BYTES}-byte UTF-8 limit")
-        return self
+class EditArtifact(LiteralTextEdit):
+    operation: Literal["edit"]
 
 
 ArtifactWriteRequest = Annotated[
-    CreateArtifact | PatchArtifact, Field(discriminator="operation")
+    CreateArtifact | EditArtifact, Field(discriminator="operation")
 ]
 
 
@@ -244,7 +223,7 @@ class ArtifactWriteReceipt(_ArtifactModel):
     size_bytes: int = Field(ge=0)
     content_digest: ContentDigest
     source_artifact_refs: tuple[ResourceRef, ...] = ()
-    edits_applied: int = Field(default=0, ge=0, le=DRAFT_MAX_EDITS)
+    edits_applied: int = Field(default=0, ge=0, le=DRAFT_MAX_BYTES)
 
 
 class ArtifactResourceItem(_ArtifactModel):
@@ -286,7 +265,7 @@ class MachineArtifactPublication(_ArtifactModel):
 
 AcceptedArtifactRequest = Annotated[
     CreateArtifact
-    | PatchArtifact
+    | EditArtifact
     | GeneratedArtifactPublication
     | MachineArtifactPublication,
     Field(discriminator="operation"),
@@ -306,7 +285,7 @@ class ArtifactProducerBinding(_ArtifactModel):
     def validate_purpose(self) -> ArtifactProducerBinding:
         expected = (
             "draft"
-            if self.request.operation in {"create", "patch"}
+            if self.request.operation in {"create", "edit"}
             else self.request.operation
         )
         if self.purpose != expected:

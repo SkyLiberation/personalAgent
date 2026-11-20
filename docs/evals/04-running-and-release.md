@@ -6,6 +6,8 @@ LongDS、Toolathlon 及后续采集 Conversation 用户结果的评测复用 [co
 
 当前两套运行均从独立环境开始，关闭 `goal_verification` 和 `answer_verification`，保存各自生效配置。结果属于未核验流程采集，与权威评分一起报告，不计为完整 Product E2E 或发布证据。部署默认核验仍开启。
 
+LongDS 和 Toolathlon 共用普通 Markdown 答复及来源链接契约。旧归档按实际生效配置解读。[答复与来源契约](../adr/0055-unified-conversation-answer.md)
+
 ### 正式 Web 配置
 
 `EVAL-CONFIG-1` 评测将所选运行配置交给正式 Web 应用，由应用的 `Settings.from_env()` 解析模型、超时、重试和其他运行参数。Toolathlon 的 `--model-env` 是完整配置文件，显式覆盖测试数据库、认证、工具挂载、后台任务和评测开关。LongDS 继续按其既定样本配置装配同一个 Web 应用。共用启动器在子进程中从已装配应用读取实际模型和预算参数，保存到 `web-settings.json`，归档排除凭据。
@@ -215,7 +217,9 @@ LongDS 的现行入口位于 `evals/longDS/`，使用公开题面和语料，采
 .\.venv\Scripts\python.exe -B -X utf8 -m evals.longDS.longds_suite --root "$evaluationEvidenceRoot/longds" --collect-only
 ```
 
-正式采集和恢复入口为 `python -m evals.longDS.run_longds`。需要 Bash 时同时传入 `--bash-image-id` 和 `--docker-endpoint`。独立评分入口为 `python -m evals.longDS.longds_judge`。各模块用 `--help` 查看参数。采集复用[共用 HTTP 链路](#conversation-评测共用入口)；旧检查点沿原源码版本和配置续跑。原始预算和历史结果见 [LongDS 长程分析基线](#longds-长程分析基线)。
+正式采集和恢复入口为 `python -m evals.longDS.run_longds`。需要 Bash 时同时传入 `--bash-image-id` 和 `--docker-endpoint`。连续采集可加 `--task-workspace`，在分析任务范围内保留容器的 `/tmp`，服务关停时回收。单题及套件入口都绑定无人值守答复模式，模型可用现有工具完成分析或按正式状态协议交代限制。独立评分入口为 `python -m evals.longDS.longds_judge`。各模块用 `--help` 查看参数。采集复用[共用 HTTP 链路](#conversation-评测共用入口)，旧检查点沿原源码版本和配置续跑。原始预算和历史结果见 [LongDS 长程分析基线](#longds-长程分析基线)。
+
+LongDS 在提交下一条用户消息前，以已知模型总用量（输入含缓存加输出）检查 `--task-token-limit`。`turn-XX.generation-usage.json` 记录采集段截至该轮的累计值，`report.json` 记录该段终态用量。两份记录都提供输入、输出、缓存读取、缓存写入、折算未缓存输入和缓存命中率。恢复从检查点带入已知消费参与预算判断，分项归档仍按采集段保留。用量分项、缺失语义及额度来源见[LongDS 用量与预算](../budge/README.md#评测中的独立预算)。
 
 ## 正式发布验证
 

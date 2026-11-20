@@ -1,5 +1,7 @@
 # 最终稿具体来源归属
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 `ANSWER-NORMATIVE-SCOPE-001` 的本候选修复最终稿把一篇资料的流程归到另一篇资料的问题。[失败事实及实际输入审计](../normative-scope-attribution.md#2026-10-02-实际流程步骤的来源错配)确认引用目录中的原文和 URL 正确，局部修订留下含混指代，汇总确定了错误页面归属；最终核验未取得已物化的逐段原文。
 
 ## 机制与责任

@@ -87,6 +87,12 @@ class ConversationOperationConflict(RuntimeError):
     pass
 
 
+class ConversationTurnBlocked(ConversationOperationConflict):
+    def __init__(self, turn_id: str) -> None:
+        super().__init__("请先恢复或处理该会话的未完成轮次")
+        self.turn_id = turn_id
+
+
 class ConversationWriterBusy(ConversationOperationConflict):
     pass
 

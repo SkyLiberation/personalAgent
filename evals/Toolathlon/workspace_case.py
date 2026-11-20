@@ -118,11 +118,10 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
         return response.status_code, response.json()
 
     refs = upload_local_workspace_attachments(base, workspace, args.output, api_key=key)
-    request = ConversationTurnRequest.model_validate({
-        "session_id": session_id, "messages": [{"role": "user", "content": question}],
-        "input_artifact_refs": refs,
-        "client_request_id": "initial-workspace-request",
-    })
+    request = ConversationTurnRequest(
+        session_id=session_id, text=question, create_session=True,
+        input_artifact_refs=refs, client_request_id="initial-workspace-request",
+    )
     report["turn"] = turn_result(request)
     status, turn = report["turn"]
     if status != 200 or turn.get("session_id") != session_id or turn.get("disposition") != "confirmation_required":
@@ -169,11 +168,10 @@ def _exercise(args, base, server_id, workspace, question, key, other_key, report
     report["resumed_duplicate"] = turn_result(request)
     report["post_resume_decision"] = _send(base, route, decision, key)
     if args.scenario == "reject":
-        new_request = ConversationTurnRequest.model_validate({
-            "session_id": session_id,
-            "messages": [{"role": "user", "content": f"我现在重新提出这个请求。{question}"}],
-            "input_artifact_refs": refs,
-        })
+        new_request = ConversationTurnRequest(
+            session_id=session_id, text=f"我现在重新提出这个请求。{question}",
+            input_artifact_refs=refs, client_request_id="reopened-workspace-request",
+        )
         report["new_request"] = turn_result(new_request)
     report["calls"] = _calls(args.output)
     writes = [call for call in report["calls"] if call["name"] in WRITES]

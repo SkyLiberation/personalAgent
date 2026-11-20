@@ -17,7 +17,7 @@
 | VCTX-3 保持原事实 | Journal 保有完整提交、报告及目标操作，准入和 Completion 继续消费原 typed facts；发送与容量估算共用物化 | 原事实摘要不变，原生工具调用配对及观察身份、状态保持，正式消费者实际收到新输入 |
 | VCTX-4 逐次回答绑定目标 | `verification_events` 从该回答前已接受目标操作的 `verification_ref` 恢复确切通过回执，放入 `VerificationEvent.verified_goal`；回答核验不再显示全局目标 | 各轮及同轮修订前后的回答匹配当时目标；当前正常回答删除快照时拒绝构造请求，历史未准入尝试及澄清／限制不伪造目标 |
 
-局部阅读入口为 [Context 构造](../../../src/personal_agent/application/conversation/verification_context.py)、[typed 契约](../../../src/personal_agent/capabilities/contracts/verification.py)、[核验消息物化](../../../src/personal_agent/capabilities/contracts/verification_prompt.py)和[主循环观察投影](../../../src/personal_agent/application/conversation/citations.py)。每个用户轮首次采用或更换目标时展示完整目标及通过引用，每次回答显式引用该目标判决。目标正文和快照复用不可变 `SemanticVerificationReceipt`，没有第二份可写目标状态。
+局部阅读入口为 [Context 构造](../../../src/personal_agent/application/conversation/verification_context.py)、[typed 契约](../../../src/personal_agent/capabilities/contracts/verification.py)、[核验消息物化](../../../src/personal_agent/capabilities/contracts/verification_prompt.py)和[主循环观察投影](../../../src/personal_agent/application/conversation/interaction_projection.py)。每个用户轮首次采用或更换目标时展示完整目标及通过引用，每次回答显式引用该目标判决。目标正文和快照复用不可变 `SemanticVerificationReceipt`，没有第二份可写目标状态。
 
 每轮原话为独立 user 消息，提交为明确的数据消息，真实判决为紧邻的 system 消息；后者明确是可纠正的运行记录，用户原话仍为权威。不伪造 assistant／tool 交互。中文和英文模板、版本及占位同步，原打包及未决判决占位已删除。仅加标题仍无法提供独立消息，按最新目标回填也无法恢复当时事实，均不采用。
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import partial
 import json
 import re
@@ -21,12 +22,14 @@ from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import ValidationError
 
 from personal_agent.application.artifacts.models import CreateArtifact
+from personal_agent.application.bash_execution.models import BASH_TEMP_DIR, BashArgs, BashShellArgs
+from personal_agent.application.bash_execution.workspace_edit import workspace_edit_command, workspace_read_command
+from personal_agent.application.text_edit import LiteralTextEdit
 from personal_agent.capabilities.contracts.model import (
     ModelActionDefinition,
     ModelActionInvocation,
     ModelActionKind,
     StructuredOutputFailure,
-    StructuredModelResponse,
     StructuredOutputFailureCode,
 )
 from personal_agent.kernel.decimal_integer import read_decimal_integer
@@ -47,15 +50,17 @@ from .models import (
     WorkingPlanProposal,
 )
 from .goal_models import (
-    GOAL_PENDING_ACTION_REJECTED, SUBMIT_GOAL_PATCH, GoalMaintenanceInvocation, GoalPatchProposal,
+    SUBMIT_GOAL_PATCH, GoalMaintenanceInvocation, GoalPatchProposal,
     GoalReadInvocation, ReadCurrentGoalArguments,
 )
 from .tool_requests import (
     CREATE_ARTIFACT_ACTION,
-    PATCH_ARTIFACT_ACTION,
-    ArtifactPatchArguments,
-    decode_artifact_write_arguments,
+    EDIT_ACTION,
+    READ_FILE_ACTION,
+    WriteArtifactArgs,
+    decode_edit_arguments,
 )
+from .file_reading import ReadFileArguments
 
 _WORKING_PLAN_TARGET = "working_plan"
 CLARIFICATION_TOOL = "control_request_clarification"
@@ -70,6 +75,17 @@ _RUNTIME_FIELD_NAMES = frozenset(
         "kind",
     }
 )
+
+
+def decode_bash_call(function: dict[str, str], *, prompts: PromptCatalog) -> BashArgs:
+    """Reconstruct a rejected Bash request from its original native call."""
+    if function["name"] == EDIT_ACTION:
+        edit = LiteralTextEdit.model_validate_json(function["arguments"])
+        return workspace_edit_command(edit, prompts=prompts)
+    if function["name"] == READ_FILE_ACTION:
+        read = ReadFileArguments.model_validate_json(function["arguments"])
+        return workspace_read_command(**read.model_dump(), prompts=prompts)
+    return BashArgs.model_validate_json(function["arguments"], context=prompts)
 
 
 def goal_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True) -> ModelActionDefinition:
@@ -125,22 +141,40 @@ def _working_plan_action_schema() -> dict[str, Any]:
     return schema
 
 
-def _artifact_write_definitions(prompts: PromptCatalog) -> tuple[ModelActionDefinition, ...]:
-    return (
-        ModelActionDefinition(
-            name=CREATE_ARTIFACT_ACTION,
-            kind="tool",
-            target_name="write_artifact",
-            description=prompts.get("artifact.create_action.description").template,
-            input_schema=_schema_without_fields(CreateArtifact.model_json_schema(), frozenset({"operation"})),
-        ),
-        ModelActionDefinition(
-            name=PATCH_ARTIFACT_ACTION,
-            kind="tool",
-            target_name="write_artifact",
-            description=prompts.get("artifact.patch_action.description").template,
-            input_schema=strictify_schema(ArtifactPatchArguments.model_json_schema()),
-        ),
+def _create_artifact_definition(prompts: PromptCatalog) -> ModelActionDefinition:
+    return ModelActionDefinition(
+        name=CREATE_ARTIFACT_ACTION,
+        kind="tool",
+        target_name="write_artifact",
+        description=prompts.get("artifact.create_action.description").template,
+        input_schema=_schema_without_fields(CreateArtifact.model_json_schema(), frozenset({"operation"})),
+    )
+
+
+def _edit_definition(
+    *, artifact: bool, workspace: bool, prompts: PromptCatalog,
+) -> ModelActionDefinition:
+    schema = LiteralTextEdit.model_json_schema()
+    roots = []
+    if artifact:
+        roots.append("artifacts/")
+    if workspace:
+        roots.append(f"{BASH_TEMP_DIR}/")
+    schema["properties"]["file_path"]["pattern"] = (
+        f"^(?:{'|'.join(re.escape(root) for root in roots)})[^\\x00-\\x1f]+$"
+    )
+    for name, field in schema["properties"].items():
+        field["description"] = prompts.get(f"artifact.edit_action.field.{name}").template
+    description = prompts.render("artifact.edit_action.description", paths=", ".join(roots))
+    if workspace:
+        description += " " + prompts.get("artifact.edit_action.workspace_guard").template
+    return ModelActionDefinition(
+        name=EDIT_ACTION,
+        kind="tool",
+        target_name="write_artifact" if artifact else "bash",
+        description=description,
+        input_schema=schema,
+        strict=False,
     )
 
 
@@ -149,28 +183,41 @@ def build_model_action_definitions(
     *,
     experiment_run: bool = False,
     answer_actions: tuple[ModelActionDefinition, ...] = (),
+    task_workspace: bool = False,
     prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[ModelActionDefinition, ...]:
     """Project visible business operations and typed control actions."""
     definitions: list[ModelActionDefinition] = []
+    names = {capability.name for capability in capabilities.tools}
+    draft_edit = "write_artifact" in names
+    workspace_edit = task_workspace and {"bash", "read_file"} <= names
     for capability in capabilities.tools:
         if capability.name == "write_artifact":
-            definitions.extend(_artifact_write_definitions(prompts))
+            definitions.append(_create_artifact_definition(prompts))
             continue
+        schema = (BashShellArgs.model_json_schema() if capability.name == "bash"
+                  else deepcopy(capability.input_schema))
+        description = prompts.localize_metadata(capability.description)
+        if capability.name == "read_file":
+            if workspace_edit:
+                description += " " + prompts.get("artifact.edit_action.workspace_read").template
+            else:
+                schema["properties"]["file_path"]["pattern"] = rf"^(?!{BASH_TEMP_DIR}/)"
         definitions.append(
             ModelActionDefinition(
                 name=_wire_name("tool", capability.name),
                 kind="tool",
                 target_name=capability.name,
                 description=prompts.render(
-                    "conversation.model_action.tool_description", description=prompts.localize_metadata(capability.description),
+                    "conversation.model_action.tool_description", description=description,
                 ),
-                input_schema=(strictify_schema(capability.input_schema)
-                              if capability.strict else deepcopy(capability.input_schema)),
+                input_schema=strictify_schema(schema) if capability.strict else schema,
                 strict=capability.strict,
                 model_integer_string_fields=capability.model_integer_string_fields,
             )
         )
+    if draft_edit or workspace_edit:
+        definitions.append(_edit_definition(artifact=draft_edit, workspace=workspace_edit, prompts=prompts))
     for capability in capabilities.agents:
         definitions.append(
             ModelActionDefinition(
@@ -527,30 +574,22 @@ def decode_model_action_invocations(
             reason_code="provider_action_call_id_duplicate",
         )
 
-    unknown_names = [item.name for item in invocations if item.name not in by_name]
-    if unknown_names:
+    if len(invocations) > 1:
+        for kind in ("maintain_goal", "read_current_goal", "request_clarification", "answer_result"):
+            exclusive = next((call for call in invocations
+                              if call.name in by_name and by_name[call.name].kind == kind), None)
+            if exclusive is not None:
+                raise StructuredOutputFailure(
+                    "agent_interaction_turn", "exclusive operation was mixed with other calls",
+                    reason_code="provider_action_exclusive", action_name=exclusive.name, action_kind=kind,
+                )
+    unknown = next((item for item in invocations if item.name not in by_name), None)
+    if unknown is not None:
         raise StructuredOutputFailure(
             "agent_interaction_turn",
-            f"unknown model action {unknown_names[0]!r}",
+            f"unknown model action {unknown.name!r}",
             reason_code="provider_action_unknown",
-            action_name=unknown_names[0],
-        )
-    clarification = next((item for item in invocations if by_name[item.name].kind == "request_clarification"), None)
-    if clarification is not None and len(invocations) != 1:
-        raise _payload_failure(action_name=clarification.name, action_kind="request_clarification",
-            reason="clarification must be submitted alone; the batch was not executed",
-            field_paths=(), error_types=())
-    answer_calls = [item for item in invocations if by_name[item.name].kind == "answer_result"]
-    goal_calls = [item for item in invocations if by_name[item.name].kind in ("maintain_goal", "read_current_goal")]
-    if goal_calls and len(invocations) != 1:
-        raise StructuredOutputFailure(
-            "agent_interaction_turn", "goal operations require an exclusive invocation; the batch was not executed",
-            reason_code="provider_action_goal_payload_invalid", action_name=goal_calls[0].name,
-            action_kind=by_name[goal_calls[0].name].kind)
-    if answer_calls and len(invocations) != 1:
-        raise StructuredOutputFailure(
-            "agent_interaction_turn", "提交、修订和研究操作必须独占本轮；整批动作未执行。",
-            reason_code="provider_action_answer_result_payload_invalid", action_kind="answer_result",
+            action_name=unknown.name,
         )
     working_plan: WorkingPlanProposal | None = None
     wait_for_user = False
@@ -594,12 +633,22 @@ def decode_model_action_invocations(
                 wait_for_user = payload.get("wait_for_user", False)
                 continue
             if definition.kind == "tool":
-                if definition.target_name == "write_artifact":
-                    payload = decode_artifact_write_arguments(definition.name, payload).model_dump(mode="json")
+                target_name = definition.target_name
+                if definition.name == EDIT_ACTION:
+                    target_name, request = decode_edit_arguments(payload, prompts=prompts)
+                    payload = request.model_dump(mode="json")
+                elif definition.name == READ_FILE_ACTION and payload["file_path"].startswith(f"{BASH_TEMP_DIR}/"):
+                    read = ReadFileArguments.model_validate(payload)
+                    target_name = "bash"
+                    payload = workspace_read_command(**read.model_dump(), prompts=prompts).model_dump(mode="json")
+                elif definition.name == CREATE_ARTIFACT_ACTION:
+                    payload = WriteArtifactArgs(
+                        request=CreateArtifact.model_validate({**payload, "operation": "create"}),
+                    ).model_dump(mode="json")
                 actions.append(
                     ToolCallProposal(
                         action_id=invocation.call_id,
-                        tool_name=definition.target_name,
+                        tool_name=target_name,
                         arguments=payload,
                     )
                 )
@@ -651,21 +700,86 @@ __all__ = [
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class PartiallyDecodedToolBatch:
+    """Original call order with one proposal or rejection for each read."""
+
+    calls: tuple[ToolCallProposal | DecisionFeedback, ...]
+
+    @property
+    def proposal(self) -> ContinueTurnProposal:
+        return ContinueTurnProposal(
+            actions=tuple(call for call in self.calls if isinstance(call, ToolCallProposal))
+        )
+
+
+def partially_decode_tool_batch(
+    error: StructuredOutputFailure,
+    invocations: tuple[ModelActionInvocation, ...],
+    definitions: tuple[ModelActionDefinition, ...],
+    capabilities: EffectiveCapabilities,
+    *,
+    prompts: PromptCatalog,
+    reveal_invalid_action_field_names: bool,
+) -> PartiallyDecodedToolBatch | None:
+    """Recover independent reads after the batch envelope has passed validation."""
+    if error.reason_code != "provider_action_tool_payload_invalid" or len(invocations) < 2:
+        return None
+    by_name = _definition_map(definitions)
+    safe_tools = {
+        tool.name for tool in capabilities.tools
+        if tool.read_only and tool.safely_retryable and tool.planning_safe
+    }
+    calls: list[ToolCallProposal | DecisionFeedback] = []
+    for invocation in invocations:
+        definition = by_name[invocation.name]
+        if definition.kind != "tool" or definition.target_name not in safe_tools:
+            return None
+        file_path = invocation.arguments.get("file_path")
+        if (invocation.name == READ_FILE_ACTION and isinstance(file_path, str)
+                and file_path.startswith(f"{BASH_TEMP_DIR}/")):
+            # This wire name can route to the separately governed Bash executor.
+            return None
+        try:
+            decoded = decode_model_action_invocations(
+                (invocation,), (definition,), prompts=prompts,
+                reveal_invalid_action_field_names=reveal_invalid_action_field_names,
+            )
+        except StructuredOutputFailure as failure:
+            if failure.reason_code != "provider_action_tool_payload_invalid":
+                return None
+            calls.append(provider_action_feedback(
+                failure, (invocation,), prompts=prompts, available_actions=(),
+                rejected_call_id=invocation.call_id,
+            ))
+            continue
+        assert isinstance(decoded, ContinueTurnProposal)
+        action = decoded.actions[0]
+        if not isinstance(action, ToolCallProposal) or action.tool_name not in safe_tools:
+            return None
+        calls.append(action)
+    if not any(isinstance(call, ToolCallProposal) for call in calls):
+        return None
+    return PartiallyDecodedToolBatch(tuple(calls))
+
+
 def provider_action_feedback(
-    error: StructuredOutputFailure, response: StructuredModelResponse, *, prompts: PromptCatalog,
-    goal_maintenance_actions: tuple[str, ...] | None = None,
+    error: StructuredOutputFailure, invocations: tuple[ModelActionInvocation, ...], *, prompts: PromptCatalog,
+    available_actions: tuple[str, ...],
+    rejected_call_id: str | None = None,
 ) -> DecisionFeedback:
     read_error = error.action_kind == "read_current_goal" or error.action_name == "read_current_goal"
     goal_error = read_error or error.action_kind == "maintain_goal" or error.action_name == SUBMIT_GOAL_PATCH
-    message = prompts.get("conversation.action_protocol_rejected").template
+    message = prompts.get("conversation.action_protocol_rejected" if rejected_call_id is None
+                          else "conversation.tool_arguments_rejected").template
     repair = prompts.get("conversation.action_protocol_repair").template
-    reason_code = error.reason_code
-    if error.reason_code == "provider_action_unknown" and error.action_name:
+    if error.reason_code == "provider_action_exclusive":
+        message = prompts.get("conversation.action_exclusive_rejected").template
+        repair = prompts.render("conversation.action_exclusive_repair", action_name=error.action_name)
+    elif error.reason_code == "provider_action_unknown" and error.action_name:
         message = prompts.render("conversation.action_unavailable", action_name=error.action_name)
-        if goal_maintenance_actions is not None:
-            reason_code = GOAL_PENDING_ACTION_REJECTED
-            repair = prompts.render("conversation.goal.pending_action_repair",
-                                    actions=", ".join(goal_maintenance_actions))
+        if available_actions:
+            repair = prompts.render("conversation.action_available_repair", actions=", ".join(available_actions))
     elif goal_error:
         message = prompts.render("conversation.goal.rejected", reason_code=error.reason_code,
             details_json=json.dumps({"field_paths": error.field_paths, "error_types": error.error_types}))
@@ -676,14 +790,14 @@ def provider_action_feedback(
         remaining_repair = (repair,) if goal_error or len(error.repair_hints) < len(error.field_paths) else ()
         repair = "\n".join((*error.repair_hints, *remaining_repair))
     return DecisionFeedback(
-        action_id="provider_action_protocol",
+        action_id=rejected_call_id if rejected_call_id is not None else "provider_action_protocol",
         action_name=error.action_name or "provider_action_protocol",
-        reason_code=reason_code,
+        reason_code=error.reason_code,
         action_diagnostics=tuple(
             ActionProtocolDiagnostic(field_path=path, error_type=kind)
             for path, kind in zip(error.field_paths, error.error_types, strict=True)
         ),
-        rejected_action_invocations=response.action_invocations,
+        rejected_action_invocations=invocations,
         message=message,
         repairable_fields=("action_calls",),
         immutable_fields=("messages", "inputs"),

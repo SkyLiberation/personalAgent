@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
@@ -14,11 +15,14 @@ from .models import (
     BashExecutionFact,
     BashExecutionReceipt,
     BashInputContent,
+    BashInputIdentity,
     BashJournalView,
 )
 
 if TYPE_CHECKING:
     from personal_agent.application.artifacts.service import StoredArtifact
+
+BashInputLoader = Callable[[BashInputIdentity], BashInputContent]
 
 
 class BashArtifactPort(Protocol):
@@ -29,7 +33,7 @@ class BashArtifactPort(Protocol):
         principal: AuthenticatedPrincipal,
         owner: AuthenticatedPrincipal,
     ) -> tuple[StoredArtifact, bytes]: ...
-    def resource_item(
+    def describe_upload(
         self,
         resource_ref: ResourceRef,
         *,
@@ -54,7 +58,8 @@ class BashArtifactPort(Protocol):
 
 class BashJournalPort(Protocol):
     def load_bash_execution(
-        self, *, execution_scope: ExecutionScope, action_id: str, request_digest: str
+        self, *, execution_scope: ExecutionScope, action_id: str, request_digest: str,
+        retain_task_workspace: bool = False,
     ) -> BashJournalView: ...
     def bind_bash_command(
         self,
@@ -81,7 +86,7 @@ class BashJournalPort(Protocol):
 
 class BashExecutionPort(Protocol):
     def execute(
-        self, command: BashExecutionCommand, inputs: tuple[BashInputContent, ...], *, run_deadline_at: datetime,
+        self, command: BashExecutionCommand, load_input: BashInputLoader, *, run_deadline_at: datetime,
     ) -> BashBackendOutcome: ...
     def reconcile(self, command: BashExecutionCommand) -> BashBackendOutcome: ...
     def close_turn(self, scope: ExecutionScope) -> None: ...

@@ -3,7 +3,9 @@
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 
-from personal_agent.application.bash_execution.models import BASH_SHARED_INPUTS_DIR, BashArgs
+from personal_agent.application.bash_execution.models import (
+    BASH_SHARED_INPUTS_DIR, BASH_TEMP_DIR, BashArgs, BashWorkspaceFileAction,
+)
 from personal_agent.application.bash_execution.service import BashExecutionService
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
@@ -19,10 +21,14 @@ def build_bash_tool(
     service: BashExecutionService, *, prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> BaseTool:
     workspace = service.profile.workspace
-    tool_description = (
-        prompts.render("bash_execution.shared_workspace", workspace_root=workspace.root, inputs_root=BASH_SHARED_INPUTS_DIR)
-        if workspace is not None else prompts.get("bash_execution.description").template
-    )
+    if workspace is not None:
+        tool_description = prompts.render(
+            "bash_execution.shared_workspace", workspace_root=workspace.root, inputs_root=BASH_SHARED_INPUTS_DIR,
+        )
+    elif service.profile.task_workspace is not None:
+        tool_description = prompts.render("bash_execution.task_workspace", temp_dir=BASH_TEMP_DIR)
+    else:
+        tool_description = prompts.get("bash_execution.description").template
 
     @tool(
         "bash",
@@ -42,6 +48,7 @@ def build_bash_tool(
         description: str,
         config: RunnableConfig,
         workdir: str = ".",
+        workspace_file: BashWorkspaceFileAction | None = None,
     ):
         context = require_gateway_context(config, prompts=prompts)
         if context.accepted_request_digest is None:
@@ -49,7 +56,8 @@ def build_bash_tool(
         try:
             result = service.execute(
                 BashArgs.model_validate(
-                    {"command": command, "description": description, "workdir": workdir}, context=prompts,
+                    {"command": command, "description": description, "workdir": workdir,
+                     "workspace_file": workspace_file}, context=prompts,
                 ),
                 execution_scope=context.execution_scope,
                 action_id=context.tool_call_id,

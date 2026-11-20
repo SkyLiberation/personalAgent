@@ -77,9 +77,9 @@ PROMPTS: dict[str, PromptSpec] = {
         template="#### 待交付回答\n\n提交标识 {submission_id}，回答类型 {disposition}\n\n{draft}",
     ),
     "interaction_verification.compliance.answer_evidence": PromptSpec(
-        name="interaction_verification.compliance.answer_evidence", version="v2",
+        name="interaction_verification.compliance.answer_evidence", version="v3",
         owner="interaction_verifier", output_contract="AnswerGoalAssessment",
-        template="##### 待交付回答的证据\n\ncited_text 提供引用原文及来源坐标。workspace_execution_facts 是 Runtime 提交的工作区操作状态与路径。按各证据实际覆盖的事实核对回答。\n\n{evidence}",
+        template="##### 待交付回答的证据\n\nsource_observations 提供当前任务已授权的成功工具回执，包括实际返回的正文和来源。workspace_execution_facts 是 Runtime 提交的工作区操作状态与路径。按各证据实际覆盖的事实核对回答。\n\n{evidence}",
     ),
     "interaction_verification.compliance.history_action": PromptSpec(
         name="interaction_verification.compliance.history_action", version="v1",
@@ -196,8 +196,8 @@ PROMPTS.update({
         template='## 有效目标到候选目标的实际差异\n\n以下由 Runtime 对比全文生成，供核对改动及删除。用户原话仍是判断依据。\n\n```diff\n{delta}\n```',
         output_contract='GoalVerificationInput'),
     'interaction_verification.goal.task_review': PromptSpec(
-        name='interaction_verification.goal.task_review', version='v2-task-evidence', owner="interaction_verifier",
-        template="## 本轮任务归属提议\n\n关系：{action}\n本轮证据：{evidence}\n切换前的任务入口：{current_task_request}\n\n先核对关系是否符合本轮原话和交付对象。continue 延续，start 开始独立任务，side_question 是一次性插问，resume 恢复选中的旧任务。start 和 side_question 时，切换前任务仅用于判断归属。逐项检查新候选的实质条件，包括精度、格式、排序、统计方法及验收条件。要求必须得到本轮用户原话支持，旧规则须由本轮明确引用。可选的实现方法留给执行；候选若把这些方法或旧规则写成义务，按 not_satisfied 指明条件与缺少的依据。后续修订继续检查选中任务仍适用的要求。",
+        name='interaction_verification.goal.task_review', version='v3-historical-basis', owner="interaction_verifier",
+        template="## 本轮任务归属提议\n\n关系：{action}\n任务关系的用户引文：{evidence}\n切换前的任务入口：{current_task_request}\n\n先核对关系是否符合本轮原话和交付对象。continue 延续，start 开始独立任务，side_question 是一次性插问，resume 恢复选中的旧任务。start 和 side_question 时，切换前任务仅用于判断归属。逐项检查新候选的实质条件，包括精度、格式、排序、统计方法及验收条件。要求必须得到本轮用户原话支持，旧规则须由本轮明确引用。可选的实现方法留给执行；候选若把这些方法或旧规则写成义务，按 not_satisfied 指明条件与缺少的依据。后续修订继续检查选中任务仍适用的要求。",
     ),
     'interaction_verification.goal.clarification_resolution': PromptSpec(
         name='interaction_verification.goal.clarification_resolution', version='v1', owner="interaction_verifier",

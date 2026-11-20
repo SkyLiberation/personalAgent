@@ -8,7 +8,7 @@ from personal_agent.capabilities.contracts.model import (
     ModelCapacityCheck, ModelCapacityRefused, StructuredModelRequest, sealed_context_projection_ref,
 )
 from personal_agent.capabilities.contracts.verification import (
-    ActionGoalAssessment, ActionGoalDecision, ActionGoalJudgment, CitedDraftUnit, GoalComplianceAnswerContext,
+    ActionGoalAssessment, ActionGoalDecision, ActionGoalJudgment, GoalComplianceAnswerContext,
 )
 from personal_agent.capabilities.contracts.verification_prompt import (
     GOAL_COMPLIANCE_OPERATION, goal_compliance_answer_request, goal_compliance_messages, verification_judgment_text,
@@ -20,7 +20,7 @@ from personal_agent.application.bash_execution.models import PROGRAM_MAX_BYTES, 
 
 from .goal_compliance_history import ActionHistoryEvent, GoalComplianceTurn, project_goal_compliance_history
 from .errors import ConversationOperationConflict
-from .citations import render_decision_feedback
+from .interaction_projection import render_decision_feedback
 from .goal_models import CurrentAnalysisGoal
 from .models import (
     ActionGoalBinding, ActionGoalReview, ArtifactSourceInput, InteractionTrace,
@@ -169,7 +169,7 @@ def _fit_history(turns: tuple[GoalComplianceTurn, ...], through: int, render: Ca
 def answer_goal_context(goal: CurrentAnalysisGoal | None, draft: str, sources: tuple[InteractionTrace, ...], *,
                         prompts: PromptCatalog,
                         measure_capacity: Callable[[StructuredModelRequest], ModelCapacityCheck | None],
-                        cited_units: tuple[CitedDraftUnit, ...] = (),
+                        source_observations: tuple[str, ...] = (),
                         workspace_execution_facts: tuple[str, ...] = (),
                         ) -> tuple[GoalComplianceAnswerContext, int]:
     trace = sources[-1]
@@ -191,8 +191,8 @@ def answer_goal_context(goal: CurrentAnalysisGoal | None, draft: str, sources: t
 
     def context_at(through: int) -> GoalComplianceAnswerContext:
         return GoalComplianceAnswerContext(rounds=_render_history(turns, through, prompts=prompts),
-            submission_id=pending.submission_id, disposition=pending.disposition, cited_units=cited_units,
-            workspace_execution_facts=workspace_execution_facts)
+            submission_id=pending.submission_id, disposition=pending.disposition,
+            source_observations=source_observations, workspace_execution_facts=workspace_execution_facts)
 
     _, through = _fit_history(turns, max(source.goal_compliance_history_compacted_through for source in sources),
         lambda n: goal_compliance_answer_request(context_at(n), draft, prompts=prompts), measure_capacity)

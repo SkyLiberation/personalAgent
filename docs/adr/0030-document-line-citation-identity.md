@@ -1,6 +1,6 @@
 # ADR 0030：以文档版本和原文位置标识引用
 
-2026-09-18 决定，2026-09-22 扩展到全部生成端引用。现行语法与投影由[引用专题](../topics/context-engineering.md#可见证据的随文引用编号)维护。
+2026-09-18 决定，2026-09-22 扩展到全部生成端引用。2026-11-18 退役 Conversation 答复行坐标。普通答复可在正文使用已观察到的来源链接，文件读取位置由原读搜工具维护。现行答复见 [ADR 0055](0055-unified-conversation-answer.md)。
 
 ## 背景与决定
 
@@ -12,4 +12,4 @@ Journal 和 Artifact 拥有原始结果。文档别名只由本次可见集合�
 
 ## 验证边界
 
-按用户要求，原改造只执行 Offline 验证。历史对照覆盖重复来源、快照和版本、同文档连续行、部分行及不可见范围。两个真实短样本分别消费网页正文和搜索结果。后续发现错绑、原文变化或可见性回归时，回放实际窗口和引用提交。[历史证据](../optimization/citation-coordinate-confusion.md) · [后续观察](../future/citation-coordinate-identity.md)
+按用户要求，原改造只执行 Offline 验证。历史对照覆盖重复来源、快照和版本、同文档连续行、部分行及不可见范围。两个真实短样本分别消费网页正文和搜索结果。后续发现错绑、原文变化或可见性回归时，回放实际窗口和引用提交。[历史证据](../optimization/citation-coordinate-confusion.md) · [原观察条件](../optimization/citation-coordinate-confusion.md#原-e2e-观察条件)

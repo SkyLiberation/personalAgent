@@ -51,6 +51,8 @@ class InteractionToolPort(Protocol):
 
     def interaction_call_is_safe_for_concurrency(self, name: str) -> bool: ...
 
+    def interaction_call_is_mcp_write(self, name: str) -> bool: ...
+
     def invoke_interaction(
         self,
         name: str,

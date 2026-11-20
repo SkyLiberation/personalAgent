@@ -1,6 +1,7 @@
 """Validate and apply a model-proposed goal patch without mutating its base."""
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import chain
 
 from personal_agent.capabilities.contracts.verification import GoalClarificationReview
 
@@ -10,11 +11,38 @@ from .goal_models import (
 from .models import InteractionTrace
 
 
+GOAL_EVIDENCE_NOT_FOUND = "evidence_not_in_task_user_messages"
+TASK_EVIDENCE_NOT_FOUND = "task_evidence_not_in_task_user_messages"
+
+
+def _user_source(trace: InteractionTrace) -> tuple[str, str]:
+    index, message = next(
+        (index, trace.messages[index - 1])
+        for index in range(len(trace.messages), 0, -1)
+        if trace.messages[index - 1].role == "user"
+    )
+    return f"{trace.interaction_run_ref}:user:{index}", message.content
+
+
+def find_goal_evidence_source(
+    evidence: str, trace: InteractionTrace, previous: Sequence[InteractionTrace],
+) -> str | None:
+    """Find the latest exact user source on the selected task branch."""
+    if not evidence.strip():
+        return None
+    for source in chain((trace,), reversed(previous)):
+        source_id, user_message = _user_source(source)
+        if evidence in user_message:
+            return source_id
+    return None
+
+
 @dataclass(frozen=True)
 class GoalPatchRejected(ValueError):
     reason: str
     item_id: str | None = None
     clarification_id: str | None = None
+    evidence_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +84,7 @@ def _clarification_review(
         raise GoalPatchRejected("clarification_not_pending", clarification_id=resolution.clarification_id)
     if not resolution.evidence.strip() or resolution.evidence not in user_message:
         raise GoalPatchRejected("clarification_evidence_not_in_current_user_message",
-                                clarification_id=pending.clarification_id)
+                                clarification_id=pending.clarification_id, evidence_path="$.resolve_clarification.evidence")
     return GoalClarificationReview(clarification_id=pending.clarification_id,
                                    question=pending.question, evidence=resolution.evidence)
 
@@ -72,26 +100,20 @@ def apply_goal_patch(
     version = current.reference.revision if current else 0
     if patch.base_version != version:
         raise GoalPatchRejected("stale_version")
-    if patch.clarifications:
-        raise GoalPatchRejected("clarification_required")
     if current is not None and current.goal.goal_id is None:
         raise GoalPatchRejected("legacy_goal_requires_new_conversation")
-    index, user_message = next(
-        (index, trace.messages[index - 1].content)
-        for index in range(len(trace.messages), 0, -1) if trace.messages[index - 1].role == "user"
-    )
-    source_id = f"{trace.interaction_run_ref}:user:{index}"
+    source_id, user_message = _user_source(trace)
     if patch.delivery is not None:
         if trace.first_goal_operation is not None:
             raise GoalPatchRejected("delivery_already_bound")
         if not patch.delivery.evidence.strip() or patch.delivery.evidence not in user_message:
-            raise GoalPatchRejected("evidence_not_in_current_user_message")
+            raise GoalPatchRejected("evidence_not_in_current_user_message", evidence_path="$.delivery.evidence")
     clarification = _clarification_review(patch, user_message, (*previous, trace))
     goal = current.goal if current else None
     control = current.execution_control if current else None
     if change := patch.execution_control:
         if not change.evidence.strip() or change.evidence not in user_message:
-            raise GoalPatchRejected("evidence_not_in_current_user_message")
+            raise GoalPatchRejected("evidence_not_in_current_user_message", evidence_path="$.execution_control.evidence")
         restriction = {"running": 0, "read_only": 1, "paused": 2}
         previous_mode = control.mode if control else "running"
         if (restriction[change.mode] < restriction[previous_mode]
@@ -108,32 +130,37 @@ def apply_goal_patch(
     items = {item.item_id: item for item in goal.items} if goal else {}
     applicable = {item.item_id for item in goal.active_items(trace.interaction_run_ref)} if goal else set()
     touched = set()
-    for change in patch.changes:
-        if not change.evidence.strip() or change.evidence not in user_message:
-            raise GoalPatchRejected("evidence_not_in_current_user_message")
+    for index, change in enumerate(patch.changes):
+        evidence_id = find_goal_evidence_source(change.evidence, trace, previous)
+        if evidence_id is None:
+            raise GoalPatchRejected(GOAL_EVIDENCE_NOT_FOUND, evidence_path=f"$.changes[{index}].evidence")
         if isinstance(change, AddGoalItem):
             item_id = f"i{len(items) + 1}"
             item = GoalItem(item_id=item_id, kind=change.kind, scope=change.scope, text=change.text,
-                source_message_ids=(source_id,), acceptance_criteria=change.acceptance_criteria)
+                source_message_ids=tuple(dict.fromkeys((evidence_id, source_id))),
+                acceptance_criteria=change.acceptance_criteria)
         else:
             item_id = change.item_id
             if item_id not in applicable or item_id in touched:
                 raise GoalPatchRejected("item_unavailable_or_already_changed", item_id)
             touched.add(item_id)
-            previous = items[item_id]
-            if previous.kind == "constraint" and not trace.feature_flags_binding.goal_verification:
+            previous_item = items[item_id]
+            if previous_item.kind == "constraint" and not trace.feature_flags_binding.goal_verification:
                 raise GoalPatchRejected("constraint_change_requires_verification", item_id)
-            sources = tuple(dict.fromkeys((*previous.source_message_ids, source_id)))
+            sources = dict.fromkeys((*previous_item.source_message_ids, evidence_id))
+            # The final source binds a turn-scoped item to the turn of this operation.
+            sources.pop(source_id, None)
+            source_ids = (*sources, source_id)
             if isinstance(change, RevokeGoalItem):
-                items[item_id] = previous.model_copy(update={"status": "revoked", "source_message_ids": sources})
+                items[item_id] = previous_item.model_copy(update={"status": "revoked", "source_message_ids": source_ids})
                 continue
-            item = previous.model_copy(update={
+            item = previous_item.model_copy(update={
                 "text": change.text,
-                "acceptance_criteria": (previous.acceptance_criteria if change.acceptance_criteria is None
+                "acceptance_criteria": (previous_item.acceptance_criteria if change.acceptance_criteria is None
                                         else change.acceptance_criteria),
-                "source_message_ids": sources,
+                "source_message_ids": source_ids,
             })
-            if item.text == previous.text and item.acceptance_criteria == previous.acceptance_criteria:
+            if item.text == previous_item.text and item.acceptance_criteria == previous_item.acceptance_criteria:
                 raise GoalPatchRejected("unchanged_item", item_id)
         items[item_id] = item
 

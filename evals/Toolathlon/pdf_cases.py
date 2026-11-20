@@ -19,7 +19,8 @@ from evals.Toolathlon import runner
 from evals.Toolathlon.confirmation_probe import mapping, snapshot
 from evals.Toolathlon.workspace_inputs import upload_local_workspace_attachments
 from evals.conversation_http import UNVERIFIED_FLOW, effective_structured_model, submit_turn
-from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest
+from personal_agent.adapters.web.routes.conversation import ConversationTurnRequest, submitted_turn_id
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 
 
 REVISION = "9be8d8fe07a497b18ee61e3f2ae694e9797f39eb"
@@ -102,8 +103,7 @@ def _record_calls(output: Path) -> dict[str, dict[str, int]]:
     return totals
 
 
-def _record_model(output: Path) -> dict:
-    runs = output / "product-data/interaction_runs"
+def _record_model(output: Path, turn_id: str | None) -> dict:
     requests = []
     for path in runner.model_request_paths(output):
         request = json.loads(path.read_text(encoding="utf-8"))
@@ -112,13 +112,13 @@ def _record_model(output: Path) -> dict:
             "operation": request["operation"],
             "actions": [action["name"] for action in request.get("action_definitions", [])],
         })
-    revisions = sorted(runs.glob("*/[0-9][0-9][0-9][0-9].json"))
-    if not revisions:
+    final = runner.read_turn_trace(output, turn_id) if turn_id is not None else None
+    if final is None:
         return {"requests": requests}
-    final = json.loads(revisions[-1].read_text(encoding="utf-8"))
+    facts = final.model_dump(mode="json", include={"usage", "answer_result_binding", "feature_flags_binding"})
     return {
-        "requests": requests, "usage": final["usage"],
-        "answer_result": final["answer_result_binding"], "feature_flags": final["feature_flags_binding"],
+        "requests": requests, "usage": facts["usage"],
+        "answer_result": facts["answer_result_binding"], "feature_flags": facts["feature_flags_binding"],
     }
 
 
@@ -154,6 +154,9 @@ print(json.dumps({"passed": bool(passed), "detail": detail}))
 
 def _run(args, report: dict) -> bool:
     session_id = "toolathlon-" + uuid4().hex
+    client_request_id = uuid4().hex
+    principal = AuthenticatedPrincipal(tenant_id="personal-agent", user_id=USER)
+    turn_id = submitted_turn_id(principal, session_id, client_request_id)
     report["session_id"] = session_id
     case = CASES[args.scenario]
     task = args.upstream / "tasks/finalpool" / args.scenario
@@ -215,17 +218,17 @@ def _run(args, report: dict) -> bool:
             )
             if report["preflight_passed"]:
                 refs = upload_local_workspace_attachments(base, workspace, args.output, user_id=USER)
-                response = submit_turn(base, ConversationTurnRequest.model_validate({
-                        "user_id": USER, "session_id": session_id,
-                        "messages": [{"role": "user", "content": question}],
-                        "input_artifact_refs": refs,
-                    }), timeout=600)
+                body = ConversationTurnRequest(
+                    user_id=principal.user_id, session_id=session_id, text=question,
+                    client_request_id=client_request_id, create_session=True, input_artifact_refs=refs,
+                )
+                response = submit_turn(base, body, timeout=600)
                 if response.is_success:
                     report["turn"] = response.json()
                 else:
                     report["turn_error"] = {"status": response.status_code, "detail": response.json()}
     report["remote_calls"] = _record_calls(args.output)
-    report["model_trace"] = _record_model(args.output)
+    report["model_trace"] = _record_model(args.output, turn_id)
     report["input_unchanged"] = snapshot(workspace) == initial
     report["deliverables"] = snapshot(deliverables)
     report["grader"] = _grade(args.upstream, task, case, deliverables)

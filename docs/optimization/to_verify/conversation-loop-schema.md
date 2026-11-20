@@ -1,8 +1,8 @@
 # Conversation Loop 的模型交互契约统一设计
 
-状态：2026-10-25，统一协议已接入生产链路。主终答固定10/10、内部意图固定40/40通过；新LongDS中文36/36轮完成交付并通过第17→18轮真实Web恢复，官方独立评分27/36。当前direct／none的流程已验证，语义结果未全部达标；完整结果和边界见§16。本文唯一拥有主循环Schema流程的替换方案，问题归属CONVERSATION-LOOP-BOUNDARIES-001；能力组织与治理仍由[主循环边界](conversation-loop-boundaries.md)拥有，架构从[工程入口](../../architecture/README.md)阅读。
+2026-10-25 的统一协议已进入正式链路。第 16 节记录原生动作、直接答复和 LongDS 36 轮的实际结果。第 17.7 节记录 2026-11-18 普通正文与状态工具的替换契约。现行答复和入口见 [ADR 0055](../../adr/0055-unified-conversation-answer.md)及[运行专题](../../topics/runtime.md)。问题准入见 [Future 队列](../../future/design-optimization-backlog.md)。
 
-[ADR 0055](../../adr/0055-unified-conversation-answer.md)终止可替换 writer、独立选证操作和相关评测，并保留正文和带属性的统一提交。下列 claims、direct／claims 配置、对应核验与防绕过规则仅解释原协议及其证据。两类核验的当前装配见 [ADR 0050](../../adr/0050-verification-feature-flags.md)。
+[ADR 0055](../../adr/0055-unified-conversation-answer.md)已移除 Conversation claim 的 writer、选证和对应评测。下列旧提交工具、行坐标、direct／claims、核验及防绕过规则只解释各自的历史版本。两类核验的装配见 [ADR 0050](../../adr/0050-verification-feature-flags.md)。
 
 ## 1. 目标、范围与真实依据
 
@@ -87,7 +87,7 @@ flowchart TD
 
 主模型继续看到当前可见能力的原生 function 声明，业务参数直接进入 `function.arguments`。不再要求同时输出 `kind/action_id/tool_name/actions/finalization_requested` 等通用 Decision 对象；这些内部字段由同轮声明和真实调用恢复。具体 wire 名沿现有唯一命名与绑定函数生成，不做无依据的全工具重命名。
 
-普通工具可按现行兼容关系组批。参数 JSON、工具名、call ID 或批次关系不合法时，任何成员均未准入；反馈覆盖实际被拒集合。最终提交／修订与业务动作、委派或计划控制混批时，在执行任何成员前拒绝整批，不挑选一个结束、不截断剩余动作。
+普通工具可按现行兼容关系组批。调用封套中的参数 JSON、工具名、call ID 或批次关系不合法时，任何成员均未准入。封套通过后，符合条件的只读批次可以逐调用处理参数错误，再把合法项交给原准入。最终提交／修订与业务动作、委派或计划控制混批时，在执行前拒绝整批。 [只读批次的适用范围](../completed/readonly-tool-batch-decoding.md)
 
 | 意图 | 模型参数 | 代码绑定与约束 |
 | --- | --- | --- |
@@ -513,7 +513,7 @@ main10仍不重开，但复用必须按实际新差异重做当前正式Root首w
 
 ### 17.1 问题、事实与状态
 
-2026-10-25 按用户要求分析框架组织。状态为已完成源码分析、生产协议未改；§4 仍描述当前实现，§16 已成立验收不重新打开。本节不把双入口本身判成两个结果系统，也不以外部框架允许双入口直接证明本工程应保留重复职责。
+2026-10-25 的框架分析见 §17.1–17.6。当前候选的终答契约、工具选择和验收由 [§17.7](#177-普通正文与按用途装配的终答) 统一维护。
 
 实际调用为 Runtime 装配 `DirectAnswerResult`／`ClaimAnswerResult` → `ConversationService._generate_chat` → 原生响应分类及同轮动作绑定 → 回答模块解释 → 同一个 `FinalMessage` → 保存、核验及 Completion。`answer_results.py` 的 `decode_assistant_message` 将无调用正文恢复成 answer；`decode_operation` 将 `submit_final` 解析成同一类型。`SubmitFinalArguments` 允许 `disposition=answer` 且 `references=[]`，这时两种输入表达同一新正文提交。它们没有独立持久 owner 或第二条完成链，但确有重复的模型选择和解码入口。代码身份见[只读核对](../../../.tmp/framework-finalization-analysis-20261025/local-source-identity.json)。
 
@@ -540,7 +540,7 @@ JSON 是参数或数据编码，Markdown 是正文表达，两者不作为结果
 
 ### 17.4 操作分工与可观察要求
 
-以下是下一候选的职责约束，尚未修改当前 Schema／Prompt。它不要求统一 Provider 所有外部消息形式，而是删除向模型重复提供的等价业务操作。
+以下是 2026-10-25 的职责收窄探索，供追溯取舍。带行引用的终答提议已撤回，现行候选以 [§17.7](#177-普通正文与按用途装配的终答) 为准。
 
 | 编号 | 触发与必须行为 |
 | --- | --- |
@@ -562,10 +562,49 @@ JSON 是参数或数据编码，Markdown 是正文表达，两者不作为结果
 
 ### 17.6 工具选择参数的语义与历史有效性
 
-2026-10-25 补充只读核对，当前生产主请求仍为 `action_choice=auto`。API 的 `tools` 字段声明工具，`tool_choice` 表达本次生成的选择要求；工具定义最终属于模型输入，不等于由本工程手工拼接一段工具介绍。当前 Infra 将原 action definitions 投影成 function declarations，并将 action choice 写入请求参数。参数声明、SDK 实际出站、服务端遵循和本地拒绝是不同事实，不能互相替代。
+2026-10-25 核对的主请求使用 `action_choice=auto`。API 的 `tools` 字段声明可用工具，`tool_choice` 表达本次生成的选择要求。参数声明、SDK 实际出站、服务端遵循和本地拒绝是不同事实。新的 LongDS 第 8 轮目标准备实发使用 `required`，详见 [§17.7](#177-普通正文与按用途装配的终答)。
 
 [OpenAI 工具选择契约](https://developers.openai.com/api/docs/guides/function-calling#tool-choice)的 `required` 表示调用一个或多个可用工具，指定函数则是另一种选择模式。工具表同时有 Python、读取和提交时，`required` 不保证调用 `control_submit_final`。要求下一次直接调用提交函数，与允许继续工作、但最终只接受某个提交操作，也是不同契约。当前 Model Port 的 action choice 只声明 `none／auto／required`，没有已接入的指定函数对象模式；不能将未来支持写成改一个配置值即可。
 
 §11 的两次真实失败已沿原件重新审计：内部请求均声明 `required`，原始响应却均没有工具调用。快速识别、具体反例及证据边界归入[MiniMax required 排查经验](../../experience/minimax-tool-choice-required.md)，原件与校验和仍由[历史审计](../../../.tmp/tool-choice-boundary-20261025/required-history-audit.json)拥有。当时端到端没有建立强制调用保证；缺少实际 HTTP 出站抓包，不能直接归因服务端或外推全部 MiniMax 模型。
 
 若后续产品决定要求特定终答操作，先以同 endpoint、模型、thinking 和完整输入，对比 auto、required、供应商实际支持的指定函数选择或只开放目标工具的方式。保存真实 SDK／HTTP 出站与原始响应，分别检查参数是否发出、调用是否存在、函数名是否匹配、参数是否合法及恢复行为；本地拒绝、提示后改正、单次碰巧调用均不直接证明服务端硬约束。该供应商协议诊断按其实际边界计证，不冒充 Agent 产品 E2E。本轮零新增模型请求，未改主循环策略，也未执行这些新对照。
+
+### 17.7 普通正文与按用途装配的终答
+
+2026-11-18 实施，已完成 Task 1 连续复验。LongDS NYC Task 1 第 8 轮的两次实发都设置 `tool_choice: "required"`，同时声明目标管理、澄清和 `control_submit_final`。此时终答工具只允许 `limitation` 或 `failed`。模型两次把目标更新与占位终答放在一批，解码器在执行前拒绝整批。重试反馈给出错误码与空字段诊断，未交付已知的独占条件。终答 Schema 没有占位默认值或示例。首个请求带着前几轮四次被拒的占位调用，重试时再带上当轮第一次。此轨迹证明了混批与反馈缺项，单次运行无法区分强制工具选择和历史对生成的影响。[首个实发请求](../../../.tmp/nyc-r2-20261118/capture/sdk/74bdf5d2c0ee4269ae076e618b036a06.http.request.json) · [重试实发请求](../../../.tmp/nyc-r2-20261118/capture/sdk/1ab697ef6828499bb9bccc006fe19c45.http.request.json) · [正式复跑](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#启用任务工作区后的本-agent-复跑)
+
+#### 采用依据
+
+- DeepSeek Harness 普通主循环执行工具后继续，无工具调用的正常回复可结束 Turn。网页工具返回来源 URL，并提示模型在 Markdown 正文中使用链接。子 Agent 根据调用方的 `outputSchema` 按需注册 `structured_output`，其 Schema 由调用方定义。已核对的普通交付、网页工具和结构化结果路径没有专用的行坐标终答约定。本候选采用正文链接，撤回前一版的带行引用终答。Gemini CLI 和 OpenHands 的独立源码对照见[交互参考 §4](../../agentRef/model-interaction-protocols.md#4-终答入口与框架职责的组织)。[主循环](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/core/agent-loop/src/agent.ts#L572-L609) · [网页来源](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/web/tool-web/src/search.ts#L85-L106) · [结构化终答](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/subagent/subagent/src/structured.ts#L76-L137)
+- LongDS 对照走 `llm-pi-ai` 的 `openai-completions`。Harness 传入工具声明，流式选项未设置 `toolChoice`。锁定的 Pi AI `1.3.0` 在提供该选项时才写出 `tool_choice`。用已安装的 SDK 在发包前截获三个参数投影，三组均有工具声明，未设置时省略字段，显式 `auto` 和 `required` 原样写出，新增 HTTP 请求为零。该检查证明 SDK 序列化，候选对 MiniMax 实发的效果以连续验证为准。[评测装配](../../../.tmp/nyc-longds-20261118/harness-aligned/cordis.json) · [Harness 适配](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/llm/llm-pi-ai/src/adapter.ts#L468-L483) · [依赖锁](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/pnpm-lock.yaml)
+
+#### 正式契约
+
+| 场景 | 模型可用表达 | Runtime 行为 |
+| --- | --- | --- |
+| 本轮目标未就绪 | 原有目标更新、有既存目标时可读取，以及适用的澄清或状态报告。 | 用现有 `goal_prepared` 判断业务执行与普通答复的前提。普通正文触发目标前置反馈。能通过用户补充解决的缺口走原澄清。确定性拒绝、限额和不可恢复失败由 Runtime 交付。 |
+| 目标就绪，普通答案 | 直接输出完整 Markdown 正文。有来源时可在正文附已知的来源链接。 | 无工具调用的正文按原文形成 `answer` 候选，经原计划检查、适用核验及 Completion。回复含工具调用时处理当前动作，正文作说明。 |
+| 报告明确限制或失败 | `control_report_turn_status(message, disposition)`。状态限 `limitation`、`failed`，正文说明导致无法继续的已知事实和影响。 | 目标未就绪时也可报告当前入口无法解决、且追问无法解除的阻塞。沿原受限或失败处理，交付以真实执行、审批与完成状态为准。 |
+
+正文和状态报告归入现有 `FinalMessage` 与交付链。状态报告覆盖 [LOOP-ONE-1](analysis-goal-maintenance.md#统一-conversation-主循环) 允许的目标准备期限制。读取工具继续返回原文、来源和窗口位置，核验从已授权工具回执和 Artifact 获取证据。回放复用 Toolathlon 已验证的无行坐标正文投影。[无行坐标投影与证据](../../adr/0055-unified-conversation-answer.md#toolathlon-答复引用)
+
+主循环将现有 `StructuredModelRequest.action_choice` 设为 `None`，使用 OpenAI 兼容适配器的省略逻辑。MiniMax 的目标准备和业务阶段都保留 `tools`、省略 `tool_choice`。MiMo 等有专用投影要求的供应商沿用自身适配契约。核验等独立结构化请求保留原输出策略。
+
+首次正式验证的第 1 轮在两阶段均成功省略 `tool_choice`。第 10、12 步收到完整 Markdown，Infra 却只在显式 `auto` 时接受空调用列表，两次以 `provider_action_missing` 拒绝。适配器仅在明确要求工具调用时拒绝空列表。省略或选择允许正文时，原助手消息交 Conversation 决定是否满足目标和交付条件。使用这两份原响应回放：省略参数须逐字解码，显式 `required` 仍须拒绝。通过后从新会话重跑 32 轮，保留首次采集。[首次正文和拒绝](../../../.tmp/nyc-r3-20261118/capture/turn-01.trace.json)
+
+Conversation 以既有 Goal 状态负责前置准入和当前阶段说明。解码、续跑及协议反馈以此 Step 冻结的声明识别当时可用动作。取消用 `tool_choice=required` 选择修复提示的分支，动作不可用时反馈该请求实际声明的合法操作。混批在执行前拒绝，反馈指出应独立提交的动作。工具调用沿原 Call ID 配对，目标前置拒绝与无调用正文沿原 Runtime 反馈投影，Journal 仍持有原始响应。当前阶段说明进入 Step Context。
+
+`answer_results.py` 负责状态参数及正文归一，`ConversationService` 负责按阶段装配，`model_actions.py` 负责批次解码，Journal 和原交付链保存候选及终态。实施时删除通用 `control_submit_final`、旧参数和 `without_normal_answer`，迁移中英文工具说明与计划反馈。删除答复专用的 `references`、行坐标投影和绑定、摘要保护分支及 `answer_citations` 开关，同步移除 Toolathlon 的关停配置和实验登记。工具自身的行号、原件引用与核验内部证据继续由各自的消费者处理。Toolathlon 比较器删除从旧终答枚举推导的 `normal_answer_available_steps`。按 [ADR 0055](../../adr/0055-unified-conversation-answer.md) 绑定答复协议版本，新规范使用新会话，旧轨迹沿原版本读取。
+
+#### 验收与停止
+
+1. 零模型回放第 8 轮的完整请求与原始调用。基线重现同一拒绝。候选目标准备阶段保留工具声明，省略 `tool_choice`，可用的终止表达为实际受限或失败状态。原混批须零派发，下一次请求显示具体原因及合法路径。单独的原目标操作通过解码并交原准入。回放原有正文，分别核对目标未就绪时的前置反馈和就绪后的原文交付。
+2. 用已有工具回执与正式答复回放 Markdown 正文及其中的来源链接、澄清和受限状态。实发工具和提示省去答复行坐标及 `references`，原文和来源 URL 可读，旧式 `references` 调用在执行前拒绝。核对中英文声明、目标准备期限制、拒稿重提、核验的来源证据及原内部结构化调用策略。
+3. 确定性回放通过后，用正式 HTTP 入口从新会话连续执行一次 NYC Task 1 原始英文全部 32 轮。沿用上次 MiniMax-M3.1-Flash、medium、镜像、评分器和预算，每轮最多 40 次主决策、48 次工具调用、1,000 万 tokens 与 3,600 秒，任务上限 6,000 万 tokens。单列第 8 轮的真实目标推进、工具结果和正式答复作为机制检查点，按正式运行器终态停止并封存原结果。独立评分复用同一配置，上限 100 万 tokens。单次复验只覆盖这条连续链。
+
+回复解析修复后的首次运行以原终答协议交付前两轮。第 3 轮两次 Goal 增量因 `changes[0].evidence` 省略两段之间的标题而被拒。两次实发都包含把标题算在内的完整用户原话，没有观察到答复协议、证据来源或预算拒绝。原反馈只有原因码，未指明哪个证据字段及连续片段条件。准确定位由 Goal 准入拥有。对证据原文拒绝，在原调用的反馈中报告 JSON 字段路径，要求从最新消息复制相关连续片段。保持原文校验、原始题目、Goal 语义和一次协议重试。先回放两次原补丁，原参数仍拒绝、只改为真实原文后可入原准入，再从新会话完整复验一次。新轨迹若在同一边界仍失败，按 EVD §7.2 停止修正并复审。非此原因触发运行器终态，按最早责任记录。生成和评分沿上项额度。[第 3 轮实际轨迹](../../../.tmp/nyc-r4-20261118/capture/turn-03.trace.json) · [两次请求的原文核对](../../../.tmp/nyc-r4-20261118/turn03-input-audit.json)
+
+连续复验从新会话交付 32 轮，第 8 轮通过独立目标更新和 Bash 执行后交付正文。独立评分 6/32。目标证据反馈用上次两份真实补丁回放，本次第 3 轮首次通过，未触发该反馈。[完整复验](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#终答协议更新后的本-agent-复验)
+
+阶段绕过、合法答复无法交付、核验失去原始证据或未知执行导致误交付时停止候选准入。撤回恢复原版本与会话契约，保留两边实发和结果。

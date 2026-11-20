@@ -26,6 +26,12 @@ def _normalized_text_payload(value: Any) -> Any:
     raise ValueError("unsupported non-JSON model payload")
 
 
+def _utf8_json(value: Any) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+
+
 def check_model_capacity(
     *,
     operation: str,
@@ -75,21 +81,24 @@ def check_model_capacity(
     output_reserve = (
         requested_output if requested_output is not None else capacity.max_output_tokens
     )
+    envelope_sha256 = None
+    estimator_version = "ascii_json_bytes_v1"
     try:
-        serialized = json.dumps(
-            body,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        estimated = json.dumps(
-            _normalized_text_payload(body),
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("ascii")
+        serialized = _utf8_json(body)
+        if operation in {"agent_interaction_turn", "conversation_history_compaction"}:
+            estimator_version = "utf8_json_density_v1"
+            input_tokens = (len(serialized) + 3) // 4
+        else:
+            input_tokens = len(json.dumps(
+                _normalized_text_payload(body),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ))
+        if operation == "agent_interaction_turn":
+            envelope = _utf8_json({key: value for key, value in body.items() if key != "messages"})
+            envelope_sha256 = sha256(envelope).hexdigest()
     except (TypeError, ValueError, UnicodeError):
         raise ModelCapacityRefused(operation, "capacity_payload_unsupported") from None
     check = ModelCapacityCheck(
@@ -97,8 +106,10 @@ def check_model_capacity(
         provider_host=provider_host,
         model=model,
         payload_sha256=sha256(serialized).hexdigest(),
+        estimator_version=estimator_version,
+        envelope_sha256=envelope_sha256,
         serialized_body_bytes=len(serialized),
-        estimated_input_tokens=len(estimated),
+        estimated_input_tokens=input_tokens,
         requested_output_tokens=requested_output,
         output_reserve_tokens=output_reserve,
         protocol_reserve_tokens=capacity.protocol_reserve_tokens,
@@ -107,7 +118,7 @@ def check_model_capacity(
     if output_reserve > capacity.max_output_tokens:
         raise ModelCapacityRefused(operation, "output_capacity_exceeded", check=check)
     if (
-        len(estimated) + output_reserve + capacity.protocol_reserve_tokens
+        input_tokens + output_reserve + capacity.protocol_reserve_tokens
         > capacity.context_window_tokens
     ):
         raise ModelCapacityRefused(operation, "context_capacity_exceeded", check=check)

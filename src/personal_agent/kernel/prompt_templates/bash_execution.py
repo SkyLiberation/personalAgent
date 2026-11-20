@@ -24,6 +24,21 @@ PROMPTS = {
             "可用 /tmp 保存单次命令的临时文件。输出包含 stdout、stderr 和退出状态。"
         ),
     ),
+    "bash_execution.task_workspace": PromptSpec(
+        name="bash_execution.task_workspace", version="v2-task-tmp", owner="bash_execution",
+        output_contract="BashArgs -> BashToolResult",
+        template=(
+            "在隔离容器中执行 Bash。默认目录是只读 /workspace，用户附件在 attachments/。"
+            "脚本、解压数据和中间结果可保存在 {temp_dir}。同一授权分析任务内，"
+            "这些文件可供后续命令和用户轮次使用，任务容器回收时清除。"
+            "每次命令启动独立 Bash。"
+            "输出包含 stdout、stderr 和退出状态。"
+        ),
+    ),
+    "bash_execution.task_workspace_unavailable": PromptSpec(
+        name="bash_execution.task_workspace_unavailable", version="v2", owner="bash_execution",
+        template="当前调用无法使用此任务的容器工作区，命令尚未执行。恢复原任务或在新的授权会话重建工作区。",
+    ),
     **{
         f"bash_execution.parameter.{name}": PromptSpec(
             name=f"bash_execution.parameter.{name}", version="v2" if name == "workdir" else "v1",

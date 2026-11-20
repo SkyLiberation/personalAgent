@@ -24,10 +24,10 @@ from .models import (
     BashExecutionProfile,
     BashExecutionReceipt,
     BashInputContent,
+    BashInputIdentity,
     BashInputManifest,
     BashJournalView,
     BashToolResult,
-    canonical_digest,
 )
 from .ports import BashArtifactPort, BashExecutionPort, BashJournalPort
 
@@ -72,6 +72,7 @@ class BashExecutionService:
             execution_scope=execution_scope,
             action_id=action_id,
             request_digest=request_digest,
+            retain_task_workspace=self.profile.task_workspace is not None,
         )
         if (
             view.execution_scope != execution_scope
@@ -91,14 +92,14 @@ class BashExecutionService:
         if command is None:
             if view.execution is not None or view.receipt is not None:
                 raise ValueError(self._prompts.render('bash_execution.execution_command'))
-            command, inputs = self._command(view)
+            command = self._command(view)
             self.journal.bind_bash_command(
                 execution_scope=execution_scope,
                 action_id=action_id,
                 command=command,
             )
         elif view.execution is None:
-            inputs = self._restore_inputs(command, view)
+            self._validate_input_identities(command)
         if view.execution is not None:
             # Dispatching and terminal-without-receipt both resume the original
             # job. A missing capture must never trigger another computation.
@@ -124,7 +125,9 @@ class BashExecutionService:
                 action_id=action_id,
                 fact=BashExecutionFact(status="dispatching", output_available=False),
             )
-            outcome = self.execution.execute(command, inputs, run_deadline_at=view.run_deadline_at)
+            outcome = self.execution.execute(
+                command, lambda item: self._read_input(item, execution_scope), run_deadline_at=view.run_deadline_at,
+            )
         if view.execution is None or view.execution.status in {
             "dispatching",
             "unknown",
@@ -142,26 +145,34 @@ class BashExecutionService:
         )
         return self._response(receipt, execution_scope)
 
-    def _read(
+    def _input_identity(
         self, name: str, ref: ResourceRef, scope: ExecutionScope, *, max_bytes: int
-    ) -> BashInputContent:
+    ) -> BashInputIdentity:
         if ref.resource_type != "artifact" or ref.owner != scope.principal:
             raise PermissionError(self._prompts.render('bash_execution.input_owner'))
-        metadata = self.artifacts.resource_item(
+        metadata = self.artifacts.describe_upload(
             ref,
             principal=scope.principal,
             owner=scope.principal,
         )
         if metadata.resource_ref != ref or metadata.size_bytes > max_bytes:
             raise ValueError(self._prompts.render('bash_execution.input_boundary'))
+        return BashInputIdentity.model_validate({
+            "name": name, "resource_ref": ref,
+            "content_digest": metadata.content_digest, "size_bytes": metadata.size_bytes,
+        }, context=self._prompts)
+
+    def _read_input(self, identity: BashInputIdentity, scope: ExecutionScope) -> BashInputContent:
         stored, content = self.artifacts.read_upload(
-            ref,
+            identity.resource_ref,
             principal=scope.principal,
             owner=scope.principal,
         )
-        if stored.resource_ref != ref or stored.size_bytes != metadata.size_bytes:
+        if stored.resource_ref != identity.resource_ref or stored.size_bytes != identity.size_bytes:
             raise ValueError(self._prompts.render('bash_execution.input_changed'))
-        return BashInputContent.model_validate({'name': name, 'resource_ref': ref, 'content_digest': metadata.content_digest, 'size_bytes': metadata.size_bytes, 'content': content}, context=self._prompts)
+        return BashInputContent.model_validate({
+            **identity.model_dump(), "content": content,
+        }, context=self._prompts)
 
     def _publish(
         self,
@@ -186,9 +197,7 @@ class BashExecutionService:
             limitations=limitations,
         )
 
-    def _command(
-        self, view: BashJournalView
-    ) -> tuple[BashExecutionCommand, tuple[BashInputContent, ...]]:
+    def _command(self, view: BashJournalView) -> BashExecutionCommand:
         if (
             view.remaining_execution_seconds <= 0
             or self.clock() >= view.run_deadline_at
@@ -203,16 +212,13 @@ class BashExecutionService:
             content,
             mime="text/x-shellscript",
         )
-        source = self._read(
+        source = self._input_identity(
             "command.sh", program_ref, scope, max_bytes=PROGRAM_MAX_BYTES
         )
-        # Source files are UTF-8; compilation and program correctness belong to
-        # the real interpreter and its output rather than an admission heuristic.
-        source.content.decode("utf-8", errors="strict")
-        inputs: list[BashInputContent] = []
+        inputs: list[BashInputIdentity] = []
         available = INPUT_MAX_BYTES
         for file in view.workspace_files:
-            item = self._read(file.name, file.resource_ref, scope, max_bytes=available)
+            item = self._input_identity(file.name, file.resource_ref, scope, max_bytes=available)
             inputs.append(item)
             available -= item.size_bytes
         now = self.clock()
@@ -238,20 +244,23 @@ class BashExecutionService:
             deployment_digest=view.deployment_digest,
             image_id=self.profile.image_id,
             limits=limits,
-            program=source.identity(),
-            inputs=tuple(item.identity() for item in inputs),
+            program=source,
+            inputs=tuple(inputs),
             workdir=view.arguments.workdir,
             accepted_at=now,
             deadline_at=deadline,
             reserved_seconds=reserved,
+            task_workspace=view.task_workspace,
+            workspace_file=view.arguments.workspace_file,
         )
         # Reparse the full payload so the digest uses exactly the persisted JSON
         # representation (including aware datetime and float serialization).
         provisional = BashExecutionCommand.model_construct(
             **fields, command_digest="0" * 64
         )
-        command = BashExecutionCommand.model_validate({**fields, 'command_digest': canonical_digest(provisional.model_dump(mode='json', exclude={'command_digest'}))}, context=self._prompts)
-        return command, (source, *inputs)
+        return BashExecutionCommand.model_validate(
+            {**fields, "command_digest": provisional.bound_digest()}, context=self._prompts,
+        )
 
     def _validate_command(
         self, command: BashExecutionCommand, view: BashJournalView
@@ -267,6 +276,8 @@ class BashExecutionService:
             != self.profile.limits.model_dump(exclude={"timeout_seconds"})
             or command.limits.timeout_seconds > self.profile.limits.timeout_seconds
             or command.workdir != view.arguments.workdir
+            or command.task_workspace != view.task_workspace
+            or command.workspace_file != view.arguments.workspace_file
         ):
             raise PermissionError(self._prompts.render('bash_execution.command_request'))
         expected = view.arguments.command.encode("utf-8")
@@ -275,24 +286,13 @@ class BashExecutionService:
         ).hexdigest() or command.program.size_bytes != len(expected):
             raise ValueError(self._prompts.render('bash_execution.program_bytes'))
 
-    def _restore_inputs(
-        self, command: BashExecutionCommand, view: BashJournalView
-    ) -> tuple[BashInputContent, ...]:
-        contents = tuple(
-            self._read(
-                item.name,
-                item.resource_ref,
-                view.execution_scope,
-                max_bytes=item.size_bytes,
+    def _validate_input_identities(self, command: BashExecutionCommand) -> None:
+        for item in (command.program, *command.inputs):
+            current = self._input_identity(
+                item.name, item.resource_ref, command.execution_scope, max_bytes=item.size_bytes,
             )
-            for item in (command.program, *command.inputs)
-        )
-        if tuple(item.identity() for item in contents) != (
-            command.program,
-            *command.inputs,
-        ):
-            raise ValueError(self._prompts.render('bash_execution.original_command'))
-        return contents
+            if current != item:
+                raise ValueError(self._prompts.render('bash_execution.original_command'))
 
     def _publish_outcome(
         self, command: BashExecutionCommand, outcome: BashBackendOutcome
@@ -361,9 +361,10 @@ class BashExecutionService:
                 else:
                     stderr_ref = ref
         else:
-            limitations.append(
-                self._prompts.render('bash_execution.output_unavailable')
+            prompt = "bash_execution.task_workspace_unavailable" if error == "workspace_unavailable" else (
+                "bash_execution.output_unavailable"
             )
+            limitations.append(self._prompts.render(prompt))
             if status == "succeeded":
                 status, error = "failed", "output_unavailable"
         return BashExecutionReceipt(

@@ -1,6 +1,6 @@
 # 运行预算总结
 
-对话运行按单次用户请求累计主模型决策、工具调用、子智能体委派和 token 用量。单次模型请求另受上下文窗口和输出额度约束。启用 Python 分析、检索实验或独立 Research 时，还会叠加对应的任务预算。本文根据 2026-11-11 工作树的源码与配置整理，运行结果见[评测盘点](../evals/02-current-case-inventory.md)。
+对话运行按单次用户请求累计主模型决策、工具调用、子智能体委派和 token 用量。单次模型请求另受上下文窗口和输出额度约束。启用 Python 分析、检索实验或独立 Research 时，还会叠加对应的任务预算。本文根据当前运行实现与配置整理，运行结果见[评测盘点](../evals/02-current-case-inventory.md)。
 
 ## 对话主循环
 
@@ -17,8 +17,22 @@
 本地 `.env` 的累计 token、模型轮次和工具次数与示例值一致。已启动进程在重启后重新读取配置。[环境变量读取](../../src/personal_agent/kernel/config_env.py) · [示例配置](../../.env.example) · [对话运行预算](../env.md#对话运行预算)
 
 - **累计 token 按已知消费准入。** 每次新增模型实发前检查余额和适用的截止时间。响应原件提交时优先采用服务提供方报告的总量，否则累加已知输入和输出。用量缺失时，累计值只表示已知下界。在途请求可以把累计用量推过阈值。已付费原件按原调用身份恢复解码并去重记账。[运行日志](../../src/personal_agent/application/conversation/journal.py) · [模型重试与记账](../topics/runtime.md#model-retry)
-- **工具和委派先准入再分配。** 批次按动作顺序分配余额，超额动作收到 `budget_exhausted`。正数工具额度耗尽会停止新的主决策。工具额度设为 `0` 时，普通工具派发被拒绝，主模型仍可生成无工具回答。适用的运行时核验活动使用自身的准入分支。[主循环实现](../../src/personal_agent/application/conversation/service.py) · [预算实现](../../src/personal_agent/application/conversation/budget.py)
-- **预算耗尽时保留已有结果。** 达到决策、工具或 token 停止条件后，运行可恢复已付费的响应，也可在满足交付条件时交付已有稿件。需要新增模型或执行才能继续时，运行按预算关口停止，预算终态为 `limitation`。开启 `low_budget_warning` 时，至少完成一轮主决策且 token 余量大于零并低于有效额度的 10%，下一次主决策会收到交付提醒。[运行系统](../topics/runtime.md#conversation-loop) · [模型输入与低余额提醒](../context/agent-loop.md)
+- **工具和委派先准入再分配。** 批次按动作顺序分配余额，超额动作收到 `budget_exhausted`。普通工具额度耗尽时，下一次主决策撤下用完额度的工具。主模型可用仍有效的工具或交付已有结果。额度设为 `0` 时，从首步起撤下普通工具。适用的运行时核验活动使用自身的准入分支。[主循环实现](../../src/personal_agent/application/conversation/service.py) · [预算实现](../../src/personal_agent/application/conversation/budget.py)
+- **预算耗尽时保留已有结果。** 新主决策在步数、累计 token 或截止时间达到上限时停止。运行可恢复已付费的响应，也可在满足交付条件时交付已有稿件。受阻且无法完成交付时返回 `limitation`。开启 `low_budget_warning` 时，至少完成一轮主决策且 token 余量大于零并低于有效额度的 10%，下一次主决策会收到交付提醒。[运行系统](../topics/runtime.md#conversation-loop) · [模型输入与低余额提醒](../context/agent-loop.md)
+
+### 主决策与工具额度独立
+
+LongDS NYC Task 2 的复跑在第 40 步完成已获准的动作，下一步因主决策额度耗尽而返回 `limitation`。同题早先的成功运行在累计 15 次工具调用后，于第 17 步直接交付 Markdown。把该成功阶段的工具上限设为 15 时，旧主循环会在准备第 17 步前终止，尽管生成已有结果的正文并不占用工具额度。[原两次运行](../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md)
+
+DeepSeek Harness 核心在 `agent/pre-step` 返回拒绝时停止开下一步。LongDS 对照用外部扩展拒绝第 41 步。核心单次输出由 `maxTokens` 限制，工具批次另管并发，正常无工具正文可结束。采用其按生命周期边界执行限制的做法，沿用本工程的 Journal、模型次数、累计 token 和工具额度。[主循环固定源码](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/agent.ts#L344-L395) · [对照扩展](../../.tmp/nyc23-20261119/step-limit.mjs)
+
+已接入。
+
+`ConversationBudget` 判断能否发起新主决策，`ConversationService` 先检查已付费原件和待交付旧稿，再在能力物化前检查主决策、累计 token 和截止时间。普通工具额度用尽后，下一主决策只声明仍可执行的动作，工具批次仍在派发边界逐项分配额度。已计入正数额度的目标更新、目标读取及新增核验也不能越过该边界。保留不占用普通工具额度的状态报告、澄清、计划控制和独立委派。配置为零时沿用既有内置目标与核验规则。未就绪的目标及必须新增核验的答案仍经过原交付检查。余额在 Step Context，存在余额的最后一次主决策仍按原 Auto 协议执行。无新增宽限、持久化计数或循环入口。
+
+预定验收为两个原始 Task 2 首轮阶段。对早先成功运行重放第 17 步之前已提交状态，分别使用原 48 次工具额度及与已提交用量相同的 15 次额度。检查正常声明保留、耗尽后无新增计费工具声明、保留正常正文出口和已提交工具结果。用原第 17 步实际回复核对 Markdown 可走原交付路径。对复跑第 40 步之后的状态核对完成的工具回执不丢失，第 41 步没有模型调用。核验或目标未就绪的终态仍受原门禁约束。本次是固定真实阶段的 Offline Eval，完整任务分数独立。
+
+离线回放通过四项。48 次配置下沿原路径交付；15 次配置下保留原来的 15 次工具调用用量和 15 组历史交互，复用第 17 步实际正文完成交付；40 步耗尽时未再物化能力或调用模型，保留已执行动作。已记账的第 17 步回复在决策与工具额度均耗尽时可恢复并交付，本次恢复无新增模型请求。另以第 17 步的完整请求回放 MiniMax，将工具列表缩减为当步仍可用的三个控制工具，并以当前 System Prompt 和末尾预算发出。一次实发用量 23,435 tokens，返回正常 Markdown 正文，无工具调用。两次 Task 2 的整题结果保持原归档。[离线回放](../../.tmp/dsh-budget-20261119/replay-result.json) · [模型回放](../../.tmp/dsh-budget-20261119/model-replay.json)
 
 ## 单次请求与上下文容量
 
@@ -51,5 +65,9 @@
 
 ## 评测中的独立预算
 
+- **LongDS 生成用量与停止点。** Task 2 的第 31 轮交付后累计 60,053,780 tokens，外层在第 32 轮前停止。DeepSeek Harness 对照也用 60M 的整题额度，在用户轮之间检查。其 SDK 的 `maxTokens` 单独限制每次主请求的输出，token-meter 从已结算的助手事件累计未缓存输入、缓存读写和输出，同一次尝试的更新替换旧样本，后续重试独立计入。LongDS 主模型请求现有 32,768 输出上限，Run 与 Bash 授权继续执行各自的额度。采用对照的整题停止边界与用量分项。[Task 2 轨迹](../../.tmp/nyc23-pressure-20261120/t2/capture/report.json) · [对照运行器](../../.tmp/nyc23-20261119/harness.py#L157) · [token-meter 固定源码](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/llm/token-meter/src/usage-projection.ts#L108-L143)
+- **记录与归档。** LongDS 以实际 HTTP 发送及配对的 SDK 响应为来源。`known_tokens` 是已知模型总用量，包含总输入和输出。单次优先用服务方总量，缺失时累计已知输入与输出。汇总供停跑、检查点和最终报告使用，缺失的尝试单列。DeepSeek Harness 的适配器将总输入拆为缓存读取、缓存写入和未缓存输入，界面将三项相加得到总输入，缓存命中率按读取量除以总输入计算。LongDS 同步记录总输入、输出和三项输入分量。读取量有效时，按同一公式折算未缓存输入，未报告的写入量在折算中按零处理，原始缓存写入统计仍保留未知和观测次数。已有的未命中输入是总输入减缓存读取，可能包含写入。命中率按同时有有效总输入与缓存读取的请求做 token 加权，覆盖数由未命中输入的 `observed_attempts` 给出。旧报告可继续读取，新增分项以原始回包重算。[用量映射](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/llm/llm-pi-ai/src/stream.ts#L17-L31) · [统计展示](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/experimental/client-ui-stats/src/client/stats-totals.ts#L14-L29) · [运行与归档](../evals/04-running-and-release.md#公开数据集运行)
+- **定向验收。** 只读回放 Task 2 最近一次的 31 轮物理请求和 DeepSeek Harness Task 2 原生用量，按同一口径对齐输入、输出和缓存。校验 Task 2 第 30 轮后余额为正、第 31 轮之后拒绝第 32 轮。用 Task 1 含用量缺口的已封存 HTTP 轨迹核对未知尝试仍保留。对服务方缺总量的字段投影使用同一次实际回包的独立副本验证回退及完整性。定向回放零新模型费用，无需改变题面、评分或生产 Prompt。
+- **用量展示验收。** 只读复核 Task 3 双方题面逐字相同的前 25 轮，按原始用量重算总输入、输出、缓存分量和命中率。复用本 Agent 的首次采集段检查报告可读、289 次请求中的 1 次未知仍保留，以及 60,107,747 的已知总量和停止判据仍成立。用同一真实响应的独立副本检查已报告写入的分量守恒。每项执行一次，零新模型调用。[Task 3 原件审计](../../.tmp/nyc3-cost-20261120/report.json) · [首次采集报告](../../.tmp/nyc3-1120/c/report.json)
 - **评测运行与评分。** Toolathlon、LongDS 的执行配置由各运行规格和归档记录。LongDS 评分器默认单次输出 32,768 token、单次超时 480 秒、累计 2,000,000 token。评分请求发送前按已知用量加上新请求预留判断是否有余额。[评测运行说明](../evals/04-running-and-release.md) · [LongDS 评分预算](../../evals/longDS/longds_judge_config.py) · [评分准入](../../evals/longDS/longds_judge.py)
 - **遗留 Ask 离线评测。** 证据进入模型前默认最多 12 项、5,000 字符。配置入口为 `PERSONAL_AGENT_ASK_CONTEXT_MAX_ITEMS` 和 `PERSONAL_AGENT_ASK_CONTEXT_CHAR_BUDGET`。[Ask 组件配置](../env.md#offline-eval-的遗留-ask-组件配置)

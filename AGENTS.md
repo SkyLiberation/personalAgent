@@ -97,12 +97,12 @@
 
 | 任务 | 使用的 skill | 方法与输出职责 |
 | --- | --- | --- |
-| LLM 决策 | [设计](.agents/skills/design-llm-decisions/SKILL.md)、[排障](.agents/skills/troubleshoot-llm-decisions/SKILL.md) | 决策设计与错误定位 |
+| LLM 决策设计或排障 | [设计](.agents/skills/design-llm-decisions/SKILL.md)、[排障](.agents/skills/troubleshoot-llm-decisions/SKILL.md) | 从目标设计契约，从失败定位责任 |
 | 参考开源方案 | [参考开源方案](.agents/skills/reference-open-source-solutions/SKILL.md) | 源码追踪、实现对照与采用落点 |
 | 架构定义与设计、业务适配检查或架构维护 | [架构设计与维护](.agents/skills/design-project-architecture/SKILL.md) | 业务适配、职责契约、依赖装配与实现一致性 |
 | 编写、修改、重构代码或检查局部结构质量 | [编码质量](.agents/skills/write-quality-code/SKILL.md) | 业务聚焦、内聚耦合、变化隔离、切面与结构质量 |
+| 切换或维护 feature flag | [开关管理](.agents/skills/manage-feature-flags/SKILL.md) | 生效配置与实验组 |
 | 描述方案落地阻塞 | [问题描述](.agents/skills/describe-project-problems/SKILL.md) | 前因后果、链路传导、历史复现与关键责任 |
-| 解释工程问题、原因、机制或设计取舍 | [方案说明](.agents/skills/explain-project-solutions/SKILL.md) | 问题、做法与参考依据；窄问题只展开相关部分 |
 | 审计必要性、优化前后差异或逐点 E2E 覆盖 | [方案审计](.agents/skills/audit-project-proposals/SKILL.md) | 问题聚焦、设计清晰与解耦、参考对比及证据 |
 | 制定具体方案验证计划，或分析已有方案的迭代受阻、去留与新问题关联 | [方案推进分析](.agents/skills/analyze-proposal-progress/SKILL.md) | 实践核对、验证与因果分析，保留局部收益并决定去留 |
 

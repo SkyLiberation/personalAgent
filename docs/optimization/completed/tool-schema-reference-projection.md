@@ -26,9 +26,9 @@
 | 全部C正式组及补充动作10/10合法 | 8次write加2次合法直接execute；后两次不计write参数通过，原计划停止与未执行保持 |
 | 实际Schema审计 | 21份SDK、234份工具Schema，只有目标request变化；原字符串拒绝，两个完整合法历史对象接受，unsupported及literal反事实保持 |
 | 生产接入 | helper AST与已验证C相同，21份实际envelope等于候选；shared encoder与Adapter字节保持，独立审查无Critical／Important |
-| 当前正式入口 | 新完整34轮task2已启动，冻结当前3,753文件、原英文输入和数据；结果独立报告，不提前计为完整通过 |
+| 当时的正式入口 | 完整 Task 2 按原 34 轮启动，采集及后续接续累计交付 7 轮、独立评分通过 6 轮。接续段两次请求仍被参数结构拒绝，完整范围见[验证记录](../to_verify/verify_results/tool-schema-reference.md#最新task2完整测试)。 |
 
-新完整任务保持direct/none、Flash thinking、英文Markdown和无搜索。旧baseline及partial不重跑，Pro评分使用原1M共享账本及既有资格。原计划尚未执行的两次独立中英保存／执行smoke由本次用户要求的完整task2代替，没有中文新E2E成绩。工程检查、费用、启动身份与最终原件由验证记录拥有。
+完整任务的运行身份、分段源码和停止边界见验证记录。两次独立中英保存／执行 smoke 未执行。
 
 ## 失败尝试及评测纠正
 

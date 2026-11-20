@@ -42,6 +42,7 @@ StructuredOutputFailureCode = Literal[
     "provider_action_clarification_payload_invalid",
     "provider_action_goal_payload_invalid",
     "provider_action_multiple_working_plans",
+    "provider_action_exclusive",
     "provider_action_definition_invalid",
 ]
 
@@ -309,7 +310,8 @@ class ModelCapacityCheck(BaseModel):
     provider_host: str
     model: str
     payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    estimator_version: Literal["ascii_json_bytes_v1"] = "ascii_json_bytes_v1"
+    estimator_version: Literal["ascii_json_bytes_v1", "utf8_json_density_v1"] = "ascii_json_bytes_v1"
+    envelope_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     measurement_kind: Literal["estimated"] = "estimated"
     serialized_body_bytes: int = Field(ge=0)
     estimated_input_tokens: int = Field(ge=0)

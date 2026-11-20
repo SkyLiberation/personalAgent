@@ -34,11 +34,6 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template="The model has not returned a nonempty visible body; reasoning cannot serve as the answer.",
     ),
-    "conversation.answer.citation_repair": PromptTranslation(
-        source_version="2026-11-15.v1",
-        version="2026-11-15.en.v1",
-        template="Resubmit the complete answer. Fix required references or read their source text first. Remove optional coordinates that are unavailable.",
-    ),
     "conversation.plan.active_step_limit": PromptTranslation(
         source_version="2026-10-27.v1",
         version="2026-10-27.en.v1",
@@ -84,11 +79,6 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template="An original Bash program, input, or execution manifest is missing.",
     ),
-    "conversation.answer.citation_feedback": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="{error}\nSee the latest submitted_final for the complete submission and references for each segment.",
-    ),
     "conversation.plan.step_binding_invalid": PromptTranslation(
         source_version="v2-list-control",
         version="v2-list-control-en.1",
@@ -97,10 +87,5 @@ TRANSLATIONS = {
     "conversation.plan.goal_binding_invalid": PromptTranslation(
         source_version="v1", version="v1-en.1",
         template="Each unfinished plan step needs the IDs of the active goal items it serves. Revise the steps using the latest goal.",
-    ),
-    "conversation.experiment.citations_unbound": PromptTranslation(
-        source_version="2026-10-27.v1",
-        version="2026-10-27.en.v1",
-        template="The report references are not bound to actual sources: {error}",
     ),
 }

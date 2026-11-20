@@ -183,6 +183,11 @@ class ToolExecutor:
             set(governance.side_effects) - {"none", "read_local", "read_longterm"}
         )
 
+    def interaction_call_is_mcp_write(self, name: str) -> bool:
+        tool = self._interaction_tool(name)
+        return bool(tool is not None and (tool.extras or {}).get("mcp_capability")
+                    and not self.interaction_call_is_safe_for_concurrency(name))
+
     def graph_node(self):
         return self._gateway.invoke_graph
 

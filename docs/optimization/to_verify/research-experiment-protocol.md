@@ -234,6 +234,10 @@ ExperimentExecutionPort 为 `execute(command,inputs:tuple[BoundArtifact,...])->B
 
 候选失败时，backend 除原 typed 执行事实外，发布实际候选 stderr（最多64KiB）及 stdout 原件（最多本轮16MiB）为具名诊断引用；模型按需读取而非整段塞入 Observation。stderr 的 UTF-8 解码替换按原 sandbox 诊断口径标明，stdout 保留原字节；不把日志当成功、排名完整性或评分事实。私有评分输入及任意 worker／宿主日志不借该入口公开。Artifact owner 新增窄只读契约 `read_limitations(ref, *, principal, owner) -> tuple[str, ...]`，复用 `_read_verified` 授权、版本和原字节完整性检查，返回现有 canonical limitations；ExperimentArtifactPort 的同名方法供 `_response` 从原 diagnostic_refs 恢复限制，保留未知状态原有限制，不另存日志或限制镜像，不向模型返回宿主存储记录。捕获缺失时不伪造诊断；启动早期 job/result 身份一致但尚无容器／镜像，且两路实际捕获均空时，只保留原执行事实。原 unknown 捕获尚无容器 ID、两路为空，而原 job 按同一 job_key／名称／镜像／输入对账后才确认容器 ID 时，该合法历史快照只保留当前执行事实，不发布空旧捕获，也不因旧 ID 未知截断原恢复。其他绑定仍逐项核对；旧捕获非空、两个已知 ID 不同或其他记录冲突均明确失败，不把 unknown 默认转成 failed 或成功。冻结 v1 未含这两项模型协议补齐；其终态和原身份保留，v2 实施后才启动依赖该协议的 P1。
 
+候选诊断原先在一个方法中读取并核对捕获，又处理 UTF-8、截断和命名。该方法共 226 行、35 个控制流节点，阅读编码规则须经过作业对账代码。[Docker 适配器](../../../src/personal_agent/infra/retrieval_experiment/backend.py)在原校验之后，通过同文件私有方法将两路字节、作业键和 stderr 限额转换为原有 `BackendDiagnostic`。运行时由原 `ExperimentExecutionPort` 返回，实验服务继续消费同一结果。
+
+以 Python AST 对照前后源码，原校验方法降为 183 行、30 个控制流节点。将私有投影内联回调用处后，整模块 AST 与基线一致，覆盖原拒绝条件、读取顺序及诊断内容。分层、Ruff 和本次差异检查通过。容器实际捕获与回执恢复的运行判据见[候选诊断工程用例](verify_results/research-experiment.md#2-决策状态先于持久接受)。
+
 工程契约的纯模型及无 IO 冻结规则移入 `application/retrieval_experiment/contracts.py`／`rules.py`，其余业务模型／Port／Service 同模块；infra 保留文件 Job 协议和 file_io、controller／sandbox／worker 唯一实现，backend／deployment 负责外层适配。Application 不导入 infra／scripts／Conversation；CLI 复用同一纯规则和引擎。worker 的固定相对生产路径源码清单与host一致，迁移后重建新镜像、新结果／冻结，历史身份不改。新原件／private refs 必须由新 owner 实际准备，worker新ID须实际构建取得，不预填旧ID。
 
 按[主循环工具设计](conversation-loop-boundaries.md#工具粒度和模型可见面的收敛)控制可见操作及输出成本。当前工程没有现成通用计算入口，受控 Python 执行属于新增能力；只有当前研究一个消费者时，不预建通用作业或 Skill 平台。原 E1 可以使用固定方法完成，不强制编程；P1 通过明确的程序实现委托验收扩展，不能把工具次数或新增参数当成自主性。

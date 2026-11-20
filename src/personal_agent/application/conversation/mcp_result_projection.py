@@ -1,6 +1,5 @@
 """Select a single copy of MCP result data for Conversation model inputs."""
 
-from collections.abc import Iterator
 import json
 from typing import Any
 
@@ -40,27 +39,3 @@ def project_mcp_result(payload: dict[str, Any]) -> dict[str, Any]:
     if "raw" in data:
         data["raw"] = {key: value for key, value in data["raw"].items() if ("data", "raw", key) not in fields}
     return {**payload, "data": data}
-
-
-def _member_ranges(
-    value: dict[str, Any], fields: frozenset[tuple[str, ...]], *,
-    parent: tuple[str, ...] = (), first_line: int = 1,
-) -> Iterator[range]:
-    line = first_line + 1
-    for key, child in sorted(value.items()):
-        path = (*parent, key)
-        # A member begins on the same line as the first line of its value.
-        size = len(_json(key).splitlines()) - 1 + len(_json(child).splitlines())
-        if path in fields:
-            yield range(line, line + size)
-        elif isinstance(child, dict) and any(field[:len(path)] == path for field in fields):
-            yield from _member_ranges(child, fields, parent=path, first_line=line + len(_json(key).splitlines()) - 1)
-        line += size
-
-
-def mcp_duplicate_lines(payload: dict[str, Any]) -> frozenset[int]:
-    """Locate omitted aliases in the original citation document's coordinates."""
-    fields = _duplicate_fields(payload)
-    if not fields:
-        return frozenset()
-    return frozenset(line for span in _member_ranges(payload, fields) for line in span)

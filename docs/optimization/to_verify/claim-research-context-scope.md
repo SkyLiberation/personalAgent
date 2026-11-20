@@ -1,5 +1,7 @@
 # 研究智能体输入不承载运行控制
 
+旧 Conversation claim 机制已随 [ADR 0055](../../adr/0055-unified-conversation-answer.md)退役。本文记录当时的实现、判据与证据。
+
 2026-09-28 接入及正式验收见[统一记录](../claim-revision-nonconvergence.md#2026-09-28-完整生产接入)。下文隔离代码、未接入说明和局部证据均按当轮日期解释。
 
 `CLAIM-LOOP-PROMPT-CONTRACT-001` 属于[研究论断反馈修订无法收敛](../claim-revision-nonconvergence.md)。本页只处理研究智能体的工作 Context 混入实验停止规则；[新版复验触发](claim-revision-progress.md)另行处理编辑后不提交核验。该输入修正已写入[集成隔离候选](../../../.tmp/claim-integrated-20260926/research-system.txt)，首个[实发请求](../../../.tmp/claim-integrated-20260926/call-001-request.json)已核对没有累计错误或预算说明；尚未接入生产，不能据此归因于 c7 的反复改写或宣布完整集合通过。
