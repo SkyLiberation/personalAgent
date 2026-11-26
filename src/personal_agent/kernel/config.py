@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
+from personal_agent.kernel.contracts.tool import ConversationToolProfile
 from personal_agent.kernel.feature_flags import FeatureFlags, load_feature_flags
 
 from personal_agent.kernel.config_models import (
@@ -25,6 +27,7 @@ from personal_agent.kernel.config_models import (
     ReflectionReplaySettings,
     ResearchConfig,
     ReviewDigestConfig,
+    SkillScopesConfig,
     StructuredConfig,
     WebApiConfig,
     WebSearchConfig,
@@ -45,7 +48,11 @@ class Settings(_StrictBase):
     action_diagnostics_reveal_field_names: bool = False
     retrieval_experiment_config_path: Path | None = None
     bash_execution_config_path: Path | None = None
+    skill_root: Path | None = None
+    skill_scopes: SkillScopesConfig = Field(default_factory=SkillScopesConfig)
     answer_result: AnswerResultConfig = Field(default_factory=AnswerResultConfig)
+    conversation_tools: ConversationToolProfile = Field(default_factory=ConversationToolProfile)
+    conversation_goal_mode: ConversationGoalMode = ConversationGoalMode.ENABLED
     feature_flags: FeatureFlags = Field(default_factory=load_feature_flags)
 
     graphiti: GraphitiConfig = Field(default_factory=GraphitiConfig)
@@ -68,6 +75,13 @@ class Settings(_StrictBase):
     ask: AskConfig = Field(default_factory=AskConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     reflection_replay: ReflectionReplaySettings = Field(default_factory=ReflectionReplaySettings)
+
+    @model_validator(mode="after")
+    def validate_skill_scope_principals(self) -> "Settings":
+        configured = set(self.web.api_keys.values()) | set(self.web.admin_api_keys.values())
+        if any(entry.principal not in configured for entry in (*self.skill_scopes.users, *self.skill_scopes.projects)):
+            raise ValueError("用户级和工程级技能的绑定主体须配置 Web 认证密钥")
+        return self
 
     @property
     def web_search_available(self) -> bool:

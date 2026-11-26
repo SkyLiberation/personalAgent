@@ -12,6 +12,6 @@ def require_bash_authorization(
             or authorization.authorized_principal != trace.principal
             or authorization.conversation_id != trace.conversation_id
             or authorization.max_execution_seconds != trace.max_execution_seconds
-            or trace.run_deadline_at is None or trace.run_deadline_at > authorization.expires_at):
+            or trace.run_deadline_at is None):
         raise PermissionError("原Bash分析授权不可用或绑定已变化")
     return authorization

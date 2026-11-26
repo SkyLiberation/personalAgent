@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from evals.conversation_http import UNVERIFIED_FLOW, benchmark_feature_flags
 from personal_agent.kernel.config import Settings
-from personal_agent.kernel.feature_flags import FeatureFlags, write_feature_flags
+from personal_agent.kernel.feature_flags import write_feature_flags
 
 from .longds_judge import JudgeScoreReport, MeteredJudge, require_qualification, score
 from .longds_judge_config import LongDSJudgeSettings, build_judge_configuration
@@ -28,7 +28,10 @@ from .longds_materials import (
     DATASET_REVISION, TASK_NAME, LongDSInput, LongDSPreparation, LongDSTurn,
     json_bytes, seal, verify_preparation, verify_seal,
 )
-from .run_longds import LONGDS_ANSWER_RESULT, ROOT, LongDSCapture, _configuration, _source_identity, _source_paths, baseline
+from .run_longds import (
+    LONGDS_ANSWER_RESULT, LONGDS_CONVERSATION_TOOLS, ROOT, LongDSCapture, _configuration,
+    _source_identity, _source_paths, baseline,
+)
 
 
 LITE_SHA256 = "51f03d65ce3149ae36fb283140ee9aaffca77d9d3bb13d5487d6cf04d443931f"
@@ -223,10 +226,13 @@ def configure(output: Path) -> Settings:
     expected = json.loads(REFERENCE_CONFIGURATION.read_bytes())["expected_configuration"]
     # New captures bind the shared unattended LongDS configuration.
     answer_config = LONGDS_ANSWER_RESULT
-    effective_flags = benchmark_feature_flags(FeatureFlags.model_validate(expected.get("feature_flags", {})))
+    effective_flags = benchmark_feature_flags(settings.feature_flags)
     flag_path = (output / "feature_flags.toml").resolve()
     write_feature_flags(flag_path, effective_flags)
     expected = {**expected, "answer_result": answer_config.model_dump(mode="json"),
+                "conversation_tools": LONGDS_CONVERSATION_TOOLS.model_dump(mode="json"),
+                "conversation_goal_mode": "enabled",
+                "budget": {**expected["budget"], "max_total_tokens": TOKEN_LIMIT},
                 "feature_flags": effective_flags.model_dump(mode="json")}
     if (settings.structured.model != expected["structured"]["model"]
             or settings.openai.model != expected["openai"]["model"]
@@ -245,12 +251,14 @@ def configure(output: Path) -> Settings:
         PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS=str(expected["openai"]["timeout_seconds"]),
         PERSONAL_AGENT_OPENAI_MAX_RETRIES=str(expected["openai"]["max_retries"]),
         PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS="40", PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS="256",
-        PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS="4", PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS="10000000",
+        PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS="4", PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=str(TOKEN_LIMIT),
         PERSONAL_AGENT_ANSWER_RESULT=answer_config.model_dump_json(),
+        PERSONAL_AGENT_CONVERSATION_TOOLS=LONGDS_CONVERSATION_TOOLS.model_dump_json(),
+        PERSONAL_AGENT_CONVERSATION_GOAL_MODE=expected["conversation_goal_mode"],
         PERSONAL_AGENT_FEATURE_FLAGS_CONFIG=str(flag_path), PYTHONDONTWRITEBYTECODE="1")
     effective = Settings.from_env()
     current = _configuration(effective)
-    # The legacy manifest predates these fields; record both in the new identity.
+    # Resolve metadata that predates the current capture configuration.
     if (current.keys() - expected.keys() - {"prompt_language", "web_search_available"}
             or any(key not in current or current[key] != value for key, value in expected.items())):
         raise ValueError("实际模型、容量或执行配置与原完整运行不一致")
@@ -332,7 +340,7 @@ def run(root: Path, output: Path, *, qualification_directory: Path,
                 stage = "capture_failed"
                 capture = baseline(task_root / "materials", task_root / "capture", purpose="target",
                     user_turns=len(prepared.turns), task_token_limit=TOKEN_LIMIT,
-                    bash_image_id=identity["bash_image_id"], docker_endpoint=identity["docker_endpoint"])
+                    enable_bash=True)
                 stage = "score_failed"
                 judge = MeteredJudge(task_root / "judge", source_directory=SOURCE_DIRECTORY,
                                      token_limit=judge_token_limit, settings=judge_settings)

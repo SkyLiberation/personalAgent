@@ -118,7 +118,7 @@ class ResearchExperimentCompletionUseCase:
                 raise ValueError("Bash回执状态与实际进程终态不同")
             manifest = BashInputManifest(
                 command_digest=command.command_digest, program=command.program,
-                inputs=command.inputs, image_id=command.image_id, limits=command.limits,
+                inputs=command.inputs, limits=command.limits,
             )
             try:
                 for identity in (command.program, *command.inputs):

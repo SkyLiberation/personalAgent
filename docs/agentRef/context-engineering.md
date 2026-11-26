@@ -50,7 +50,7 @@
 
 ## 5. 压缩的实际装配、消费与恢复
 
-2026-10-18 核对两个独立开源实现的固定源码，以及 DeepAgents 锁定的 `langchain==1.4.6` 配对切割实现。共取得 27 个源码／依赖锁文件，见[来源及 SHA-256](../../.tmp/context-compaction-review-20261018/sources/source-manifest.json)和[校验记录](../../.tmp/context-compaction-review-20261018/sources/verification.json)。未运行第三方项目、模型或测试。以下是该版本机制，不代表当前所有部署配置。
+2026-10-18 核对两个独立开源实现的固定源码，以及 DeepAgents 锁定的 `langchain==1.4.6` 配对切割实现。共取得 27 个源码／依赖锁文件，见来源及 SHA-256（`.tmp/context-compaction-review-20261018/sources/source-manifest.json`）和校验记录（`.tmp/context-compaction-review-20261018/sources/verification.json`）。未运行第三方项目、模型或测试。以下是该版本机制，不代表当前所有部署配置。
 
 | 实现 | 实际生产调用链 | 触发、保留与失败边界 |
 | --- | --- | --- |
@@ -63,7 +63,7 @@
 
 ## 6. 参数错误回传与工具历史配对
 
-2026-10-22 复核以下两份固定提交及当前 Provider 契约，源码快照与摘要见[来源归档](../../.tmp/action-parameter-repair-20261022/references/manifest.json)。没有运行第三方项目。源码是相应版本的 A 级机制证据，官方经验为 B 级；不证明本工程错误的唯一原因或候选收益。
+2026-10-22 复核以下两份固定提交及当前 Provider 契约，源码快照与摘要见来源归档（`.tmp/action-parameter-repair-20261022/references/manifest.json`）。没有运行第三方项目。源码是相应版本的 A 级机制证据，官方经验为 B 级；不证明本工程错误的唯一原因或候选收益。
 
 | 来源 | 实际调用链与可复用边界 |
 | --- | --- |
@@ -76,7 +76,7 @@
 
 ## 7. 原始任务、动态要求与历史的位置
 
-2026-10-27 前期按固定源码复核模型输入的实际构造。Gemini CLI 八份文件经 GitHub 连接器读取并封存，Git blob 校验 8/8；另复用已校验的 smolagents／OpenHands 固定版本。来源、文件哈希及本地输入审计见[清单](../../.tmp/criterion-context-layout-20261027/source-manifest.json)和[布局审计](../../.tmp/criterion-context-layout-20261027/audit.json)。本节保留历史比较；当前要求区表达的采用依据改由[通用框架公共路径](#8-通用框架的要求表达与采用依据)拥有，不据模型专用或客户端特定表达作决定。未运行第三方项目或调用生成模型。
+2026-10-27 前期按固定源码复核模型输入的实际构造。Gemini CLI 八份文件经 GitHub 连接器读取并封存，Git blob 校验 8/8；另复用已校验的 smolagents／OpenHands 固定版本。来源、文件哈希及本地输入审计见清单（`.tmp/criterion-context-layout-20261027/source-manifest.json`）和布局审计（`.tmp/criterion-context-layout-20261027/audit.json`）。本节保留历史比较；当前要求区表达的采用依据改由[通用框架公共路径](#8-通用框架的要求表达与采用依据)拥有，不据模型专用或客户端特定表达作决定。未运行第三方项目或调用生成模型。
 
 | 实现与固定源码 | 实际组织及消费链 | 可采用部分与边界 |
 | --- | --- | --- |
@@ -88,7 +88,7 @@
 
 ## 8. 通用框架的要求表达与采用依据
 
-2026-10-27 按用户要求改用通用开源框架的公共输入路径作为要求区表达依据。固定 OpenCode `6b1bc48148085411e33a4358aab9dabfcdc04aa4` 与 LangChain `575db57ab3658e38ba1d8c40c2bf62110c8a0c27`，十份源码经 GitHub 连接器读取并封存，Git blob 校验 10/10，见[来源清单](../../.tmp/generic-context-presentation-20261027/source-manifest.json)。未运行项目、安装依赖或调用生成模型。
+2026-10-27 按用户要求改用通用开源框架的公共输入路径作为要求区表达依据。固定 OpenCode `6b1bc48148085411e33a4358aab9dabfcdc04aa4` 与 LangChain `575db57ab3658e38ba1d8c40c2bf62110c8a0c27`，十份源码经 GitHub 连接器读取并封存，Git blob 校验 10/10，见来源清单（`.tmp/generic-context-presentation-20261027/source-manifest.json`）。未运行项目、安装依赖或调用生成模型。
 
 | 公共实现及真实调用链 | 模型阅读的表达与内部结构 | 采用部分及排除项 |
 | --- | --- | --- |

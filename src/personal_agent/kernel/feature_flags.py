@@ -10,7 +10,6 @@ class FeatureFlags(BaseModel):
 
     goal_verification: StrictBool = True
     answer_verification: StrictBool = True
-    low_budget_warning: StrictBool = False
 
 
 class _FeatureFlagDocument(BaseModel):

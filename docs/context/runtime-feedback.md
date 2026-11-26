@@ -7,13 +7,13 @@
 
 反馈先说明动作及结果，再用文字解释字段诊断和修复方式。原调用已随协议配对时沿用其实际参数；未配对的提议仍保留必要参数。允许值以本次实际工具 Schema 为准。Toolathlon 第 13 轮的 `$.resource_id` 枚举错误用于验证模型收到具体字段、限制和未执行说明。
 
-2026-11-10 Toolathlon 的第 4、6、7 次主决策把整数字段提交成字符串。下一请求收到了类型说明，第 5 轮曾正确提交，随后同类错误复现。补充一次有界修正。若字符串是标准 JSON 整数且该数字通过原字段 Schema，拒绝回执同时展示实际字符串与可直接提交的数字写法。Runtime 仍拒绝原调用。使用该归档中的原参数验证类型和取值边界，再在相同配置下重跑一次 `detect-revised-terms`。首次失败归档独立保留。 三个真实拒绝阶段的中英文回放及成功调用反事实通过。重跑未再次出现该类型错误，模型是否使用新提示在该轨迹中未触发验证。[反馈回放](../../.tmp/readable-context-20261110/integer-feedback-replay.json)
+2026-11-10 Toolathlon 的第 4、6、7 次主决策把整数字段提交成字符串。下一请求收到了类型说明，第 5 轮曾正确提交，随后同类错误复现。补充一次有界修正。若字符串是标准 JSON 整数且该数字通过原字段 Schema，拒绝回执同时展示实际字符串与可直接提交的数字写法。Runtime 仍拒绝原调用。使用该归档中的原参数验证类型和取值边界，再在相同配置下重跑一次 `detect-revised-terms`。首次失败归档独立保留。 三个真实拒绝阶段的中英文回放及成功调用反事实通过。重跑未再次出现该类型错误，模型是否使用新提示在该轨迹中未触发验证。反馈回放（`.tmp/readable-context-20261110/integer-feedback-replay.json`）
 
 ### 显式允许的整数表示
 
 Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工具调用中两次把同一页码传为字符串。第 11 轮的实际请求带有上一轮配对的整数示例，模型仍原样重试。最早失败点是 Application 的动作解码，MCP 未收到这两次调用。已有反馈能解释拒绝，复审后用字段级读取契约处理含义唯一的表示差异。PydanticAI 固定版本的 Toolset 装配字段验证器，ToolManager 在执行前读取已验证参数。本工程采用该边界分工，继续限制可转换的字段及表示。[Toolset 装配](https://github.com/pydantic/pydantic-ai/blob/922ee561846333665a5bd5391e175b4b20867667/pydantic_ai_slim/pydantic_ai/toolsets/function.py#L779-L789) · [ToolManager 参数读取](https://github.com/pydantic/pydantic-ai/blob/922ee561846333665a5bd5391e175b4b20867667/pydantic_ai_slim/pydantic_ai/tool_manager.py#L566-L579)
 
-本地工具映射可逐字段允许规范十进制整数字符串。Toolathlon 的 PDF 页范围读取允许 `start_page` 和 `end_page`，PDF 内容搜索允许 `page_size`。`university-course-selection` 的真实调用曾以字符串 `"40"` 提交该页大小，上游声明为可选整数。模型收到的整数声明和原始响应均保留。动作解码在形成 Proposal 前把已允许字段的标准整数字符串读为整数，沿用已有提示所用的 18 位限制。保留 Schema 已接受的原生整数和可空值。小数、布尔、非标准字符串、缺失必填字段与超出 Schema 约束的值仍走原拒绝与反馈。Application 仅从本次已封存的动作定义读取许可。Admission、权限判断与 MCP 继续消费原内部契约的参数。[原始运行](../../.tmp/ta14-rerun-1111/batch-01/university-course-selection/report.json)
+本地工具映射可逐字段允许规范十进制整数字符串。Toolathlon 的 PDF 页范围读取允许 `start_page` 和 `end_page`，PDF 内容搜索允许 `page_size`。`university-course-selection` 的真实调用曾以字符串 `"40"` 提交该页大小，上游声明为可选整数。模型收到的整数声明和原始响应均保留。动作解码在形成 Proposal 前把已允许字段的标准整数字符串读为整数，沿用已有提示所用的 18 位限制。保留 Schema 已接受的原生整数和可空值。小数、布尔、非标准字符串、缺失必填字段与超出 Schema 约束的值仍走原拒绝与反馈。Application 仅从本次已封存的动作定义读取许可。Admission、权限判断与 MCP 继续消费原内部契约的参数。原始运行（`.tmp/ta14-rerun-1111/batch-01/university-course-selection/report.json`）
 
 工具动作解码、类型修复提示和文稿坐标共用 Kernel 的十进制整数字符串读取函数。工具解码和修复提示沿用有符号整数及 18 位限制，文稿坐标沿用正整数表示。调用方继续拥有字段许可和数值约束，统一函数只识别并读取数字表示。[共用读取函数](../../src/personal_agent/kernel/decimal_integer.py) · [Toolathlon 映射装配](../../evals/Toolathlon/runner.py)
 
@@ -21,7 +21,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 
 验证已完成。归档中四次字符串页码均解码为同值整数，原生整数调用保持原值，13 项拒绝反例通过。把四次真实失败响应及一次同轨迹原生整数响应重放到真实 Toolathlon PDF MCP，均经过动作解码、准入和网关，五次执行成功，服务端收到的页码均为整数。该回放没有重新调用模型。独立整例重跑通过 PDF 与只读预检，第 5 轮返回 `plan_ready` 等待用户确认。该轨迹未触发字符串转换或历史压缩，未产生 CSV，官方评分失败。归档见 `.tmp/model-tool-integers-20261110/`。
 
-补充回放已验证，原轨迹的 `page_size: "40"` 生成整数 `40`，真实 PDF MCP 收到该整数并执行成功。直接入口收到字符串时返回类型错误，远端调用记录仍只有一次。11 项拒绝反例通过，文稿坐标 Schema、样本判定及原有修复提示的前后对照一致。本次验证覆盖表示读取和工具派发。[回放](../../.tmp/decimal-arguments-1111/target.json) · [真实 MCP 请求](../../.tmp/decimal-arguments-1111/smoke/report.json)
+补充回放已验证，原轨迹的 `page_size: "40"` 生成整数 `40`，真实 PDF MCP 收到该整数并执行成功。直接入口收到字符串时返回类型错误，远端调用记录仍只有一次。11 项拒绝反例通过，文稿坐标 Schema、样本判定及原有修复提示的前后对照一致。本次验证覆盖表示读取和工具派发。回放（`.tmp/decimal-arguments-1111/target.json`） · 真实 MCP 请求（`.tmp/decimal-arguments-1111/smoke/report.json`）
 
 ## 1. 反馈进入 Context 的位置
 
@@ -41,7 +41,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | 主循环提交未声明的动作名 | “动作 {实际名称} 不在当前请求的工具列表中。本批动作均未执行。”通用后续要求依据当前声明选择动作。待维护目标时，另外给出当次允许的目标维护动作，并说明业务工具暂不可用。 |
 | 主循环动作协议校验失败 | 通用反馈为“本次动作集合不符合声明的交互协议”，说明整批未执行。附上可用的被拒动作、字段路径和错误类型，要求依据现有诊断及当前工具声明继续。可能涉及缺少调用、缺失或重复调用 ID、不支持的调用类型、参数 JSON 无效或参数不是对象。具体进入应用层或终止取决于适配层是否保留可交接的响应。 |
 | 工作计划、业务工具、子 Agent、回答或目标动作参数不符合声明 | 符合条件的只读批次按调用反馈，其余使用上项通用反馈。Schema 类型错误可按实际字段路径、收到的类型和期望类型给出修复提示，数组被单属性对象包裹时指出实际数组所在位置。目标动作另附目标修复指引。原参数从配对调用或被拒原件取得。 |
-| 同批有多个工作计划，或目标操作、回答提交与其他动作混在一批 | 解码器分别拒绝多个计划以及要求独占的操作。交给模型时沿用通用动作协议反馈或目标修复反馈。具体的独占条件和计划数量原因留在解码异常描述中，反馈没有单独转交该描述。 |
+| 同批有多个工作计划，或目标维护、澄清、回答提交等独占操作与其他动作混在一批 | 解码器分别拒绝多个计划以及要求独占的操作。交给模型时沿用通用动作协议反馈或目标修复反馈。具体的独占条件和计划数量原因留在解码异常描述中，反馈没有单独转交该描述。 |
 | 动作定义重名、类型不受支持或原生响应无法恢复 | 有可交接响应时走协议拒绝或正文解码反馈。无可用响应或无法安全恢复时，由运行系统以输出无效或调用失败结束。定义及装配问题需要运行侧处理。 |
 
 [动作协议解码与反馈](../../src/personal_agent/application/conversation/model_actions.py) · [服务方响应解析](../../src/personal_agent/infra/model_response.py) · [修复提示](../../src/personal_agent/kernel/prompt_templates/runtime.py) · [目标和协议提示](../../src/personal_agent/kernel/prompt_templates/conversation.py) · [通用拒绝及原件提示](../../src/personal_agent/kernel/prompt_templates/supplemental.py)
@@ -67,7 +67,6 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 
 | 出现场景 | 模型收到的反馈及处理出口 |
 | --- | --- |
-| 将历史快照作为来源交给文件检查 | 给出被拒快照 ID 及仅供上下文恢复的限制。下一次请求只列出接受该 ID 的读搜工具。 |
 | Python 或实验工具缺本任务执行许可 | 指出未绑定获准环境，改用本任务可用能力或说明缺少环境。 |
 | 待执行 Python 动作与已生效目标明确冲突 | 按原调用返回该动作未执行、适用目标条件、实际冲突及修订方向。主循环可修改参数后发起新调用。只有同一目标下相同的 Python 参数再次因目标冲突被拒，才纳入重复动作停止判断。同批其他准入通过的动作继续。[动作核验上下文](goal-compliance-verifier.md) |
 | 调用 ID 已绑定一次已提交动作 | 指明已占用的调用身份。先使用已有结果，需要新操作时发起新调用。原生协议绑定调用身份。 |
@@ -97,12 +96,12 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | --- | --- |
 | 已提交的附件或原件无法恢复 | 给出具体资源引用，说明原件不可用且未替换。使用仍可用原件继续，恢复后再读，或如实说明缺失。 |
 | 工具长结果被外置，或保存原件失败 | 限长回执、可用原件和失败原因见[工具输出超限的处理](tool.md#2-外置原件并返回限长回执)。 |
-| 读取或搜索的资源 ID 不可用、重复绑定、越权或快照版本不匹配 | 返回文件不在可读集合、对应多个确切引用、归属不符或快照不匹配。原调用提供请求 ID。找不到版本、原件不存在或原件不是可读 UTF-8 时返回对应异常，部分存储错误仅附异常类型和文字。 |
+| 读取或搜索的文件路径不可用、对应多个引用、越权或快照版本不匹配 | 返回文件不在可读集合、对应多个确切引用、归属不符或快照不匹配。原调用提供请求 ID。找不到版本、原件不存在或原件不是可读 UTF-8 时返回对应异常，部分存储错误仅附异常类型和文字。 |
 | 文件读取起始行或列越界 | 坐标预检先返回 “text position is beyond EOF” 或 “text position is beyond the line or inside a newline”。模型可见原请求位置，异常未带总行数或该行实际长度。带总行数的专用模板在此越界路径未被使用。 |
 | 读取容量不足以同时返回正文和续读参数 | 报告输出容量不足，未说明可执行的调整或替代读取方式。 |
 | 搜索命中位置超出原文、分页偏移超出匹配数、单条记录超容量 | 分别报告位置或分页错误。单条记录过大时给出按原资源读取的出口。偏移越界未返回实际命中数或可用起点。 |
 | 读取或搜索成功但只返回局部窗口 | 说明实际返回行列、续读参数、原文范围及是否截断。搜索命中可用于读取起点。匹配过多可缩小关键词。零命中和当前窗口结束均不证明全文已读。 |
-| 文件检查或编辑被拒 | 不可见资源、只读原件和缺接受记录按各自错误返回。精确编辑失败报告零匹配或匹配次数、目标格式或大小问题。Artifact 使用原写入反馈，任务容器的 `/tmp` 使用 Bash 退出状态及 stderr。两者均与原调用配对。 |
+| 文件编辑被拒 | 不可见资源、只读原件和缺接受记录按各自错误返回。精确编辑失败报告零匹配或匹配次数、目标格式或大小问题。Artifact 使用原写入反馈，任务容器的 `/tmp` 使用 Bash 退出状态及 stderr。两者均与原调用配对。 |
 | 任务文件未观察或版本已变化 | `FS_NOT_OBSERVED` 提示先用 `tool_read_file`，`FS_STALE_VERSION` 提示重新读取。回执保留原编辑调用 ID，供下一步修复。运行器保管观察到的摘要，成功读取和编辑返回原文或修改结果。 |
 | Bash 命令执行失败或被拒 | 原生工具消息带回 stdout、stderr 和退出码，超时与输出截断按进程事实标记。授权、预算或工作区快照失败时返回实际错误。工具回执关联原输出文件。 |
 | 网页读取或搜索失败 | 按实际结果返回访问限制、无正文、上游抓取失败、临时网络错误或未交付结果。网页读取错误由工具声明、原 URL 与错误详情共同提供判断依据。搜索服务的动态错误沿工具失败回传。 |
@@ -135,7 +134,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 ## 7. 状态回执与终止边界
 
 - **接纳或准备成功。** 目标读取回传当前版本和条目。目标维护回传实际接纳的快照，按开关提供真实判决或明确未核验。通过的核验保留类型、状态、身份和对应提交。计划接纳及知识命令准备分别报告真实状态。[目标回执](../../src/personal_agent/application/conversation/goal_maintenance.py) · [通过反馈投影](../../src/personal_agent/application/conversation/interaction_projection.py)
-- **用户确认和直接结束。** 等待计划确认、准备保存或删除、用户取消或确认后的执行结果，由用户交互或实际执行回执承载。明确不支持后台继续、运行时限或总预算耗尽、重复同类错误达到停止条件、服务方不可用、容量拒绝、记录恢复失败及无法恢复的核验依赖，按各自边界结束或报告失败。没有发起后续模型调用的分支不判为反馈注入缺失。[服务停止分支](../../src/personal_agent/application/conversation/service.py) · [运行消息](../../src/personal_agent/kernel/prompt_templates/service_feedback.py)
+- **用户确认和直接结束。** 等待计划确认、准备保存或删除、用户取消或确认后的执行结果，由用户交互或实际执行回执承载。不支持后台继续、运行时限或总预算耗尽、服务方不可用、容量拒绝、记录恢复失败及无法恢复的核验依赖，按各自边界结束或报告失败。预算允许继续时，重复被拒的动作也按原调用回送每次拒绝反馈。[动作拒绝后的下一步](../optimization/to_verify/conversation-loop-boundaries.md#动作拒绝后的下一步2026-11-22) · [服务停止分支](../../src/personal_agent/application/conversation/service.py)
 - **历史压缩拒绝。** 来源、快照、覆盖范围或决策身份不匹配，原件导出失败，摘要为空、截断或没有缩减，来源变化与激活冲突，以及没有安全旧前缀，均按历史恢复或容量失败处理。摘要不激活，仍按原记录处理。[摘要处理](../../src/personal_agent/application/conversation/history_compaction.py)
 - **内部反馈。**控制动作延期文案仍可渲染，当前源码没有生成该延期状态的调用点。通用网关的无待执行工具调用、仅内部流程使用的工具错误，以及订阅维护、更新笔记或重试运维任务等有专门暴露边界的反馈，按实际消费者区分。只有进入模型请求的内容才适用入模反馈审查。[工具入口](../../src/personal_agent/application/conversation/service.py) · [控制回执](../../src/personal_agent/application/conversation/model_history.py) · [能力暴露](../../src/personal_agent/governance/registry.py)
 
@@ -173,7 +172,7 @@ Toolathlon `detect-revised-terms` 再次运行时，第 10、11 轮在原生工�
 | 相同请求再次抓取 | `pw-104232` 第 19 轮的三条拒绝都指定了本地读搜工具。 | 当前请求只保留重复和未执行的事实，与被拒调用配对。模型从已有上下文和当前声明决定下一步。 |
 | 创建文稿、提交补丁或生成补丁后正文超过限制 | 三处错误文案另写固定数字 `65536`。 | 判断与文案都读取 `DRAFT_MAX_BYTES`。已用 UTF-8 边界反事实核对原有通过、失败和文字。 |
 
-历史验证覆盖两个真实拒绝阶段、仅声明读取和资源超出声明范围的反事实，以及三项字节限制，共 7 项。检查到 SDK 请求构造，无新模型或工具调用。现行精确编辑的字节判断见[编辑契约](../optimization/to_verify/program-artifact-contract.md#模型编辑工具)。[外置原件反馈设计](../optimization/completed/runtime-feedback-repair.md#原件和调用身份) · [回放结果](../../.tmp/runtime-feedback-declarations-20261106/final-review-regression/report.json) · [反馈物化](../../src/personal_agent/application/conversation/context_materialization.py)
+历史验证覆盖两个真实拒绝阶段、仅声明读取和资源超出声明范围的反事实，以及三项字节限制，共 7 项。检查到 SDK 请求构造，无新模型或工具调用。现行精确编辑的字节判断见[编辑契约](../optimization/to_verify/program-artifact-contract.md#模型编辑工具)。[外置原件反馈设计](../optimization/completed/runtime-feedback-repair.md#原件和调用身份) · 回放结果（`.tmp/runtime-feedback-declarations-20261106/final-review-regression/report.json`） · [反馈物化](../../src/personal_agent/application/conversation/context_materialization.py)
 
 重复抓取的反馈按 `offloaded_output_refetch` 区分。Admission 仍按已提交外置结果的工具名和参数摘要判定。主请求生成新反馈时使用具名中英文提示，重建旧 Journal 时也按同一契约投影。已封存请求保留原文。以 `pw-104232` 第 18 轮三条原提议和第 19 轮完整请求做离线回放，检查拒绝、调用配对、两种语言及无修复建议。离线回放通过。三个重复提议仍被拒绝，三条后继工具消息与原调用配对，其他交互内容及第 25 轮 `page_size` 类型修复保持原样。报告保存在 `.tmp/tool-feedback-brief-20261110/result.json`。
 

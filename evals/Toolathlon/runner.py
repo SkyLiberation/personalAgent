@@ -166,6 +166,7 @@ def product_environment(
     output: Path, db_url: str, servers: list[dict], model_env: Path | None, *,
     feature_flags: FeatureFlags | None = None,
     bash_deployment: Path | None = None,
+    apply_benchmark_flags: bool = True,
 ):
     if model_env is not None and not model_env.is_file():
         raise FileNotFoundError(model_env)
@@ -174,8 +175,8 @@ def product_environment(
     env.update({name: value for name, value in values.items() if value is not None})
     flags_path = (output / "feature_flags.toml").resolve()
     source_flags = Path(env.get("PERSONAL_AGENT_FEATURE_FLAGS_CONFIG", "config/feature_flags.toml"))
-    flags = benchmark_feature_flags(feature_flags or load_feature_flags(source_flags))
-    write_feature_flags(flags_path, flags)
+    flags = feature_flags or load_feature_flags(source_flags)
+    write_feature_flags(flags_path, benchmark_feature_flags(flags) if apply_benchmark_flags else flags)
     env.update(
         PERSONAL_AGENT_DATA_DIR=str(output / "product-data"),
         PERSONAL_AGENT_POSTGRES_URL=db_url,

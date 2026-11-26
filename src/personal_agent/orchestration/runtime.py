@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from personal_agent.infra.model_providers import build_provider_policy
-
 from personal_agent.infra.artifact_ripgrep import RipgrepArtifactSearch
 
+from functools import partial
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -13,6 +12,7 @@ from urllib.parse import urlparse
 
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.contracts.policy import EntryPolicyDenied, EntrySource, PolicyDecisionEvent, PolicyInput
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
 from personal_agent.kernel.langsmith_tracing import configure_langsmith_environment
 from personal_agent.kernel.models import (
@@ -63,7 +63,6 @@ from personal_agent.tools import (
     build_consolidate_knowledge_tool,
     build_enterprise_knowledge_search_tool,
     build_graph_search_tool,
-    build_inspect_artifact_tool,
     build_write_artifact_tool,
     build_retrieval_experiment_tool,
     build_inspect_knowledge_gaps_tool,
@@ -225,9 +224,7 @@ class AgentRuntime:
         )
         self.structural_retriever = StructuralRetrieverStore(self.memory)
         self.capture_service = capture_service
-        self.artifact_service = ArtifactService(settings, logger, provider_policy=build_provider_policy(
-            base_url=settings.openai.base_url, provider=settings.openai.provider,
-        ), prompts=self._prompts)
+        self.artifact_service = ArtifactService(settings, prompts=self._prompts)
         self._structured_client = build_structured_model_client(
             settings.structured,
             settings.langsmith,
@@ -357,7 +354,6 @@ class AgentRuntime:
         experiment_completion = None
         bash_profile = None
         bash_authorization = None
-        bash_endpoint = None
         bash_execution = None
         if (self.settings.retrieval_experiment_config_path is not None
                 and self.settings.bash_execution_config_path is not None):
@@ -381,18 +377,12 @@ class AgentRuntime:
             bash_profile = BashExecutionProfile(
                 authorized_principal=experiment_deployment.authorized_principal,
                 deployment_digest=experiment_deployment.deployment_digest,
-                image_id=experiment_deployment.candidate_image_id,
                 limits=BashExecutionLimits(
                     timeout_seconds=candidate_limits.candidate_timeout_seconds,
-                    memory_mb=candidate_limits.candidate_memory_mb,
-                    cpus=candidate_limits.candidate_cpus,
-                    pids_limit=candidate_limits.candidate_pids,
-                    scratch_mb=candidate_limits.candidate_scratch_mb,
                     stdout_bytes=candidate_limits.stdout_bytes,
                     stderr_bytes=candidate_limits.stderr_bytes,
                 ),
             )
-            bash_endpoint = experiment_environment.endpoint
             from personal_agent.application.retrieval_experiment.delivery import RetrievalExperimentCompletionService
             from personal_agent.application.conversation.research_delivery import ResearchExperimentCompletionUseCase
             experiment_completion = ResearchExperimentCompletionUseCase(
@@ -414,24 +404,41 @@ class AgentRuntime:
             ):
                 raise ValueError("The MCP server bound to the Bash workspace is not enabled")
             bash_profile = bash_authorization.execution_profile()
-            bash_endpoint = bash_config.endpoint
         if bash_profile is not None:
             from personal_agent.application.bash_execution.service import BashExecutionService
-            from personal_agent.infra.bash_execution.backend import DockerBashExecutionBackend
+            from personal_agent.infra.bash_execution.backend import NativeBashExecutionBackend
             from personal_agent.tools.bash import build_bash_tool
 
-            bash_execution = DockerBashExecutionBackend(
-                endpoint=bash_endpoint, work_root=self.settings.data_dir / "bash_execution_jobs",
+            bash_execution = NativeBashExecutionBackend(
+                work_root=self.settings.data_dir / "bash_execution_jobs",
                 profile=bash_profile, prompts=self._prompts,
             )
-            bash_execution.sweep_expired()
             bash_service = BashExecutionService(
                 artifacts=self.artifact_service, journal=conversation_journal, execution=bash_execution,
                 profile=bash_profile, prompts=self._prompts,
             )
             self._tool_executor.register(build_bash_tool(bash_service, prompts=self._prompts))
         self._bash_backend = bash_execution
+        skill_catalog = None
+        skill_scripts = None
+        if settings.skill_root is not None or settings.skill_scopes.users or settings.skill_scopes.projects:
+            from personal_agent.infra.skill_files import load_skill_catalog, read_skill_scripts
+            from personal_agent.tools.load_skill import build_load_skill_tool
+
+            skill_catalog = load_skill_catalog(settings.skill_root, settings.skill_scopes)
+            if skill_catalog.available:
+                self._tool_executor.register(build_load_skill_tool(skill_catalog, prompts=self._prompts))
+                if bash_profile is not None:
+                    from personal_agent.application.bash_execution.models import BASH_DEFAULT_INPUTS_DIR, BASH_SHARED_INPUTS_DIR
+                    from personal_agent.application.conversation.skills import publish_skill_scripts
+
+                    input_root = BASH_SHARED_INPUTS_DIR if bash_profile.workspace is not None else BASH_DEFAULT_INPUTS_DIR
+                    skill_scripts = partial(publish_skill_scripts, input_root=input_root,
+                                            read_scripts=read_skill_scripts, artifacts=self.artifact_service)
         from personal_agent.application.conversation.answer_results import DirectAnswerResult
+        from personal_agent.application.conversation.goal_module import GoalModule
+
+        goal_module = GoalModule() if settings.conversation_goal_mode is ConversationGoalMode.ENABLED else None
         answer_result = DirectAnswerResult(self.settings.answer_result, feature_flags=self.settings.feature_flags)
         workspace_changes, mcp_tools = bind_workspace_changes(
             settings, mcp_tools, policy=self._policy_engine, decisions=self._policy_decisions,
@@ -458,8 +465,11 @@ class AgentRuntime:
             experiment_deployment=experiment_deployment,
             experiment_completion=experiment_completion,
             bash_authorization=bash_authorization,
-            bash_execution=bash_execution,
             answer_result=answer_result,
+            tool_profile=settings.conversation_tools,
+            skill_catalog=skill_catalog,
+            skill_scripts=skill_scripts,
+            goal_module=goal_module,
             experiment_model_capacity_valid=all(
                 config.capacity is not None
                 and config.capacity.provider_host == urlparse(config.base_url or "").hostname
@@ -577,7 +587,6 @@ class AgentRuntime:
             self._tool_executor.register(
                 build_capture_upload_tool(self.capture_service, self.artifact_service)
             )
-        self._tool_executor.register(build_inspect_artifact_tool(self.artifact_service, prompts=self._prompts))
         self._tool_executor.register(build_write_artifact_tool(self.artifact_service, prompts=self._prompts))
         self._tool_executor.register(
             build_graph_search_tool(self._active_graph_store(), prompts=self._prompts)
@@ -1014,6 +1023,10 @@ class AgentRuntime:
             interaction_run_ref,
             principal=principal,
         )
+
+    def steer_conversation_turn(self, interaction_run_ref: str, *, principal: AuthenticatedPrincipal, request):
+        self.authorize_entry(principal, "web")
+        return self._conversation_service.steer_turn(interaction_run_ref, principal=principal, request=request)
 
     def decide_conversation_knowledge_save(self, **kwargs):
         return self._conversation_service.decide_knowledge_save(**kwargs)

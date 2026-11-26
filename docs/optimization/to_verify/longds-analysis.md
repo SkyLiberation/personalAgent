@@ -92,6 +92,71 @@ L3 的采集职责限于 `run_longds.py` 的正式 HTTP 生命周期与真实文
 
 模型／工具协议错误使用原有界恢复；达到重复无效动作、权限失败、无法确认的执行、确定性额度耗尽或许可到期等原停止条件时，结束并保留未执行轮数。未知用量继续如实记录，不单独触发停止。普通答案错误继续完整测量，离线评分不改变运行路径；不在同一组改 Prompt、镜像、窗口、翻译或预算后续跑并合并成绩。新方案按 EVD 取得对应边界证据后，以新身份验证，原失败保留。
 
+### 脚本执行前的需求核对
+
+Water Potability Task 1 第 2 轮的两组脚本在成功退出后仍返回了错误的修补均值。两组终答都沿用了错误输出。改为五邻居后，第 26 轮仍受错误选邻规则影响。开启组的第 2 轮 Goal 记录了完整列、距离和邻居要求，模型重写脚本时仍采用了逐行选列。脚本需要在第一次执行及每次改写后检查 Goal 中实际约定的计算逻辑。[原始轨迹与离线复算](../../problems/longds/nyc-restaurants.md#lite-首批失分中的脚本错误) · [重写前的实发请求](../../../.tmp/lt1123/water/enabled/sdk/2c960bf0dab649b884860ed7ea6061cb.http.request.json)
+
+现行 `review-script-before-run` 只通过 `tool_read_file` 读取待执行的脚本，用上下文中的生效 Goal 判断符合性。模型使用同一读取工具补齐续页及本次涉及的辅助文件。判断应指出适用的 Goal 要求和具体代码偏差，编辑后的版本重新核对。Goal 的读回和维护由 `review-goal-after-update` 负责。脚本检查继续由现有技能目录与加载回执提供说明，文件权限及执行契约由现有 Runtime 负责。此次收窄删除了脚本技能内的 Goal 读取、技能跳转、编辑和执行步骤。若观察到完整脚本与有效 Goal 无法同时供模型判断，可撤回技能正文改动。[技能装配](../../context/skill.md) · [Goal 写入后审查](analysis-goal-maintenance.md#goal-修改后的整体审查技能)
+
+定向验证从一个空会话进入正式 HTTP，提交一份已保存的 Python 脚本。用户要求判断脚本是否计算平均值并保留文件原样，脚本实际对输入求和。检查技能正文、脚本真实读回和求和与平均值的差异是否进入终答。在脚本检查步骤仅选文件读取，同时按调用身份区分独立 Goal 审查。本次只验证只读检查路径，最多 12 次主模型决策、10 次工具调用、40 万 tokens，使用 MiniMax-M3.1-Flash。
+
+前置定向验证通过。实发先加载新版脚本技能，再调用 `tool_read_file`，模型根据实际第 2 行指出脚本求和得到 `30`，平均值应为 `15`。没有编辑或执行调用。模型随后独立加载 Goal 审查技能并读回 Goal。完整复跑启动前核对了当前工作树中两份技能与定向验证归档中的对应文件逐字一致。[前置验证](../../../.tmp/script-review-readonly-1124/verified/report.json) · [实发请求](../../../.tmp/script-review-readonly-1124/verified/sdk/8217943cf79c4960b02f6834fbce7b09.http.request.json)
+
+确认新版技能可发现、可加载并通过只读检查后，按用户要求从新会话完整复跑 Water Potability Task 1 的 34 轮英文原题。沿用 Goal 开启组的原材料、镜像、模型、核验配置、每轮 40 次主决策和整题 1.5 亿 tokens。冻结两项技能的正文和摘要校验和。按实际轨迹分别核对 Goal 在写入后的读取、偏差识别、补丁接纳、改版读回和后续消费。按原题、可用 Goal 和落盘脚本核对读回、偏差识别、修订、复读及运行结果。区分用户要求的改版、模型主动纠错、执行异常修复和统计口径修复。按该次样本报告未触发和未修正，模型调用、检查与交付分别计数。[原完整试次](../../../.tmp/lt1123/water/enabled/report.json)
+
+#### 34 轮完整复跑
+
+上海时间 2026-11-24 00:47:28 开始，01:14:40 结束。正式运行耗时 27 分 08.078 秒，交付 34/34 轮，共 222 次物理模型请求、64,271,906 tokens。两项打包技能均在第 1 轮被加载，文件校验和与前置通过样本一致。整题独立评分见 [Water Potability 同口径复评](../../problems/longds/nyc-restaurants.md#water-potability-task-1-的-minimax-同口径复评2026-11-24)。[运行计划](../../../.tmp/goal-script-review-water-1124/plan.json) · [运行报告](../../../.tmp/goal-script-review-water-1124/capture/report.json)
+
+**Goal 审查。** 34 轮各有一次首次接纳，25 轮读回对应版本，9 轮跳过。第 11、13、15、18、20、24、31、32、34 轮的实发上下文均可见已加载的 Goal 技能和 `read_current_goal` 声明。25 次读回中 19 次与 Bash 同批，部分在读回结果抵达前即启动了脚本写入。全程没有读回之后再次提交的 Goal 更新。第 1 轮把初始有缺值理解成前导缺值，读回第 1 版后未修订，并把只有 `ph` 作为直接回答。全表的 `ph`、`Sulfate` 和 `Trihalomethanes` 均有缺值。[第 1 轮结果](../../../.tmp/goal-script-review-water-1124/capture/turn-01.response.json) · [第 13 轮工具与技能可见性](../../../.tmp/goal-script-review-water-1124/capture/sdk/dd8c52ca7c6e4c7599b6cfafb6ea1928.http.request.json) · [实发索引](../../../.tmp/goal-script-review-water-1124/wire-audit.json)
+
+**脚本审查。** 共 47 次 `tool_read_file`，均面向 Python 脚本，43 次成功。12 次 `tool_edit` 分布在 8 轮，11 次成功。第 31、32、33 轮有实际的“读回后、首次执行前修正”样本，修订了 `count pressure` 输出中的占位值或列错配，修订后的脚本参与了执行。核对这 8 轮的执行序列后，未发现最后一次成功编辑与下一次运行同一文件之间的重新读回。[第 32 轮编辑前请求](../../../.tmp/goal-script-review-water-1124/capture/sdk/38209b593da84ef7b573746dd07030e6.http.request.json) · [调用与编辑轨迹](../../../.tmp/goal-script-review-water-1124/audit.json)
+
+| 轮次 | 发现、修正与消费 |
+| --- | --- |
+| 1 | 两项技能已进入实发请求。模型在同一次 Bash 调用中保存并运行 `analysis.py`，跳过脚本读回。脚本沿用了 Goal 的前导缺值口径。[执行前请求](../../../.tmp/goal-script-review-water-1124/capture/sdk/ad176487826841a2bda19c5e04712414.http.request.json) |
+| 2 | Goal 指定使用每一步的全表完整列。模型读回 `repair.py` 的三段正文后仍运行了逐对选完整维度的实现。缺值组的硫酸盐均值在回执和终答均为 `334.6077`，参考为 `334.4316`。随后以相同选邻口径做验证，并仅修正写出格式，计算偏差未修正。[执行前请求](../../../.tmp/goal-script-review-water-1124/capture/sdk/f417770480f94c77a4d2ef2222e2d53f.http.request.json) · [执行回执](../../../.tmp/goal-script-review-water-1124/capture/sdk/a06cbb007faa412db3ce6e80d782d003.http.request.json) |
+| 6、8、21 | 首次执行出现 `KeyError` 或 `SyntaxError`，模型编辑后重跑成功。第 8 轮在执行前已经读过含多余 `]` 的脚本。[第 6 轮](../../../.tmp/goal-script-review-water-1124/capture/turn-06.trace.json) · [第 8 轮](../../../.tmp/goal-script-review-water-1124/capture/turn-08.trace.json) · [第 21 轮](../../../.tmp/goal-script-review-water-1124/capture/turn-21.trace.json) |
+| 24、26 | 第 24 轮在执行前删掉 CSV 表头里的原始 `Conductivity`，数据行仍写入对应值。第 26 轮运行联表分组后得到异常 p90 `145.5348`，模型定位列错位，修正写出代码并重建文件。联表脚本重跑得到 `6.4861`，恢复为同一五邻居流程的内存结果。[第 24 轮](../../../.tmp/goal-script-review-water-1124/capture/turn-24.trace.json) · [第 26 轮](../../../.tmp/goal-script-review-water-1124/capture/turn-26.trace.json) |
+
+#### 历史试次
+
+以下同批读取版本曾在保存脚本后同时读取 Goal 与文件，并包含编辑和执行指引。此前仅使用文件读取的两轮共有 6 次 `tool_read_file`。[较早采集](../../../.tmp/script-review-goal-1123/audit.json) · [同批调用与回执](analysis-goal-maintenance.md#goal-读取回执的上下文渲染)
+
+同批读取的定向验收使用一次开启 Goal 的正式 HTTP 采集，从空会话提交 Water Potability Task 1 原版英文第 1、2 轮。检查实发生效 Goal、技能正文和 `写入 → 同批读取 Goal 和脚本 → 执行`，以及第 2 轮 Goal、计算逻辑、工具结果和终答的相符性。
+
+2026-11-24 定向复跑交付 2/2 轮，使用 20 次物理模型请求和 345,698 tokens，耗时 134.704 秒。新版技能正文实际可见。3 个执行的脚本在最后一次写入后都触发同批读取。第 2 轮先暂存脚本，再重写完整版本。实发请求的 `messages[35]` 同批调用两个工具，`messages[36]` 返回 Goal 第 2 版，`messages[37]` 返回脚本开头，后续读到第 103 行后才执行。Goal `i6` 和脚本均采用逐步重选完整列、纳入 `Potability`、原尺度曼哈顿距离和十个已知邻居。六个分组均值在工具输出、终答与既有独立复算中一致。该次未调用 `tool_edit`，因此没有该工具编辑后的实发样本。[运行报告](../../../.tmp/script-review-batch-1124/capture/report.json) · [同批核对](../../../.tmp/script-review-batch-1124/audit.json) · [第 2 轮请求](../../../.tmp/script-review-batch-1124/capture/sdk/08e8ed36aa3547a6adb2b86a796ac503.http.request.json)
+
+同次第 1 轮的 Goal 已把全表初始缺失改写为只看第一行，把 `potability share` 改写为所有阈值同时通过的比例。在 `messages[13]` 至 `messages[17]` 读回这些口径和完整脚本后，模型下一步直接执行。脚本主结果还把化学测量列缩为有阈值的 7 列。原始 CSV 与参考结果分别为 3 个有缺值的列、标签比例 `0.3901` 和 9 个测量列。原文、当前 Goal 和脚本均在同次请求中可见。两个偏差首先出现在 Goal，已有技能在把脚本与 Goal 对齐前没有具体核对统计口径的操作。[第 1 轮执行前实发](../../../.tmp/script-review-batch-1124/capture/sdk/89fdf7f1431f41bfa6832925faa133ed.http.request.json) · [结果](../../../.tmp/script-review-batch-1124/capture/turn-01.response.json)
+
+追加候选在技能回执中细化了审查顺序。先用用户原话和源数据确定字段、公式、数据范围、分组和分母，再判断 Goal 与脚本。Goal 口径缺乏依据时先提交 `submit_goal_patch`，脚本仍有偏差时用 `tool_edit` 后复查。候选只变更技能正文，允许已有正确实现直接执行。
+
+验证从第 1 轮执行前的完整实发请求回放下一动作。旧、新技能各 10 次，变化限定为 `messages[5]` 的技能正文。组级判据要求候选 10 次均不直接执行错误脚本，且下一动作能纠正口径或取得相应依据。20 次均收到模型响应，共 268,572 tokens。旧技能 10 次直接执行原脚本，候选 9 次直接执行，剩余一次只提出给布尔掩码增加 `.astype(bool)`。两组均未提出有效口径修订。单步回放没有派发任何动作。[固定输入与计数](../../../.tmp/script-review-grounding-1124/replay/report.json)
+
+正式 HTTP 定向复跑使用相同模型、材料、镜像和核验设置，共 2 轮、28 次物理请求、728,547 tokens，耗时 121.172 秒。第 1 轮答复的 9 列和 `0.3901` 正确，仍把初始缺失列主答写成仅 `ph`，与同轮 Goal 中的 `leading missing values` 一致。唯一一次 `tool_edit` 在执行报 `KeyError: 0` 后发生，把 `row[j]` 改为 `row["raw"][j]`，属于取值错误处理。第 2 轮的六个主分组均值与参考一致。两处证据都未显示模型在运行前纠正已写入 Goal 的缺失范围。候选未达成验收，撤回新增措辞，当前技能继续保留已验证的同批读取流程。[运行报告](../../../.tmp/script-review-grounding-1124/capture/report.json) · [第 1 轮结果](../../../.tmp/script-review-grounding-1124/capture/turn-01.response.json) · [实际编辑](../../../.tmp/script-review-grounding-1124/capture/sdk/5841996d04c441cfa67c0acd22640b17.http.request.json)
+
+以下记录来自加入同批读取指令之前的技能版本。
+
+2026-11-23 在关闭 Goal 的配置下交付两轮。实际首个请求提供技能摘要，加载后的工具回执包含完整正文。三个新脚本首次执行前均成功读回。第 2 轮修补脚本有三次执行失败，模型每次都通过 `tool_edit` 修正并在下一次运行前复读修改段。最终工具输出及终答中的缺值组均值均为 pH `7.0778`、硫酸盐 `334.4316`、三卤甲烷 `66.4286`，与原始 CSV 离线复算一致。两轮生成共 32 次物理模型请求、553,100 tokens，耗时 130.438 秒。已验证这一次加载、读回、修订与最终数值，执行失败说明模型复核仍可能漏掉错误。[采集](../../../.tmp/script-review-1123/capture/report.json) · [实发请求与顺序校验](../../../.tmp/script-review-1123/audit.json)
+
+2026-11-23 补充运算场景后，以相同运行配置从新会话复跑英文原题前两轮。北京时间 22:35:05 开始，22:36:47 结束，交付 2/2 轮。生成耗时 102.078 秒，共 18 次物理模型请求和 332,868 tokens。首个实发请求含新版摘要，加载回执含完整正文。两个计算脚本均完整读回后才执行成功，修补脚本读完 182 行后一次运行成功，本次未触发编辑分支。[采集报告](../../../.tmp/script-review-calc-1123/capture/report.json) · [脚本与顺序校验](../../../.tmp/script-review-calc-1123/audit.json)
+
+第 2 轮脚本逐列重选全表完整的特征列，纳入 `Potability`，用原尺度曼哈顿距离选择十个已知邻居并在最后展示时舍入。两组在 pH、硫酸盐和三卤甲烷上的六个均值在工具输出、终答和独立复算中一致。终答把三卤甲烷步骤的 9 个特征误写成 9 项化学测量加 `Potability`，实际为其余 8 项化学测量加 `Potability`。第 1 轮还在脚本落盘前用内联 Python 初算了缺值，并曾使用错误的 Artifact 路径执行。该次命令末尾的 `tail` 掩盖了 Python 的非零退出，改用 Artifact 实际挂载路径后成功。[第 1 轮轨迹](../../../.tmp/script-review-calc-1123/capture/turn-01.trace.json) · [第 2 轮工具回执及实发上下文](../../../.tmp/script-review-calc-1123/capture/sdk/4630796754514464af44edd172e4fb7a.http.request.json) · [第 2 轮终答](../../../.tmp/script-review-calc-1123/capture/turn-02.response.json)
+
+2026-11-23 改为依据生效 Goal 核对后，开启 Goal 从新会话采集前两轮英文原题。北京时间 22:58:11 开始，23:00:47 结束，交付 2/2 轮。生成耗时 155.078 秒，共 24 次物理模型请求、445,199 tokens。Goal 语义核验和回答核验沿用关闭配置。三个计算脚本均完整读回后运行。第 2 轮执行请求中的 `messages[3]` 为新版技能回执，`messages[34]` 为生效 Goal 修订 2，`messages[44]` 和 `messages[46]` 合计返回 `repair.py` 的完整 92 行。本次没有 `tool_edit` 调用。[采集报告](../../../.tmp/script-review-goal-1123/capture/report.json) · [顺序与数值校验](../../../.tmp/script-review-goal-1123/audit.json) · [执行前实发请求](../../../.tmp/script-review-goal-1123/capture/sdk/c2365f8d7faa49dd846a961d62a74457.http.request.json)
+
+第 2 轮 Goal 的 `i2` 明确要求每步使用当前全表无缺值的列并纳入 `Potability`。脚本用该口径计算原尺度曼哈顿距离，从目标读数已知的行选取十个邻居。两个分组的六个均值与独立复算一致。`i3` 额外加入了跨测量列的合并均值，原题只要求比较各项修补后的均值。第 1 轮 Goal 把 `potability share` 写成七项化学阈值的联合达标率，终答以 `0.0000` 为主结果。基准要求的数据标签比例 `0.3901` 只被列为参考。这次分别观察到了准确 Goal 对计算约束的承载，以及偏离基准的 Goal 口径进入了终答。[第 1 轮目标和终答](../../../.tmp/script-review-goal-1123/capture/turn-01.trace.json) · [第 2 轮目标和终答](../../../.tmp/script-review-goal-1123/capture/turn-02.trace.json)
+
+### 对照运行的累计 token 上限
+
+Netflix Task 3 第 32 轮结算 18 次主决策后达到 10,205,950 tokens，触发本 Agent 单轮 1,000 万上限。整题已知用量为 57,389,660，离 1.5 亿上限仍有余额。同次对照用 DeepSeek Harness `2e39e704`。LongDS 扩展在第 41 步拒绝继续，外层在提交下一条用户消息前检查整题 token；`token-meter` 记录用量和上下文压力，不设每用户轮累计 token 上限。单次请求的窗口和输出限额独立生效。[本 Agent 第 32 轮](../../../.tmp/netflix-task3-20261122/personal/turn-32.trace.json) · [对照配置](../../../.tmp/netflix-task3-20261122/harness/cordis.json) · [DeepSeek token-meter](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/llm/token-meter/src/index.ts#L74) · [对照停止检查](../../../evals/longDS/run_longds_harness.py#L189)
+
+LongDS 单题和套件新采集均从整题额度派生正式 Web 运行设置，删除独立的 1,000 万配置。Bash 授权仍持有整题额度，生产准入按同一授权的跨轮已知用量计算余额。主循环的通用运行上限取同一整题值，无法早于跨轮余额耗尽。未绑定 Bash 的基线前缀也使用同一已声明额度。普通 Conversation、已封存配置和其他评测的预算不受此变更影响。40 次主决策、时间、单次上下文容量以及评分预算分别沿原责任边界生效。采用已有数值配置，避免另增无上限开关。Web 子进程使用已加载且冻结的运行环境，整题值只有一个来源。[通用预算责任](../../budge/README.md#对话主循环)
+
+实现前固定反事实。只读复用第 32 轮实际停止前的已提交修订和原计量，同一份 `ConversationBudget` 在旧设置拒绝第 18 次响应携带的动作，在新 LongDS 设置允许该动作及继续决策；只核对准入，不执行旧脚本。以同一前缀检查整题额度刚耗尽、40 次主决策已用尽和截止时间到期仍生效。检查子进程实际加载值、旧日志保持和有效余额投影，不启动模型或改动旧成绩。局部回放验收独立于后续整题采集。
+
+离线回放已通过。第 32 轮修订 181 在旧设置下拒绝该动作，在新设置下允许该动作继续，当时整题余额为 92,610,340 tokens。达到整题额度、40 次主决策或截止时间仍会停止。单题子进程实际加载 1.5 亿额度，套件使用隔离配置验证了 6,000 万额度。验证发出零次模型请求，未重跑整题或重新评分。[验证报告](../../../.tmp/longds-case-budget-20261123/proof/report.json)
+
 ## 7. 实施顺序、删除项与整体 critic
 
 1. **保持 L0／L1 准备与基线合同（LT-01、LT-04）。** 准备原题／中文镜像、真实数据和固定环境，核实正式授权、普通 Final 及已回答后的新 run。评测适配仅调用正式入口，不使用外部 ReAct 实现替换生产模型循环。

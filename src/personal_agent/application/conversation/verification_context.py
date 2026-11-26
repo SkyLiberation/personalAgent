@@ -137,7 +137,7 @@ def build_verification_context(*, trace: InteractionTrace, history: tuple[Intera
     for source in sources:
         question = None
         if kind == "goal":
-            question = next((message.content for message in reversed(source.messages) if message.role == "user"), None)
+            question = "\n\n".join(message.content for message in source.goal_messages()[len(source.messages) - 1:])
             if question is None:
                 raise ConversationOperationConflict("goal verification requires the original user input")
         events = verification_events(source)
@@ -159,7 +159,7 @@ def build_verification_context(*, trace: InteractionTrace, history: tuple[Intera
                 active_goal = operation.goal.verification_text(trace.interaction_run_ref, operation.execution_control)
     binding = sha256(json.dumps({"run": trace.interaction_run_ref, "kind": kind,
         "principal": trace.principal.model_dump(mode="json"),
-        "messages": [message.model_dump(mode="json") for message in trace.messages],
+        "messages": [message.model_dump(mode="json") for message in trace.goal_messages()],
         "task_review": task_review.model_dump(mode="json") if task_review else None,
         "goal_refs": [operation.goal_ref.model_dump(mode="json") for source in sources
                       for operation in source.goal_operations if operation.operation != "read"]},

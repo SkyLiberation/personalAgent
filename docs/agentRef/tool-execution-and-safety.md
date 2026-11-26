@@ -34,7 +34,7 @@ personalAgent 的正式执行契约仍以[智能体决策与受治理执行](../
 
 ## 4. 工具粒度、通用性与按需暴露
 
-2026-10-19 核对三个独立开源实现的 43 个固定源码／示例文件，均为 A 级机制证据，见[统一来源及 SHA-256](../../.tmp/tool-design-review-20261019/source-manifest.json)与[核查范围](../../.tmp/tool-design-review-20261019/source-review.json)。未运行第三方项目、模型或测试；源码只能证明相应配置下的机制，不证明本工程工具过多、收益或最佳工具数量。
+2026-10-19 核对三个独立开源实现的 43 个固定源码／示例文件，均为 A 级机制证据，见统一来源及 SHA-256（`.tmp/tool-design-review-20261019/source-manifest.json`）与核查范围（`.tmp/tool-design-review-20261019/source-review.json`）。未运行第三方项目、模型或测试；源码只能证明相应配置下的机制，不证明本工程工具过多、收益或最佳工具数量。
 
 | 实现 | 实际装配与模型消费 | 粒度及披露边界 |
 | --- | --- | --- |
@@ -50,7 +50,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ## 5. 固定程序执行可复用的库
 
-2026-10-19 核对两个独立开源库的正式调用链，取得 9 个文件并走读相关关键片段；固定版本、文件及 SHA-256 见[源码清单](../../.tmp/experiment-runner-libraries-20261019/source-manifest.json)。Docker 取本轮查询到的官方发布版 `7.2.0`（2026-07-09 发布），psutil 使用与官方 stable 文档对应的 `v7.2.2` tag；psutil 的 GitHub `releases/latest` 返回 404，按 tag 固定，不宣称它提供了对应 GitHub Release。未安装库、调用 Docker Engine 或运行第三方程序。
+2026-10-19 核对两个独立开源库的正式调用链，取得 9 个文件并走读相关关键片段；固定版本、文件及 SHA-256 见源码清单（`.tmp/experiment-runner-libraries-20261019/source-manifest.json`）。Docker 取本轮查询到的官方发布版 `7.2.0`（2026-07-09 发布），psutil 使用与官方 stable 文档对应的 `v7.2.2` tag；psutil 的 GitHub `releases/latest` 返回 404，按 tag 固定，不宣称它提供了对应 GitHub Release。未安装库、调用 Docker Engine 或运行第三方程序。
 
 | 库及固定身份 | 实际调用链与能力 | 不能直接归给库的职责 |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ## 6. 开源 Agent 的运行隔离装配
 
-2026-10-19 固定三个项目的源码身份，取得并校验 69 个相关源码／配置文件，走读实际装配、执行及停止分支；范围及 SHA-256 见 [OpenHands 清单](../../.tmp/runtime-isolation-practices-20261019/openhands/source-manifest.json)、[Gemini CLI 清单](../../.tmp/runtime-isolation-practices-20261019/gemini/source-manifest.json)、[OpenSandbox 清单](../../.tmp/runtime-isolation-practices-20261019/opensandbox/source-manifest.json)。以下是 A 级机制证据，未安装或运行这些项目，不证明目标环境的隔离效果或本工程收益。
+2026-10-19 固定三个项目的源码身份，取得并校验 69 个相关源码／配置文件，走读实际装配、执行及停止分支；范围及 SHA-256 见 OpenHands 清单（`.tmp/runtime-isolation-practices-20261019/openhands/source-manifest.json`）、Gemini CLI 清单（`.tmp/runtime-isolation-practices-20261019/gemini/source-manifest.json`）、OpenSandbox 清单（`.tmp/runtime-isolation-practices-20261019/opensandbox/source-manifest.json`）。以下是 A 级机制证据，未安装或运行这些项目，不证明目标环境的隔离效果或本工程收益。
 
 | 项目及固定身份 | 实际调用链与隔离单位 | 可借鉴机制及适用限制 |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ## 7. 模型生成程序的实际执行链
 
-2026-10-20 核对两个独立 A 级实现，范围为受控编程及反馈消费。smolagents 新取得 3 个源码文件，OpenHands 复用并逐文件复核此前 7 个源码的 SHA-256；分别见[smolagents 固定清单](../../.tmp/programmable-experiment-tool-20261020/smolagents-source-manifest.json)和[OpenHands 复用清单](../../.tmp/programmable-experiment-tool-20261020/openhands-reused-sources.json)。未运行第三方程序、模型、容器或测试，不据源码主张本工程效果。
+2026-10-20 核对两个独立 A 级实现，范围为受控编程及反馈消费。smolagents 新取得 3 个源码文件，OpenHands 复用并逐文件复核此前 7 个源码的 SHA-256；分别见smolagents 固定清单（`.tmp/programmable-experiment-tool-20261020/smolagents-source-manifest.json`）和OpenHands 复用清单（`.tmp/programmable-experiment-tool-20261020/openhands-reused-sources.json`）。未运行第三方程序、模型、容器或测试，不据源码主张本工程效果。
 
 | 固定实现 | 实际装配、执行及反馈 | 采用与限制 |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ## 8. 文本读写与修改入口
 
-2026-10-20 在 §4 的固定源码基础上复核以下两个独立 A 级实现，实际读取文件及摘要见[本轮来源清单](../../.tmp/program-artifact-tools-20261020/source-manifest.json)，完整装配身份仍见[原始清单](../../.tmp/tool-design-review-20261019/source-manifest.json)。未运行第三方程序或模型，不据此主张本工程收益。
+2026-10-20 在 §4 的固定源码基础上复核以下两个独立 A 级实现，实际读取文件及摘要见本轮来源清单（`.tmp/program-artifact-tools-20261020/source-manifest.json`），完整装配身份仍见原始清单（`.tmp/tool-design-review-20261019/source-manifest.json`）。未运行第三方程序或模型，不据此主张本工程收益。
 
 | 实现 | 模型参数到实际消费者 | 采用与差异 |
 | --- | --- | --- |
@@ -103,7 +103,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ## 9. 模型按需计算数据与结果反馈
 
-2026-10-21 针对“已有结构化结果，谁决定继续统计、怎样处理大量数据”复核以下机制。两个开源实现按固定提交走读，另两项为当日读取的 A 级官方动态契约；源码及身份见[只读来源快照](../../.tmp/data-analysis-practices-20261021/sources.md)。没有运行第三方代码、模型或容器，不据此主张本工程效果。
+2026-10-21 针对“已有结构化结果，谁决定继续统计、怎样处理大量数据”复核以下机制。两个开源实现按固定提交走读，另两项为当日读取的 A 级官方动态契约；源码及身份见只读来源快照（`.tmp/data-analysis-practices-20261021/sources.md`）。没有运行第三方代码、模型或容器，不据此主张本工程效果。
 
 | 来源与身份 | 实际机制与消费者 | 可借鉴范围及限制 |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ### 9.1 代码执行与其他工具的架构关系
 
-2026-10-21 继续核对“代码执行在整体 Agent 中处于什么位置”，[补充来源快照](../../.tmp/code-capability-architecture-20261021/sources.md)保存新增源码及摘要。以下是三种可组合方式，不是框架优劣排名；固定提交只证明对应版本，官方 API 文档只证明公开契约。
+2026-10-21 继续核对“代码执行在整体 Agent 中处于什么位置”，补充来源快照（`.tmp/code-capability-architecture-20261021/sources.md`）保存新增源码及摘要。以下是三种可组合方式，不是框架优劣排名；固定提交只证明对应版本，官方 API 文档只证明公开契约。
 
 | 方式与来源 | 实际装配及调用链 | 适用差异 |
 | --- | --- | --- |
@@ -132,7 +132,7 @@ Anthropic 的[工具设计文章](https://www.anthropic.com/engineering/writing-
 
 ## 10. Python工具的参数结构与字段说明
 
-2026-10-22 针对真实漏参和绑定错层级，复核两个独立实现的10份固定源码，见[来源及SHA-256](../../.tmp/python-schema-reference-review-20261022/source-manifest.json)。未运行第三方项目或模型。以下是A 级机制证据，不是本工程效果证明；AutoGen固定本次所读提交，OpenHands使用已发布0.59.0，不声称它代表当前SDK。
+2026-10-22 针对真实漏参和绑定错层级，复核两个独立实现的10份固定源码，见来源及SHA-256（`.tmp/python-schema-reference-review-20261022/source-manifest.json`）。未运行第三方项目或模型。以下是A 级机制证据，不是本工程效果证明；AutoGen固定本次所读提交，OpenHands使用已发布0.59.0，不声称它代表当前SDK。
 
 | 实现 | 声明、模型消费及执行边界 | 可采用与差异 |
 | --- | --- | --- |
@@ -145,7 +145,7 @@ Anthropic的[工具设计经验](https://www.anthropic.com/research/writing-tool
 
 ## 11. Code Agent 执行工具的最小输入与默认值
 
-2026-10-24 针对“补 program_ref 后丢 input_files”的真实新轨迹重新核对 Code Agent 源码，不再仅类比字段说明。来源与 SHA-256 见[固定清单](../../.tmp/code-agent-tool-design-20261024/source-manifest.json)；只读，未运行外部项目、模型、工具或测试。
+2026-10-24 针对“补 program_ref 后丢 input_files”的真实新轨迹重新核对 Code Agent 源码，不再仅类比字段说明。来源与 SHA-256 见固定清单（`.tmp/code-agent-tool-design-20261024/source-manifest.json`）；只读，未运行外部项目、模型、工具或测试。
 
 | 独立 A 级实现 | 声明、实际消费与采用边界 |
 | --- | --- |
@@ -158,7 +158,7 @@ Anthropic的[工具设计经验](https://www.anthropic.com/research/writing-tool
 
 ## 12. 文件选择与运行环境分责
 
-2026-10-24 为简化模型文件引用，重新检查两个独立 A 级实现的文件定位及实际消费者，来源与 SHA-256 见[本轮固定清单](../../.tmp/resource-id-tool-production-20261024/source-manifest.json)。Codex 仍为 §11 的当日 main 快照，OpenHands 仍为已发布0.59.0；不声称是同一种权限或恢复契约。
+2026-10-24 为简化模型文件引用，重新检查两个独立 A 级实现的文件定位及实际消费者，来源与 SHA-256 见本轮固定清单（`.tmp/resource-id-tool-production-20261024/source-manifest.json`）。Codex 仍为 §11 的当日 main 快照，OpenHands 仍为已发布0.59.0；不声称是同一种权限或恢复契约。
 
 | 机制及源码 | 采纳与适用差异 |
 | --- | --- |
@@ -169,7 +169,7 @@ Anthropic的[工具设计经验](https://www.anthropic.com/research/writing-tool
 
 ## 13. 分析自检与计算成文的交接
 
-2026-10-25 针对 LongDS 正确执行结果被报告错用、展示精度回流计算、程序排序规则错误，核对以下固定实现及实际消费者。[源码与 SHA-256](../../.tmp/research-answer-correctness-20261025/sources-manifest.json)保留只读快照；未执行第三方项目或发起新模型调用。这是机制参考，不是本工程效果证据。
+2026-10-25 针对 LongDS 正确执行结果被报告错用、展示精度回流计算、程序排序规则错误，核对以下固定实现及实际消费者。源码与 SHA-256（`.tmp/research-answer-correctness-20261025/sources-manifest.json`）保留只读快照；未执行第三方项目或发起新模型调用。这是机制参考，不是本工程效果证据。
 
 | 来源与调用链 | 可采用机制与适用边界 |
 | --- | --- |
@@ -181,7 +181,7 @@ Anthropic的[工具设计经验](https://www.anthropic.com/research/writing-tool
 
 ## 14. 数字参数、类型解析与错误修复
 
-2026-11-03只读核对两个固定版本的真实参数构造、解析及失败消费者，原件、URL及摘要见[源码清单](../../.tmp/numeric-type-reference-20261103/source-manifest.json)。没有执行第三方代码、调用模型或修改生产协议。以下不是“模型必定遵守数字类型”的保证；两者在类型转换策略上有明确差异。
+2026-11-03只读核对两个固定版本的真实参数构造、解析及失败消费者，原件、URL及摘要见源码清单（`.tmp/numeric-type-reference-20261103/source-manifest.json`）。没有执行第三方代码、调用模型或修改生产协议。以下不是“模型必定遵守数字类型”的保证；两者在类型转换策略上有明确差异。
 
 | 固定源码与实际链路 | 已核实机制 | 本工程可采用部分与差异 |
 | --- | --- | --- |

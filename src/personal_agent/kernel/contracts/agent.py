@@ -181,10 +181,6 @@ def new_agent_event_id() -> str:
     return f"aevt_{uuid4().hex[:16]}"
 
 
-def new_agent_artifact_id() -> str:
-    return f"aart_{uuid4().hex[:16]}"
-
-
 __all__ = [
     "AgentAdapter",
     "AgentArtifact",
@@ -203,7 +199,6 @@ __all__ = [
     "ChildAgentRunStatus",
     "AgentTask",
     "SubagentProfile",
-    "new_agent_artifact_id",
     "new_agent_event_id",
     "new_agent_run_id",
 ]

@@ -21,17 +21,6 @@ class ResourceRef(BaseModel):
     revision: int = Field(default=1, ge=1)
 
 
-class ResourceEvidenceRef(BaseModel):
-    """Stable citation identity derived from an inspected Resource revision."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    evidence_ref: str = Field(min_length=1)
-    resource_ref: ResourceRef
-    locator: str = Field(min_length=1)
-    content_hash: str = Field(min_length=1)
-
-
 class GeneratedArtifactContent(BaseModel):
     """Typed content materialized through the canonical Artifact owner."""
 
@@ -137,6 +126,6 @@ def match_resource_contract(
 __all__ = [
     "MUTATING_OPERATIONS", "NON_WRITING_SIDE_EFFECT_CLASSES", "OperationScope",
     "GeneratedArtifactContent", "ProviderConstraint", "ResourceMatchResult",
-    "ResourceEvidenceRef", "ResourceRef", "ResourceSelector", "match_resource_contract",
+    "ResourceRef", "ResourceSelector", "match_resource_contract",
     "mutating_operations", "side_effect_requires_write_set",
 ]

@@ -27,7 +27,7 @@ HTTP / CLI / Message Adapter
 
 目标与回答核验消费各自的历史、提交及反馈。回答核验使用生效目标、实际稿件及引用证据；绑定的检索实验沿用专有完成契约。运行中的验收条件由当前 Goal 派生，独立前置意图分类已退役。[目标核验](../context/goal-verifier.md) · [回答核验](../context/goal-compliance-verifier.md)
 
-`AgentRuntime` 装配 Conversation 的预算组件。它从已提交用量派生主模型可见的轮次、工具调用、Agent 委派和 token 余额，并负责新模型实发与工具批次的额度判定。存在 `run_deadline_at` 时，快照包含从原截止和当前 UTC 派生的 `wall_seconds_at_input`。Journal 持有用量、执行预留和结算，恢复沿用原截止。低 token 提醒随下一次主决策请求物化，触发条件与预算停止分开判定。具体关口和验证见[主循环预算治理设计](../optimization/to_verify/conversation-loop-boundaries.md#319-对话预算治理的装配边界)。
+`AgentRuntime` 装配 Conversation 的预算组件。它根据已提交用量和运行截止判断能否发起新模型请求或派发动作，并分配工具及 Agent 委派额度。Journal 持有用量、执行预留和结算，恢复沿用原截止。具体关口见[运行预算](../budge/README.md)。
 
 通用 Python 分析可按显式主体／对话许可独立装配。Trace 保存该授权摘要；Journal 在对话锁内聚合原 run 消费，并投影成功程序及工作产物，后继 run 不复制 usage 或压缩 checkpoint。当前剩余 tokens 按已知消费受 per-run 和任务阈值约束；模型费用不完整时保留未知标记，仍可调用模型、压缩及跨用户轮继续，不以完整性标记判断任务完成。未决工具执行、授权和截止继续守原边界；原件读取经 Artifact 校验。通用授权不触发检索领域冻结／test；实现契约及尚未完成的真实验收见 [ADR 0040](../adr/0040-scoped-python-analysis-authorization.md)和 [Python Spec](../optimization/to_verify/python-data-analysis-tool.md#35-longds-用例的条件适配)。
 
@@ -53,7 +53,7 @@ messages + authenticated principal
 
 模型决定开放语义和下一步 Proposal；代码决定 schema、scope、policy、唯一推导、预算与不变量；执行系统产生 execution fact；Verifier 和 Completion Gate 分别判断语义满足与 required result contract。
 
-ConversationService 提交模型决策产生的 `DecisionFeedback` 时绑定 `decision_turn`，同轮多个工具被拒绝只算一次尝试，完整反馈仍全部交给下一轮模型。相同动作种类、原因和计划版本在成功进展之后跨两个不同决策回合被拒绝，才触发既有重复错误停止保护；Journal 恢复保留回合归属。前置非决策反馈不计为模型重试。责任与证据边界见 [ADR 0019](../adr/0019-bind-feedback-to-decision-turn.md)。
+ConversationService 提交模型决策产生的 `DecisionFeedback` 时绑定 `decision_turn`，Journal 恢复后仍可把每条反馈与原调用配对。可修复的拒绝随下一步模型请求送达，主决策和 token 预算及运行截止条件控制是否发起下一步。[Runtime 拦截反馈](../context/runtime-feedback.md) · [运行预算](../budge/README.md)
 
 终止计划没有可执行活动项，直接提交新工具仍会被拒绝。反馈明确允许模型提出后续计划，沿已有交互模式与唯一活动项准入继续执行；不把历史已完成工作项重新标为未完成，也不把计划终止等同于用户任务完成。
 
@@ -81,7 +81,7 @@ Plan 是否开始新一轮以同一会话和身份下 Journal 已接纳的 answe
 
 LongDS 无人值守入口采用测试模式。各阶段先组装可用动作，再滤掉 `control_request_clarification`。请求构造和 Runtime 解码消费同一份声明。配置随答复协议绑定到运行及会话。目标补丁保存既有问答的接受事实，新问题统一走独立澄清工具。[澄清协议和验收](../adr/0055-unified-conversation-answer.md#澄清由独立工具提交)
 
-离线回放已核对 Task2 第 24 轮的原调用在两种模式下均被拒绝。独立澄清在普通模式可提交并接续用户回复，测试模式拒绝该调用并保留目标读取。回放覆盖中英文和目标待维护、普通答复两个阶段。[原实发请求](../../.tmp/gc34/c-recovery/sdk/9dfd11b4d60544d1b1dcea3ff65f461c.http.request.json) · [原第 24 轮轨迹](../../.tmp/gc34/c-recovery/turn-24.trace.json)
+离线回放已核对 Task2 第 24 轮的原调用在两种模式下均被拒绝。独立澄清在普通模式可提交并接续用户回复，测试模式拒绝该调用并保留目标读取。回放覆盖中英文和目标待维护、普通答复两个阶段。原实发请求（`.tmp/gc34/c-recovery/sdk/9dfd11b4d60544d1b1dcea3ff65f461c.http.request.json`） · 原第 24 轮轨迹（`.tmp/gc34/c-recovery/turn-24.trace.json`）
 
 整稿 verifier 注册为 `workflow_activity`，由运行系统调用并生成 `SemanticVerificationReceipt`，不进入模型可见能力。Verifier 聚合 `passed|failed`；运行系统将失败反馈交回主循环，模型可重新作答或继续取证。下一轮额度耗尽时停止。成功的个人知识 `Observation` 提交后，下一回合不再暴露已完成的 `search_personal_knowledge`，其他可见能力和交付入口保持可用。
 
@@ -97,7 +97,7 @@ LongDS 无人值守入口采用测试模式。各阶段先组装可用动作，�
 2. 模型已经选择的 personal evidence；
 3. capability/tool schema 投影；
 4. committed Observation/Feedback；
-5. budget materialization。
+5. 适用的计划恢复和技能目录。
 
 Personal Knowledge 只有在模型选择 `search_personal_knowledge` 后，才通过有界 `tool_result` 进入。该投影不复制 canonical facts，也不成为写入口。
 
@@ -129,9 +129,7 @@ Model Port 统一拥有传输重试；Schema 或语义错误按各自输出协�
 - 完整工具响应被 `content_filter` 拒绝时，Adapter 在动作解码前停止且不重试，通过原错误对象携带真实响应和 `provider_response_complete=true`。Conversation 按原计量器保存其中的实际 usage；该标志不代替用量字段完整性，缺用量仍未知，真实断流仍按原规则标未知。完整过滤既不执行动作，也不进入参数修复；
 - `llm.http.headers` 在正文读取前记录真实状态、白名单头和头到达时间；`llm.http.failed` 记录失败阶段，`llm.http.body_closed` 记录首末正文块时间、块／字节数及是否完整读取。每个物理请求有独立 `attempt_id`，状态随 Request 传递；时间以该请求开始为原点。`connect_host/port` 来自实际 TCP 连接事件，`peer_host/port` 来自当前 socket；复用连接时前者可缺失，未知不回填代理环境值。这些事实不代表 SDK 解析完成、用量完整或用户目标完成；
 - SDK 在 SSE `[DONE]` 后正常关闭 HTTP 迭代器产生的 `GeneratorExit` 不记录为传输失败。原始 HTTP 正文未迭代至末尾时 `body_complete` 仍可为 false，须结合最终 SDK 完成观察判断模型响应是否完整；
-- E2E archive 记录 `MeasurementProfile` 与 `CaseMeasurement`；
-- `metrics_report` 生成同 profile 的完成率、token、调用、延迟与恢复指标；
-- `release_gate` 独立判断 archive 能否用于目标 revision 发布。
+- 公开数据集按各自入口保存运行身份，以及实际取得的评分、用量和耗时。正式发布证据按目标版本归档。[评测运行与发布](../evals/04-running-and-release.md#正式发布验证)
 
 ## 不变量
 

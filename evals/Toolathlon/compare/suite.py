@@ -152,9 +152,7 @@ def personal(gateway, port, out, question, result, health, selection, *, session
         deployment = None
         deployment_path = None
         if sandbox is not None:
-            workspace = case_tools.bind_gateway_workspace(
-                gateway, config.server_id, runtime_volume_name=sandbox.runtime_volume_name,
-            )
+            workspace = case_tools.bind_gateway_workspace(gateway, config.server_id)
             deployment = sandbox.deployment(PERSONAL_PRINCIPAL, session_id,
                                             timeout_seconds=WALL_SECONDS, max_total_tokens=BUDGET.max_total_tokens,
                                             workspace=workspace)
@@ -402,9 +400,9 @@ def run(resources):
     sandbox = None
     if args.arm != "official" and any(requirements.needs_bash for _, requirements in selected):
         try:
-            sandbox = resources.enter_context(BashSandbox.from_fixture_image(preflight.PDF_IMAGE))
-        except subprocess.CalledProcessError:
-            parser.error("Cannot prepare Bash from the pinned Toolathlon task image")
+            sandbox = BashSandbox.native()
+        except (RuntimeError, subprocess.SubprocessError) as exc:
+            parser.error(str(exc))
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     project = Path.cwd()

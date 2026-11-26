@@ -14,7 +14,6 @@ from personal_agent.application.capture.web_source import (
 from personal_agent.application.conversation.models import (
     OFFLOADED_OUTPUT_REFETCH,
     ActionObservation,
-    ConversationMessage,
     DecisionFeedback,
     InteractionInput,
 )
@@ -84,28 +83,6 @@ def _with_offloaded_preview(
     guide = _file_reading_guidance(path, actions, prompts=prompts)
     projected = {**compact_payload, "retrieval": {**retrieval, "read_more": guide}}
     return fit_observation_preview(projected, preview or "", previously_omitted=previously_omitted)
-
-
-def materialize_analysis_user_requirements(
-    messages: Sequence[ConversationMessage], *, prompts: PromptCatalog = DEFAULT_PROMPTS,
-    indices: Sequence[int] | None = None,
-) -> str:
-    """Quote user-owned sources without interpreting or storing another goal."""
-    positions = range(len(messages)) if indices is None else indices
-    users = [(index, messages[index]) for index in positions if messages[index].role == "user"]
-    if not users:
-        return ""
-    sources = []
-    for index, message in users:
-        lines = message.content.splitlines(keepends=True) or [""]
-        sources.append(prompts.render(
-            "conversation.analysis.current_user_source" if index == users[-1][0]
-            else "conversation.analysis.historical_user_source",
-            message_index=index, line_count=len(lines),
-            source_text="".join(f"L{number}|{line}" for number, line in enumerate(lines, 1)),
-        ))
-    return prompts.render("conversation.analysis.user_sources",
-        historical_user_sources="\n\n".join(sources[:-1]), current_user_source=sources[-1])
 
 
 def materialize_interaction_inputs(

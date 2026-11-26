@@ -33,27 +33,14 @@ class _ArtifactModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def resolve_artifact_ref(
-    resource_id: str,
-    allowed_refs: tuple[ResourceRef, ...],
-    *,
-    principal: AuthenticatedPrincipal,
-    prompts: PromptCatalog = DEFAULT_PROMPTS,
-) -> ResourceRef:
-    """Resolve a model's ID only within the caller's already authorized facts."""
-    matches = tuple(dict.fromkeys(
-        ref for ref in allowed_refs if ref.resource_id == resource_id
-    ))
-    if len(matches) != 1:
-        raise PermissionError(prompts.render('artifacts.ref_unavailable'))
-    ref = matches[0]
-    if ref.resource_type != "artifact" or ref.owner != principal:
-        raise PermissionError(prompts.render('artifacts.ref_owner_mismatch'))
-    return ref
-
-
 def tool_output_directory(session_digest: str) -> str:
     return f"tool-output/session-{session_digest}"
+
+
+def supports_text_snapshot(content_type: str | None) -> bool:
+    """Check the media type accepted by the Artifact text reader."""
+    media_type = (content_type or "").lower()
+    return media_type.startswith("text/") or media_type in {"application/json", "application/x-ndjson"}
 
 
 def artifact_file_path(ref: ResourceRef) -> str:
@@ -71,10 +58,13 @@ def resolve_artifact_file(
     principal: AuthenticatedPrincipal,
     prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> ResourceRef:
-    visible = tuple(ref for ref in allowed_refs if artifact_file_path(ref) == file_path)
-    if not visible:
+    matches = tuple(dict.fromkeys(ref for ref in allowed_refs if artifact_file_path(ref) == file_path))
+    if len(matches) != 1:
         raise PermissionError(prompts.render('artifacts.ref_unavailable'))
-    return resolve_artifact_ref(visible[0].resource_id, visible, principal=principal, prompts=prompts)
+    ref = matches[0]
+    if ref.resource_type != "artifact" or ref.owner != principal:
+        raise PermissionError(prompts.render('artifacts.ref_owner_mismatch'))
+    return ref
 
 
 def validate_display_filename(filename: str) -> str:

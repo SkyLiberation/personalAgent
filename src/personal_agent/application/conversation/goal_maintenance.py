@@ -4,6 +4,7 @@ from hashlib import sha256
 import json
 
 from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from .errors import ConversationOperationConflict
 from .goal_changes import (
     GOAL_EVIDENCE_NOT_FOUND, TASK_EVIDENCE_NOT_FOUND, GoalPatchCandidate, pending_goal_clarifications,
@@ -21,8 +22,8 @@ def _digest(value) -> str:
                              separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def goal_input_digest(trace: InteractionTrace) -> str:
-    return _digest([message.model_dump(mode="json") for message in trace.messages])
+def goal_input_digest(trace: InteractionTrace, *, step: int | None = None) -> str:
+    return _digest([message.model_dump(mode="json") for message in trace.goal_messages(step=step)])
 
 
 def _goal_digest(goal: AnalysisGoal) -> str:
@@ -34,6 +35,8 @@ def _goal_digest(goal: AnalysisGoal) -> str:
 def current_analysis_goal(
     trace: InteractionTrace, previous: Sequence[InteractionTrace],
 ) -> CurrentAnalysisGoal | None:
+    if trace.goal_mode is ConversationGoalMode.DISABLED:
+        return None
     current = None
     for source in (*previous, trace):
         switch = source.first_goal_operation
@@ -43,7 +46,8 @@ def current_analysis_goal(
             if switched and record.decision_turn < switch.decision_turn:
                 continue
             base = current.reference if current is not None else None
-            if record.run_ref != source.interaction_run_ref or record.input_digest != goal_input_digest(source):
+            if (record.run_ref != source.interaction_run_ref
+                    or record.input_digest != goal_input_digest(source, step=record.decision_turn)):
                 raise ConversationOperationConflict("goal operation input binding changed")
             if record.base_goal_ref != base:
                 raise ConversationOperationConflict("goal operation is not on the selected branch")
@@ -116,8 +120,10 @@ def admit_goal_maintenance(
 
 
 def goal_tool_result(record: GoalOperationRecord, *, prompts: PromptCatalog) -> str:
-    prompt = ("conversation.goal.read_result" if record.operation == "read" else
-              "conversation.goal.accepted" if record.verification_ref is not None else
+    if record.operation == "read":
+        snapshot = record.goal.snapshot(record.run_ref, record.execution_control)
+        return json.dumps({"revision": record.goal_ref.revision, **snapshot}, ensure_ascii=False, separators=(",", ":"))
+    prompt = ("conversation.goal.accepted" if record.verification_ref is not None else
               "conversation.goal.accepted_unverified")
     operation = prompts.get(f"conversation.context.goal.operation.{record.operation}").template
     objective = prompts.render("conversation.context.goal.version",
@@ -152,14 +158,20 @@ def goal_decision_outcome(decision, *, trace: InteractionTrace, previous: Sequen
         "base_version": current.reference.revision if current else 0}, prompts=prompts)
 
 
-def goal_context(trace: InteractionTrace, previous: Sequence[InteractionTrace], *, prompts: PromptCatalog) -> str:
+def goal_context(trace: InteractionTrace, previous: Sequence[InteractionTrace], *, prompts: PromptCatalog,
+                 visible_read: GoalOperationRecord | None = None) -> str:
     current = current_analysis_goal(trace, previous)
     verified = trace.feature_flags_binding.goal_verification
     state = ("verified" if verified else "unverified") if goal_prepared(trace, current) else "pending"
-    objective = (prompts.render("conversation.context.goal.version", revision=current.reference.revision,
-                               objective=current.verification_text(trace.interaction_run_ref))
-                 if current is not None else prompts.get("conversation.context.goal.none").template)
-    context = prompts.render("conversation.goal.context" if verified else "conversation.goal.context_unverified",
+    if visible_read is not None:
+        objective = prompts.render("conversation.goal.read_reference",
+            revision=visible_read.goal_ref.revision, call_id=visible_read.call_id)
+    elif current is not None:
+        objective = prompts.render("conversation.context.goal.version", revision=current.reference.revision,
+                                   objective=current.verification_text(trace.interaction_run_ref))
+    else:
+        objective = prompts.get("conversation.context.goal.none").template
+    context = prompts.render("conversation.goal.context",
         prepared=prompts.get(f"conversation.context.goal.{state}").template, objective=objective)
     pending = pending_goal_clarifications((*previous, trace))
     if not pending:

@@ -16,11 +16,9 @@ TASK_EVIDENCE_NOT_FOUND = "task_evidence_not_in_task_user_messages"
 
 
 def _user_source(trace: InteractionTrace) -> tuple[str, str]:
-    index, message = next(
-        (index, trace.messages[index - 1])
-        for index in range(len(trace.messages), 0, -1)
-        if trace.messages[index - 1].role == "user"
-    )
+    messages = trace.goal_messages()
+    index, message = next((index, messages[index - 1])
+                          for index in range(len(messages), 0, -1) if messages[index - 1].role == "user")
     return f"{trace.interaction_run_ref}:user:{index}", message.content
 
 
@@ -31,9 +29,15 @@ def find_goal_evidence_source(
     if not evidence.strip():
         return None
     for source in chain((trace,), reversed(previous)):
-        source_id, user_message = _user_source(source)
-        if evidence in user_message:
-            return source_id
+        if not source.steering:
+            source_id, message = _user_source(source)
+            if evidence in message:
+                return source_id
+            continue
+        messages = source.goal_messages()
+        for offset, message in enumerate(reversed(messages[len(source.messages) - 1:])):
+            if evidence in message.content:
+                return f"{source.interaction_run_ref}:user:{len(messages) - offset}"
     return None
 
 
@@ -166,7 +170,8 @@ def apply_goal_patch(
 
     keys = set()
     for item in items.values():
-        if item.status != "active" or (item.scope == "turn" and item.source_message_ids[-1] != source_id):
+        if item.status != "active" or (item.scope == "turn"
+                                       and not item.source_message_ids[-1].startswith(f"{trace.interaction_run_ref}:user:")):
             continue
         key = _item_key(item)
         if key in keys:

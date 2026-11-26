@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from personal_agent.application.bash_execution.models import BashExecutionAuthorization
 
 from .journal import InMemoryInteractionJournal
@@ -15,17 +13,6 @@ from .models import (
     RunExecutionBudget, ToolCallProposal,
 )
 from .bash_authorization import require_bash_authorization
-
-
-class RemainingInteractionBudget(BaseModel):
-    """Read-only budget facts at decision input construction."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    model_turns: int = Field(ge=0)
-    tool_calls: int = Field(ge=0)
-    agent_calls: int = Field(ge=0)
-    tokens: int = Field(ge=0)
-    wall_seconds_at_input: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 def deadline_elapsed(deadline_at: datetime | None) -> bool:
@@ -48,11 +35,13 @@ class ConversationBudget:
         return max(0, remaining)
 
     def tool_calls_exhausted(self, usage: CommittedUsage) -> bool:
-        return usage.tool_calls >= self.limits.max_tool_calls
+        limit = self.limits.max_tool_calls
+        return limit is not None and usage.tool_calls >= limit
 
     def counted_tool_quota_exhausted(self, usage: CommittedUsage) -> bool:
         # Zero disables ordinary tools while leaving built-in goal and verification operations available.
-        return self.limits.max_tool_calls > 0 and self.tool_calls_exhausted(usage)
+        limit = self.limits.max_tool_calls
+        return limit is not None and 0 < limit <= usage.tool_calls
 
     def new_decision_exhausted(self, trace: InteractionTrace, usage: CommittedUsage) -> bool:
         return (usage.model_turns >= self.limits.max_model_turns
@@ -77,35 +66,19 @@ class ConversationBudget:
                 and not deadline_elapsed(trace.run_deadline_at)
                 and execution.remaining_seconds > 0 and not execution.unsettled_action_ids)
 
-    def model_snapshot(self, trace: InteractionTrace, usage: CommittedUsage) -> RemainingInteractionBudget:
-        tokens = self.remaining_model_tokens(trace, usage)
-        wall_seconds = (max(0.0, (trace.run_deadline_at - datetime.now(UTC)).total_seconds())
-                        if trace.run_deadline_at is not None else None)
-        return RemainingInteractionBudget(
-            model_turns=max(0, self.limits.max_model_turns - usage.model_turns),
-            tool_calls=max(0, self.limits.max_tool_calls - usage.tool_calls),
-            agent_calls=max(0, self.limits.max_agent_calls - usage.agent_calls),
-            # Keep the original projection of the effective positive policy limit.
-            tokens=max(0, max(1, usage.total_tokens + tokens) - usage.total_tokens),
-            wall_seconds_at_input=wall_seconds,
-        )
-
-    @staticmethod
-    def should_warn_low_token_balance(usage: CommittedUsage, remaining: RemainingInteractionBudget) -> bool:
-        effective_limit = usage.total_tokens + remaining.tokens
-        return usage.model_turns > 0 and 0 < remaining.tokens * 10 < effective_limit
-
     def allocate_actions(
         self, actions: Iterable[ActionProposal], usage: CommittedUsage,
     ) -> tuple[list[ActionProposal], list[DecisionFeedback]]:
-        remaining: dict[Literal["tool", "agent"], int] = {
-            "tool": max(0, self.limits.max_tool_calls - usage.tool_calls),
+        tool_limit = self.limits.max_tool_calls
+        remaining: dict[Literal["tool", "agent"], int | None] = {
+            "tool": None if tool_limit is None else max(0, tool_limit - usage.tool_calls),
             "agent": max(0, self.limits.max_agent_calls - usage.agent_calls),
         }
         runnable, denied = [], []
         for action in actions:
             kind: Literal["tool", "agent"] = "tool" if isinstance(action, ToolCallProposal) else "agent"
-            if remaining[kind] == 0:
+            available = remaining[kind]
+            if available == 0:
                 denied.append(DecisionFeedback(
                     action_id=action.action_id,
                     reason_code="budget_exhausted",
@@ -115,6 +88,7 @@ class ConversationBudget:
                     disposition="fail_closed",
                 ))
                 continue
-            remaining[kind] -= 1
+            if available is not None:
+                remaining[kind] = available - 1
             runnable.append(action)
         return runnable, denied

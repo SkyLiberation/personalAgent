@@ -1,6 +1,6 @@
 # 模型消息、Schema 与交付协议参考
 
-2026-10-24 核对。本文记录实际源码机制，不定义 personalAgent 的现行行为；本工程采用决定由[Loop Schema 统一设计](../optimization/to_verify/conversation-loop-schema.md)拥有。固定提交仅证明该版本，不声明最新发布。源码和 SHA-256 见[参考清单](../../.tmp/loop-schema-redesign-20261024/source-manifest.json)。
+2026-10-24 核对。本文记录实际源码机制，不定义 personalAgent 的现行行为；本工程采用决定由[Loop Schema 统一设计](../optimization/to_verify/conversation-loop-schema.md)拥有。固定提交仅证明该版本，不声明最新发布。源码和 SHA-256 见参考清单（`.tmp/loop-schema-redesign-20261024/source-manifest.json`）。
 
 ## 1. 实际装配与消费链
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | S1：smolagents | `huggingface/smolagents@96f33faaf028479119ec8d34507b47694cf14e34`；[工具定义](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/default_tools.py#L83)、[Agent](https://github.com/huggingface/smolagents/blob/96f33faaf028479119ec8d34507b47694cf14e34/src/smolagents/agents.py#L402)：`MultiStepAgent` 注入 FinalAnswerTool → run／步骤生成 → ToolCallingAgent 生成原生调用 → process_tool_calls → ActionOutput → FinalAnswerStep | `final_answer` 接收答案本身；不先发送空准备动作再调用 JSON 成文。参数校验与工具执行错误分开。它检查最终回答独占，但检查发生在工具处理之后；该顺序不满足本工程“混批先拒绝、零执行”的要求。CodeAgent 通过执行器的 final-answer 标记结束，不能把它解释为无需沙箱或执行事实。 |
 | S2：Gemini CLI | `google-gemini/gemini-cli@cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005`；[client](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/core/client.ts#L648) → [Turn.run](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/core/turn.ts#L269) → Content／工具调用／Finished 事件；[文件工具](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/tools/write-file.ts#L369)、[Todo 工具](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/tools/write-todos.ts#L29) | 正文直接来自模型文本；文件内容由专用工具执行写入，计划由独立 Todo 操作维护。无 pending tools 时还有 next-speaker 检查，不能概括为收到任意文本便立即完成，更不能据此删除本工程 Completion。Todo 的完整列表和状态属于模型参数，执行结果与 UI 展示分别投影。 |
-| S3：OpenHands SDK | `OpenHands/software-agent-sdk@6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1`；[FinishAction](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/tool/builtins/finish.py#L21) → 工具 Schema → response_dispatch → Agent 批次执行；[详细审计](../../.tmp/loop-schema-redesign-20261024/openhands-reference/report.json) | finish 的业务参数是 message，通用层另有可选 summary。原生调用、reasoning 和结果按真实 ID 重建。无工具文本也可 FINISHED；finish 后截断批次、等待保留工具结束；这些语义不能照搬为本工程的完成事实。参数错误、工具内部异常、Provider 暂时失败、运行错误分别处理，不把它们统一称为 HTTP 不可用。 |
+| S3：OpenHands SDK | `OpenHands/software-agent-sdk@6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1`；[FinishAction](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/tool/builtins/finish.py#L21) → 工具 Schema → response_dispatch → Agent 批次执行；详细审计（`.tmp/loop-schema-redesign-20261024/openhands-reference/report.json`） | finish 的业务参数是 message，通用层另有可选 summary。原生调用、reasoning 和结果按真实 ID 重建。无工具文本也可 FINISHED；finish 后截断批次、等待保留工具结束；这些语义不能照搬为本工程的完成事实。参数错误、工具内部异常、Provider 暂时失败、运行错误分别处理，不把它们统一称为 HTTP 不可用。 |
 | S4：LangChain | `langchain-ai/langchain@b15a385cb1aa4507b86a3ba1e6430748b0c4ae4b`；[create_agent 的策略装配](https://github.com/langchain-ai/langchain/blob/b15a385cb1aa4507b86a3ba1e6430748b0c4ae4b/libs/langchain_v1/langchain/agents/factory.py#L1066) → [OutputToolBinding](https://github.com/langchain-ai/langchain/blob/b15a385cb1aa4507b86a3ba1e6430748b0c4ae4b/libs/langchain_v1/langchain/agents/structured_output.py#L318) → 工具参数解析 → typed structured_response 或配对 ToolMessage 错误 | Provider 原生结构化输出与工具调用承载结构化数据是不同策略。后者把目标类型导出为输出工具，并在本地验证参数；不依赖正文恰好为 JSON。该输出工具不是业务副作用。错误恢复策略可配置，本工程仍须沿自己的有限次数、Journal 和费用规则，不能照搬任意重试。 |
 
 四组源码均为 A 级参考，已读取装配及真实消费者。S1/S2 原件在本节清单的 `references/`；S3 的独立清单包含 51 份源码及 Git blob 校验。未执行第三方项目，不以其机制存在证明 personalAgent 改善。
@@ -33,7 +33,7 @@ S4 OpenAI适配器的[_convert_delta_to_message_chunk](https://github.com/langch
 
 ## 4. 终答入口与框架职责的组织
 
-2026-10-25 针对普通正文与结束工具是否形成重复协议，重新读取 S1／S2／S3 的装配、响应分类及终止消费者。重新取得的四份源码、复用的三份固定源码及校验和见[本轮来源](../../.tmp/framework-finalization-analysis-20261025/source-manifest.json)，未执行第三方代码或发起模型请求。以下只说明固定版本的机制，不声称代表各项目最新发布或证明本工程收益。
+2026-10-25 针对普通正文与结束工具是否形成重复协议，重新读取 S1／S2／S3 的装配、响应分类及终止消费者。重新取得的四份源码、复用的三份固定源码及校验和见本轮来源（`.tmp/framework-finalization-analysis-20261025/source-manifest.json`），未执行第三方代码或发起模型请求。以下只说明固定版本的机制，不声称代表各项目最新发布或证明本工程收益。
 
 2026-11-03补充核对回答拒绝后的修正：同一S1的`MultiStepAgent._run_stream`在配置final_answer_checks时验证当前完整答案；失败捕获为AgentError，写ActionStep.error、保存memory.steps并继续下一步，而不是调用专门的答案段号编辑工具。检查默认空，最大步数另有兜底，本工程只采用错误回原循环的组织，不复制其完成权限。S3的FinishAction直接携带完整message，可见正文路径也形成MessageEvent；该固定路径没有本工程的普通回答局部合并协议。答案按段修改原为本地引用保真适配，不能把文件编辑工具作为其已被这些项目采用的证据。本地采用决定由[ADR0049](../adr/0049-answer-regeneration-in-original-loop.md)及唯一Loop设计拥有，旧引用丢失事实与claims业务编辑另保留原边界。
 

@@ -341,6 +341,26 @@ export async function streamConversationTurn(
   }
 }
 
+export async function steerConversationTurn(
+  turnId: string,
+  sessionId: string,
+  request: { text: string; user_id: string; client_request_id: string },
+): Promise<void> {
+  const response = await fetch(`/api/conversation/turns/${encodeURIComponent(turnId)}/steer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(request),
+  });
+  const value = await response.json().catch(() => null) as {
+    detail?: unknown; turn_id?: unknown; session_id?: unknown; client_request_id?: unknown;
+  } | null;
+  if (!response.ok) throw new ConversationTurnError(response.status, value?.detail);
+  if (response.status !== 202 || value?.turn_id !== turnId || value.session_id !== sessionId
+      || value.client_request_id !== request.client_request_id) {
+    throw new Error("对话服务返回了无效的补充指令回执。");
+  }
+}
+
 export async function resumeConversationTurn(
   turnId: string,
   userId: string,

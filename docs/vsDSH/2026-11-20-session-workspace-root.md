@@ -19,12 +19,12 @@ DeepSeek Harness 允许受信任的宿主入口在同一 Session 内切换项目
 ## personalAgent 的同场景路径
 
 1. **正式入口。** `POST /api/conversation/turns` 接收会话、用户文本和 `input_artifact_refs`。路由校验调用身份，再经 `AgentService` 和 `AgentRuntime` 转给 Conversation。请求模型拒绝未知字段，Web 入口没有切换会话宿主根的动作。上传和下载分别由 Artifact 路由按主体及版本处理。用户可以明确提交 B 的文件版本供分析。[请求和字段](../../src/personal_agent/adapters/web/routes/conversation.py#L50-L64) · [Web 入口](../../src/personal_agent/adapters/web/routes/conversation.py#L183-L213) · [Service 入口](../../src/personal_agent/orchestration/service.py#L213-L218) · [Runtime 入口](../../src/personal_agent/orchestration/runtime.py#L1008-L1010) · [Artifact 上传和下载](../../src/personal_agent/adapters/web/routes/artifacts.py#L43-L89)
-2. **准入与执行。** Runtime 装配 `BashExecutionService`、Docker 适配器和注册工具。在 Conversation 接受 Bash 动作时，`ConversationJournal` 冻结可读资源和相对文件名，Bash Application 校验主体、命令与许可摘要。Docker 以只读 `/workspace` 提供普通模式的输入。任务许可可以让 `/tmp` 随同一任务容器跨轮保留。部署绑定具名 MCP 工作区时，单独挂载获准的卷子目录，冻结输入另挂在 `/run/personal-agent-inputs`。单条命令的 `workdir` 由固定根拼接相对目录，下一条命令可以重新指定。任务容器复用会核对任务、接续轮次和冻结输入集合，失效时拒绝继续使用该工作区。[Runtime 装配](../../src/personal_agent/orchestration/runtime.py#L403-L432) · [接受动作与冻结文件](../../src/personal_agent/application/conversation/journal.py#L494-L514) · [投影输入路径](../../src/personal_agent/application/conversation/journal.py#L706-L727) · [执行权限与摘要](../../src/personal_agent/application/bash_execution/service.py#L52-L89) · [容器默认根](../../src/personal_agent/infra/bash_execution/run_container.py#L71-L83) · [输入和卷挂载](../../src/personal_agent/infra/bash_execution/run_container.py#L180-L217) · [任务容器复用](../../src/personal_agent/infra/bash_execution/run_container.py#L269-L309) · [单命令工作目录](../../src/personal_agent/infra/bash_execution/backend.py#L144-L166)
+2. **准入与执行。** Runtime 装配 `BashExecutionService`、Docker 适配器和注册工具。在 Conversation 接受 Bash 动作时，`ConversationJournal` 冻结可读资源和相对文件名，Bash Application 校验主体、命令与许可摘要。Docker 以只读 `/workspace` 提供普通模式的输入。任务许可可以让 `/tmp` 随同一任务容器跨轮保留。部署绑定具名 MCP 工作区时，单独挂载获准的卷子目录，冻结输入另挂在 `/run/personal-agent-inputs`。单条命令的 `workdir` 由固定根拼接相对目录，下一条命令可以重新指定。任务容器复用会核对任务、接续轮次和冻结输入集合，失效时拒绝继续使用该工作区。[Runtime 装配](../../src/personal_agent/orchestration/runtime.py#L403-L432) · [接受动作与冻结文件](../../src/personal_agent/application/conversation/journal.py#L494-L514) · [投影输入路径](../../src/personal_agent/application/conversation/journal.py#L706-L727) · [执行权限与摘要](../../src/personal_agent/application/bash_execution/service.py#L52-L89) · [容器默认根](../../.tmp/native-bash-migration-20261125/retired-run-container.py#L71-L83) · [输入和卷挂载](../../.tmp/native-bash-migration-20261125/retired-run-container.py#L180-L217) · [任务容器复用](../../.tmp/native-bash-migration-20261125/retired-run-container.py#L269-L309) · [单命令工作目录](../../src/personal_agent/infra/bash_execution/backend.py#L144-L166)
 3. **模型与用户消费。** `build_bash_tool` 按获准配置生成工具说明。Conversation 从当前有效能力投影工具声明，随主决策请求送出。退出状态及双流由执行链产生，通过 Bash 工具结果进入后续模型输入。用户下载已发布的 Artifact 时走确切的 `resource_id` 和 `revision`。容器临时文件本身只服务获准的任务执行。[工具说明与回执](../../src/personal_agent/tools/bash.py#L20-L73) · [工具声明投影](../../src/personal_agent/application/conversation/service.py#L2194-L2206) · [主模型请求](../../src/personal_agent/application/conversation/service.py#L2346-L2364) · [Bash 回执投影](../../src/personal_agent/application/conversation/interaction_projection.py#L93-L108) · [下载入口](../../src/personal_agent/adapters/web/routes/artifacts.py#L70-L89)
 
 ### 已有模型输入证据
 
-DeepSeek Harness 的 11 月 18 日 LongDS NYC Task 1 原配对使用 `ca33fd6843b205e279c7ccb6cb73a472c78f5760` 和 JSON-RPC SDK。第 1 轮第 1 步，会话事件 `seq=4` 为 system，`seq=5` 为题面，`seq=6` 为 `user` 角色的运行上下文，随后是请求头。第 6 号事件全文如下。本轮核对了归档事件及其校验和，模型服务方的原始 HTTP 请求未归档在该记录中。[运行身份](../problems/longds/2026-11-18-nyc-restaurants-task1.md#运行口径) · [第 1 轮事件](../../.tmp/nyc-longds-20261118/harness-aligned/turn-01.json) · [归档校验和](../../.tmp/nyc-longds-20261118/harness-aligned/checksums.json)
+DeepSeek Harness 的 11 月 18 日 LongDS NYC Task 1 原配对使用 `ca33fd6843b205e279c7ccb6cb73a472c78f5760` 和 JSON-RPC SDK。第 1 轮第 1 步，会话事件 `seq=4` 为 system，`seq=5` 为题面，`seq=6` 为 `user` 角色的运行上下文，随后是请求头。第 6 号事件全文如下。本轮核对了归档事件及其校验和，模型服务方的原始 HTTP 请求未归档在该记录中。[运行身份](../problems/longds/nyc-restaurants.md#task-1-运行口径) · [第 1 轮事件](../../.tmp/nyc-longds-20261118/harness-aligned/turn-01.json) · [归档校验和](../../.tmp/nyc-longds-20261118/harness-aligned/checksums.json)
 
 ```text
 <system-reminder>
@@ -34,7 +34,7 @@ Current working directory: "D:\\mySoft\\workspace\\personalAgent\\.tmp\\nyc-long
 </system-reminder>
 ```
 
-personalAgent 的 11 月 19 日两轮正式 HTTP 定向验证以任务容器中的 `rate.py` 检查读取、编辑和陈旧版本拒绝。首份带 `tool_bash` 的归档主请求使用 MiniMax-M3.1-Flash，消息数组的角色依次为 system、user、system、user、user。下方从该请求的 `tools[15].function.description` 开头逐字摘录两句，后续说明省略。这两个旧记录分别说明了运行上下文和工具声明的内容，没有覆盖 A 切 B 的同一任务。[验证用途与结果](../problems/longds/2026-11-18-nyc-restaurants-task1.md#先读再改与模型上下文) · [实发主请求](../../.tmp/edit-guard-formal-1119/sdk/c3ef206eedd94991bb55479a652fc63b.http.request.json)
+personalAgent 的 11 月 19 日两轮正式 HTTP 定向验证以任务容器中的 `rate.py` 检查读取、编辑和陈旧版本拒绝。首份带 `tool_bash` 的归档主请求使用 MiniMax-M3.1-Flash，消息数组的角色依次为 system、user、system、user、user。下方从该请求的 `tools[15].function.description` 开头逐字摘录两句，后续说明省略。这两个旧记录分别说明了运行上下文和工具声明的内容，没有覆盖 A 切 B 的同一任务。[验证用途与结果](../problems/longds/nyc-restaurants.md#先读再改与模型上下文) · [实发主请求](../../.tmp/edit-guard-formal-1119/sdk/c3ef206eedd94991bb55479a652fc63b.http.request.json)
 
 ```text
 Run Bash in an isolated container. The default directory is read-only /workspace, with user attachments under attachments/.
@@ -46,7 +46,7 @@ Run Bash in an isolated container. The default directory is read-only /workspace
 | --- | --- |
 | **已由源码确认。** personalAgent 的 Web 入口可更换本轮显式材料。现有入口和 Bash 许可没有对应的 Session 根切换操作，文件交付使用 Artifact 版本。 | 用户只说“改用 B 的当前目录”时，B 的实时文件不会自动成为本轮材料。用户可提交 B 的文件，或由部署接入授权卷。 |
 | **设计取舍。** DeepSeek 的选定目录为当前检出及工作区写入提供共同坐标。personalAgent 的 Artifact 持有确切版本，Docker 按任务许可限制实时写入。 | 对问答和可追溯分析，原始输入与输出可按版本核对。若产品证据表明确需项目切换，可以由受信任入口绑定显式授权的项目，再评估执行和项目文件视图能否共用该绑定。项目授权由受信任入口确认。 |
-| **待验证。** 会话级项目选择是否值得引入，取决于真实用户是否需要在一次分析中切换检出并继续在文件树内工作。 | 现有 LongDS 任务容器回放已覆盖跨轮复用脚本与旁支拒绝，其历史场景始终使用同一任务目录。[原运行及回放身份](../problems/longds/2026-11-18-nyc-restaurants-task1.md#任务沙箱单目录验证) |
+| **待验证。** 会话级项目选择是否值得引入，取决于真实用户是否需要在一次分析中切换检出并继续在文件树内工作。 | 现有 LongDS 任务容器回放已覆盖跨轮复用脚本与旁支拒绝，其历史场景始终使用同一任务目录。[原运行及回放身份](../problems/longds/nyc-restaurants.md#任务沙箱单目录验证) |
 
 最小验证只需一对数据内容可区分的 A、B 目录。保留同一问题、Session 和相对文件名，先选 A 再由正式入口选择 B。检查用户取得的第二份汇总来自 B，且 A 的输入与输出都未被本轮改写。对于 DeepSeek，在配置了 `workspace-write` 的宿主入口检查 B 的文件树和实际文件。对于 personalAgent，沿正式 Web 路由对照“只在消息中提到 B”与“提交 B 的 Artifact 版本”。前者应说明材料不足，后者应交付可核对的 B 汇总。若评估新增的项目绑定，再加一个未授权目录的拒绝条件，并沿同一权限边界检查可见文件与实际写入。
 

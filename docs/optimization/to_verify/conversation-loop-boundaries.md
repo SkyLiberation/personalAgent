@@ -288,6 +288,8 @@ flowchart TD
 
 **采用模块化单体，在稳定主干上显式装配能力组件；以调用包装器处理横切职责，以受限生命周期 hook 处理旁路通知。** 这是微内核式扩展思路在当前 Application 内的最小落点，不先建设跨业务插件平台。
 
+Goal 的可选装配、工作区身份及与核验的交接由[Goal 模块装配规格](analysis-goal-maintenance.md#goal-模块的可选装配)定义。
+
 三种机制处理不同变化：插件化回答“加入什么能力及其协作者”，middleware 回答“某次调用怎样经过共同处理”，hook 回答“已发生某件事后谁需要知道”。它们可以组合，不是三选一；也不能把业务步骤全改成回调。
 
 | 机制 | 本次架构建议 | 放入什么 | 绑定边界 |
@@ -392,6 +394,8 @@ Conversation → 研究能力入口（目标、有效引用、约束）
 
 订阅者由当前 Runtime 在构造时显式注入，绑定本实例；不使用进程全局可变 HookBus，也不让插件在运行中追加任意回调。如果未来确需执行前阻断扩展，应将其定义为明确的 typed Policy／Admission 协作，声明冲突合并、错误与超时行为，再独立准入；不能把一个通知 hook 悄悄升级为授权入口。
 
+普通 Web 对话的[终答提交前接续](#终答提交前接续l-18)由启动方单独装配，属于轮次生命周期协作。写入补充仍由原有鉴权入口负责。
+
 ### 3.9 核验在扩展架构中的位置
 
 独立语义核验是按契约启用的能力协作，不是每个模块都必须安装的公共阶段。研究模块提供现行统一核验，普通审稿提供冻结标准核验；事务用例的执行事实检查沿用确定性业务边界。交付入口依据已准入结果契约选择检查，再由 Completion 检查必需证据。必需核验不能因关闭 hook 被跳过，也不重复核验已有有效批准的同一候选；判据和交付分支见 §4。
@@ -447,7 +451,7 @@ Conversation → 研究能力入口（目标、有效引用、约束）
 
 在最终 SDK body 构造完毕后、每次发送前检查，覆盖 schema、tools、repair 和支持的 extra_body；未知媒体或扩展不得当零开销。主循环和工作摘要使用[现行文本估算](../../context/context-management.md#1-历史压缩)。其余调用沿用 `ascii_json_bytes_v1`，取完整 body 的 NFC 副本按稳定 ASCII JSON 序列化后的字节数。协议默认额外预留 `8,192` tokens。计量属于估算，原 body 摘要及实发内容保持。估计输入＋本次输出额度＋预留不得超过窗口，本次输出另不得超过技术上限和原政策额度。
 
-**主循环压力计量对照（2026-11-20）。** LongDS Task 2 复跑主模型回包最高输入约 18.8 万 tokens，本地 100 万窗口仍触发七次摘要。相同模型窗口下，DeepSeek Harness `2e39e704` 在 Task 2、Task 3 原评测均无压缩事件，最大提示用量为 237,873、295,305。其 token meter 对匹配请求参数使用最近一次服务方输入用量加本次消息增量，`compaction-basic` 将窗口 80% 与保留输出和压缩余量后的上限取较小值。本工程采用同一锚点、增量和压力分工。适配器使用完整 UTF-8 JSON 的字节数除以四估算输入，将 Schema、原生工具历史和非 ASCII 序列均计入。Journal 继续拥有服务方用量，按主决策存小型计量，后继请求仅在模型路由及消息外请求参数一致时借用。沿已有 Conversation 装配和检查点，移除主循环按 ASCII 字节触发的分支。[DeepSeek token meter](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/llm/token-meter/src/index.ts#L151-L190) · [压力配置](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/compaction/compaction-basic/src/config.ts#L162-L202) · [本地实测](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#本-agent-复跑耗时分解)
+**主循环压力计量对照（2026-11-20）。** LongDS Task 2 复跑主模型回包最高输入约 18.8 万 tokens，本地 100 万窗口仍触发七次摘要。相同模型窗口下，DeepSeek Harness `2e39e704` 在 Task 2、Task 3 原评测均无压缩事件，最大提示用量为 237,873、295,305。其 token meter 对匹配请求参数使用最近一次服务方输入用量加本次消息增量，`compaction-basic` 将窗口 80% 与保留输出和压缩余量后的上限取较小值。本工程采用同一锚点、增量和压力分工。适配器使用完整 UTF-8 JSON 的字节数除以四估算输入，将 Schema、原生工具历史和非 ASCII 序列均计入。Journal 继续拥有服务方用量，按主决策存小型计量，后继请求仅在模型路由及消息外请求参数一致时借用。沿已有 Conversation 装配和检查点，移除主循环按 ASCII 字节触发的分支。[DeepSeek token meter](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/llm/token-meter/src/index.ts#L151-L190) · [压力配置](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/compaction/compaction-basic/src/config.ts#L162-L202) · [本地实测](../../problems/longds/nyc-restaurants.md#本-agent-复跑耗时分解)
 
 区分自动压力判断与摘要请求策略。原有快照覆盖、结构化摘要、原件授权及两类核验保留。本次针对已确认的过早触发，不改变历史正文投影或摘要模型的请求前缀。验收离线消费最新 Task 2、Task 3 完整发送的主请求及对应同路由用量，确认消息和工具 Schema 逐字相同、压力口径与新规则一致。使用同一真实体与不同窗口的隔离副本核对越过压力阈值、硬容量、锚点失配和候选必须缩减。历史记录继续保持原成绩及真实摘要次数；当时未发送的候选和推迟摘要后的任务耗时不从已发送样本外推。
 
@@ -808,6 +812,8 @@ E1 v5 已结束并[封存](../../../.tmp/research-capability-20261020/t5/e1-v5-f
 
 ### 3.19 对话预算治理的装配边界
 
+以下保留预算组件引入和提示位置实验的历史证据。现行模型输入契约见[移除主请求预算提醒](../../context/agent-loop.md#1-目标与输入责任)。
+
 目标是集中 Conversation 的额度计算与准入判定，降低修改同一规则时需要查阅的执行分支数。当前轮次与 token 停止、并发批次分配、工作区与核验工具额度分别散落在 `ConversationService`，模型输入又单独计算余额。现有规则可从 [Runtime 专题](../../topics/runtime.md#conversation-loop)和[执行预算验证记录](../../evals/02-current-case-inventory.md#loop-修复与验证执行预算的定向检查)核对。PDF `detect-revised-terms` 的 [.tmp/pu-103645](../../../.tmp/pu-103645/report.json) 归档还记录了真实低余额请求和后续预算停止。
 
 采用 Conversation 内的具名预算组件，由 `AgentRuntime` 组合现有策略、Journal 和 Python 授权。组件根据已提交用量派生余额，决定新模型实发是否拒绝、哪些动作占用本批工具或委派额度，以及本次模型可见余额。Conversation 继续控制停止、反馈和恢复的时点及结果。Journal 保留用量提交和执行预留的唯一写入责任，预留校验仍与命令绑定原子执行。支付过的响应先走现行恢复路径。模型实发、派发、核验复用与授权绑定的相对顺序按原链路保留。参考[预算与硬停止的开源源码核对](../../agentRef/runtime-recovery.md#3-预算可见与硬停止必须分层)。通用轮末 hook 只能在动作之后运行，无法承担这些准入条件。
@@ -833,6 +839,30 @@ Conversation 构造主请求时，把最新预算、适用秒数和低余额提�
 Toolathlon 的 `detect-revised-terms` 要求比较五份判决 PDF 和一份新法 PDF。历史 `pw-104232` 在 2,000,000 tokens 下以 `limitation` 结束。其第 26 至 29 次完整阶段请求及首轮用于离线对照。原工作树 `v41-round-budget-reminder` 的 5 个完整阶段及 3 个条件对照均通过，另一次 MiniMax 实发在上一轮只有拒绝反馈时收到提醒，随后仍继续搜索。早期 `v40` 的完整 Toolathlon 样本未进入 10% 触发区，产物评分未通过。两类证据分别保存在 `.tmp/low-token-budget-reminder/round-stage-recorded/` 和 `.tmp/low-token-budget-reminder/target/`，不作为当前整例通过证据。
 
 合并后的预算组件通过 10/10 个离线检查，含 5 个完整真实阶段与 5 个确定性对照。上一轮只有拒绝反馈且余额低于 10% 时提醒生效，首次主决策、恰好 10%、零余量和关闭开关均省略提醒。去掉新增提醒后，原消息、工具定义与原生历史逐字一致，关闭臂请求版本保持。结果封存于 `.tmp/main-budget-integration-20261110/replay-result.json`，合并验证没有发起新模型请求。
+
+#### 动作拒绝后的下一步（2026-11-22）
+
+Netflix Task 2 第 20 轮两次提交的 `evidence` 不同。第一次跨段拼接，第二次只保留问题片段但改了首字母大小写。两个动作均由准入拒绝。旧 Conversation 主循环按工具名和原因码归为一组，在第二次拒绝后提前结束，第二条反馈未进入新请求。[原始轨迹](../../../.tmp/netflix-bash-tail-20261122/personal/turn-20.trace.json)
+
+移除 Conversation 主循环的按重复拒绝计数停止分支及其终止文案。Admission 仍按每次提议校验并拒绝，Journal 保存反馈和原步骤绑定，下一次主请求沿原生工具消息配对回送。已有主决策和 token 上限、运行截止、动作预算及执行准入继续由原边界执行。DeepSeek Harness 的默认插件按连续相同工具和完整参数在第 3、5、8 次注入提醒，正常工具结果仍进入下一步。LongDS 对照仅装配步数限制，采用其由独立预算限制主循环的做法。[重复调用提醒](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/guard/repeat-tool-reminder/src/index.ts#L196-L230) · [LongDS 步数限制](../../../evals/longDS/harness_step_limit.mjs)
+
+验收使用 Netflix 第 20 轮第二次拒绝后的原 Journal 修订及两份模型原件。旧实现应复现提前停止。新实现有预算时应形成第 3 步请求，完整用户输入和两条反馈均保留，均与原调用配对，目标和执行事实保持原值。把同一检查点的主决策上限设为已用步数时，仍须返回预算限制且不产生新模型请求。两臂均为离线回放，模型后续能否修好引用和正式整题得分另行记录。若配对、拒绝或预算反例失败，撤回本次分支删除，保留原轨迹。
+
+已移除并完成离线回放。旧实现还剩 38 个主决策步骤时直接终止。新实现到达第 3 步模型请求，原题逐字保留，两次拒绝分别在消息 239 和 241 与对应的原调用配对。原目标操作和工具执行记录均为空。主决策额度用尽和截止时间已到的两个对照均返回对应限制。本次回放在模型网络发送前结束，未产生新答复或评分。[旧实现](../../../.tmp/longds-repeated-rejection-20261122/baseline.json) · [新实现和两个对照](../../../.tmp/longds-repeated-rejection-20261122/candidate.json)
+
+#### Skill 重复加载的回执对照
+
+DeepSeek Harness 的 `skill` 每次成功都返回完整正文，按调用 ID 保存结果。默认装配在连续第 3、5、8 次相同工具和参数后追加独立提示。提示使用实际重复次数，随下一步请求发送。上游原生回放记录了普通工具第三次成功回执和下一步提示。现有 16 条本仓库 Skill 轨迹没有连续重复加载，能证明正常加载的正式请求路径。[上游加载](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/skill/tool-skill/src/index.ts#L137-L169) · [上游提示](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/guard/repeat-tool-reminder/src/index.ts#L196-L230) · [上游回放](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/snapshots/session/repeat-tool-reminder/session.v4.jsonl#L25-L40) · [本仓库原请求](../../../.tmp/skill-use-scope-20261123-user/personal-agent/sdk/d90d96f534704776a5b80b1c8beeb9ac.http.request.json)
+
+待核实的差异是同批两个独立调用能否各取得正文，以及连续读取是否有独立提示。用正式 Web Conversation 入口提交同一个中文回执核对任务，使用 `review-goal-after-update`，要求先把两次读取放在同批，再分步读到五次成功并报告所见。计划先运行一条基线，模型原生提交调用，捕获同批原响应、两条配对回执、第三和第五次读取后的实发请求以及用户收到的答复。固定模型、语言、工具组和普通 Goal 模式。最初的直接回答配置在启动校验处被拒，未产生模型请求。每次运行最多 12 步、12 次工具调用、200,000 tokens，达到上限或出现服务错误即停止。模型未按要求提交同批调用或未达第三次时将相应项标为未到达。
+
+正式 Web 基线的主循环第 4 步提交两个 `review-goal-after-update` 请求。下一步 `messages[4]` 是首次完整正文，`messages[5]` 是 `duplicate_action_request` 的配对反馈。后四次逐步读取均有完整正文，第三和第五次成功后无独立提醒。模型交付了与观察一致的报告。实际 13 次模型请求、75,433 tokens。[实发同批回执](../../../.tmp/skill-repeat-contract-20261125/web-baseline/sdk/5765442823284e0197ed66317cd1304c.http.request.json) · [基线报告](../../../.tmp/skill-repeat-contract-20261125/web-baseline/report.json)
+
+候选范围为 `tool_load_skill`。Conversation 的同批准入让不同合法 ID 的读取各自走既有 Tool Port、权限、预算与执行，按 ID 回送结果。仍按协议拒绝重复调用 ID。Conversation 历史投影从本轮仍可见的原生回执按顺序推导同名技能的连续成功次数，其他动作或用户补充输入断开计数。触发时通过现有 Runtime 反馈消息在整批回执之后追加独立提示。提示使用 Runtime 的系统角色，避免当成用户补充输入；摘要覆盖的旧回执连同相邻提示退出当前请求。技能目录和会话 Journal 继续拥有正文和调用事实，无需产品状态、插件、配置或新增依赖。撤回时删除 Skill 在同批去重中的例外及提醒投影。
+
+基线到达所需检查点后，用相同正式入口、原题和配置运行一条目标。成功判据是两条同批请求分别收到完整正文，连续第三和第五次有单独提示，第一和第二次无提示，用户得到与回执一致的报告。第八次按实现检查，单条正常加载用已有实发阶段检查无额外提示。保留同批重复 ID 和其他只读工具规则的源码反事实。此诊断只验收回执契约。
+
+目标运行的同批两条原生回执均完整，各自与不同的调用 ID 配对，1,106 字符的正文与基线逐字一致。第一次和第二次加载后没有提醒。第三次的 `messages[7]` 和第五次的 `messages[12]` 仍是正常工具回执，各自下一条消息是 Runtime 提醒。以上回执检查点通过。第八次仅核对实现。目标用了 13 次模型请求、95,950 tokens。整例报告存在偏差：模型多读了一次，准确报告正文形态，但独立提醒缺少核验器可引用的执行证据，最终答复只确认主循环见过提示，未确认第 3、5 次位置。不能据此主张提醒减少调用次数，或核验器可以验收独立 Runtime 消息。[目标报告](../../../.tmp/skill-repeat-contract-20261125/web-target/report.json) · [同批双正文](../../../.tmp/skill-repeat-contract-20261125/web-target/sdk/21597a2289a1435c8ff3bd98137bbd6a.http.request.json) · [第三次后的请求](../../../.tmp/skill-repeat-contract-20261125/web-target/sdk/0dab78b05aed48b88788aa7fcbcb8dc9.http.request.json) · [第五次后的请求](../../../.tmp/skill-repeat-contract-20261125/web-target/sdk/32b5a8f289904e8ca27f21d5747296d5.http.request.json)
 
 ### 3.20 Session、Turn 与 Step 生命周期
 
@@ -868,6 +898,18 @@ Web、CLI 和飞书进入同一个 Conversation 提交用例。认证后，Journ
 历史消费者按已提交顺序恢复原话、答复和适用的原生交互。SQLite 每轮保存本轮原话和前驱的已交付答复投影，各修订保存 typed 事实及原件引用。投影同前驱修订绑定，每一轮只保存一次。原始模型请求和响应仍按调用保存为文件。现有任务选择、可见性、工具配对及压缩决定最终入模范围。[主循环上下文](../../context/agent-loop.md#1-目标与输入责任)
 
 #### 正式入口与评测
+
+普通 Web 轮次执行期间的补充指令以原 `turn_id` 进入 `POST /api/conversation/turns/{turn_id}/steer`。入口、并发提交及恢复契约见 [ADR 0054](../../adr/0054-session-run-step-journal.md#同轮补充指令)。
+
+#### 终答提交前接续（L-18）
+
+**需求与基线。** 普通 Web 对话生成可交付的回答后，受信调用方可在提交终答之前完成最后一次补充投递。DynaRev 邮轮历史严格试次两端均为 3/5，第二次修订在 DeepSeek Harness 的补发试次进入原轮并完成 5/5。personalAgent 已证明原轮接收第一条用户消息，现有 DynaRev 入口仍拒绝为其开启提前收尾补发。第一个缺少的环节是可等待的终答候选通知。 [原始归档](../../problems/DynaRev/cruise-steering.md) · [DeepSeek Harness 收尾顺序](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/agent.ts#L400-L406)
+
+**职责与实施。** Web 组合可向普通 Conversation 提交传入可选的同步通知。Conversation 在候选通过原有核验后、写终答前等待通知返回。已有排队补充时直接进入现有 Journal 提交检查。通知没有业务数据，DynaRev 适配器为每条独立试次装配一个本机端点，按原评测规则决定是否补发，继续使用鉴权的 `/steer`。通知请求超时为 15 秒，传输或 HTTP 失败由试次记录。Journal 原子判断能否提交终答，遇到排队补充时保留候选过程并接续原轮。默认 Web 组合无通知消费者。移除评测参数对 DeepSeek 单方的限制，保留严格里程碑作为默认策略。
+
+**验收 L-18。** 用已封存邮轮试次核对基线提前收尾及指令原文。目标由正式 Web 入口运行同一个 DynaRev 样本，保持模型与上游评分条件，启用补发策略。机制判据为至少一次终答前补发、原轮 HTTP 202、该原文在后续实发模型请求中只出现一次、最终只发布一次终态。两条原文同轮消费及五项约束全部满足为整题通过，分别报告机制与整题。相邻反事实为通知未产生补充时正常提交终答。一次 live 试次，模型总预算 160 万 tokens、评测限时 600 秒，遇环境失败保留归档，有界诊断再决定是否复跑。无新权限入口或存储 Schema。采用失败时撤回通知与评测接线，继续保留既有 `/steer`。
+
+**验证结果（2026-11-24）。** 正式 Web 实跑一例。第一条经网页里程碑送入，第二条经终答提交前通知送入。两条均收到原轮 HTTP 202，原文在实发模型请求中各以用户角色出现一次。评测器没有剩余指令时，第二次通知返回后正常提交终答，SSE 只发出一次 `done`。机制判据通过，原题上游评分 5/5。 [运行命令与证据](../../problems/DynaRev/cruise-steering.md#2026-11-24-personalagent-提前收尾补发验证)
 
 | 操作 | 入口契约 |
 | --- | --- |
@@ -914,18 +956,30 @@ LongDS 第 18 轮沿正式 Web 入口在隔离服务续跑。提交原会话 ID�
 
 #### 长会话历史读取与回执匹配
 
-LongDS NYC Task 2 在最后 7 轮的相邻模型请求间隔中位数为 45.4 秒。第 33 轮最后一次请求的只读回放耗时 27.8 秒，其中反复重建已提交前驱与逐条比较历史回执是两项独立开销。分别去掉重复读取和全列表匹配后，局部回放降至 16.9 秒和 12.5 秒，两项一起降至 2.3 秒。[真实运行](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md) · [隔离诊断](../../../.tmp/nyc23-20261119/t2/local_gap_counterfactual.log)
+LongDS NYC Task 2 在最后 7 轮的相邻模型请求间隔中位数为 45.4 秒。第 33 轮最后一次请求的只读回放耗时 27.8 秒，其中反复重建已提交前驱与逐条比较历史回执是两项独立开销。分别去掉重复读取和全列表匹配后，局部回放降至 16.9 秒和 12.5 秒，两项一起降至 2.3 秒。[真实运行](../../problems/longds/nyc-restaurants.md#task-2-与-task-3-对照评测) · [隔离诊断](../../../.tmp/nyc23-20261119/t2/local_gap_counterfactual.log)
 
 DeepSeek Harness `2e39e70496aa02986ca6a820c5d497e816b69d7e` 冷启动先从持久日志装载 Session。`SurfaceManager` 记录最近处理的事件序号，将新事件折入已有视图。`Agent.buildRequest` 从该视图派生本步输入。正式 Task 2 通过 SDK、Session 和 agent loop 装配走这条路径。本工程采用复用已装载历史与按身份查找这两个原则。SQLite 继续提交完整修订，现有前驱绑定、视图筛选和恢复规则继续拥有业务语义。[DeepSeek 会话恢复](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/index.ts#L793-L818) · [增量视图](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/session/src/surface.ts#L618-L704) · [请求消费](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/agent-loop/src/agent.ts#L732-L749)
 
 | 需求 | 实施与验收 |
 | --- | --- |
-| L-16 复用不可变前驱 | SQLite Journal 在现有 `exclusive_session` 内读取数据库选出的身份及修订，按会话主体、Session、Turn 和修订复用已解码的前驱。尾轮照常重建，读到不同修订时重新校验，退出锁作用域即释放。正式 `respond` 和工作区确认续接沿已有组合根消费。无锁查询照常读取原记录。验证固定前驱与最新修订的读取差异、不同主体和新会话锁作用域，以及重开 Journal 后从存储重建。 |
+| L-16 复用不可变前驱 | SQLite Journal 在 `exclusive_session` 内按数据库选出的身份及修订复用已解码的前驱。正式 `respond` 和工作区确认续接沿已有组合根消费。验证覆盖固定前驱与最新修订的读取差异、主体和会话锁作用域，以及重开 Journal 后从存储重建。当前轮的复用由下文增量修订扩展。 |
 | L-17 加速回执匹配 | 历史投影按观察类型和动作或资源身份缩小候选集，再执行原对象相等比较。保留原消息顺序和运行反馈，身份相同而内容不同的回执仍须遵守原配对规则。替换全列表成员查找，变更局限于现有 Journal 与历史投影。 |
 
 验证固定为同一 Task 2 的既有实际请求状态。用早期未压缩、后期已压缩和含失败回执的归档，在同一解释器回放现行及候选。固定计时预算字段，比较原生历史、消息、动作定义、投影摘要和拟发 HTTP 正文。第 33 轮局部请求构造至少减半。请求或修订读取出现差异即撤回对应改动。此项只验收确定性路径与局部耗时，整题耗时和评分按另一次完整运行记账。
 
-实现与验证已完成。六份拟发请求正文一致，最新修订及被冻结前驱按原选择重建。第 33 轮回放达到局部耗时判据。[耗时与回放证据](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#task-2-长会话优化回放)
+实现与验证已完成。六份拟发请求正文一致，最新修订及被冻结前驱按原选择重建。第 33 轮回放达到局部耗时判据。[耗时与回放证据](../../problems/longds/nyc-restaurants.md#task-2-长会话优化回放)
+
+#### 轮内增量修订
+
+Netflix Task 3 的前 31 轮有 187 次主模型请求。模型返回到工具网关启动累计 156 秒，工具网关完成到下次容量检查累计 148 秒。这些间隔包括多个 Runtime 阶段。可独立复现的存储开销是每次 Journal 查询重读修订正文，以及每次提交序列化全文。第 32 轮的 SQLite 中有 182 个修订，`facts` 合计 301.09 MiB。现有缓存只节省旧轮次的解码，当前轮及已缓存前驱的正文仍会从数据库取得。[采集记录](../../problems/longds/nyc-restaurants.md#netflix-task-3-双方对照2026-11-22) · [运行日志](../../../.tmp/netflix-task3-20261122/personal/server.log)
+
+DeepSeek Harness `2e39e704` 在内存保留由事件序号推进的历史视图，持久层只追加新事件。采用其增量原则。SQLite Journal 继续拥有会话和已提交修订，保留每个提交点的事务和旧修订的精确读取。使用现有 `revision.facts` 保存首个修订和首次终态的完整快照，其间提交写入有基础修订号的字段增量，长序列只保存从首个变化位置起的后缀。曾经保存的完整修订直接作为快照读取。恢复从最近快照按序应用增量，经原 `InteractionTrace` 校验后交付。`exclusive_session` 内以数据库选出的修订身份复用内存对象，提交成功后才更新已解码视图，退出锁作用域释放视图。模型请求、权限判断、工具派发前登记、补充指令的事务和撤回边界沿用现行契约。[DeepSeek 增量消息视图](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/core/session/src/index.ts#L1079) · [DeepSeek 持久化](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/session/session-persistence-jsonl/src/storage.ts#L278) · [ADR 0054](../../adr/0054-session-run-step-journal.md)
+
+仅缓存读取仍会写入所有旧工具状态。仅压缩全文仍会重复构造、编码和解码全文。改为异步事件写入会改变工具派发与已提交执行事实的顺序，超出本次范围。字段增量和读取缓存都放在原 SQLite 适配器，其余消费者继续读取完整的 `InteractionTrace`。删除热路径上的全文重读和重复写入，新增修订编解码与锁内缓存。
+
+实现前固定为真实 Netflix Task 3 第 1、31、32 轮的全部已提交修订。以同一现行工作树中的全文存储版本为基线，在临时 SQLite 中经正式 Journal `put`、`get`、分支读取重放。对照每个修订的完整事实、原承接消息、终态和冻结前驱。检查轮内从新实例恢复、存量全文库继续追加、重复提交、过时后继写入拒绝和失败事务后的读取。既定判据为后两轮合计修订正文至少减少一半，三轮相同操作的回放耗时下降，结束相同，恢复与可见性断言全部通过。回放只证明存储机制，不计整题耗时与评分变化。发现语义或恢复差异即撤回候选。[固定运行](../../../.tmp/netflix-task3-20261122/personal/report.json)
+
+回放已通过。三轮共 379 个修订，读回事实、会话消息、冻结前驱和终态一致。第 31、32 轮的修订正文合计由 318.73 MiB 降至 20.61 MiB，减少 93.53%。三轮 Journal 热路径计时合计由 265.95 秒降至 36.44 秒。基线计时期间与一次诊断回放短时重叠，耗时是本机单次观察。另以 DynaRev 的 54 个真实修订核对补充指令去重和事务内消费。没有重跑整题。[对照报告](../../../.tmp/netflix-journal-20261123/comparison.json) · [Netflix 回放入口](../../../.tmp/netflix-journal-20261123/replay.py) · [DynaRev 回放入口](../../../.tmp/netflix-journal-20261123/replay_steering.py)
 
 ## 4. 是否所有流程都需要答案核验
 

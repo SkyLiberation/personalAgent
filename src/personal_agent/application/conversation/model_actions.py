@@ -48,6 +48,7 @@ from .models import (
     RequestClarificationArguments,
     ToolCallProposal,
     WorkingPlanProposal,
+    WorkingPlanStepProposal,
 )
 from .goal_models import (
     SUBMIT_GOAL_PATCH, GoalMaintenanceInvocation, GoalPatchProposal,
@@ -89,10 +90,12 @@ def decode_bash_call(function: dict[str, str], *, prompts: PromptCatalog) -> Bas
 
 
 def goal_action_definition(prompts: PromptCatalog, *, verification_enabled: bool = True) -> ModelActionDefinition:
-    name = "conversation.goal.description"
+    acceptance = prompts.get(
+        "conversation.goal.admission.verified" if verification_enabled else "conversation.goal.admission.deterministic"
+    ).template
     return ModelActionDefinition(name=SUBMIT_GOAL_PATCH, kind="maintain_goal",
         target_name="maintain_goal",
-        description=prompts.get(name if verification_enabled else name + "_unverified").template,
+        description=prompts.render("conversation.goal.description", acceptance=acceptance),
         input_schema=GoalPatchProposal.tool_schema(), strict=False)
 
 
@@ -130,8 +133,11 @@ def _schema_without_fields(
     return strictify_schema(projected)
 
 
-def _working_plan_action_schema() -> dict[str, Any]:
+def _working_plan_action_schema(*, bind_goal_items: bool) -> dict[str, Any]:
     schema = deepcopy(WorkingPlanProposal.model_json_schema())
+    if not bind_goal_items:
+        step_schema = schema["$defs"][WorkingPlanStepProposal.__name__]
+        del step_schema["properties"]["goal_item_ids"]
     schema["properties"]["wait_for_user"] = {
         "type": "boolean", "default": False,
         "description": "Return the plan to the user and pause for review before executing business actions.",
@@ -184,6 +190,7 @@ def build_model_action_definitions(
     experiment_run: bool = False,
     answer_actions: tuple[ModelActionDefinition, ...] = (),
     task_workspace: bool = False,
+    bind_goal_items: bool = True,
     prompts: PromptCatalog = DEFAULT_PROMPTS,
 ) -> tuple[ModelActionDefinition, ...]:
     """Project visible business operations and typed control actions."""
@@ -238,7 +245,7 @@ def build_model_action_definitions(
             kind="working_plan",
             target_name=_WORKING_PLAN_TARGET,
             description=prompts.get("conversation.working_plan.description").render(),
-            input_schema=_working_plan_action_schema(),
+            input_schema=_working_plan_action_schema(bind_goal_items=bind_goal_items),
             strict=False,
         )
     )
@@ -575,7 +582,7 @@ def decode_model_action_invocations(
         )
 
     if len(invocations) > 1:
-        for kind in ("maintain_goal", "read_current_goal", "request_clarification", "answer_result"):
+        for kind in ("maintain_goal", "request_clarification", "answer_result"):
             exclusive = next((call for call in invocations
                               if call.name in by_name and by_name[call.name].kind == kind), None)
             if exclusive is not None:
@@ -591,6 +598,7 @@ def decode_model_action_invocations(
             reason_code="provider_action_unknown",
             action_name=unknown.name,
         )
+    goal_read: GoalReadInvocation | None = None
     working_plan: WorkingPlanProposal | None = None
     wait_for_user = False
     working_plan_call_id = None
@@ -610,8 +618,16 @@ def decode_model_action_invocations(
                 return ContinueTurnProposal(goal_maintenance=GoalMaintenanceInvocation(
                     call_id=invocation.call_id, arguments=GoalPatchProposal.model_validate(payload).to_patch()))
             if definition.kind == "read_current_goal":
-                return ContinueTurnProposal(goal_read=GoalReadInvocation(
-                    call_id=invocation.call_id, arguments=ReadCurrentGoalArguments.model_validate(payload)))
+                if goal_read is not None:
+                    raise StructuredOutputFailure(
+                        "agent_interaction_turn", "a model response may contain only one current-goal read",
+                        reason_code="provider_action_goal_payload_invalid", action_name=invocation.name,
+                        action_kind=definition.kind,
+                        repair_hints=(prompts.get("conversation.goal.read_description").template,),
+                    )
+                goal_read = GoalReadInvocation(
+                    call_id=invocation.call_id, arguments=ReadCurrentGoalArguments.model_validate(payload))
+                continue
             if definition.kind == "answer_result":
                 return AnswerResultInvocation(call_id=invocation.call_id,
                     operation=definition.target_name, arguments=payload)
@@ -690,6 +706,7 @@ def decode_model_action_invocations(
         working_plan=working_plan,
         wait_for_user=wait_for_user,
         working_plan_call_id=working_plan_call_id,
+        goal_read=goal_read,
     )
 
 

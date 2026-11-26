@@ -23,7 +23,7 @@ from .interaction_projection import ProjectedInteractionInput
 from .context_materialization import FILE_READ_CAPABILITIES, READ_FILE_CAPABILITY, file_read_actions
 from .errors import ConversationOperationConflict
 from .history_models import (
-    HistoryCompactionCheckpoint, HistorySummary,
+    HistoryCompactionCheckpoint, HistorySummary, HistoryToolPruningBoundary,
     VerificationHistoryCheckpoint, VerificationTurnCompaction,
 )
 from .journal import InMemoryInteractionJournal
@@ -37,8 +37,9 @@ from .history_compaction_source import (
     covered_observation_key, history_digest, main_decisions, render_history_run, run_source, select_coverage,
     snapshot_json, snapshot_result_positions,
 )
+from .history_tool_pruning import active_tool_pruning
 from .analysis_tasks import task_message_indices
-from .goal_maintenance import goal_context
+from .goal_module import GoalModule
 from .verification_context import verification_prefix
 from personal_agent.capabilities.contracts.verification import VerificationContext
 from personal_agent.capabilities.contracts.verification_prompt import verification_judgment_text
@@ -139,9 +140,11 @@ class HistoryCompactor:
                  artifacts: InteractionArtifactPort,
                  generate: Callable[[StructuredModelRequest[HistorySummary], str], StructuredModelResponse[HistorySummary]],
                  record_usage: Callable[[CommittedUsage, StructuredModelResponse], CommittedUsage],
+                 goal_module: GoalModule | None = GoalModule(),
                  prompts: PromptCatalog = DEFAULT_PROMPTS) -> None:
         self.journal, self.artifacts = journal, artifacts
         self.generate, self.record_usage = generate, record_usage
+        self._goals = goal_module
         self._prompts = prompts
 
     def project_verification(
@@ -268,6 +271,23 @@ class HistoryCompactor:
         previous = self.validate(trace)
         coverage = select_coverage(self._sources(trace), previous)
         return bool(coverage and (previous is None or coverage != previous.sources))
+
+    def activate_tool_pruning(
+        self, trace: InteractionTrace, boundaries: tuple[HistoryToolPruningBoundary, ...],
+    ) -> None:
+        scope = ExecutionScope(
+            principal=trace.principal, execution_id=trace.interaction_run_ref,
+            thread_id=trace.conversation_id,
+        )
+
+        def activate(current: InteractionTrace) -> InteractionTrace:
+            if current.revision != trace.revision:
+                raise ConversationOperationConflict("历史工具结果裁剪候选的会话修订已经变化")
+            return current.model_copy(update={
+                "revision": current.revision + 1, "history_tool_pruning": boundaries,
+            })
+
+        self.journal.update(scope, activate)
 
     def validate(self, trace: InteractionTrace,
                  candidate: HistoryCompactionCheckpoint | None = None) -> HistoryCompactionCheckpoint | None:
@@ -453,9 +473,11 @@ class HistoryCompactor:
             raise ValueError(self._prompts.render("conversation.history.no_closed_progress"))
         old = {item.run_ref: item for item in previous.sources} if previous else {}
         by_run = {source.interaction_run_ref: source for source in sources}
+        tool_pruning = active_tool_pruning(sources)
         exported = [run_source(by_run[item.run_ref], item.through_turn, item.includes_final) for item in coverage]
         new_history = "\n\n".join(render_history_run(by_run[item.run_ref], item,
-            after_turn=old[item.run_ref].through_turn if item.run_ref in old else 0, prompts=self._prompts)
+            after_turn=old[item.run_ref].through_turn if item.run_ref in old else 0,
+            pruned_through_step=tool_pruning.get(item.run_ref, 0), prompts=self._prompts)
             for item in coverage if item != old.get(item.run_ref))
         source_digest = history_digest(exported)
         text = snapshot_json(exported)
@@ -470,21 +492,23 @@ class HistoryCompactor:
         snapshot = self.artifacts.read_snapshot(snapshot_ref, principal=trace.principal, owner=trace.principal)
         if snapshot.content != text or snapshot.content_digest != content_digest:
             raise ConversationOperationConflict(self._prompts.render("conversation.history.export_incomplete"))
-        prompt = self._prompts.get("conversation.history_compaction")
+        prompt = self._prompts.get("conversation.history_compaction" if self._goals is not None
+                                   else "conversation.history_compaction.direct")
         delivery = self._prompts.get("conversation.context.history.delivered"
             if trace.final_message is not None else "conversation.context.history.partial").template
         contents = self._prompts.render("conversation.context.history_input",
             question=trace.messages[-1].content,
-            goal=goal_context(trace, sources[:-1], prompts=self._prompts),
+            goal=self._goals.summary_goal(trace, sources[:-1], prompts=self._prompts) if self._goals is not None else "",
             delivery=delivery, history=new_history, snapshot_id=artifact_file_path(snapshot_ref))
         if previous is not None:
             contents = self._prompts.render("conversation.context.history_previous_summary",
                 summary=previous.working_summary) + "\n\n" + contents
         system = prompt.template
-        version = prompt.version
-        snapshot_prompt = self._prompts.get("conversation.goal.snapshot_fields")
-        system += "\n\n" + snapshot_prompt.template
-        version += "+" + snapshot_prompt.version
+        version = f"{prompt.version}+skill-receipt-projection-v1"
+        if self._goals is not None:
+            snapshot_prompt = self._prompts.get("conversation.goal.snapshot_fields")
+            system += "\n\n" + snapshot_prompt.template
+            version += "+" + snapshot_prompt.version
         messages = [{"role": "system", "content": system}, {"role": "user", "content": contents}]
         request = StructuredModelRequest(operation="conversation_history_compaction", version=version,
             consumer_key="conversation:history_compaction", messages=messages, output_type=HistorySummary,

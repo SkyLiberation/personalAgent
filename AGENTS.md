@@ -93,7 +93,7 @@
 | `QLT` | Real E2E、Offline Eval、Golden Set 与真实环境 smoke 的验证设计；局部语义判断类修复、重复验证；解释停用范围与历史证据：单元测试、tests/、Contract、Integration；定位 E2E 阻塞、核验漏放、最小充分上下文；核对 Trace、安全、权限、审计与评测职责 | [测试、评估、观测与安全](docs/devSpec/quality-security.md) |
 | `REL` | 实施 Schema 迁移、协议迁移与兼容窗口；记录 ADR；执行发布评审、合并验收与完成门禁 | [迁移、ADR 与完成门禁](docs/devSpec/migration-release.md) |
 
-按任务用 skill。数据集对照用[评测 skill](.agents/skills/compare-dataset-agents/SKILL.md)。上下文模式修改必须调用[上下文管理](.agents/skills/manage-model-context/SKILL.md)并维护对应文档。方法归 skill，门禁归细则。
+数据集对照运行与失败归因用 `compare-dataset-agents`，已有结果汇总用 `compare-agent-benchmark-performance`。上下文模式修改必须用[上下文管理](.agents/skills/manage-model-context/SKILL.md)并维护对应文档。方法归 skill，门禁归细则。
 
 | 任务 | 使用的 skill | 方法与输出职责 |
 | --- | --- | --- |

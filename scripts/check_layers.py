@@ -13,6 +13,8 @@ from collections import defaultdict
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG_ROOT = os.path.join(REPO_ROOT, "src", "personal_agent")
 ROOT_PKG = "personal_agent"
+# Skill scripts are shipped as data and enter the Agent only through the sandbox.
+BUNDLED_SKILL_ASSETS = "bundled_skills"
 
 # Direct dependencies only. Transitive reachability is deliberately not copied
 # into every row: adding an edge requires an explicit architecture decision.
@@ -58,6 +60,7 @@ def discover_packages() -> set[str]:
         name for name in os.listdir(PKG_ROOT)
         if os.path.isdir(os.path.join(PKG_ROOT, name))
         and not name.startswith("__")
+        and name != BUNDLED_SKILL_ASSETS
         and contains_module(os.path.join(PKG_ROOT, name))
     }
 
@@ -84,7 +87,7 @@ def build_graph(packages: set[str]) -> tuple[dict[str, set[str]], dict[tuple[str
             full = os.path.join(dirpath, filename)
             rel = os.path.relpath(full, PKG_ROOT)
             source = top_pkg_of(rel)
-            if source is None:
+            if source is None or source == BUNDLED_SKILL_ASSETS:
                 continue
             cur_parts = rel.replace("\\", "/").split("/")[:-1]
             with open(full, encoding="utf-8") as handle:
@@ -107,7 +110,7 @@ def build_graph(packages: set[str]) -> tuple[dict[str, set[str]], dict[tuple[str
                         if parts[0] == ROOT_PKG and len(parts) > 1:
                             destinations.append(parts[1])
                 for destination in destinations:
-                    if destination in packages and destination != source:
+                    if destination == BUNDLED_SKILL_ASSETS or (destination in packages and destination != source):
                         adjacency[source].add(destination)
                         edge_files[(source, destination)].add(rel.replace("\\", "/"))
     return adjacency, edge_files

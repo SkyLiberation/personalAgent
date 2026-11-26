@@ -118,14 +118,6 @@ JSON schema：{{"topic":"...","instructions":"...","max_items":1,"lookback_hours
 ## 来源材料
 {sources}""",
     ),
-    'artifacts.image.question_default': PromptSpec(
-        name='artifacts.image.question_default', version='2026-10-27.v1', owner='artifacts',
-        template='请概述图片内容',
-    ),
-    'artifacts.image.describe': PromptSpec(
-        name='artifacts.image.describe', version='2026-10-27.v1', owner='artifacts',
-        template='客观描述附件可见内容并回答用户问题；不要声称已保存。\n用户请求：{question}',
-    ),
     'knowledge.gap_question': PromptSpec(
         name='knowledge.gap_question', version='2026-10-27.v1-md1', owner='knowledge_gap',
         template="""

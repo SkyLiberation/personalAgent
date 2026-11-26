@@ -109,7 +109,7 @@ typed status、artifact/receipt ref 和错误分类；不能只压成一段无�
 
 `LoopBudgetPolicy.max_total_tokens` 约束已提交的累计用量。[Provider 末端检查](../../src/personal_agent/infra/model_capacity.py)则按显式 host／model 配置估算本轮完整文本请求，加上输出和协议预留后接受或拒绝。两者分别控制总消费与单次容量；单条字符数、主循环原消息长度或输出 `max_tokens` 不能替代完整请求检查。
 
-主请求达到[压缩压力阈值](../context/context-management.md#1-历史压缩)时，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)对按 run 绑定的完整旧交互前缀生成摘要，保留用户原话、当前目标、未决反馈及近期配对尾部。Python 执行层已外置全文、限制预览；旧预览随已覆盖完整交互退出请求，原 stdout/stderr 引用仍可读取；已覆盖的模型交换和旧答复正文不再被历史重建恢复。纯请求构造同时服务候选和正式调用，经模型 Port 测量完整 wire 输入，严格缩小才激活、最多两次；末端仍按输出和协议预留执行硬容量检查。原件快照及 lineage 只用于工作恢复，不取得业务证据资格。摘要沿用部署参数，当前实施和验收状态见[目标维护 Spec §9.20](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
+主请求达到[压缩压力阈值](../context/context-management.md#1-历史压缩)时，先尝试裁剪可重读的旧回执并重测。仍达压时，[HistoryCompactor](../../src/personal_agent/application/conversation/history_compaction.py)对按 run 绑定的完整旧交互前缀生成摘要，保留用户原话、当前目标、未决反馈及近期配对尾部。Python 执行层已外置全文、限制预览；旧预览随已覆盖完整交互退出请求，原 stdout/stderr 引用仍可读取；已覆盖的模型交换和旧答复正文不再被历史重建恢复。纯请求构造同时服务候选和正式调用，经模型 Port 测量完整 wire 输入，严格缩小才激活。主决策最多尝试两次摘要，末端仍按输出和协议预留执行硬容量检查。原件快照及 lineage 只用于工作恢复，不取得业务证据资格。摘要沿用部署参数，当前实施和验收状态见[目标维护 Spec §9.20](../optimization/to_verify/analysis-goal-maintenance.md#920-结果卸载与完整交互压缩)，参数归属见[环境说明](../env.md#provider-选择与参数绑定)。
 
 LongDS 的 direct／none 流程已实际触发本地估算容量拒绝，完成摘要激活、后继消费和多次续跑；完整交付与答案正确性分别计分。本地估算压力不代表 Provider 实际 token 达到窗口极限，也不证明全文语义保真或净成本收益。较早的进程恢复不能证明压缩后检查点的跨进程复用。实际身份、分数及未覆盖项由 [Loop Schema §16](../optimization/to_verify/conversation-loop-schema.md#16-完整运行结果与实际边界)和[当前评测盘点](../evals/02-current-case-inventory.md)维护。
 

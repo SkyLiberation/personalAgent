@@ -15,6 +15,7 @@ from personal_agent.capabilities.contracts.model import (
 )
 
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.evidence import EvidenceItem
 from personal_agent.kernel.contracts.tool_runtime import accepted_tool_request_digest
@@ -33,17 +34,18 @@ from personal_agent.application.bash_execution.models import (
     BashExecutionCommand,
     BashExecutionFact,
     BashExecutionReceipt,
+    BashInputScope,
     BashTaskWorkspaceAccess,
     BashWorkspaceFile,
     validate_workspace_path,
     BashJournalView,
 )
 from personal_agent.application.artifacts.models import artifact_file_path
-from .artifact_sources import trace_resource_refs
+from .artifact_sources import bash_audit_artifact_refs, trace_resource_refs
 from .analysis_tasks import select_goal_task
 from .tool_requests import WriteArtifactArgs
 
-from .errors import ConversationOperationNotFound, ConversationOperationConflict
+from .errors import ConversationOperationNotFound, ConversationOperationConflict, ConversationSteeringPending
 from .goal_changes import GoalPatchRejected, apply_goal_patch
 from .goal_maintenance import admit_goal_maintenance, current_analysis_goal
 from .goal_models import (
@@ -51,17 +53,19 @@ from .goal_models import (
 )
 from .verification_admission import observed_receipts, INTERACTION_VERIFICATION_CAPABILITY
 from .journal_lock import exclusive_run_lock
-from .model_history import validate_decision_extension, prior_analysis_turns, selected_analysis_turns
+from .model_history import validate_decision_extension, prior_analysis_turns, selected_analysis_turns, task_switch_input_indices
+from .skills import LOAD_SKILL_CAPABILITY
 from .workspace_changes import validate_workspace_progress
 from .models import (
     ActionGoalBinding, ActionGoalReview, ActionObservation,
     CommittedUsage,
     ConversationWorkingPlan, SessionId,
     InteractionTrace,
+    AcceptedToolRequest,
     AcceptedArtifactToolRequest,
     AcceptedExperimentToolRequest,
     AcceptedBashToolRequest,
-    MCPWriteDispatch, RunExecutionBudget,
+    MCPWriteDispatch, RunExecutionBudget, TurnSteering, TurnSteeringRequest,
     ModelDecisionRecord, StoredModelRequest, ModelRequestReference, ModelResponseReference,
 )
 
@@ -79,6 +83,7 @@ class InMemoryInteractionJournal:
         self._lock = RLock()
         self._model_request_originals: dict[tuple[str, str], str] = {}
         self._model_response_originals: dict[tuple[str, str], list[str]] = {}
+        self._pending_steering: dict[str, tuple[TurnSteeringRequest, ...]] = {}
 
     def recover_model_response_originals(self, scope):
         """Account complete orphan tail originals before admission of new work."""
@@ -278,10 +283,70 @@ class InMemoryInteractionJournal:
         self, trace: InteractionTrace, *, expected_revision: int | None = None
     ) -> None:
         with self.exclusive_run(trace.interaction_run_ref):
-            previous = self.get(trace.interaction_run_ref)
-            self._check_revision(trace, previous, expected_revision)
             with self._lock:
+                previous = self.get(trace.interaction_run_ref)
+                self._check_revision(trace, previous, expected_revision)
+                queued = self._pending_steering.get(trace.interaction_run_ref, ())
+                claimed = self.check_steering_commit(trace, previous, queued)
                 self._traces[trace.interaction_run_ref] = trace
+                if claimed:
+                    self._pending_steering[trace.interaction_run_ref] = queued[claimed:]
+
+    @staticmethod
+    def validate_steering_submission(
+        trace: InteractionTrace | None, scope: ExecutionScope, request: TurnSteeringRequest,
+        queued: tuple[TurnSteeringRequest, ...], *, active: bool,
+    ) -> bool:
+        if trace is None or trace.principal != scope.principal or trace.conversation_id != scope.thread_id:
+            raise ConversationOperationNotFound("interaction turn not found")
+        existing = next((item for item in (*trace.steering, *queued)
+                         if item.client_request_id == request.client_request_id), None)
+        if existing is not None:
+            if existing.text != request.text:
+                raise ConversationOperationConflict("补充指令请求标识已用于不同内容")
+            return False
+        if (not active or trace.final_message is not None or trace.bash_profile_digest is not None
+                or trace.workspace_changes or trace.knowledge_save_operation is not None
+                or trace.knowledge_delete_command_ref is not None
+                or any(item.plan_waiting for record in trace.responded_steps[-1:] for item in record.dispositions)):
+            raise ConversationOperationConflict("当前轮次不再接收补充指令")
+        return True
+
+    def submit_steering(self, scope: ExecutionScope, request: TurnSteeringRequest, *, active: bool) -> None:
+        with self._lock:
+            queued = self.pending_steering(scope.execution_id)
+            if self.validate_steering_submission(self.get(scope.execution_id), scope, request, queued, active=active):
+                self._pending_steering[scope.execution_id] = (*queued, request)
+
+    def pending_steering(self, run_ref: str) -> tuple[TurnSteeringRequest, ...]:
+        with self._lock:
+            return self._pending_steering.get(run_ref, ())
+
+    def claim_steering(self, scope: ExecutionScope) -> InteractionTrace:
+        pending = self.pending_steering(scope.execution_id)
+        if not pending:
+            return self.get(scope.execution_id)
+        return self.update(scope, lambda trace: trace.model_copy(update={
+            "revision": trace.revision + 1,
+            "steering": (*trace.steering, *(TurnSteering(
+                **request.model_dump(), after_step=trace.current_step_no,
+            ) for request in pending)),
+        }))
+
+    @staticmethod
+    def check_steering_commit(trace, previous, queued: tuple[TurnSteeringRequest, ...]) -> int:
+        existing = previous.steering if previous is not None else ()
+        if trace.steering[:len(existing)] != existing:
+            raise ConversationOperationConflict("已接续的补充指令不可改写")
+        claimed = trace.steering[len(existing):]
+        if tuple(TurnSteeringRequest(client_request_id=item.client_request_id, text=item.text)
+                 for item in claimed) != queued[:len(claimed)]:
+            raise ConversationOperationConflict("补充指令必须按入队顺序接续")
+        if claimed and (previous is None or any(item.after_step != previous.current_step_no for item in claimed)):
+            raise ConversationOperationConflict("补充指令必须绑定到上一已完成模型步骤")
+        if trace.final_message is not None and queued[len(claimed):]:
+            raise ConversationSteeringPending()
+        return len(claimed)
 
     def _check_revision(self, trace, previous, expected_revision):
         if previous == trace:
@@ -303,12 +368,17 @@ class InMemoryInteractionJournal:
             or previous.answer_protocol_version != trace.answer_protocol_version
             or previous.answer_result_binding != trace.answer_result_binding
             or previous.feature_flags_binding != trace.feature_flags_binding
+            or previous.tool_profile_binding != trace.tool_profile_binding
+            or previous.skill_scope_digest != trace.skill_scope_digest
+            or previous.goal_mode != trace.goal_mode
             or previous.run_deadline_at != trace.run_deadline_at
             or previous.max_execution_seconds != trace.max_execution_seconds
         ):
             raise ConversationOperationConflict(
                 "interaction journal input binding changed"
             )
+        if trace.goal_mode is ConversationGoalMode.DISABLED and (trace.goal_operations or trace.action_goal_reviews):
+            raise ConversationOperationConflict("The session has no Goal module to own these facts")
         if previous is not None:
             validate_decision_extension(previous, trace)
             validate_workspace_progress(previous.workspace_changes, trace.workspace_changes)
@@ -463,6 +533,7 @@ class InMemoryInteractionJournal:
         plan_step_id: str | None,
         action_goal_binding: ActionGoalBinding | None = None,
         goal_ref: AnalysisGoalRef | None = None,
+        bash_input_scope: BashInputScope = "history",
     ):
         if isinstance(arguments, WriteArtifactArgs):
             tool_name, request_type = "write_artifact", AcceptedArtifactToolRequest
@@ -489,7 +560,7 @@ class InMemoryInteractionJournal:
             raise PermissionError("accepted action identity does not match its scope")
 
         def accept(latest):
-            self.check_tool_goal(latest, request)
+            self.check_tool_binding(latest, request)
             review = next((item for item in latest.action_goal_reviews if item.binding.action_id == action_id), None)
             if review is not None or action_goal_binding is not None:
                 if (review is None or review.binding != action_goal_binding
@@ -528,7 +599,7 @@ class InMemoryInteractionJournal:
                 )
             accepted = request
             if isinstance(request, AcceptedBashToolRequest):
-                workspace_files = self.bash_workspace_files(latest)
+                workspace_files = self.bash_workspace_files(latest, input_scope=bash_input_scope)
                 if review is not None and tuple(file.resource_ref for file in workspace_files) != review.binding.input_refs:
                     raise ConversationOperationConflict("Bash workspace changed after action goal review")
                 accepted = request.model_copy(update={"workspace_files": workspace_files})
@@ -546,15 +617,14 @@ class InMemoryInteractionJournal:
             if item.action_id == action_id
         )
 
-    def check_tool_goal(self, trace, request) -> None:
-        if request.goal_ref is None:
-            return
-        history = selected_analysis_turns(trace, self.task_traces(trace))
-        current = current_analysis_goal(trace, history)
-        if current is None or current.reference != request.goal_ref:
-            raise ConversationOperationConflict("tool request is bound to an obsolete goal")
-        if current.execution_control is not None and current.execution_control.mode != "running":
-            raise ConversationOperationConflict("current execution control disallows tool writes")
+    def check_tool_binding(self, trace: InteractionTrace, request: AcceptedToolRequest) -> None:
+        if request.goal_ref is not None:
+            history = selected_analysis_turns(trace, self.task_traces(trace))
+            current = current_analysis_goal(trace, history)
+            if current is None or current.reference != request.goal_ref:
+                raise ConversationOperationConflict("tool request is bound to an obsolete goal")
+            if current.execution_control is not None and current.execution_control.mode != "running":
+                raise ConversationOperationConflict("current execution control disallows tool writes")
         if request.plan_step_id is not None and not any(
             step.step_id == request.plan_step_id and step.status == "in_progress"
             for step in (trace.working_plan.steps if trace.working_plan is not None else ())
@@ -707,6 +777,7 @@ class InMemoryInteractionJournal:
             and item.answer_protocol_version == trace.answer_protocol_version
             and item.answer_result_binding == trace.answer_result_binding
             and item.feature_flags_binding == trace.feature_flags_binding
+            and item.goal_mode == trace.goal_mode
         ))
 
     def conversation_usage(self, trace: InteractionTrace) -> CommittedUsage:
@@ -725,19 +796,30 @@ class InMemoryInteractionJournal:
 
     def readable_resource_refs(self, trace: InteractionTrace) -> tuple[ResourceRef, ...]:
         sources = (*selected_analysis_turns(trace, self.task_traces(trace)), trace)
+        return self._readable_branch_refs(sources)
+
+    @staticmethod
+    def _readable_branch_refs(sources: tuple[InteractionTrace, ...]) -> tuple[ResourceRef, ...]:
+        current_ref = sources[-1].interaction_run_ref
         return tuple(dict.fromkeys(ref for item in sources
                                    for ref in trace_resource_refs(
-                                       item, include_goal_drafts=item.interaction_run_ref == trace.interaction_run_ref)))
+                                       item, include_goal_drafts=item.interaction_run_ref == current_ref)))
 
-    def bash_workspace_files(self, trace: InteractionTrace) -> tuple[BashWorkspaceFile, ...]:
+    def bash_workspace_files(
+        self, trace: InteractionTrace, *, input_scope: BashInputScope = "history",
+    ) -> tuple[BashWorkspaceFile, ...]:
         sources = (*selected_analysis_turns(trace, self.task_traces(trace)), trace)
-        attachment_refs = {ref for source in sources for ref in source.input_artifact_refs}
+        attachment_refs = dict.fromkeys(ref for source in sources for ref in source.input_artifact_refs)
+        refs = tuple(attachment_refs) if input_scope == "attachments" else self._readable_branch_refs(sources)
+        audit_only = bash_audit_artifact_refs(sources).difference(attachment_refs) if input_scope == "task" else set()
         names = {item.resource.resource_ref: item.resource.filename for source in sources
                  for item in source.inputs if item.kind == "artifact_source"
                  and item.resource.resource_ref in attachment_refs}
         paths = {}
         counts = {}
-        for ref in self.readable_resource_refs(trace):
+        for ref in refs:
+            if ref in audit_only:
+                continue
             path = artifact_file_path(ref)
             if ref in names:
                 try:
@@ -747,10 +829,28 @@ class InMemoryInteractionJournal:
             paths[ref] = path
             key = path.casefold()
             counts[key] = counts.get(key, 0) + 1
-        return tuple(BashWorkspaceFile(
+        ordinary = tuple(BashWorkspaceFile(
             name=path if counts[path.casefold()] == 1 else f"versions/{ref.resource_id}/{ref.revision}/{path.rsplit('/', 1)[-1]}",
             resource_ref=ref,
         ) for ref, path in paths.items())
+        return (*ordinary, *self._skill_workspace_files(sources))
+
+    @staticmethod
+    def _skill_workspace_files(sources: tuple[InteractionTrace, ...]) -> tuple[BashWorkspaceFile, ...]:
+        files: dict[str, BashWorkspaceFile] = {}
+        for source in sources:
+            loads = [
+                (index, item.skill_scripts) for index, item in enumerate(source.inputs)
+                if isinstance(item, ActionObservation) and item.capability_id == LOAD_SKILL_CAPABILITY
+                and item.status == "succeeded" and item.skill_scripts is not None
+            ]
+            if not loads:
+                continue
+            excluded = task_switch_input_indices(source)
+            for index, scripts in loads:
+                if index not in excluded:
+                    files.update((file.name, file) for file in scripts.files)
+        return tuple(files.values())
 
     def task_observations(self, previous: tuple[InteractionTrace, ...]) -> tuple[ActionObservation, ...]:
         """Recover owned tool observations for the selected task."""
@@ -804,7 +904,7 @@ class InMemoryInteractionJournal:
                 or trace.max_execution_seconds is None):
             raise PermissionError("Bash execution is not authorized for this run")
         if accepted.execution is None:
-            self.check_tool_goal(trace, accepted)
+            self.check_tool_binding(trace, accepted)
         workspace = accepted.command.task_workspace if accepted.command is not None else (
             self._bash_task_workspace(trace) if retain_task_workspace else None
         )
@@ -820,6 +920,12 @@ class InMemoryInteractionJournal:
 
     def _bash_task_workspace(self, trace: InteractionTrace) -> BashTaskWorkspaceAccess:
         candidates = self.task_traces(trace)
+        predecessors = tuple(item.interaction_run_ref for item in prior_analysis_turns(trace, candidates))
+        if trace.goal_mode is ConversationGoalMode.DISABLED:
+            if trace.bash_authorization_digest is None:
+                raise PermissionError("The session has no Bash workspace authorization")
+            return BashTaskWorkspaceAccess(task_id=f"session:{trace.conversation_id}",
+                                          predecessor_turn_ids=predecessors)
         selected = selected_analysis_turns(trace, candidates)
         goal = current_analysis_goal(trace, selected)
         first = trace.first_goal_operation
@@ -829,9 +935,7 @@ class InMemoryInteractionJournal:
             raise PermissionError("Bash task workspace requires an accepted analysis task")
         return BashTaskWorkspaceAccess(
             task_id=goal.goal.goal_id,
-            predecessor_turn_ids=tuple(
-                item.interaction_run_ref for item in prior_analysis_turns(trace, candidates)
-            ),
+            predecessor_turn_ids=predecessors,
         )
 
     def _update_bash(self, scope: ExecutionScope, action_id: str, change) -> None:
@@ -860,7 +964,7 @@ class InMemoryInteractionJournal:
                 if accepted.command != command:
                     raise ConversationOperationConflict("Bash command already differs")
                 return accepted
-            self.check_tool_goal(trace, accepted)
+            self.check_tool_binding(trace, accepted)
             if (command.execution_scope != execution_scope or command.action_id != action_id
                     or command.request_digest != accepted.request_digest
                     or command.deployment_digest != trace.bash_profile_digest

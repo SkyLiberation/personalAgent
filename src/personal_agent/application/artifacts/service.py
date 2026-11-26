@@ -1,33 +1,23 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 import hashlib
-from io import BytesIO
 import json
-import logging
-import mimetypes
 from pathlib import Path
 import re
 from typing import Any
 
-from openai import OpenAI
 from pydantic import TypeAdapter
 
 from personal_agent.application.capture.utils import (
-    TEXT_FILE_EXTENSIONS,
-    extract_pdf_text,
     normalize_upload_filename,
-    preprocess_uploaded_text,
     source_type_from_upload,
 )
 from personal_agent.kernel.config import Settings
 from personal_agent.kernel.prompt_registry import PromptCatalog
 from personal_agent.kernel.prompts import create_prompt_catalog
-from personal_agent.kernel.model_provider import ModelProviderPolicy
 from personal_agent.kernel.contracts.resource import (
     GeneratedArtifactContent,
-    ResourceEvidenceRef,
     ResourceRef,
 )
 from personal_agent.kernel.contracts.scope import ExecutionScope, AuthenticatedPrincipal
@@ -46,6 +36,7 @@ from .models import (
     MachineArtifactPublication,
     TOOL_OUTPUT_ID_PATTERN,
     resolve_artifact_file,
+    supports_text_snapshot,
     tool_output_directory,
     validate_display_filename,
 )
@@ -74,14 +65,9 @@ class _PreparedDraft:
 class ArtifactService:
     """Owns immutable Artifact bytes, metadata and accepted producer requests."""
 
-    def __init__(
-        self, settings: Settings, logger: logging.Logger | None = None,
-        *, provider_policy: ModelProviderPolicy, prompts: PromptCatalog | None = None,
-    ) -> None:
+    def __init__(self, settings: Settings, *, prompts: PromptCatalog | None = None) -> None:
         self.settings = settings
         self._prompts = prompts if prompts is not None else create_prompt_catalog(settings.prompt_language)
-        self._provider_policy = provider_policy
-        self.logger = logger or logging.getLogger(__name__)
 
     def save_upload(
         self,
@@ -208,11 +194,7 @@ class ArtifactService:
         record, _, content_bytes = self._read_verified(
             resource_ref, principal=principal, owner=owner
         )
-        mime = (record.content_type or "").lower()
-        if not (
-            mime.startswith("text/")
-            or mime in {"application/json", "application/x-ndjson"}
-        ):
+        if not supports_text_snapshot(record.content_type):
             raise ValueError("Artifact is not directly readable UTF-8 text")
         content = content_bytes.decode("utf-8", errors="strict")
         return ArtifactTextSnapshot(
@@ -278,41 +260,6 @@ class ArtifactService:
             size_bytes=record.size_bytes,
             content_digest=record.content_digest,
         )
-
-    def inspect_upload(
-        self,
-        *,
-        resource_ref: ResourceRef,
-        principal: AuthenticatedPrincipal,
-        owner: AuthenticatedPrincipal,
-        question: str = "",
-    ) -> dict[str, Any]:
-        record, file_bytes = self.read_upload(
-            resource_ref, principal=principal, owner=owner
-        )
-        text = self._interpret_bytes(
-            filename=record.filename,
-            content_type=record.content_type,
-            source_type=record.source_type,
-            file_bytes=file_bytes,
-            question=question,
-        )
-        content_hash = _digest(text.encode("utf-8"))
-        evidence_ref = ResourceEvidenceRef(
-            evidence_ref=f"ev_{content_hash[:16]}",
-            resource_ref=resource_ref,
-            locator="extracted-text:0",
-            content_hash=content_hash,
-        )
-        return {
-            "resource_ref": resource_ref.model_dump(mode="json"),
-            "filename": record.filename,
-            "content_type": record.content_type,
-            "source_type": record.source_type,
-            "size_bytes": len(file_bytes),
-            "text": text,
-            "evidence_refs": [evidence_ref.model_dump(mode="json")],
-        }
 
     def write_draft(
         self,
@@ -713,114 +660,6 @@ class ArtifactService:
                 "Artifact metadata path escapes its canonical directory"
             )
         return sidecar
-
-    def _interpret_bytes(
-        self, *, filename, content_type, source_type, file_bytes, question
-    ) -> str:
-        suffix = Path(filename).suffix.lower()
-        mime = (content_type or "").lower()
-        if (
-            suffix in TEXT_FILE_EXTENSIONS
-            or mime.startswith("text/")
-            or mime in {"application/json", "application/xml"}
-        ):
-            text = preprocess_uploaded_text(
-                file_bytes.decode("utf-8", errors="replace").strip()
-            )
-            if text:
-                return f"Uploaded text artifact: {filename}\n\n{text[:12000]}"
-        if source_type == "pdf":
-            text = extract_pdf_text(file_bytes, self.logger)
-            if text:
-                return f"Uploaded PDF artifact: {filename}\n\n{text[:12000]}"
-        if source_type == "image":
-            return self._describe_image(
-                filename=filename,
-                content_type=content_type,
-                file_bytes=file_bytes,
-                question=question,
-            )
-        if source_type == "audio":
-            return self._transcribe_audio(
-                filename=filename, content_type=content_type, file_bytes=file_bytes
-            )
-        return _metadata_only_context(
-            filename, content_type, source_type, len(file_bytes)
-        )
-
-    def _describe_image(self, *, filename, content_type, file_bytes, question) -> str:
-        model = self.settings.openai.vision_model or self.settings.openai.model
-        if not (
-            self.settings.openai.api_key and self.settings.openai.base_url and model
-        ):
-            return _metadata_only_context(
-                filename, content_type, "image", len(file_bytes)
-            )
-        mime = content_type or mimetypes.guess_type(filename)[0] or "image/png"
-        encoded = base64.b64encode(file_bytes).decode("ascii")
-        prompt = self._prompts.render("artifacts.image.describe", question=question or self._prompts.render("artifacts.image.question_default"))
-        try:
-            client = OpenAI(
-                api_key=self.settings.openai.api_key,
-                base_url=self.settings.openai.base_url,
-                timeout=self.settings.openai.timeout_seconds,
-                max_retries=self.settings.openai.max_retries,
-            )
-            parameters = self._provider_policy.prepare_chat_parameters({
-                "model": model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:{mime};base64,{encoded}"},
-                            },
-                        ],
-                    }
-                ],
-                "max_tokens": 900,
-            }, defaults=self.settings.openai.extra_body if model == self.settings.openai.model else {})
-            response = client.chat.completions.create(**parameters)
-            content = (response.choices[0].message.content or "").strip()
-            if content:
-                return f"Uploaded image artifact: {filename}\n\n{content}"
-        except Exception:
-            self.logger.exception("Failed to describe uploaded image artifact")
-        return _metadata_only_context(filename, content_type, "image", len(file_bytes))
-
-    def _transcribe_audio(self, *, filename, content_type, file_bytes) -> str:
-        model = self.settings.openai.transcription_model
-        if not (
-            self.settings.openai.api_key and self.settings.openai.base_url and model
-        ):
-            return _metadata_only_context(
-                filename, content_type, "audio", len(file_bytes)
-            )
-        try:
-            client = OpenAI(
-                api_key=self.settings.openai.api_key,
-                base_url=self.settings.openai.base_url,
-                timeout=self.settings.openai.timeout_seconds,
-                max_retries=self.settings.openai.max_retries,
-            )
-            audio_file = BytesIO(file_bytes)
-            audio_file.name = filename
-            response = client.audio.transcriptions.create(model=model, file=audio_file)
-            text = str(getattr(response, "text", "") or "").strip()
-            if text:
-                return f"Uploaded audio artifact: {filename}\n\nTranscript:\n{text[:12000]}"
-        except Exception:
-            self.logger.exception("Failed to transcribe uploaded audio artifact")
-        return _metadata_only_context(filename, content_type, "audio", len(file_bytes))
-
-
-def _metadata_only_context(
-    filename: str, content_type: str | None, source_type: str, size_bytes: int
-) -> str:
-    size_kb = max(1, size_bytes // 1024) if size_bytes else 0
-    return f"Uploaded artifact: {filename}\nSource type: {source_type}\nMedia type: {content_type or 'unknown'}\nSize: {size_kb} KB\n\nThe artifact is available, but automatic content interpretation did not produce text."
 
 
 def _authorize_principal(

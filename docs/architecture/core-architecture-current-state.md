@@ -45,7 +45,7 @@ Conversation 的个人知识读取投影由 Application 内的 `ConversationKnow
 
 1. 恢复已提交消息、当前工作项清单和可重读执行结果。
 2. 从注册定义、服务可用性和曝光规则生成 `EffectiveCapabilities`；能力投影与调用授权的区别见 [Context](../topics/context-engineering.md#visibility-的定义与分层)。
-3. 将用户目标、已提交 `Observation`、反馈和预算物化到 LLM Context。
+3. 将用户目标、已提交 `Observation`、反馈及适用的步骤接续信息物化到 LLM Context。
 4. 动作相位由模型原生调用提出业务动作或独立工作清单控制；Application 对 Proposal 做 Schema、曝光、权限、预算和业务准入。
 5. 已准入动作经 Tool/Agent/Application 执行入口产生 `Observation`，回到同一循环。
 6. 模型以完整正文提交普通答复，以 `control_report_turn_status` 报告限制或失败；两条入口产生同一类 `FinalMessage`。Runtime 保存 `SubmittedFinal`，执行适用核验及领域检查后交付同一稿件。拒稿后，原循环可继续取证或完整重提。提交规格见 [ADR 0055](../adr/0055-unified-conversation-answer.md)，检索实验的领域检查见 [ADR 0037](../adr/0037-experiment-submission-first-delivery.md)。
@@ -126,7 +126,7 @@ PostgreSQL 保存业务 Aggregate 认可的 canonical facts、必要 journal、q
 
 组合根注入 `SqliteInteractionJournal`。Turn 及修订由 SQLite 提交，模型请求与响应原件按轮次和调用保存为文件。对话历史、压缩输入和用户返回视图从已提交记录投影。待确认命令及副作用回执沿所属业务入口恢复。普通 MCP 写调用由 Conversation 在工具派发前登记。恢复时缺少原结果的已登记写调用生成未知回执，交回原轮次的模型决策。[Conversation 恢复坐标](code-map.md#2-从功能进入代码) · [MCP 派发与恢复](../mcpDesign/README.md#普通-mcp-写调用的进程恢复)
 
-会话锁内，Journal 复用同一主体、会话和修订下已校验的前驱记录。数据库在每次读取时确定实际修订，释放会话锁后该次解码结果随之释放。[读取机制与验收](../optimization/to_verify/conversation-loop-boundaries.md#长会话历史读取与回执匹配)
+会话锁内，Journal 复用同一主体、会话和修订下已校验的当前轮与前驱。数据库在每次读取时确定实际修订，释放会话锁后释放该次解码视图。轮内修订以增量提交，首次终态保存完整快照，恢复时从最近快照重建所需修订。[读取机制与验收](../optimization/to_verify/conversation-loop-boundaries.md#轮内增量修订)
 
 恢复必须重放已冻结的 Command 和执行事实，不得重新调用模型生成 Command，也不得重复外部副作用。幂等 digest、submission key、Receipt 和 journal 只在确有审批、跨请求恢复或外部结果关联时使用。
 

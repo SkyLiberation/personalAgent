@@ -1,8 +1,108 @@
 # 长程分析执行目标维护 Spec
 
+## Goal 模块的可选装配
+
+普通 Conversation 默认装配 Goal。部署可关闭 Goal 并沿用同一主循环、工具组和权限配置。2026-11-23 的首次关闭验证在隔离 LongDS 中执行，结果见下文。
+
+### 已确认的耦合与参考实现
+
+Netflix Task 3 本 Agent 第 1 轮的首个实发请求只声明 `submit_goal_patch` 和 `control_report_turn_status`。消息 `[3]`、`[4]` 分别携带目标状态和任务选择；目标接纳后，第 2 个模型请求才声明 Bash 和文件动作。36 轮各写入一次 Goal 操作，共 1 次创建、35 次修订，即使评测已关闭目标语义核验。该轨迹证明 Goal 是独立于核验开关的前置环节。准确性和耗时收益需用固定条件的启停对照测量。[首次请求](../../../.tmp/n3-1123/personal/sdk/eefdb14adbca448eaed7ced487b2ec04.http.request.json) · [接纳后请求](../../../.tmp/n3-1123/personal/sdk/fb778a38dc2e43b6ac4d81f1c8999acb.http.request.json)
+
+DeepSeek Harness `2e39e704` 把三类协作独立装配。`GoalService` 把变更提交为 Session 的 `goal/change` 并由投影恢复。`tool-goal` 依赖 Goal 服务，注册 `get_goal`、`create_goal`、`update_goal` 与对应指令。`goal-round-driver` 可另外装配，按已激活目标调用 `agent.followup`，并在 `agent/pre-step` 核对续跑来源和版本。基础 bundle 声明这些插件。Netflix Task 3 实际使用的 `cordis.json` 只装配通用 Agent Loop 及工具等组件，省略 Goal、Goal 工具、Goal 命令及续跑驱动。预检的 14 份实发请求都只声明 `bash`、`edit`、`read`、`write`，正式试次交付 36 轮。[GoalService](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/goal/goal/src/index.ts#L237) · [工具注册](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/goal/tool-goal/src/index.ts#L187) · [续跑驱动](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/goal/goal-round-driver/src/index.ts#L187) · [实际装配](../../../.tmp/netflix-task3-20261122/harness/cordis.json) · [实发预检](../../../.tmp/netflix-task3-20261122/preflight/tool-preflight.json) · [正式采集](../../../.tmp/netflix-task3-20261122/harness/report.json)
+
+`POST /api/conversation/turns` 经现有组合根进入 `ConversationService`。组合根显式装配 Goal 模块。模块把工具、上下文和目标准入交给现有主循环、历史和摘要消费者，目标职责保留在 `application/conversation/`。确定性准入仍是同一次 Journal 提交的前置条件，Journal 继续持有目标变更事实。仅隐藏工具会留下工作区和核验依赖，因此可选装配要覆盖这些消费者。本设计覆盖用户发起的 Conversation Turn。[本 Agent 组合根](../../../src/personal_agent/orchestration/runtime.py#L429) · [主循环装配边界](conversation-loop-boundaries.md#35-扩展架构能力模块middleware-与-hook)
+
+### 装配契约
+
+| 规格 | 模块的责任与正式消费者 |
+| --- | --- |
+| GOAL-MOD-1 装配与恢复 | 组合根按可信配置选择 `enabled` 或 `disabled`。默认 `enabled`，开启时沿用现行 Goal 协议。首次接纳时将模式与现有工具和核验配置一起写入 Turn 的 Journal 绑定。后续 Turn、恢复及待批工作区命令的决策沿原绑定校验，缺字段的历史修订使用启用模式。切换模式须新建会话。配置由服务端装配拥有，模型和用户消息无法修改它。 |
+| GOAL-MOD-2 模型可见面 | 模块贡献 `submit_goal_patch`、`read_current_goal`、任务选择、当前 Goal、相关反馈及目标前置规则。开启时沿用 `model_actions` 的 Schema 和调用配对。关闭时首请求直接声明本步授权的 Bash、文件等业务动作与原会话控制，后续继续使用已授权的原始消息、附件和配对工具历史。主请求和摘要请求省略 Goal 专属区块及模板。稳定工具说明仍拥有每轮维护要求，Goal 快照是当前步骤的动态输入。 |
+| GOAL-MOD-3 准入与提交 | 开启时，模块消费已有 typed 提议，协调版本、引文、任务切换和目标核验，输出 `GoalOperationRecord` 或具体拒绝。Plan 据接纳的切换与条目增量处理待执行步骤。Service 在原 Journal 提交边界同批写入操作、调用处置和 Plan 更新。关闭时无 Goal 提议入口和 Goal 回执。未声明的 Goal 工具请求走现有未声明动作拒绝。普通 Plan 操作、草稿审阅、Completion 与许可检查由各自的既有入口执行。 |
+| GOAL-MOD-4 工作区和权限 | 持久 Bash 工作区在开启时由当前目标任务及匹配前驱提供归属，关闭时由既有 Bash 会话授权和冻结前驱提供归属。恢复绑定 Bash 授权的轮次时核对原授权，预算和执行检查已冻结的轮次截止。MCP、网络读取和工作区变更继续各自经能力投影、Policy、工具准入和适用确认。[Bash 许可生命周期](../../adr/0056-bash-workspace.md#bash-许可随部署生效) |
+| GOAL-MOD-5 独立装配与核验 | 部署配置选择是否装配 Goal。启动、新建轮次和恢复不以工具组、MCP、网络策略、测试模式或持久 Bash 的存在作为 Goal 关闭条件。目标定义核验随 Goal 操作触发。现有回答核验消费已接纳 Goal，关闭 Goal 的配置须关闭该项核验，矛盾配置在构造时拒绝。LongDS 自己设置隔离和禁网条件。 |
+
+工作区身份归授权及 Journal 确定性派生，目标约束归 Goal 模块，回答验收由交付责任链执行。`answer_goal_context` 保持实际草稿与已接纳目标的绑定。[工作区归属](../../../src/personal_agent/application/conversation/journal.py#L921) · [答复核验绑定](../../../src/personal_agent/application/conversation/goal_compliance.py#L169)
+
+关闭模式下，普通 Plan 的 `wait_for_user` 继续经现有 Plan 准入。提交待审 Plan 的步骤零业务动作。LongDS 采集若收到待审状态就在该处封存，同一模式恢复该 Turn 时返回已提交的待审状态。启用模式的历史审批和执行控制由模式绑定保护，跨模式恢复在读取待执行动作前拒绝。[Plan 待审准入](../../../src/personal_agent/application/conversation/working_plan.py#L105)
+
+### DynaRev 独立关闭验证
+
+2026-11-26 的 Apple 和 AKC 关闭组各因启动限制退出，均未发送模型请求。DynaRev 需要已授权的浏览器 MCP，而 Runtime 把 Goal 关闭与整套 LongDS 运行配置绑定。Conversation 构造、新轮次和恢复入口也把 Goal 关闭与同一类部署前提绑定。[Apple 启动失败](../../../.tmp/dynarev-goal-off-20261126-175847-064/apple-model-override/personal-agent/web.log) · [AKC 启动失败](../../../.tmp/dynarev-goal-off-20261126-175847-064/akc-conditional-override/personal-agent/web.log)
+
+删除上述装配限制，复用 Goal 关闭后的现有主循环和消息投影。Runtime 只选择模块，Conversation 保持模式绑定，Policy、审批、授权摘要和期限分别由原入口检查。复用上一轮 [Apple](../../../.tmp/dynarev-live-20261126-173344-659/apple-model-override/summary.json) 和 [AKC](../../../.tmp/dynarev-live-20261126-173344-659/akc-conditional-override/summary.json) 的开启组。关闭组每题各一次，沿正式 Web 入口从空会话开始，使用同一原题、浏览器 MCP、模型、严格里程碑、160 万累计 token 上限和 600 秒请求时限。
+
+机制验收要求子进程读到 `disabled`，首个实发请求提供已授权浏览工具且省略 Goal 动作，实际浏览成功。送达的补充须按原文进入后续请求。原题终态和上游评分独立记录，同轮续跑和拒绝仍使用 Journal 与原权限检查。验证同时核对回答核验开启时的配置拒绝，并以实际待批命令回放跨模式审批的 409 拒绝与零派发。任一权限或绑定不变量失守时停止对应使用，按原版本撤回装配调整。
+
+解除限制后，两题各实跑一次。两题 Web 生效配置均只在 Goal 模式上与各自开启组不同。首份实发请求提供浏览器 MCP，两题合计 45 份实发请求均未声明 Goal 动作，Journal 无 Goal 操作。Apple 的改款补充从第 2 次请求起可见，AKC 三条补充分别从第 9、10、11 次请求起可见，均保留原文。[实发请求与归档核对](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/request-and-archive-audit.json)
+
+| 用例 | 开启组 | 关闭组 | 关闭组模型调用 | 关闭组累计 tokens |
+| --- | --- | --- | ---: | ---: |
+| Apple 改查上一代 | 预算耗尽，未交付 | 交付 Apple 官网 13 英寸 M4 规格，4/4 | 23 | 1,611,569 |
+| AKC 条件切换 | 预算耗尽，未交付 | 查到无毛组合零结果并切换短毛筛选，确认候选前耗尽预算，未评分 | 22 | 1,605,007 |
+
+两题验证了 Goal 关闭时仍可授权浏览并接收同轮补充。开启、关闭均为每题单次采样，交付差异只记录本次结果。[Apple 关闭组结果](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/apple-model-override/summary.json) · [AKC 关闭组结果](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/akc-conditional-override/summary.json) · [AKC 浏览轨迹](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/akc-conditional-override/personal-agent/events.jsonl)
+
+正式 Web 装配拒绝了 Goal 关闭且回答核验开启的配置。关闭组的无认证请求返回 401。实际待批工作区命令的离线 HTTP 回放在切换模式后返回 409，零派发。当时的 Bash 授权期限回放在两种模式均拒绝到期后恢复，后续由 [Bash 许可生命周期](../../adr/0056-bash-workspace.md#bash-许可随部署生效) 替换。[配置拒绝](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/answer-verifier-rejection/web.log) · [Web 认证](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/web-auth-rejection.json) · [跨模式审批](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/workspace-mode-replay.json) · [旧授权期限回放](../../../.tmp/dynarev-goal-decouple-20261126-180637-151/bash-expiry-replay.json)
+
+### 2026-11-23 LongDS 实施与验收
+
+1. 对应 GOAL-MOD-1 至 GOAL-MOD-3，把分散在 Service 的 Goal 请求投影、提议处理、反馈和计划联动收回模块，并让决策、历史、摘要和提交使用同一个模块绑定。清理主循环原有的独立 Goal 拼装分支。复用既有权限与工具投影，保留 Goal 启用时的动作顺序、调用 ID 和存量事实。
+2. 对应 GOAL-MOD-4 至 GOAL-MOD-5，先接通独立于 Goal 的工作区身份和恢复校验，再向 LongDS 单题入口暴露可选配置。评测报告冻结实际模块绑定。以现有 Netflix Task 3 第 1、2 轮真实请求、Goal 提议及 Bash 阶段证据做离线回放。核对同会话第二轮可用第一轮文件。反事实覆盖跨会话、过期授权、跨模式恢复、未声明 Goal 动作，以及待审 Plan 的零业务派发和同模式恢复。复用一条实际 Toolathlon 文件审批轨迹确认默认开启配置的前置审批和续接仍成立。[Netflix 第 1 轮](../../../.tmp/n3-1123/personal/turn-01.trace.json) · [Netflix 第 2 轮](../../../.tmp/n3-1123/personal/turn-02.trace.json) · [Toolathlon 按原入口审批](../../../.tmp/one-loop-ap2/report.json)
+3. 离线门禁通过后，两种装配各以一个新会话执行同一份 Netflix Task 3 前两轮英文原题。固定正式 HTTP 入口、模型、镜像、文件、预算和评分器。核对实际首请求、第二轮历史和工具回执、交付及评分，同时记录模型调用、tokens 和墙钟耗时。若出现权限放宽、工作区无法续接、关闭后仍有 Goal 专属输入，或开启路径的原契约变化，暂停关闭配置的准入。两轮验证回答装配是否可用，整题质量和成本用完整对照另行确认。
+
+### 定向验证结果
+
+离线回放使用原 Netflix Task 3 两轮的已封存状态。关闭时首请求直接声明 Bash 和文件操作，历史原话保留。未声明 Goal 调用、跨会话、跨模式、过期授权均被拒绝。Bash 命令的 Plan 步骤引用在无 Goal 时仍须校验，过期步骤的调用未派发。[离线回放](../../../.tmp/gm1123/offline.json)
+
+同一源码、模型配置、原始材料和预算下，开启与关闭各从空会话提交前两轮英文原题。关闭组全部实发请求均省略 Goal 动作、专用区块及计划中的 `goal_item_ids`，第二轮在同一容器中读到首轮的工作表。开启组继续先接纳 Goal。两组都交付并通过两轮独立评分。此次覆盖两轮装配与交付，实际未触发上下文压缩、待审 Plan 或外部审批。历史 Toolathlon 审批证据沿原运行身份查阅。[实发与结果汇总](../../../.tmp/gm1123/comparison.json) · [开启轨迹](../../../.tmp/gm1123/enabled-final/report.json) · [关闭轨迹](../../../.tmp/gm1123/disabled-final/report.json)
+
+| 模式 | 答对 / 有效评分 | 生成模型请求 | 已知生成 tokens | 生成耗时 |
+| --- | ---: | ---: | ---: | ---: |
+| 开启 | 2/2 | 20 | 415,758 | 172.0 秒 |
+| 关闭 | 2/2 | 36 | 1,191,216 | 514.5 秒 |
+
+关闭组在本次采样的前两轮调用更多、用量更高。两条独立生成轨迹的耗时和用量只反映本次采样，整题差异待独立评测。
+
 ## 统一 Conversation 主循环
 
 LongDS 与 Toolathlon 都从 `POST /api/conversation/turn` 进入同一 `ConversationService`。旧装配只对绑定独立 Python 授权的运行接入目标维护，Toolathlon 的 Redis 断点请求因此只有工具历史与计划，没有生效目标。统一后，主模型在每个用户轮次通过 `submit_goal_patch` 创建、修订或沿用目标，Journal 接纳后开放原有业务动作。已有版本化 Goal、任务选择及核验回路直接复用。固定源码依据沿用 §2 的目标装配和会话恢复对照。[LongDS 实发审计](../../../.tmp/goal-context-20261112/product-audit.json) · [Toolathlon 原请求](../../../.tmp/ta-rr/product-data/interaction_runs/irun_aa8b27330d0d4e4e/6fefe30a16f7437faab6c0cf76685563/request.json)
+
+### Goal 读取与业务动作同批
+
+旧解码器把 `read_current_goal` 列为独占动作，与 `tool_read_file` 同批时在执行前整批拒绝。Water Potability 的 Bash 与文件读取已有分开的原生工具回执，可复用相同的配对方式。Goal 读取只观察当前快照，同批业务调用使用各自已提交的参数和执行准入。[原生回执样本](../../../.tmp/script-review-calc-1123/capture/sdk/4630796754514464af44edd172e4fb7a.http.request.json)
+
+同一模型响应可包含一次 `read_current_goal` 和其他允许同批的动作。解码器在原有提议中同时保留目标读和业务调用。主循环先在当前决策写入只读 `GoalOperationRecord` 和对应处置，再将其余动作交给既有目标准入、权限和预算。恢复未完成的同一步时复用已提交的读取结果，读取计费只增加一次。主循环沿原调用顺序发送各自的 `tool` 消息。`submit_goal_patch`、澄清及受限状态仍按各自独占契约处理。
+
+验收使用一次从空会话提交的正式 HTTP 定向验证，要求读取当前 Goal 和一份已上传的只读文本。断言真实同批调用获得同一 Goal 版本和正确文件正文，两条回执按各自 ID 和原顺序进到下一次请求。另以同一协议核对读取独立使用、同一步已保存读取后的恢复和原独占操作拒绝。模型未选择同批时只按实际证据记录。撤回时恢复 Goal 读取的独占声明与原分支，现有 Journal Goal 记录结构可继续读取。
+
+2026-11-23 定向验证使用 MiniMax-M3.1-Flash，关闭独立目标和回答核验以观察主循环的回执协议。空会话的 3 次实发请求完成 Goal 创建、文件与 Goal 同批读取、正确交付验证码。下次请求按文件和 Goal 的原顺序发送两条回执，Goal 版本保持为 1。复制同一步已保存读取、尚未执行文件读取的 Journal 修订后重启服务，正式 `/resume` 只执行缺失的文件读取，工具计数从 2 到 3，1 次新模型请求完成交付。解码边界核对也通过单独读取、两种调用顺序、重复读取拒绝与维护独占。[实发报告](../../../.tmp/grb1123/live/report.json) · [恢复报告](../../../.tmp/grb1123/recovery/report.json)
+
+### Goal 读取回执的上下文渲染
+
+上述实发的第 3 次请求在 `messages[3]` 和 `messages[6]` 重复发送同一份 1,256 字节的 Goal JSON。前者提供维护状态和当前目标，后者对应同批第二个工具 `read_current_goal`。重复来自主请求把运行时状态与完整读取历史分别投影。[改动前实发](../../../.tmp/grb1123/live/sdk/e343d5524a384a8fb2e3a17b37d0eb84.http.request.json)
+
+DeepSeek Harness `4b399c39` 的基础包注册 `get_goal`。工具读取当前 Agent 的 Goal，输出层把含标识、修订和目标正文的结构化值渲染成一段紧凑 JSON。原生执行器把渲染结果按调用 ID 送入会话消息，适配器继续保留 ID 配对。本工程采用紧凑 JSON 与单条原生回执，保留本工程 Goal 的有效条目、证据和执行限制。上游 Goal 的自动续跑范围与本工程每轮维护状态不同，现有运行时区块继续提供维护状态和待澄清事项。[基础包装配](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/bundle/base/cordis.patch.yml#L463-L466) · [读取与渲染](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/goal/tool-goal/src/index.ts#L159-L205) · [原生回执](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/core/tools/src/batch.ts#L249-L263) · [PI 适配](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/llm/llm-pi-ai/src/context.ts#L34-L46)
+
+`GoalOperationRecord` 仍是读取事实，Goal 模块负责投影。同轮的完整 `read_current_goal` 回执在本次已选历史中可见、目标引用及执行限制均匹配时，运行时区块正文替换为指向该 `tool_call_id` 的版本引用。回执自身用单行 JSON 表达版本及快照，移除只用于读取回执的标题与套话。无读取、不同版本、历史被过滤或正文被截断时，运行时区块继续携带完整快照。主循环复用现有历史选择、原生配对和投影顺序。工具定义、Journal、目标维护、核验及权限契约保持原有行为。设计审查以始终省略运行时目标为反例，这会使尚未读过目标或原回执不可见的请求丢失当前约束。保留这一分支的完整投影，成本是动态 Goal 区块在出现或失去匹配回执时变化。若实发丢失当前目标或调用配对，撤回本节投影改动。
+
+验收复用上一节英文上传文本任务和 MiniMax 配置。以原实发验证旧请求重复，随后从空会话运行一次目标版本，最多 12 步、10 次工具调用、40 万 tokens。用实际请求校验读前的完整目标、同批顺序、回执为合法紧凑 JSON、读后当前快照只在回执正文出现，以及正确交付原验证码。用同一轨迹的已保存读取前后修订核对原生回执被排除和被裁剪后的投影边界。独立核验保持该定向用例原配置。结论限于传输和交付证据，模型用量和 LongDS 正确率由各自对照评测决定。
+
+定向验证完成 1 个新会话，3 次实发主模型请求，正确交付原验证码。第 3 次请求的 `messages[3]` 保留维护状态并引用 `messages[6]`，后者包含同版本完整快照。同一对消息正文前后实测为 2,777 和 1,153 字节。两次采样的目标文字有差异，字节数仅描述各自的请求。以目标试次的已保存 Journal 修订与原生回执做中英文离线投影核对，分别覆盖读取前、完整回执、回执不可见、正文被裁剪及只剩旧轮回执，共 10 项通过。离线核对在投影输入上复现裁剪后的形状。[改动后实发](../../../.tmp/goal-render-1123/target/sdk/d5e6d16881614eef8765731941d91939.http.request.json) · [定向运行](../../../.tmp/goal-render-1123/target/report.json) · [离线投影](../../../.tmp/goal-render-1123/projection.json)
+
+### Goal 修改后的整体审查技能
+
+Water Potability 第 1 轮的错误口径在 Goal 首次接纳时已经形成。只在脚本执行前读回 Goal，模型仍可能基于错误口径完成计算。用户要求在每次 Goal 写入后检查整体目标，发现偏差就用现有目标更新工具修订。[真实失败与前次候选](longds-analysis.md#脚本执行前的需求核对)
+
+新增打包技能 `review-goal-after-update`。Goal 创建或实质修改成功后，主模型在继续业务执行或交付前调用 `read_current_goal`，按用户原话和仍适用的历史检查完整快照，覆盖交付、范围、约束、验收条件及新增假设。发现偏差时单独提交 `submit_goal_patch`。补丁成功后再次读取和审查，原样沿用的 Goal 可直接继续。技能目录在工具开放时提示触发场景，正文按既有 `tool_load_skill` 回执送给模型。此流程由模型选择和执行，现有准入、配对、核验开关和持久化契约继续由原组件负责。可通过移除该打包技能撤回，已提交的 Goal 无需迁移。[技能装配](../../context/skill.md)
+
+定向验收用一个新会话，通过正式 HTTP 提交计算容量占比的英文自然请求，再修正分母。配置与前节 MiniMax 验证一致，每轮最多 12 次主决策、10 次工具调用及 40 万 tokens。检查本次技能摘要和正文实际送达、Goal 创建和改版均在交付前读回同版快照，正确答案分别为 `75.0%` 与 `60.0%`。核对原生 `tool_call_id` 配对。只有模型审查确实发现错误后所提交的修订，才计作错误纠正分支的实发样本。没有触发该分支时记录未覆盖，定向验收不用于估计语义准确率。
+
+首轮定向试次的两次写入均在交付前读回，答案正确。第 1 轮先加载脚本审查技能并创建 Artifact，第 2 轮在加载新技能的同批编辑了 Artifact。这确认了两项技能同时适用时存在加载顺序偏差。修订版在新技能发现摘要中明确优先时机，并在脚本审查技能入口引用 Goal 审查。原题和预算固定再跑一次，同时核对 Goal 读回发生在脚本写入、编辑和执行之前。[首次试次](../../../.tmp/goal-review-skill-1124/capture/report.json)
+
+修订版从新会话完成两轮，7 次实发主模型请求，耗时 27.140 秒。技能摘要和加载正文均进入实际请求。两轮分别记录 `create(1) → read(1)`、`revise(2) → read(2)`，完整回执按原调用 ID 配对。两轮均在工具业务动作和交付前读回相应版本，输出分别为 `75.0%` 和 `60.0%`。第 2 轮改版来自用户修正，模型自查发现错误后提交补丁的分支未触发。[定向复测](../../../.tmp/goal-review-skill-1124/linked/report.json) · [第 2 轮回执请求](../../../.tmp/goal-review-skill-1124/linked/sdk/577efb265be04df6a101cf6710258f1f.http.request.json)
+
+脚本技能后续收窄为读取脚本并消费上下文中的生效 Goal。上面的交叉加载行为是当时试次的设计。Goal 写入后的审查仍由当前技能目录独立发现。[脚本技能现行范围](longds-analysis.md#脚本执行前的需求核对)
 
 | 规格 | 行为与验收 |
 | --- | --- |
@@ -54,7 +154,7 @@ LongDS 与 Toolathlon 都从 `POST /api/conversation/turn` 进入同一 `Convers
 
 ### 跨轮原话引用
 
-**GOAL-EVIDENCE-1。** LongDS NYC Task 3 第 5 轮引用第 4 轮的压力表依据。相同原文先后在条目变更与任务接续的证据检查被拒，三次提交后未执行分析。本轮用户指定保留逐字引文，先查本轮用户消息，未命中则在所选任务的已绑定会话前驱中从近到远查找。每段引文必须在一条用户消息中连续存在。两边都找不到时指出具体字段和已搜索的范围，提示引用可见的原文。[原始失败](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#task-3-本-agent-停止原因)
+**GOAL-EVIDENCE-1。** LongDS NYC Task 3 第 5 轮引用第 4 轮的压力表依据。相同原文先后在条目变更与任务接续的证据检查被拒，三次提交后未执行分析。本轮用户指定保留逐字引文，先查本轮用户消息，未命中则在所选任务的已绑定会话前驱中从近到远查找。每段引文必须在一条用户消息中连续存在。两边都找不到时指出具体字段和已搜索的范围，提示引用可见的原文。[原始失败](../../problems/longds/nyc-restaurants.md#task-3-本-agent-停止原因)
 
 Application 的 Goal 准入根据 Journal 提供的任务分支验证证据，提交时沿同一规则重算。保存匹配的用户消息来源。末尾的本轮绑定继续决定仅本轮条目的适用期。多轮中出现同一原文时用最靠近当前轮的一次。条目及 continue、resume 的证据在所选任务范围内查找。引文只匹配用户原话。start、side_question 的任务选择，以及执行控制、交付方式和澄清关闭要求本轮依据。模型仍判断提议是否符合本轮意图及仍有效的要求，文字命中只证明引文存在。
 
@@ -163,7 +263,7 @@ Application 的 Goal 准入根据 Journal 提供的任务分支验证证据，�
 | GOAL-6 压缩与恢复 | 当前完整目标从 Journal 恢复后独立物化；历史压缩保留目标变化依据、用户纠正及必要近期交换；同 run 恢复复用已接受操作 | 摘要不能覆盖当前目标；缺失必要原件或绑定失败时沿原容量／恢复规则停止，不默认为已处理目标 |
 | GOAL-7 遵守目标 | 主模型以当前目标和原用户要求选择方法及交付；正确执行和工具成功不能替代用户结果，临时试算不自动变为有效要求 | 目标正确但执行或回答不符，仍计遵守失败；结构准入不签发语义通过 |
 | GOAL-8 成本与完成 | 目标往返消耗原主循环请求、tokens、工具及时间预算；本轮答案结束不清空后续仍有效的要求 | 不隐藏新增模型调用，不以预算将尽标记目标完成；目标核验按当前配置和§9.7履责，沿原完成契约交付 |
-| GOAL-9 按需读取 | 需要查看当前完整目标时可单独调用read_current_goal；每次主请求仍从Journal物化当前目标 | 回答和修复不要求新鲜读取，不因未读或较早读取拒绝；读取不修改版本，也不替代目标维护或语义核验 |
+| GOAL-9 按需读取 | 需要查看当前完整目标时可调用 `read_current_goal`，可以与其他非独占动作同批。每次主请求仍从 Journal 物化当前目标 | 回答和修复不检查读取新鲜性。读取保持版本、维护状态和语义核验状态 |
 | GOAL-10 写入前核验 | 每次合法的创建、修订、沿用提议触发一次目标定义核验；通过后才提交操作及成功回执；读取只返回当前目标 | 语义不符或必要依据不足均不生效；修订提议失败不改变当前版本，失败沿用不取得本轮维护事实 |
 | GOAL-11 按职责续接核验历史 | 目标核验只接收历次目标提议、目标判决及目标修订；回答核验只接收历次回答、回答判决及修复后回答。分别按用户轮次及原时间顺序累计，保留完整原始用户要求 | 从同一Journal筛选，只读投影不新增独立写入历史；相应历史及摘要不得串入另一职责，不只保留最新稿 |
 | GOAL-12 原话与交付权威 | 两类核验均以原用户要求为准；目标核验判断任务定义，回答核验判断实际交付，当前目标仅作为可纠正的任务依据交接 | 目标通过不表示结果已经完成，也不能豁免回答与原要求的冲突；回答核验及原 Completion 成立后才允许交付 |
@@ -197,7 +297,7 @@ Application 的 Goal 准入根据 Journal 提供的任务分支验证证据，�
 | --- | --- | --- |
 | maintain_goal | 只提交完整 `objective` 正文，不传其他业务字段、操作类型或版本引用 | 无当前目标时创建首版；否则完整修订并增版本，绑定实际当前分支及输入 |
 | retain_goal | 已有完整目标且正文无需改变，参数 {} | 保留正文及版本，记录当前轮维护成功；尚无目标时不可见 |
-| read_current_goal | 当前轮维护成功，需要查看目标时按需单独调用，参数 {} | 返回revision与完整目标；只读记录不增版本，不追加强制作答或重新读取提示 |
+| `read_current_goal` | 已有当前目标时按需调用，参数 `{}`，可与其他非独占动作同批 | 返回版本与当前有效条目，保持版本和维护状态 |
 
 Runtime 从当前 Journal 恢复完整 base 引用，绑定原操作、修订号、内容摘要及冻结用户输入；模型不复制内部版本。Service 串行消费本次请求的决定，通过原 Journal revision 冲突及不可变分支校验提交，不接受跨分支或被改写的旧操作。模型可见视图只有修订号与完整目标，修订号用于识别回执，不是需回填的参数。旧嵌套契约只由冻结历史源码解释，不在新生产路径接受或转换。
 
@@ -423,6 +523,8 @@ gm635 已结束并封存：8 次主请求、159,129 tokens、未知 0、84.391 �
 
 ### 9.4 回答前读取当前目标的接入与验证
 
+本节记录当时的强制读取和独占规则。现行规则见 §9.8 和[Goal 读取与业务动作同批](#goal-读取与业务动作同批)。
+
 2026-10-31 用户明确要求新增读取目标工具、Runtime 强制回答前调用，返回完整目标后提示“现在请按照目标回答用户问题。”。改动为产品协议扩展：责任仍在独立 Python direct 分析的 Conversation 主循环，原正式 HTTP → 生产装配 → 真实主模型 → Journal／执行 → 最终交付保持，criteria、claims 与独立核验继续关闭。依据为 gm637 两份正式失败的完整请求与实际 SDK 顺序，以及 §9.3 的同轨迹诊断；归档 `.tmp/gm638/baseline-input.json`。读取工具缺失和原目标区后仍有多组执行结果已确认；位置与语义失败的唯一因果未确认，本轮不主张该工具保证理解正确。
 
 沿现行架构，`goal_models` 定义空参数读取提议，原成功事实统一命名为 `GoalOperationRecord`；`goal_maintenance` 拥有当前目标恢复、读取准入和答复门禁；`model_actions` 导出、解析独占读取；Service 只分派并同次提交控制回执；Journal 保持唯一写入口，原生历史从该事实渲染回执。原操作序列新增 `read`，复用当前目标引用和只读快照、原 call ID、主调用序号及冻结输入绑定。读取与 retain 一样不得改变已有内容、引用或修订号，但读取不能替代每轮维护。是否能回答由本轮读取事实、当前目标引用与紧邻主调用关系推导，不新增独立布尔状态或目标库。
@@ -503,6 +605,8 @@ Conversation继续拥有本轮问题和提交稿，核验器拥有语义判决�
 本轮合计40次物理／2,067,513已知tokens／未知0，其中阶段4次26,015、正式生成34次2,030,413、独立评分2次11,085。原账本累计166次／7,399,055已知tokens，生成及诊断7,313,319、评分85,736，旧未知1保留，额度未超。保留用户要求的历史机制和已成立输入边界，停止语义准入及自动补采；整体要求遵循、核验漏放和实际修复未验收。压缩、故障恢复及英文模型语义未触发或未验证，不以本组外推；不接claim或来源核验，不运行单元测试。
 
 ### 9.8 移除回答前强制读取并重新验证
+
+本节保留当时移除强制读取的范围。读取的同批契约见[Goal 读取与业务动作同批](#goal-读取与业务动作同批)。
 
 2026-11-02 用户明确要求移除强制goal读取及相关Prompt后重新执行。本次是已有协议的产品行为变更，依据为gv641第三问的完整真实请求、核验失败反馈和第9／10次主决策：目标已维护，完整目标仍在每次主请求中，两个答复仅因没有紧邻读取被goal_read_required拒绝。这证明强制读取是本轮闭环的实际阻断，不证明移除后答案一定正确。第二问漏放、第三问改写仍有条件冲突是独立语义问题，本次不修改判据或评分来掩盖。
 
@@ -1205,6 +1309,26 @@ Product E2E 从正式 HTTP 空会话和新主体连续跑原 task2 全部34轮�
 继续完成独立的确定性输入审计、已正常交付十轮的原独立评分、无效分支清理和工程检查。封存只依据真实SDK、Journal和OS启动记录补记采集终态，不制造第十一轮HTTP响应或用户答案。审计区分已提交回执、已解码未提交回执及后继未到达；生成实际停止前后的代码身份分别保存。原34轮全量验证未完成，不以局部压缩通过或内部审计替代全任务完成，也不因外部中断撤销压缩后真实交付的局部证据。
 
 本轮闭环状态：已完成上述行为保持清理与独立评分，冻结生成版本的56次主请求审计和清理后11个真实阶段投影对照均已执行。保留完整交互压缩与反馈保留的局部证据；候选范围解释仍有错误，完整34轮验证未完成。源码、原分、外部中断、费用及未触发分支统一见记录§39，不再将本次列为正在运行。
+
+#### 达压后先裁剪历史工具回执
+
+11 月 23 日 Marathon 记录了三次自然达压并调用摘要，均无裁剪生效。第 69、100、127 轮摘要前，历史 `submit_goal_patch` 回执占工具正文字符的 79%、93%、93%。例如第 127 轮实际请求中，消息索引 199 是配对的 `tool`，先报告 `This call revised the goal.`，再附完整的 `Execution goal revision 99`。旧版本还在各自的回执里，当前有效目标另有完整投影。Bash 的 stdout、stderr 与退出状态同样通过原生回执传入，三次达压请求均只暴露各自步骤可用的工具，未暴露 `read_file`。原先绑定读取能力的裁剪无法处理这两类正文。[Marathon 证据](../../problems/marathon/marathon-0.md) · [第 127 轮摘要前实发请求](../../../.tmp/marathon-20261123-run/personal/sdk/97c94cf114654c49b890810971e20af2.http.request.json)
+
+| 需求 | 候选行为及防护 |
+| --- | --- |
+| HP-1 达压重测 | 采用 DeepSeek Harness 的裁剪、重测、再决定是否摘要的顺序及 8,192／4,096／1,024 Unicode 码点参数。若没有合格结果或重测未降至阈值以下，以原安全前缀摘要为后续出口。硬容量和摘要次数仍由既有主决策流程控制。 |
+| HP-2 裁剪模型可见正文 | 扫描当前任务可见的已结算历史工具回执，含 Bash、历史目标快照和文件结果。跳过最近两次已结算主决策，保护拒绝与修复反馈、未结算结果以及承载当前工作计划的回执。超限正文保留首尾并显示省略量，原生调用 ID、顺序和配对保留，已发布的文件定位随原回执发送。当前有效目标和用户原话仍由原有输入区块完整提供。 |
+| HP-3 保留原始事实 | 裁剪只改变历史回执的展示文本。Journal 和 Artifact 保留完整回执、目标修订、状态、精确读窗和原件；冻结请求仍从自身保存的内容恢复。既有文件读取与授权继续由原能力处理，裁剪本身不提供新读取路径。 |
+
+Conversation Service 沿原入口计量、提交裁剪边界和选摘要分支。历史投影在可见性和配对判定后缩短回执文本，复用 Provider 整包计量和 Journal 记录的 run／step 边界。DeepSeek 按当前可见回执的文本做同类裁剪。本工程保留近期决定和上述业务反馈保护，以便当前决策用到的完整事实继续可见。删除要求当步文件工具可用的旧裁剪分支和按工具类型重写 payload 的逻辑。完整请求严格缩小才应用裁剪。重测仍达压时，摘要继续从原始交互生成。回撤时仅恢复历史展示规则。 [DeepSeek 达压流程](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/compaction/compaction-basic/src/index.ts#L355-L382) · [DeepSeek 裁剪判据](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/compaction/compaction-tool-result-pruner/src/index.ts#L63-L181)
+
+**预声明验收。** 固定 Marathon 第 69／100／127 轮首次摘要前的主决策阶段，以 Journal 历史和封存请求为依据，按同一 MiniMax 容量档各重放一次。用前一步实际请求锚定阶段压力。若阶段记录未保留达压但未发送的原始候选，则以原驱动入口重建并明确记录。断言超限的旧 Bash 和目标回执各至少有一条被裁剪，消息顺序和调用配对不变化，近期决定和当前目标保持，估算严格减少，三个达压样本中至少一个直接走主决策。以第 69 轮已发的摘要前主请求核对未达压反事实。局部机制用离线重放，真实模型消费和完整会话得分分开记录，原 Marathon 归档不改分。发现投影破坏当前事实或协议时撤回本节扩围。
+
+**11 月 21 日诊断结果。** LongDS 11 月 20 日封存的 250 份主请求按原签名回读，当前口径的峰值压力为 491,510／800,000。指定样本有 9 条超过 8,192 码点且指向 Artifact 的读窗口，压力为 458,828。11 月 19 日归档的 175 份主请求按现行口径最高为 189,319／800,000，当时的 7 次摘要保留其历史身份。Toolathlon 首次摘要前的原重建输入为 765,484，低于按该容量计算的现行阈值 800,000，归档缺少可匹配的现行服务方锚点。三份来源尚未提供同一请求同时达压且可裁剪的依据。 [诊断脚本](../../../.tmp/history-pressure-tool-pruning-20261121/inspect_pressure.py) · [诊断报告](../../../.tmp/history-pressure-tool-pruning-20261121/report.json)
+
+**实施与阶段重放。** 新版已接入主决策。用 Marathon 封存的 Journal 修订重建达压后待发送的完整请求，复用原模型容量配置。第 69／100／127 轮压力估计分别从 808,052／805,294／808,796 降到 415,503／335,650／262,690 tokens，均低于 800,000，沿主决策直接出站的分支继续。共缩短 28 条 Bash 回执和 114 条历史目标回执，请求中的非回执消息、工具定义、回执顺序、调用 ID 及最近两次决定保持一致。第 69 轮未达压的对照阶段保留完整回执，Journal 未登记裁剪。原运行的摘要与 Marathon 成绩保持其历史身份。[重放报告](../../../.tmp/marathon-pressure-pruning-replay/report.json)
+
+**真实模型消费。** 第 69 轮的完整裁剪请求送往原 MiniMax 路由时，服务方返回 HTTP 429，原因是 Token Plan 用量上限。未取得模型答复，本次证据范围为确定性投影、整包计量和分支选择。
 
 ### 9.21 系统中断后的 task2 完整验证重新执行
 

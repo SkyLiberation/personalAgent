@@ -1,12 +1,16 @@
 """Native model exchanges projected from the run's canonical decision facts."""
+from bisect import bisect_left
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import json
+from typing import Any
 
 from personal_agent.capabilities.contracts.model import (
-    ModelAssistantMessage, ModelHistoryEntry, ModelRuntimeFeedback, ModelToolExchange, ModelToolResult, StructuredModelResponse,
+    ModelAssistantMessage, ModelHistoryEntry, ModelRuntimeFeedback, ModelToolExchange, ModelToolResult,
+    ModelUserHistoryMessage, StructuredModelResponse,
 )
 from personal_agent.kernel.prompt_registry import PromptCatalog
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from personal_agent.kernel.prompts import DEFAULT_PROMPTS
 
 from .artifact_sources import tool_result_artifact_refs
@@ -14,6 +18,8 @@ from .interaction_projection import ProjectedInteractionInput, render_interactio
 from .analysis_tasks import AnalysisTaskHistory, task_message_indices, task_switch_turn
 from .errors import ConversationOperationConflict
 from .history_models import HistoryCompactionCheckpoint, HistoryItemKey
+from .history_tool_pruning import prune_history_tool_result
+from .skills import LOAD_SKILL_CAPABILITY, LoadedSkill
 from .goal_maintenance import goal_tool_result
 from .goal_models import GOAL_PENDING_ACTION_REJECTED
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY
@@ -191,10 +197,19 @@ def _paired_rejection_content(
         prompts=prompts, submitted_arguments=_submitted_arguments(assistant, call_id, rejection.action_name))
 
 
+def _successful_skill_name(item: ProjectedInteractionInput | None) -> str | None:
+    observation = item.observation if item is not None else None
+    if (isinstance(observation, ActionObservation) and observation.capability_id == LOAD_SKILL_CAPABILITY
+            and observation.status == "succeeded"):
+        return LoadedSkill.model_validate(observation.payload.get("data")).name
+    return None
+
+
 def project_model_history(
     trace: InteractionTrace, visible: Sequence[ProjectedInteractionInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, covered_through: int = 0,
     working_plan: ConversationWorkingPlan | None = None,
+    prune_through: int = 0,
 ) -> tuple[tuple[ModelHistoryEntry, ...], tuple[ProjectedInteractionInput, ...], bool]:
     """Use only already materialized/visible facts, never raw tool payloads."""
     keyed = {input_identity(item.observation): item for item in visible
@@ -207,8 +222,19 @@ def project_model_history(
     emitted_turns: set[int] = set()
     current_plan_visible = False
     switch_turn = task_switch_turn(trace)
+    steering = iter(trace.steering)
+    supplement = next(steering, None)
+    last_skill_name: str | None = None
+    consecutive_skill_loads = 0
     for record in trace.model_decisions:
-        if record.step_no is None or not record.consumed:
+        if record.step_no is None:
+            continue
+        while supplement is not None and supplement.after_step < record.step_no:
+            exchanges.append(ModelUserHistoryMessage(user_text=supplement.text))
+            supplement = next(steering, None)
+            last_skill_name = None
+            consecutive_skill_loads = 0
+        if not record.consumed:
             continue
         if record.step_no <= switch_turn:
             consumed.update(input_identity(trace.inputs[index])
@@ -224,6 +250,8 @@ def project_model_history(
         if not keys <= keyed.keys():
             # A visibility/selection boundary removes the whole exchange, never
             # recovers its hidden result from the raw Journal.
+            last_skill_name = None
+            consecutive_skill_loads = 0
             continue
         if goal_pending_rejection(trace, record) is not None:
             rejected_key = record.blocked_by
@@ -231,19 +259,34 @@ def project_model_history(
                 exchanges.append(ModelRuntimeFeedback(
                     feedback=render_interaction_input(keyed[rejected_key], prompts=prompts)))
                 consumed.add(rejected_key)
+                last_skill_name = None
+                consecutive_skill_loads = 0
                 continue
         dispositions = {item.call_id: item for item in record.dispositions}
+        prune_results = record.step_no <= prune_through
         results = []
+        skill_notices = []
         for call_id in record.assistant.call_ids:
             own_keys = {input_identity(trace.inputs[index]) for index in indices
                         if trace.inputs[index].action_id == call_id}
             candidates = [item for item in visible if input_identity(item.observation) in own_keys]
-            if candidates:
-                item = candidates[-1]
+            item = candidates[-1] if candidates else None
+            skill_name = _successful_skill_name(item)
+            if skill_name != last_skill_name:
+                last_skill_name = skill_name
+                consecutive_skill_loads = 0
+            if skill_name is not None:
+                consecutive_skill_loads += 1
+                if consecutive_skill_loads in (3, 5, 8):
+                    skill_notices.append(prompts.render("skills.repeat_notice", skill_name=skill_name,
+                                                       count=consecutive_skill_loads))
+            if item is not None:
                 content = (_paired_rejection_content(item.observation, record.assistant, call_id, prompts)
                            if isinstance(item.observation, DecisionFeedback)
                            else render_interaction_input(item, prompts=prompts, native_tool_result=True))
                 if isinstance(item.observation, ActionObservation):
+                    if prune_results and item.observation.status in {"succeeded", "failed", "cancelled"}:
+                        content = prune_history_tool_result(content, prompts=prompts)
                     materials = (render_interaction_input(artifacts[ref], prompts=prompts)
                                  for ref in published.get(call_id, ()) if ref in artifacts)
                     content = "\n\n".join((content, *materials))
@@ -251,10 +294,12 @@ def project_model_history(
                 consumed.add(input_identity(item.observation))
             elif call_id in dispositions:
                 disposition = dispositions[call_id]
-                results.append(ModelToolResult(call_id=call_id,
-                    content=_disposition_content(disposition, prompts, trace, record.step_no)))
-                if working_plan is not None and disposition.working_plan_snapshot == working_plan:
-                    current_plan_visible = True
+                content = _disposition_content(disposition, prompts, trace, record.step_no)
+                shows_current_plan = working_plan is not None and disposition.working_plan_snapshot == working_plan
+                if prune_results and disposition.status == "accepted" and not shows_current_plan:
+                    content = prune_history_tool_result(content, prompts=prompts)
+                results.append(ModelToolResult(call_id=call_id, content=content))
+                current_plan_visible |= shows_current_plan
             elif any(item.action_id == call_id for item in trace.accepted_tool_requests):
                 raise ConversationOperationConflict("原生工具调用仍缺少已接受执行的恢复结果")
             elif record.blocked_by is not None and record.blocked_by in keyed:
@@ -272,9 +317,12 @@ def project_model_history(
         feedback = tuple(keyed[key] for index in indices
                          if (key := input_identity(trace.inputs[index])) not in consumed)
         exchanges.append(ModelToolExchange(assistant=record.assistant, results=tuple(results),
-            runtime_feedback=tuple(render_interaction_input(item, prompts=prompts) for item in feedback)))
+            runtime_feedback=(*(render_interaction_input(item, prompts=prompts) for item in feedback), *skill_notices)))
         emitted_turns.add(record.step_no)
         consumed.update(input_identity(item.observation) for item in feedback)
+    if supplement is not None:
+        exchanges.append(ModelUserHistoryMessage(user_text=supplement.text))
+        exchanges.extend(ModelUserHistoryMessage(user_text=item.text) for item in steering)
     # A submission records the answer decoded from its original decision.
     # Omit its second rendering only when that Run's original exchange is visible.
     remaining = tuple(
@@ -298,7 +346,10 @@ def prior_analysis_turns(
 def selected_analysis_turns(
     trace: InteractionTrace, candidates: Sequence[InteractionTrace],
 ) -> tuple[InteractionTrace, ...]:
-    return AnalysisTaskHistory.from_turns(prior_analysis_turns(trace, candidates)).selected_turns(trace)
+    previous = prior_analysis_turns(trace, candidates)
+    if trace.goal_mode is ConversationGoalMode.DISABLED:
+        return previous
+    return AnalysisTaskHistory.from_turns(previous).selected_turns(trace)
 
 
 def _observation_lookup_key(item: ProjectedInteractionInput) -> tuple[str, str]:
@@ -312,6 +363,7 @@ def project_conversation_history(
     trace: InteractionTrace, previous: Sequence[InteractionTrace], visible: Sequence[ProjectedInteractionInput],
     *, prompts: PromptCatalog = DEFAULT_PROMPTS, candidate: HistoryCompactionCheckpoint | None = None,
     working_plan: ConversationWorkingPlan | None = None,
+    tool_pruning: Mapping[str, int] | None = None,
 ) -> tuple[tuple[ModelHistoryEntry, ...], tuple[ProjectedInteractionInput, ...], bool]:
     """Place prior complete exchanges before their displayed final answer."""
     exchanges: list[ModelHistoryEntry] = []
@@ -319,6 +371,7 @@ def project_conversation_history(
     predecessor_plan_visible = False
     checkpoint = candidate or active_history_checkpoint(trace, previous)
     coverage = {item.run_ref: item.through_turn for item in checkpoint.sources} if checkpoint else {}
+    pruning = tool_pruning or {}
     indices = task_message_indices(trace, previous)
     for source in previous:
         # These Runtime facts are from an already scoped, exact predecessor.
@@ -332,7 +385,8 @@ def project_conversation_history(
                                if not is_runtime_feedback(item.observation))
         history, projected, plan_visible = project_model_history(
             source, (*source_visible, *feedback), prompts=prompts,
-            covered_through=coverage.get(source.interaction_run_ref, 0), working_plan=working_plan)
+            covered_through=coverage.get(source.interaction_run_ref, 0), working_plan=working_plan,
+            prune_through=pruning.get(source.interaction_run_ref, 0))
         predecessor_plan_visible |= plan_visible
         history = _with_prefix_summary(history, source.interaction_run_ref, checkpoint, prompts)
         by_observation: dict[tuple[str, str], list[ProjectedInteractionInput]] = defaultdict(list)
@@ -346,9 +400,54 @@ def project_conversation_history(
         position = indices.index(len(source.messages)) + 1
         exchanges.extend(item.model_copy(update={"before_message_index": position}) for item in history)
     history, remaining, plan_visible = project_model_history(trace, remaining, prompts=prompts,
-        covered_through=coverage.get(trace.interaction_run_ref, 0), working_plan=working_plan)
+        covered_through=coverage.get(trace.interaction_run_ref, 0), working_plan=working_plan,
+        prune_through=pruning.get(trace.interaction_run_ref, 0))
     history = _with_prefix_summary(history, trace.interaction_run_ref, checkpoint, prompts)
     return (*exchanges, *history), remaining, plan_visible or predecessor_plan_visible
+
+
+def _delivered_native_answer(trace: InteractionTrace) -> ModelAssistantMessage | None:
+    final = trace.final_message
+    if final is None or final.disposition != "answer":
+        return None
+    submission = next((item for item in reversed(trace.inputs) if isinstance(item, SubmittedFinal)), None)
+    if submission is None or submission.final != final:
+        return None
+    assistant = next((record.assistant for record in trace.model_decisions
+                      if record.step_no == submission.resource_ref.revision), None)
+    if assistant is None or assistant.call_ids or assistant.visible_text != final.message:
+        return None
+    return assistant
+
+
+def omit_replayed_delivered_answers(
+    trace: InteractionTrace, previous: Sequence[InteractionTrace],
+    messages: list[dict[str, Any]], history: tuple[ModelHistoryEntry, ...],
+) -> tuple[list[dict[str, Any]], tuple[ModelHistoryEntry, ...]]:
+    """Keep one visible delivered answer, preferring its original native message."""
+    positions = {index: position for position, index in enumerate(task_message_indices(trace, previous), 1)}
+    delivered_answers: dict[int, ModelAssistantMessage] = {}
+    for source in previous:
+        assistant = _delivered_native_answer(source)
+        position = positions[len(source.messages)]
+        if assistant is not None and messages[position] == {"role": "assistant", "content": assistant.visible_text}:
+            delivered_answers[position] = assistant
+
+    # A summary or visibility filter can remove the native exchange before this merge.
+    omitted = {position for exchange in history if isinstance(exchange, ModelToolExchange)
+               and (position := exchange.before_message_index) is not None
+               and delivered_answers.get(position) == exchange.assistant}
+    if not omitted:
+        return messages, history
+
+    ordered_omitted = sorted(omitted)
+    projected_messages = [message for position, message in enumerate(messages) if position not in omitted]
+    projected_history = tuple(
+        exchange.model_copy(update={"before_message_index": position - bisect_left(ordered_omitted, position)})
+        if (position := exchange.before_message_index) is not None else exchange
+        for exchange in history
+    )
+    return projected_messages, projected_history
 
 
 def history_summary_context(checkpoint: HistoryCompactionCheckpoint, prompts: PromptCatalog) -> str:

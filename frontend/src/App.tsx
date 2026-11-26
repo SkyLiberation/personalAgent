@@ -15,6 +15,7 @@ import {
   retryGraphSync,
   setApiKey,
   setInvestigationProjectPaused,
+  steerConversationTurn,
   streamConversationTurn,
   submitReviewFeedback,
   uploadEntryFile,
@@ -81,6 +82,7 @@ type TimelineEvent = {
 };
 
 type AskHistoryView = AskHistoryItem & {
+  supplements?: { client_request_id: string; text: string }[];
   status: "streaming" | "pending" | "done" | "error";
   error?: string;
   steps?: ExecutionStep[];
@@ -98,6 +100,7 @@ type ConversationAttempt = {
   request: ConversationTurnRequest;
   item: AskHistoryView;
   turnId?: string;
+  pendingSupplement?: { client_request_id: string; text: string };
 };
 
 type SessionSummary = {
@@ -120,6 +123,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
   const [activeTab, setActiveTab] = useState<TabId>("ask");
   const [question, setQuestion] = useState("");
+  const [isSteering, setIsSteering] = useState(false);
   const [notes, setNotes] = useState<Note[]>([]);
   const [digest, setDigest] = useState<DigestResponse | null>(null);
   const [status, setStatus] = useState("Agent 正在准备中。");
@@ -145,6 +149,7 @@ export default function App() {
   const conversationAttemptsRef = useRef(new Map<string, ConversationAttempt>());
   const conversationKey = conversationSessionKey(userId, sessionId);
   const currentAttempt = conversationAttemptsRef.current.get(conversationKey);
+  const canSteer = Boolean(currentAttempt?.turnId && currentAttempt.item.status === "streaming");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Tracks the session the user is actually viewing, so a refresh that started
   // before a session switch can't clobber the newly-opened session's thread.
@@ -355,8 +360,12 @@ export default function App() {
 
   function onEntry(event: FormEvent) {
     event.preventDefault();
-    if (isUploading || conversationStreamRef.current || conversationAttemptsRef.current.has(conversationKey)) return;
     const text = question.trim();
+    if (canSteer && currentAttempt?.turnId && conversationStreamRef.current) {
+      if (text && !isSteering && !pendingFile) void sendSteering(currentAttempt, currentAttempt.turnId, text);
+      return;
+    }
+    if (isUploading || conversationStreamRef.current || conversationAttemptsRef.current.has(conversationKey)) return;
 
     if (pendingFile) {
       void submitFileWithText(pendingFile, text || undefined);
@@ -380,6 +389,34 @@ export default function App() {
     setSelectedAskId(item.id);
     setAskHistory((current) => [item, ...current].slice(0, 20));
     void runConversation(attempt);
+  }
+
+  async function sendSteering(attempt: ConversationAttempt, turnId: string, text: string) {
+    const supplement = attempt.pendingSupplement?.text === text
+      ? attempt.pendingSupplement
+      : { client_request_id: crypto.randomUUID(), text };
+    attempt.pendingSupplement = supplement;
+    setIsSteering(true);
+    try {
+      await steerConversationTurn(turnId, attempt.request.session_id, {
+        ...supplement, user_id: attempt.request.user_id,
+      });
+      attempt.pendingSupplement = undefined;
+      attempt.item = { ...attempt.item, supplements: [...(attempt.item.supplements ?? []), supplement] };
+      const replace = (items: AskHistoryView[]) => items.map((item) => item.id === attempt.item.id ? attempt.item : item);
+      setAskHistory(replace);
+      setAllAskHistory(replace);
+      if (activeSessionRef.current === attempt.request.session_id) {
+        setQuestion((draft) => draft.trim() === text ? "" : draft);
+        if (attempt.item.status === "streaming") setStatus("已提交补充指令，等待当前轮接续。");
+      }
+    } catch (error) {
+      if (activeSessionRef.current === attempt.request.session_id) {
+        setStatus(error instanceof Error ? error.message : "暂时无法提交补充指令。");
+      }
+    } finally {
+      setIsSteering(false);
+    }
   }
 
   async function runConversation(attempt: ConversationAttempt, resumeTurnId?: string) {
@@ -767,6 +804,9 @@ export default function App() {
                             <time>{formatDateTime(item.created_at)}</time>
                           </div>
                           <p>{item.question}</p>
+                          {item.supplements?.map((supplement) => (
+                            <p key={supplement.client_request_id}><strong>补充指令</strong> {supplement.text}</p>
+                          ))}
                         </article>
 
                         <article className="chat-bubble chat-bubble-agent">
@@ -971,7 +1011,7 @@ export default function App() {
                   <textarea
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="提问、记录想法、粘贴链接，或直接上传文件..."
+                    placeholder={canSteer ? "给当前轮补充指令..." : "提问、记录想法、粘贴链接，或直接上传文件..."}
                     rows={3}
                   />
                   <div className="ask-composer-actions">
@@ -979,7 +1019,7 @@ export default function App() {
                     <button
                       type="button"
                       className="secondary-button"
-                      disabled={isUploading}
+                      disabled={isUploading || canSteer}
                       onClick={() => fileInputRef.current?.click()}
                     >
                       {isUploading ? "上传中..." : "上传文件"}
@@ -994,7 +1034,10 @@ export default function App() {
                         ) : null}
                       </>
                     ) : null}
-                    <button type="submit" disabled={Boolean(currentAttempt) || isUploading}>发送</button>
+                    <button type="submit" disabled={isUploading || isSteering || (currentAttempt
+                      ? !canSteer || !question.trim() || Boolean(pendingFile) : false)}>
+                      {canSteer ? "补充指令" : "发送"}
+                    </button>
                   </div>
                 </form>
                 </div>

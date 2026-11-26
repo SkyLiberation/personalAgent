@@ -14,6 +14,9 @@ from urllib.request import Request, urlopen
 from personal_agent.kernel.config_models import MCPServerConfig
 
 
+_MAX_TOOL_LIST_PAGES = 64
+
+
 class MCPError(RuntimeError):
     """Transport or protocol error returned by an MCP server."""
 
@@ -53,10 +56,7 @@ class MCPJsonRpcClient:
 
     def list_tools(self) -> list[MCPToolDefinition]:
         self._ensure_initialized()
-        result = self._request("tools/list", {})
-        tools = result.get("tools", [])
-        if not isinstance(tools, list):
-            raise MCPError(f"MCP server {self.server_id} returned invalid tools/list payload.")
+        tools = self._list_tool_entries()
         definitions: list[MCPToolDefinition] = []
         for item in tools:
             if not isinstance(item, dict):
@@ -74,6 +74,27 @@ class MCPJsonRpcClient:
                 raw=item,
             ))
         return definitions
+
+    def _list_tool_entries(self) -> list[Any]:
+        entries: list[Any] = []
+        seen_cursors: set[str] = set()
+        params: dict[str, str] = {}
+        for _ in range(_MAX_TOOL_LIST_PAGES):
+            result = self._request("tools/list", params)
+            page = result.get("tools")
+            if not isinstance(page, list):
+                raise MCPError(f"MCP server {self.server_id} returned invalid tools/list payload.")
+            entries.extend(page)
+            if "nextCursor" not in result:
+                return entries
+            cursor = result["nextCursor"]
+            if not isinstance(cursor, str):
+                raise MCPError(f"MCP server {self.server_id} returned invalid tools/list nextCursor.")
+            if cursor in seen_cursors:
+                raise MCPError(f"MCP server {self.server_id} returned a repeated tools/list cursor.")
+            seen_cursors.add(cursor)
+            params = {"cursor": cursor}
+        raise MCPError(f"MCP server {self.server_id} exceeded {_MAX_TOOL_LIST_PAGES} tools/list pages.")
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self._ensure_initialized()

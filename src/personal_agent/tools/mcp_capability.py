@@ -190,7 +190,6 @@ def _local_tool_capability_shape(
         "capture_text": (("capture", "knowledge_lifecycle"), ("text", "claim", "note"), ("ingest", "create"), 1),
         "capture_url": (("capture", "web"), ("url", "web_page", "artifact"), ("read",), 1),
         "capture_upload": (("capture", "artifact"), ("file", "artifact"), ("ingest", "create"), 1),
-        "inspect_artifact": (("capture", "artifact"), ("file", "artifact"), ("read",), 1),
         "verify_interaction_draft": (("verification",), ("draft", "evidence"), ("verify",), 1),
         "graph_search": (("local_memory", "graph"), ("note", "claim", "relation"), ("search", "read"), 1),
         "web_search": (("web", "docs"), ("web_page",), ("search", "read"), 2),

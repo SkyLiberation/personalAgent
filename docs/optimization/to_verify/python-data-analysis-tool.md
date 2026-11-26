@@ -2,14 +2,34 @@
 
 ## Bash 替换脚本执行工具
 
+当前 Bash 使用 Linux 本机 `bwrap` 执行。工作区、进程生命周期和部署契约见 [ADR 0056](../../adr/0056-bash-workspace.md#linux-原生沙箱迁移)。本文的 Docker 容器复用和对应验证保留历史身份。
+
 2026-11-17 决定。GDP 第 9、10、12、13、16 步反复抄错输入文件的会话目录名，Python 进程尚未启动，模型累计消耗 101.4 秒。本轮用模型可见的 `bash` 取代 `execute_python` 及 `input_files`，支持在同一现有隔离容器执行普通 shell 命令。[原始运行报告](../../../.tmp/execution-input-removal-20261116/gdp/gdp-cr5-analysis/personal/report.json)
 
 | 需求 | 设计和通过条件 |
 | --- | --- |
 | BASH-1 唯一工具 | 相同会话授权装配 `bash`。模型提交命令和用途说明，默认工作目录为容器内 `/workspace`。允许相对的子目录作为单次命令工作目录。正式主请求只声明这一脚本工具，Toolathlon 和 LongDS 复用共用 HTTP 入口。 |
-| BASH-2 输入和隔离 | Journal 在接受调用时从当前任务可读的 Artifact 引用冻结工作区。工具卸载文件沿用回执中的相对路径，用户附件用 `attachments/` 下的可发现文件。容器只读挂载该快照，沿用非 root、限额和临时 scratch。网络默认关闭，按[部署许可](../../adr/0056-bash-workspace.md)显式绑定时使用任务网关网络。命令、快照输入版本及摘要绑定原 Journal 生命周期。 |
+| BASH-2 输入和隔离 | Journal 按[工作区输入契约](#任务工作区的内容边界)冻结当前任务的只读输入。用户附件用 `attachments/` 下的可发现文件。容器只读挂载该快照，沿用非 root、限额和临时 scratch。网络默认关闭，按[部署许可](../../adr/0056-bash-workspace.md)显式绑定时使用任务网关网络。命令、快照输入版本及摘要绑定原 Journal 生命周期。 |
 | BASH-3 结果 | 模型通过原生工具回执消费 stdout、stderr、退出码及超时状态。进程返回非零时保留原 stderr。错误如实来自实际执行或既有运行时准入。原 Artifact 保存确切命令、输入清单和双流。宿主缓存使用短文件名，容器保留原工作区相对路径，未知执行沿原身份恢复。 |
 | BASH-4 共享工作区 | 部署可在会话许可中绑定已启用的 MCP Server 和对应 Docker 卷子目录。该目录是命令工作区与可写交付位置。独立的冻结快照挂载在 `/run/personal-agent-inputs`，工具说明按实际装配提供两个路径。Toolathlon 的准备与验收由 [MCP 接入 Spec](../../mcpDesign/README.md#可比的执行环境)维护。 |
+
+**BASH-3 输出预览修复。** LongDS Task 3 第 34 轮两条命令均以 `0` 退出，stdout 已保存。模型回执却在预览路径调用已移除的 `_read`，两次均靠续读 Artifact 取得结果。DeepSeek Harness 直接以捕获的 stdout 和 stderr 渲染普通回执。本 Agent 的新执行同样使用已捕获的双流生成预览，已有回执重放从引用的不可变 Artifact 读取同一双流。Artifact owner 校验身份和内容，执行结果在原捕获边界限长。复用原 Bash 回执格式与预览上限。[第 34 轮实发轨迹](../../../.tmp/nyc3u-1120/c/turn-34.trace.json) · [Harness Bash 渲染](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/shell/tool-bash/src/render.ts#L28-L68)
+
+定向验收从同一次 Task 3 的封存记录回放第 34 轮 149 字节短 stdout、7,265 字节长 stdout，以及同次真实非零退出。逐例核对捕获双流、原回执和模型工具消息。正常输出直接形成预览，恢复读取原件得到相同正文，保留真实退出码、stderr 和适用的截断标记。回放各执行一次，复用已捕获的真实结果，零新模型请求和沙箱派发。
+
+当时的三份回放均通过。按当时的预览契约，短 stdout 完整显示，长 stdout 返回前 4,000 字符和截断标记，非零退出保留原 stderr 和退出码。直接渲染无额外 Artifact 读取，恢复经正式 Bash 工具返回相同正文。[历史回放结果](../../../.tmp/nyc3-bash-preview-20261120/report.json)
+
+### Bash 双流尾部预览
+
+2026-11-22 决定。Netflix Task 2 第 2 轮完成的 Bash 命令产生 4,213 字节 stdout。实发请求只收到前 4,000 字符，缺少输出末尾的 `relax top8:` 汇总。完整文件在同一会话可读，但当轮未读取。此证据确认了输入缺项，整题失分原因仍按原答复和评分独立判断。[原请求](../../../.tmp/netflix-task2-20261122/personal/sdk/10c7c7cc82ff45699cfa63cd77ec09f8.http.request.json) · [输出原件](../../../.tmp/netflix-task2-20261122/personal/server-data/generated_artifacts/artg_3ccf3f838a68bf55d0158f43de57088f.bin)
+
+采用 DeepSeek Harness `2e39e704` 的每流 64,000 字节尾部窗口。Bash 执行服务对已捕获的有效 UTF-8 stdout 和 stderr 分别保留不超过 64,000 字节的连续尾部。在窗口起点跳过被切断的 UTF-8 码点，短流全文返回。继续复用现有 Bash 回执字段、截断标记、退出状态和可读 Artifact 定位。Conversation 接收已由 Bash 限长的 typed 回执，直接按其格式投影。普通工具的 50 KiB 外置契约和完整请求的上下文容量检查继续按现有边界执行。把 Bash 再送入普通回执限长会替换其结构并失去尾部，因此在入口保留这一已限长结果。历史保存的回执继续按其原字段渲染。恢复已完成命令时，从原 Artifact 读取并生成当前预览。[Harness 执行器](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/shell/bash-local/src/index.ts) · [回执显示契约](../../context/tool.md#1-触发条件)
+
+先用原 Netflix 第 2 轮回执完成离线反事实，要求新模型工具消息包含原 4,213 字节 stdout 及最后一行，原调用仍绑定同一回执。回放另覆盖已封存的 149 字节 stdout、7,265 字节 stdout 和非零退出，比较直接执行的结果投影与已结算读取。用受控字节样本补验双流恰好 64,000 字节和超限、多字节码点跨窗口、UTF-8 无效及超过普通回执上限仍可呈现 Bash 尾部。离线回放零真实模型请求。随后从空会话经正式 HTTP 入口重跑本 Agent 的 34 轮英文原题一次，使用原件、镜像、模型、1.5 亿生成额度和同资格独立评分器。按正式终态封存，记录真实工具消息、交付、评分、用量和压缩事件。DeepSeek 既有结果以历史参考身份保留。若定向回放不能保留输出原件、正确尾部或原执行事实，停止该实现并撤回预览变更。
+
+原 Netflix 样本在改动前只能显示 4,000 字符，改动后完整显示 4,213 字节及末尾的 `relax top8:` 行。四份真实回执和四份受控边界回放均满足预声明判据。Netflix 新运行的实发审计核对 52 条原生 Bash 回执，其中 6 条 stdout 超过旧上限，在新回执中均完整。第 2 轮一条回执实际送达 7,098 字节，并附可读 Artifact 路径。新运行交付前 19 轮，第 20 轮因两次目标引用未逐字命中用户原话进入 `terminal_limitation`，余 14 轮未提交。该终态的两份主请求均保留第 20 轮的完整原题。[离线回放](../../../.tmp/netflix-bash-tail-20261122/replay-result.json) · [实发审计](../../../.tmp/netflix-bash-tail-20261122/input-audit.json) · [第 20 轮轨迹](../../../.tmp/netflix-bash-tail-20261122/personal/turn-20.trace.json)
+
+共同前 19 轮均有有效评分。本 Agent 由 0/19 变为 6/19，前 19 轮生成总用量由 15,261,751 增至 16,734,579 tokens。历史 DeepSeek 同轮范围为 5/19。新版单次输入峰值为 306,549 tokens，摘要与达压裁剪均为 0。复跑配置相同，捕获源码中只有本次涉及的三个文件有变化。评分记录两次独立采样的实际结果。预览改动的直接效果由同一回执的离线反事实和实发审计验证。[复跑与共同轮次对照](../../../.tmp/netflix-bash-tail-20261122/summary.json)
 
 源机制采用 DeepSeek Harness 的普通 shell 调用、共同工作目录和基于进程的回执。本项目已有明确的隔离和重放边界，因此继续使用现有 ToolExecutor、Conversation Journal、Artifact 和 Docker 适配器。检索实验只在其固定 Python worker 中解析排名输出，继续使用同一底层 Docker runner。旧工具、旧模型参数及专用反馈模板随替换退役。[DeepSeek Shell](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/shell/tool-bash/src/index.ts#L413-L433) · [结果格式](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/shell/tool-bash/src/render.ts#L27-L65)
 
@@ -23,7 +43,7 @@ GDP 最新正式复跑用 Bash 读取原件，完成表格写入并返回正式�
 
 ## 在同一 Turn 内复用 Bash 容器
 
-本节记录容器复用契约及历史验收。Conversation 的 Turn 身份与恢复入口由[轮次生命周期规格](conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)定义。
+本节归档退役的容器复用契约及当时的验收。Conversation 的 Turn 身份与恢复入口由[轮次生命周期规格](conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)定义。
 
 基线：原 Bash 适配器每次调用创建一个容器。Toolathlon Canvas 排考的正式运行有 8 次 Bash 执行、8 个不同容器。普通授权配置的 LongDS 附件验证有 2 次执行、2 个不同容器。两组容器都在命令结束后删除。最早责任在 Docker 执行适配器。见 [Canvas 运行](../../../.tmp/mcp-sandbox-1117/run/canvas-arrange-exam/personal/report.json)、[LongDS 运行](../../../.tmp/bash-execution-20261117/longds-final/report.json)及 [逐次建容器的基线回放](../../../.tmp/bash-run-reuse-20261117/red-live2/report.json)。
 
@@ -33,11 +53,17 @@ GDP 最新正式复跑用 Bash 读取原件，完成表格写入并返回正式�
 
 | 需求 | 方案和通过条件 |
 | --- | --- |
-| BASH-5 容器生命周期 | Docker 适配器以现有 `ExecutionScope` 的主体、Session、Turn 与部署摘要绑定容器。首条合法命令惰性创建，后续健康调用串行复用。Docker Exec 为每条冻结命令启动新 Bash，分别设置工作目录、超时和输出限额。Turn 终态释放容器，可恢复暂停沿用原 Turn 身份和期限。容器内的受信等待进程在 Journal 的轮次截止时间退出，Docker 随即结束其余进程。运行和恢复消费轮次排他锁，适配器串行处理同一 Turn 内的命令。启动恢复按原身份与期限回收容器和孤立快照。 |
+| BASH-5 容器生命周期 | Docker 适配器以现有 `ExecutionScope` 的主体、Session、Turn 与部署摘要绑定容器。首条合法命令惰性创建，后续健康调用串行复用。Docker Exec 为每条冻结命令启动新 Bash，分别设置工作目录、超时和输出限额。Turn 终态释放容器，可恢复暂停沿用原 Turn 身份和期限。新容器以镜像提供的 Python 作为 PID 1，负责回收已退出的孤儿子进程，并在绑定的截止时间或收到停止信号时退出。Docker 随即结束其余进程。运行和恢复消费轮次排他锁，适配器串行处理同一 Turn 内的命令。启动恢复按原身份与期限回收容器和孤立快照。 |
 | BASH-6 输入和写权限 | 普通会话的 `/workspace` 保持只读，Toolathlon 的 `/workspace/dumps/workspace` 仍是网关和 Bash 唯一共享的可写目录。模型命令以 `65534:65534` 执行，使用只读根目录、私有 PID 空间并移除全部 capabilities。网络按已有部署许可配置。适配器通过 Docker 查询完整容器进程列表，核对只剩启动时绑定的受信进程，确认私有 IPC 空间无命令残留，再清理临时文件并刷新只读快照。剩余进程、SysV IPC 对象或 POSIX 消息队列均使容器退出，确认终态后才允许替换。快照泄漏、越权读写或任一跨命令状态残留均判失败。 |
 | BASH-7 结果和恢复 | Docker 继续限制容器资源。适配器在请求执行前，按现有 Command 摘要保存容器和 Exec 身份。宿主适配器采集并有界落盘双流，执行记录目录不挂入容器。Web 重启后从原身份找回已落盘结果。落盘前中断则沿现有规则停止并核对容器，报告输出不可恢复或执行未知，禁止重发原命令。超时、取消、溢出和后台残留均使用同一停机核对；只在执行终态可证时提交已有事实，工作区写入未知沿用原回执。OOM 归因须有 Docker 或容器资源计数的正证据，退出码本身不足以证明 OOM。Command、Journal、Artifact 和回执保留原事实归属。 |
 
 变更属于执行基础设施、资源生命周期与恢复协议调整。改动限定在已有 Bash Execution Port 的实现、Turn 收尾和部署装配，执行边界由 [ADR 0056](../../adr/0056-bash-workspace.md)记录。按轮次回收替换 Bash 的按命令创建与回收分支。固定 Python worker 的检索候选仍使用原单次进程生命周期。
+
+主进程调整沿用 DeepSeek Harness 的常驻进程与逐命令执行分工。旧 `sleep` 入口只维持容器到期。`BashTurnContainers` 用镜像自身 `PATH` 启动隔离模式的 `python3`，负责沙箱的进程收尾及到期退出。宿主适配器继续使用 Docker 保存每条已授权调用的执行身份和双流，存活后台进程继续走现有回收门禁。已创建容器按原身份完成或到期，新建容器统一使用 Python 入口。[DeepSeek Bash 启动链](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/shell/bash-local/src/index.ts#L187)
+
+主进程变更的定向验收复用已封存的 LongDS Bash 命令和输入，核对实际 PID 1、退出码、双流和健康容器复用。真实 Docker 探针检查截止时间、容器停止、退出孤儿的清理和存活后台进程仍会阻止复用。另检查 Toolathlon 共享工作区镜像能用其自带 Python 启动。任一边界失败时按原实现回滚启动入口。
+
+2026-11-25 真 Docker 验证了 Python PID 1、到期退出、初始化后正常停止，以及存活后台进程阻止复用。回放 LongDS 2 条和 Toolathlon Canvas 8 条封存命令，双流、退出状态和已落盘回执一致。两组各复用一个容器并在结束后回收。启动阶段立即停止仍由 Docker 的强制回收兜底。证据限于执行适配器和容器生命周期。[进程验证](../../../.tmp/bash-python-main-20261125/candidate-02/processes.json) · [LongDS 回放](../../../.tmp/bash-python-main-20261125/longds-replay-02/report.json) · [Canvas 回放](../../../.tmp/bash-python-main-20261125/canvas-replay-02/report.json)
 
 先分别回放 Canvas 已封存的 8 条 Bash 命令和 LongDS 已封存的 2 条命令。各用一个新 Run，检查每组只创建 1 个容器，输入文件摘要、退出状态、适用双流和最终工作区结果符合原契约。用现有只读附件、共享卷相邻目录和限时样本核对隔离及终止，补一次中断恢复，断言无重复写入。清理命令使用有附件的 Docker Exec 连接并核对真实退出码，避免无流连接在命令尚未退出时返回空退出码导致误回收。两种镜像各做 5 组完整适配器对照，包含清理、输出持久化与资源回收，稳定调用的中位耗时须下降。接入后各跑一次原 Canvas 和 LongDS 正式入口，分别记录用户结果与执行检查点，Canvas 原基线的选课语义错误独立计分。任何边界失败即停止对应机制准入，延迟收益未达到时撤回复用候选。
 
@@ -51,11 +77,11 @@ Canvas 正式入口暴露 Windows 路径长度回归。已经冻结的真实工�
 
 ## Bash 跨轮任务工作区候选
 
-已接入显式任务工作区许可，真实 Docker 回放通过。LongDS NYC Task 1 第 26 轮的第 5 次 Bash 已成功写入并执行 `/tmp/s27.py`，第 6 次仍在同一容器，却因调用前清理 `/tmp` 读不到脚本。第 25 至 27 轮的追踪使用相同分析任务 ID，各自使用独立轮次容器。DeepSeek Harness 第 26 轮新写的 `prepenalty.py` 直接导入已有 `base.py`。本设计处理重复写脚本、解压和计算的执行环境前提。轨迹里的 `KeyError` 来自 Python 统计逻辑，独立归因。[任务对照](../../problems/longds/2026-11-18-nyc-restaurants-task1.md) · [本 Agent 第 26 轮执行日志](../../../.tmp/nyc-longds-20261118/personal-aligned/server.log#L1003) · [DeepSeek Harness 第 26 轮事件](../../../.tmp/nyc-longds-20261118/harness-aligned/turn-26.json)
+已接入显式任务工作区许可，真实 Docker 回放通过。LongDS NYC Task 1 第 26 轮的第 5 次 Bash 已成功写入并执行 `/tmp/s27.py`，第 6 次仍在同一容器，却因调用前清理 `/tmp` 读不到脚本。第 25 至 27 轮的追踪使用相同分析任务 ID，各自使用独立轮次容器。DeepSeek Harness 第 26 轮新写的 `prepenalty.py` 直接导入已有 `base.py`。本设计处理重复写脚本、解压和计算的执行环境前提。轨迹里的 `KeyError` 来自 Python 统计逻辑，独立归因。[任务对照](../../problems/longds/nyc-restaurants.md#task-1-对照评测) · [本 Agent 第 26 轮执行日志](../../../.tmp/nyc-longds-20261118/personal-aligned/server.log#L1003) · [DeepSeek Harness 第 26 轮事件](../../../.tmp/nyc-longds-20261118/harness-aligned/turn-26.json)
 
 DeepSeek Harness 的会话工作目录提供可复用文件，每条普通 Bash 命令通过独立 `bash -c` 执行。本次对照由 LongDS 启动脚本在首轮前创建容器，末轮收尾时回收。Gemini CLI 的 Docker 路径也把容器放在多次命令之外。本候选采用同样的生命周期分工，用 Docker `tmpfs` 提供有容量上限、随容器停止而清空的工作区，减少短期脚本所需的存储管理。[DeepSeek 工作目录策略](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/sandbox/sandbox-policy/src/index.ts#L207-L233) · [独立命令入口](https://github.com/deepseek-ai/deepseek-harness/blob/ca33fd6843b205e279c7ccb6cb73a472c78f5760/packages/shell/bash-sandbox/src/index.ts#L181-L188) · [LongDS 启动脚本](../../../.tmp/nyc-longds-20261118/harness.py#L81) · [Gemini 容器启动](https://github.com/google-gemini/gemini-cli/blob/3c311beac2e78336816dd4a123db39743f9fbf85/packages/cli/src/utils/sandbox.ts#L383) · [Docker tmpfs](https://docs.docker.com/engine/storage/tmpfs/)
 
-2026-11-19 决定在任务模式直接采用该 LongDS 启动器的单目录做法。第 13 轮写入的 `/tmp/base.py` 可在第 26 轮导入，已验证跨轮复用由容器和清理时机决定。Docker 适配器只挂载一个可写 `/tmp`，任务模式只检查进程、IPC 和输入授权，普通模式仍在命令间清理临时文件。模型工具声明和精确编辑路径同步改为 `/tmp`。部署许可将任务目录纳入身份摘要，新的任务从新会话开始。历史容器按原许可到期回收，历史轨迹按原配置归档。[实跑记录](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#已落盘脚本的回查与上下文) · [评测执行器](../../../.tmp/nyc-longds-20261118/bash-container-aligned.mjs#L4)
+2026-11-19 决定在任务模式直接采用该 LongDS 启动器的单目录做法。第 13 轮写入的 `/tmp/base.py` 可在第 26 轮导入，已验证跨轮复用由容器和清理时机决定。Docker 适配器只挂载一个可写 `/tmp`，任务模式只检查进程、IPC 和输入授权，普通模式仍在命令间清理临时文件。模型工具声明和精确编辑路径同步改为 `/tmp`。部署许可将任务目录纳入身份摘要，新的任务从新会话开始。历史容器按原许可到期回收，历史轨迹按原配置归档。[实跑记录](../../problems/longds/nyc-restaurants.md#已落盘脚本的回查与上下文) · [评测执行器](../../../.tmp/nyc-longds-20261118/bash-container-aligned.mjs#L4)
 
 | 需求 | 设计和通过条件 |
 | --- | --- |
@@ -67,13 +93,40 @@ Conversation 从分析任务和会话许可提供类型化的工作区身份，C
 
 ### 只读输入复用
 
-LongDS Task 2 第 33 轮最后两条冻结命令带入 436 和 440 个输入，新增四个均为前次工具产物。第二次重新读取、暂存了原有 436 份。DeepSeek Harness `2e39e704` 从会话解析工作目录，将命令交给 Bash 执行器。LongDS 装配在容器启动时把数据目录只读挂载一次，每次调用向已有容器发出 `docker exec`。本项目采用任务级挂载生命周期，通过现有 Artifact 引用支持运行中新增的只读输入。[复跑耗时与轨迹](../../problems/longds/2026-11-19-nyc-restaurants-task2-task3.md#本-agent-复跑耗时分解) · [DeepSeek Bash 入口](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/shell/tool-bash/src/index.ts#L523-L570) · [对照装配](../../../.tmp/nyc23-20261119/harness.py#L88) · [对照执行器](../../../.tmp/nyc23-20261119/bash-container-aligned.mjs#L4)
+LongDS Task 2 第 33 轮最后两条冻结命令带入 436 和 440 个输入，新增四个均为前次工具产物。第二次重新读取、暂存了原有 436 份。DeepSeek Harness `2e39e704` 从会话解析工作目录，将命令交给 Bash 执行器。LongDS 装配在容器启动时把数据目录只读挂载一次，每次调用向已有容器发出 `docker exec`。本项目采用任务级挂载生命周期，通过现有 Artifact 引用支持运行中新增的只读输入。[复跑耗时与轨迹](../../problems/longds/nyc-restaurants.md#本-agent-复跑耗时分解) · [DeepSeek Bash 入口](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/shell/tool-bash/src/index.ts#L523-L570) · [对照装配](../../../.tmp/nyc23-20261119/harness.py#L88) · [对照执行器](../../../.tmp/nyc23-20261119/bash-container-aligned.mjs#L4)
 
 Artifact 核对当前主体、版本及原件存在性，Command 冻结路径和摘要。Bash Application 向执行端提供仅限该命令的惰性字节读取。Docker 适配器用冻结的输入与实际暂存文件逐项核对路径、大小、内容摘要，只为缺失或变化的文件加载已验证的原始字节。多余路径触发清理再准备。复用前继续检查工作区归属和原输入集合，撤销输入授权须使旧容器失效。正在执行的命令与准备过程在同一工作区锁下串行；准备失败后不得启动命令，下一次从原 Artifact 补齐。普通及 MCP 路径继续每次更新完整快照。暂存是只读投影，无独立业务写入口或新增持久索引。
 
 验收复用封存的 436／440 个输入，使用同镜像和真实 Docker，比较首次准备和下一次准备的文件数、身份、完整文件指纹和耗时。第二次须只加载新增的四个输入及当次脚本。覆盖同轮、继承轮、容器只读、撤权回收、暂存内容损坏重建及普通模式。复用时间以同机输入阶段对照为准，回放属于 Offline Eval；新整题用时和评分另行实测。如果授权或字节保真出现回归，撤回差量准备并恢复逐命令快照。
 
 已实现并完成局部回放。Task 2 第二次准备从 441 次原件字节读取减到 5 次（四个新增输入及当次脚本），用时从 2.54 秒降到 1.11 秒。合法的下一轮复用相同输入时读取 0 次，文件指纹全量一致。只读、撤权回收和损坏单文件重建均通过。Task 1 第 26 轮两条原命令通过正式 Docker Bash 适配器回放，任务模式同轮和继承轮成功，普通模式仍按原契约清理脚本，后一次命令返回缺文件。原命令结果可从既有作业记录恢复，关停均回收容器。[基线](../../../.tmp/nyc-bash-stage-20261120/baseline-real/report.json) · [候选](../../../.tmp/nyc-bash-stage-20261120/candidate/report.json) · [实际执行回放](../../../.tmp/nyc-bash-stage-20261120/exec-replay.json)
+
+### 任务工作区的内容边界
+
+Netflix Task 3 的 134 条 Bash 命令复用了一个容器。最后一次冻结 549 项，其中 16 项为原始附件，1 项为显式创建的 Artifact，其余 532 项为前 133 次 Bash 的命令、输入清单和双流产物。Journal 把 Bash 保存的原件从会话读取清单再投影为每次命令的只读输入，后续服务仍要逐项检查身份和暂存文件。归档中所有 134 条命令均未按回执路径消费这 532 项产物。首轮显式创建的 Artifact 后续进入工作区，仍按原路径提供。[运行归档](../../../.tmp/netflix-task3-20261122/personal/report.json) · [最终输入清单所在轨迹](../../../.tmp/netflix-task3-20261122/personal/turn-32.trace.json)
+
+采用相同 DeepSeek Harness `2e39e704` LongDS 装配的工作区边界。原始资料在容器生命周期中复用，任务中间文件在 `/tmp` 留用，调用结果由工具回执交付。本工程的任务级 Bash 只读投影从同一任务的已授权资料构造，排除只因执行 Bash 而发布的审计原件及其在会话中的派生引用。显式上传为此次附件的文件按附件可用，显式创建的 Artifact 保留原路径。会话读搜继续消费原工具回执的路径，冻结命令继续供原调用恢复。目标核验与工具准入使用同一清单。普通 Bash、MCP 共享目录、文件版本和隔离规则沿用原契约。模型从任务 Bash 工具说明获得附件和 `/tmp` 路径，从独立读搜工具获得回执路径说明。现有已接纳命令及运行结果不重写。正常关闭会回收任务容器，升级前遗留容器若挂载集合不再获准，沿现有工作区失效分支处理。[历史 DeepSeek 运行配置](../../../.tmp/netflix-task2-20261122/harness/cordis.json)
+
+保持现有 Artifact owner、Journal 和 Docker 暂存边界。逐次明确提交输入清单会重新引入模型抄路径的成本。只缓存已挂载字节仍保留清单随回执增长。按原件发布来源过滤可以直接作用于已证的增长点，同时保持原件可查和确切执行恢复。保留暂存指纹、命令和授权核对，每次处理的对象是缩小后的清单。
+
+实现前固定验收。逐条读取 Netflix Task 3 的 134 个原冻结输入，以真实会话前驱和已接受动作重放清单投影，原有工作区路径保持，任务模式最后两条应从 545／549 项降至 17 项且每条都只移除 Bash 执行产物。核对其实例的 Bash 原件仍可按原路径从 Artifact 读取，普通模式投影保持。用同一实际镜像和附件，通过正式 Docker 适配器配对回放末两条命令的真实输入准备，要求同一容器成功复用、实测准备耗时下降。另用首轮实际命令验证 `/workspace/attachments` 读取和 `/tmp` 产物跨后续调用使用。检查任务切换和只读边界，核对原命令恢复的适用性。样本为一次离线回放和一组 Docker 检查，无模型费用。回放覆盖局部性能与能力边界。未复跑整题，旧评分独立保留。发现预声明的可用路径、权限或恢复回归即撤回。
+
+回放已通过。134 份任务模式清单只移除 Bash 执行原件，普通模式与原清单逐项相同。真实 Docker 配对中，末两条命令的输入分别由 545／549 项降至 17／17 项，身份核对加容器准备共由 5.27 秒降至 0.50 秒；复用容器的第二条由 1.40 秒降至 0.12 秒。首轮三条实发命令的 stdout 与原件逐字节相同，其中第三条在下一轮的工作区读取首轮 `/tmp` 文件。只读挂载、其他任务拒绝和已完成命令恢复均通过。`read_file` 使用原回执路径成功返回未挂载的 stderr。耗时为单次局部配对。[回放入口](../../../.tmp/netflix-bash-inputs-20261123/replay.py) · [投影记录](../../../.tmp/netflix-bash-inputs-20261123/c/projections.json) · [Docker 报告](../../../.tmp/netflix-bash-inputs-20261123/docker-c/report.json)
+
+### 共享工作区的命令输入
+
+Marathon 第 143 轮在授权的 MCP 共享卷中运行 Go 练习。第 2 步已经挂载 1,067 个历史文件，合计 66,951,779 字节。第 3 步又带入前一次调用生成的四个原件，清单合计 67,339,136 字节，超过 64 MiB，写入解法的命令在启动前失败。该轮没有上传附件，历史清单主要是 Bash 输入清单和会话快照。DeepSeek 对照启动时挂载工作区，此后通过 Docker Exec 在该工作目录执行，实测第 143、144 轮通过。共享卷中的项目材料已经可用，历史原件属于会话记录，无须随每次调用再次进容器。[Marathon 轨迹](../../problems/marathon/marathon-0.md) · [DeepSeek Bash 执行器](../../../.tmp/marathon-20261123-run/deepseek/plugins/harness_container_bash.mjs#L14)
+
+| 需求 | 行为与防护 |
+| --- | --- |
+| BASH-11 共享卷为工作目录 | 当前会话的 Bash 许可绑定共享卷时，命令直接使用授权工作目录。Conversation 在所选任务中冻结用户显式绑定的附件和已加载的 [Skill 随包脚本](../../context/skill.md#21-随包脚本)作为额外只读输入，沿现有命名、版本和 64 MiB 校验。历史报告、快照和已发布的工具产物通过会话读搜定位。 |
+| BASH-12 保持事实与恢复 | 目标核验和 Journal 接纳使用同一个输入选择规则。已接纳调用保留原输入清单，恢复继续由原 Command 负责。其他工作区模式、Docker 授权和挂载权限沿原契约。 |
+
+Conversation Service 从已绑定的 Bash 许可选择输入范围，Journal 拥有附件投影和接纳记录，Bash 执行端按冻结清单准备原件。共享卷由部署和 Docker 管理。本次替换共享模式下按会话可读原件自动扩张清单的规则，保留实际附件的原件校验和沙箱隔离。模型工具说明同步提供共享目录及附件根；会话历史的读取职责仍归读搜能力。[ADR 0056](../../adr/0056-bash-workspace.md)
+
+**预声明验收。** 固定 Marathon 第 143 轮第 2、3 步的 Journal 修订、模型实际提交的命令和评测镜像。旧共享输入应复现 1,067／1,071 项及原字节数，新清单均应为空，且命令能够在同一个获准的工作卷读题、写入解法并运行原测试。用已有真实附件对照核对只读路径、拒绝旁支和普通输入范围，以原运行第 2 步的冻结命令核对同 ID 重提保持原清单。各执行一次，无模型调用。存在可见性、副作用或恢复回归时撤回共享输入范围变更。
+
+定向重放已通过。两个样本的额外输入由 1,067／1,071 项降为零。相同镜像在同一个 Bash 容器中执行两条原命令，只暂存当次脚本。第 2 步 stdout 与封存原件逐字节一致，第 3 步写入解法并通过 Go 测试，在同卷的评测容器中再次通过。容器检查确认仅共享工作区可写，额外输入保持只读，网络继续隔离。真实 Netflix 附件对照保留 16 个附件，另一作用域不继承这些文件。已冻结的第 2 步同 ID 重提仍返回原命令和 1,067 个输入。该重放无模型调用，原 Marathon 总分和接续状态仍以封存运行记录为准。[重放结果](../../../.tmp/marathon-shared-bash-replay/report.json)
 
 ### 验收与撤回条件
 
@@ -93,11 +146,11 @@ Artifact 核对当前主体、版本及原件存在性，Command 冻结路径和
 
 现行普通 Bash 模式用第 26 轮原命令和原附件快照复现读失败。启用任务工作区后，同一轮与下一轮均读取相同 SHA-256 的脚本且成功运行。真实 Docker 探测同时覆盖新 Shell、临时目录清理、只读挂载、断网、任务与分支隔离、输入撤权、容器重启、到期、主动回收及未知执行恢复。原有 MCP 卷探测通过，隔离子目录中的写入由独立容器读回。[普通模式](../../../.tmp/bw18/ordinary-current/report.json) · [跨轮与关停](../../../.tmp/bw18/close/report.json) · [重启](../../../.tmp/bw18/restarted/report.json) · [未知执行](../../../.tmp/bw18/unknown/report.json) · [撤权](../../../.tmp/bw18/revoked/report.json) · [到期](../../../.tmp/bw18/expiry/report.json) · [MCP](../../../.tmp/bw18/mcp-final/report.json)
 
-LongDS 正式入口实跑验证了模型对 `/work` 的轮内和跨轮复用，并确认服务关停回收资源。第 8 轮在独立的模型动作批次错误处终止，正式轨迹未到达第 26 轮。原第 26 轮命令的回放和本次整例结果分别记录。[正式复跑](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#启用任务工作区后的本-agent-复跑)
+LongDS 正式入口实跑验证了模型对 `/work` 的轮内和跨轮复用，并确认服务关停回收资源。第 8 轮在独立的模型动作批次错误处终止，正式轨迹未到达第 26 轮。原第 26 轮命令的回放和本次整例结果分别记录。[正式复跑](../../problems/longds/nyc-restaurants.md#启用任务工作区后的本-agent-复跑)
 
 ### 单目录验证
 
-现行任务模式使用原命令和附件复验。第 26 轮的 `/tmp/s27.py` 在同轮和下一轮均可读取，脚本摘要一致。Docker 探测确认只挂载一个 `/tmp`、新 Bash、只读根目录、无网络、拒绝旁支及 IPC 残留、关停回收。普通模式复现原来的临时文件清理。正式 HTTP 的两轮定向验证覆盖 `tool_edit` 和实际出站工具声明。[LongDS 验证](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#任务沙箱单目录验证)
+现行任务模式使用原命令和附件复验。第 26 轮的 `/tmp/s27.py` 在同轮和下一轮均可读取，脚本摘要一致。Docker 探测确认只挂载一个 `/tmp`、新 Bash、只读根目录、无网络、拒绝旁支及 IPC 残留、关停回收。普通模式复现原来的临时文件清理。正式 HTTP 的两轮定向验证覆盖 `tool_edit` 和实际出站工具声明。[LongDS 验证](../../problems/longds/nyc-restaurants.md#任务沙箱单目录验证)
 
 ## 历史 Python 专用工具
 
@@ -356,6 +409,8 @@ execute_python
 **整体 critic 与退出。** 代码内容由模型生成，权限／事实／完成仍归原 owner；没有硬编码统计、自动补输入、提升风险权限或额外运行循环。代价是 native 动作协议迁移面广，以及已有文件程序需要标准 Python 调用；这两项都已列为验证对象，不能以工具字段变少替代可用性证据。若真实阶段仍在新契约下失败，停止本候选及依赖 E2E，保留已成立原生历史；按 EVD 复审取得新依据，不继续补提示词。独立 builder 提出的 baseline 样本、物理请求预算及全部保留轨迹读取三处缺项已补齐；生产已接入，模型验收状态见上段。
 
 ### 3.8 文件选择只提交现有 ID（2026-10-24）
+
+本节保留当时的 ID 迁移方案和证据。现行文件参数与工具清单见[会话文件契约](../../context/tool.md)和[工具组配置](../../context/local-tools.md#conversation-工具组配置)。
 
 **问题与重新准入。** §3.7 的新两轮轨迹有4次文件引用拒绝，第二轮曾收到反馈后再次把 revision 写成字符串；原生历史及直接参数已经成立，继续提醒整数不能消除不必要的填写责任。用户授权继续简化，并要求每项设计优先基于优秀实践。本节是模型可见工具协议变更，依据为同一真实轨迹，语义答案问题继续暂缓，不改变 direct／claim 可替换结果模块。实施与原始身份保存在 [.tmp/resource-id-tool-production-20261024](../../../.tmp/resource-id-tool-production-20261024/progress.md)。
 

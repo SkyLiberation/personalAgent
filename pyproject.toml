@@ -66,3 +66,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["personal_agent.bundled_skills*"]
+
+[tool.setuptools.package-data]
+personal_agent = ["bundled_skills/*/SKILL.md", "bundled_skills/*/LICENSE", "bundled_skills/*/scripts/*.py"]

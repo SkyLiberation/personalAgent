@@ -1,5 +1,17 @@
 # 环境变量
 
+`PERSONAL_AGENT_CONVERSATION_TOOLS` 配置 Conversation 的[工具组](context/local-tools.md#conversation-工具组配置)。未设置时保留各入口原有的工具可用范围。
+
+`PERSONAL_AGENT_SKILL_ROOT` 指向部署打包技能的只读根目录，适用于该服务实例。仓库内置技能目录为 `src/personal_agent/bundled_skills`。显式配置 `PERSONAL_AGENT_CONVERSATION_TOOLS` 时通过 `skills` 组启用加载。`PERSONAL_AGENT_SKILL_SCOPES` 是可选 JSON，`users` 条目用 `principal` 和绝对路径 `home` 绑定用户级目录，`projects` 条目用 `principal`、`session_id` 和绝对路径 `root` 绑定工程级目录。两类路径下面都使用 `.dsh/skills/<name>/SKILL.md` 或 `.agents/skills/<name>/SKILL.md`。配置和技能包在进程启动时读取。[技能发现和加载](context/skill.md)
+
+例如把 `local:alice` 的个人技能供她跨会话使用，并为 `pdf-project` 会话追加一个工程目录，可在 `.env` 中配置：
+
+```dotenv
+PERSONAL_AGENT_SKILL_SCOPES='{"users":[{"principal":{"tenant_id":"local","user_id":"alice"},"home":"C:/Users/alice"}],"projects":[{"principal":{"tenant_id":"local","user_id":"alice"},"session_id":"pdf-project","root":"D:/projects/pdf"}]}'
+```
+
+`PERSONAL_AGENT_CONVERSATION_GOAL_MODE` 默认 `enabled`。设为 `disabled` 时，授权工具按各自准入规则提供。由于现有回答核验消费已接纳 Goal，该部署须将 `features.answer_verification` 设为 `false`。切换模式使用新进程和新会话，恢复沿用原模式。[Goal 装配规格](optimization/to_verify/analysis-goal-maintenance.md#goal-模块的可选装配)
+
 部署可通过 `PERSONAL_AGENT_ANSWER_RESULT` 的 JSON 配置开启回答测试模式，例如 `{"test_mode":true}`；默认 `false`，且只接受 `test_mode` 字段。目标和回答核验由 [`config/feature_flags.toml`](../config/feature_flags.toml) 的 `features.goal_verification`、`features.answer_verification` 控制，默认均开启。`PERSONAL_AGENT_FEATURE_FLAGS_CONFIG` 可指定另一份 TOML；未指定时从进程工作目录的 `config/feature_flags.toml` 读取。文件缺失、格式错误、未知键、缺项或非布尔值时启动失败。
 
 开关在进程启动时读取，经 Runtime 注入并在 Journal 的运行及对话边界绑定。修改配置后使用新进程和独立会话；恢复不能切换实验臂。关闭核验不生成通过事实，不提供完整核验或发布资格；两类核验的适用范围、关闭语义和比较条件由[实验组 1](ablation/experiment.md)拥有，决定见 [ADR 0050](adr/0050-verification-feature-flags.md)。
@@ -47,15 +59,18 @@ PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS=2000000
 ```
 
 这三项分别限制单次对话运行的模型决策轮数、工具调用次数和累计 token 用量；不是单次模型输入窗口或输出长度。
+工具次数接受非负整数或 `unlimited`。设为 `0` 时从首步隐藏普通工具。设为 `unlimited` 时仍记录每次工具调用，运行按模型决策轮数、累计 token 和适用截止时间停止。
 token 边界按已提交用量检查，最后一次模型请求可能使实际累计量超过上限。
 已有应用进程需要重启以重新加载配置；未配置上述环境变量时，代码默认仍为 8 轮、12 次工具和 32,000 tokens。
 历史评测继续保留原配置身份，新 profile 不等同于答案质量已验收。
 
 ## 通用 Bash 执行许可
 
-`PERSONAL_AGENT_BASH_EXECUTION_CONFIG` 指向通过 `BashExecutionDeploymentConfig` 校验的部署 JSON。文件包含 `authorization` 与 Docker `endpoint`。许可限定主体、会话、镜像 ID、执行额度和到期时间。
+`PERSONAL_AGENT_BASH_EXECUTION_CONFIG` 指向通过 `BashExecutionDeploymentConfig` 校验的部署 JSON。文件包含 `authorization`，许可限定主体、会话和执行额度，随服务装配生效。撤销许可时停止原服务实例，更新配置后再启动。共享工作区还绑定具名 MCP 服务和同一宿主的可写目录。Bash 由 Linux 上的 `bwrap` 执行。Windows 上可在 WSL2 中启动 Agent。
 
-匹配许可的对话取得 `bash` 并聚合历轮已消费额度。它与 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 互斥。检索实验环境可基于其既有部署身份装配 Bash。镜像构建见[脚本目录](../scripts/bash_execution/README.md)，工作区及执行契约见 [Bash Spec](optimization/to_verify/python-data-analysis-tool.md#bash-替换脚本执行工具)。
+独立任务可在 `retain_task_workspace: true` 的许可上启用 `persistent_bash: true`。同一任务内的 Bash 进程和临时文件可跨轮复用，工作区关闭或服务关停时结束持久进程。旧的部署文件须移除 `expires_at` 后用于新会话，封存轮次和检查点继续使用其原版本。
+
+匹配许可的对话取得 `bash` 并聚合历轮已消费额度。它与 `PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG` 互斥。检索实验环境可基于其既有部署身份装配本机 Bash。工作区及执行契约见 [Bash 沙箱决定](adr/0056-bash-workspace.md#linux-原生沙箱迁移)。
 
 ## 飞书配置
 
@@ -169,14 +184,15 @@ PERSONAL_AGENT_EXTRACT_MODEL=${STRUCTURED_MODEL}
 
 `STRUCTURED_*` 是生成式模型的 canonical 配置。直接回答、结构化决策、Graphiti 生成、
 LangExtract 在没有显式 Adapter override 时均从这里解析；当前部署统一使用
-`MiniMax-M3.1-Flash`，使用既有中国区订阅端点`https://api.minimax.cn/v1`和`adaptive + medium`。本机`MINIMAX_API_KEY`与评分器使用的`MIMO_API_KEY`独立；别名须位于相应凭据定义之后，避免dotenv按文件顺序展开为空。embedding 和 transcription 不属于生成式模型切换，继续使用
-`EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL` 与 `OPENAI_TRANSCRIPTION_MODEL`。
+`MiniMax-M3.1-Flash`，使用既有中国区订阅端点 `https://api.minimax.cn/v1` 和 `adaptive + medium`。凭据别名须写在对应定义之后，以便 dotenv 展开。Embedding 单独使用 `EMBEDDING_*` / `OPENAI_EMBEDDING_MODEL`。
 
 ### Prompt 语言与独立 LongDS 评分
 
 `PERSONAL_AGENT_PROMPT_LANGUAGE=zh` 为默认，`en` 选择完整英文资源；Root 显式装配不可变 Catalog，重建 Runtime 后生效。新增语言只扩展资源注册，业务调用方不按语言分支。资源失配或英文缺元数据说明时拒绝，不能静默混回中文。用户题面、历史回答和执行事实不翻译。
 
-LongDS 评分独立使用 `LONGDS_JUDGE_PROVIDER`、`LONGDS_JUDGE_MODEL`、`LONGDS_JUDGE_BASE_URL`、`LONGDS_JUDGE_API_KEY`、`LONGDS_JUDGE_EXTRA_BODY`，当前模型为 `mimo-v2.6-pro`，其余可选额度、超时和容量见 [.env.example](../.env.example)。模型或端点替换后须重新取得官方正反例资格；不能沿用旧资格或混比分数。评分逻辑不再写死品牌，配置身份记录实际Policy参数及端点摘要，不含密钥。
+LongDS 通过 `LONGDS_JUDGE_*` 独立装配评分器。默认使用中国区 MiniMax 接口的 `MiniMax-M3.1-Flash`，思考档位为 `adaptive + medium`，凭据引用 `MINIMAX_API_KEY`。输出额度、超时和容量见 [.env.example](../.env.example)。
+
+变更模型或端点后，使用 LongDS 官方评分 Prompt 对标准答案和已确认的错误答案重新验证。对照双方使用同一份通过验证的评分配置，历史分数保留原评分器身份。评分归档记录实际请求参数和端点摘要，凭据保存在本地环境。
 
 ### Provider 选择与参数绑定
 
@@ -190,7 +206,7 @@ LongDS 评分独立使用 `LONGDS_JUDGE_PROVIDER`、`LONGDS_JUDGE_MODEL`、`LONG
 | Graphiti | `PERSONAL_AGENT_GRAPHITI_LLM_PROVIDER` | `PERSONAL_AGENT_GRAPHITI_LLM_EXTRA_BODY` |
 | LangExtract | `PERSONAL_AGENT_EXTRACT_PROVIDER` | `PERSONAL_AGENT_EXTRACT_EXTRA_BODY` |
 
-覆盖 endpoint 或主模型后不继承另一绑定的 `STRUCTURED_EXTRA_BODY`。图片的 `OPENAI_VISION_MODEL`、Client 的 `model_override` 若与其配置主模型不同，也不自动继承主模型附加参数，使用该模型自己的服务方默认值。调用方显式 effort 高于当前绑定的部署默认。附加参数不能覆盖 model、messages、tools、输出额度、采样等受管字段。
+覆盖 endpoint 或主模型后不继承另一绑定的 `STRUCTURED_EXTRA_BODY`。当 Client 的 `model_override` 选择不同模型时，使用该模型自己的服务方默认值。调用方显式 effort 高于当前绑定的部署默认。附加参数不能覆盖 model、messages、tools、输出额度、采样等受管字段。
 
 MiniMax/MiMo 的输出额度投影为 `max_completion_tokens`，DeepSeek 使用 `max_tokens`；数值及省略额度的语义保持。MiniMax 当前 M3.1 Flash 使用 `adaptive` 和 `low/medium/high/xhigh/max`，不支持关闭思考；MiMo Chat Completions 使用 `enabled/disabled`，不接受没有官方契约的 effort 档位；DeepSeek 的档位与思考模式按其独立策略校验。结构化输出方式仍由 `STRUCTURED_OUTPUT_TRANSPORT` 明确配置。实现与验证边界见[策略重构记录](optimization/completed/model-provider-extensibility.md)。
 
@@ -213,11 +229,11 @@ instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首�
 
 2026-10-23用户要求 MiniMax 部署统一开启思考、深度为 `low`。当时实发请求采用省略深度的默认值，摘要还带 `thinking.type=disabled`；普通回答、Graphiti 和 LangExtract 没有消费 canonical 附加参数，单改 `.env` 不足以实现统一。架构保持现有模型 Port、Adapter、Graphiti 工厂和 LangExtract SDK 包装；`STRUCTURED_EXTRA_BODY` 是唯一部署来源，配置加载器只向现有消费者生成只读配置投影，不新增独立环境变量、路由或服务。
 
-实施顺序：先保存当前源码与既有实际请求；在 `OpenAIConfig`、`LangExtractConfig` 加入外部服务方参数投影并共用原配置解析，Graphiti 工厂直接传同一来源；移除摘要及 Graphiti 的局部关闭思考逻辑；最后更新 SDK 投影和容量检查。主 Adapter 将深度投影到 SDK 原生 `reasoning_effort`，显式请求字段优先于部署默认，MiniMax 沿推荐的 `max_completion_tokens` 传递相同输出额度。独立评审核对到正式图片附件描述仍直调 SDK，也须在现有 `ArtifactService._describe_image` 边界消费 `OpenAIConfig.extra_body`，否则该生成式调用仍使用服务方默认深度；本次只透传同源参数，不改变其输出额度、错误或附件契约。已核对安装的 LangExtract：其 SDK 参数构造只传白名单字段，构造函数收到 `extra_body` 并不会发出。因此只在既有 LangExtract 包装中增加明确的 SDK 子类，沿原参数构造点补入服务方扩展及默认深度，显式运行深度仍优先；不修改依赖包或采用运行时 monkey patch。容量检查只追加已核对的 `thinking.type=adaptive`，不放宽受管字段覆盖和非文本载荷拒绝。当时所有调用统一为 `adaptive + low`；当前按同一来源继承 `adaptive + medium`，配置副本与错误反馈不能清空该值；原重试、计量、Prompt、Schema、权限、摘要原件和激活机制保持。
+实施顺序：先保存当前源码与既有实际请求；在 `OpenAIConfig`、`LangExtractConfig` 加入外部服务方参数投影并共用原配置解析，Graphiti 工厂直接传同一来源；移除摘要及 Graphiti 的局部关闭思考逻辑；最后更新 SDK 投影和容量检查。主 Adapter 将深度投影到 SDK 原生 `reasoning_effort`，显式请求字段优先于部署默认，MiniMax 沿推荐的 `max_completion_tokens` 传递相同输出额度。当时的附件图片描述也补齐了同源参数传递。该调用随旧附件检查工具退役。已核对安装的 LangExtract：其 SDK 参数构造只传白名单字段，构造函数收到 `extra_body` 并不会发出。因此只在既有 LangExtract 包装中增加明确的 SDK 子类，沿原参数构造点补入服务方扩展及默认深度，显式运行深度仍优先；不修改依赖包或采用运行时 monkey patch。容量检查只追加已核对的 `thinking.type=adaptive`，不放宽受管字段覆盖和非文本载荷拒绝。当时所有调用统一为 `adaptive + low`；当前按同一来源继承 `adaptive + medium`，配置副本与错误反馈不能清空该值；原重试、计量、Prompt、Schema、权限、摘要原件和激活机制保持。
 
 验证先核对真实配置及各 SDK 构造的实际参数，保留候选前拒绝证据；再执行两个完整真实 SDK 阶段：首次 MiniMax 连通性请求和已封存的真实历史摘要请求。前者最多 4,096、后者沿原 8,192 输出上限，最多两次物理发送、500,000 新 tokens、15 分钟；单请求分别 120／480 秒，SDK／服务／格式重试为零，未知用量、截断或任一校验失败即停止。请求保留实际材料，仅调整本次声明的模型配置和等额输出字段投影，保存实发 HTTP 正文、响应和校验和。该验证只验参数交接及相应 typed 输出；摘要激活、后继消费、语义保真、Graphiti／LangExtract 业务集成及完整 LongDS 不由这两次调用证明。归档为 `.tmp/minimax-thinking-low-20261023/`，结果另登记评测盘点。
 
-已按原计划完成两次实际请求，最终 HTTP 正文均为 `adaptive + low`，typed 输出 2/2 合法；完整历史摘要在原 8,192 上限内返回正文，未发生参数冲突或截断。候选前容量检查拒绝已解除，受管字段覆盖仍被拒绝；Graphiti 工厂、LangExtract 参数构造及直接回答参数已核对，独立评审发现的图片附件描述遗漏已补齐并复核关闭。当前主路径、摘要、Graphiti、LangExtract 和图片描述均消费同一配置，不再有局部关闭思考的生产代码；各业务集成不由构造检查替代。实际成本、时延与边界由[评测盘点](evals/02-current-case-inventory.md#2026-10-23-minimax-统一思考与-low-验证)拥有。
+已按原计划完成两次实际请求，最终 HTTP 正文均为 `adaptive + low`，typed 输出 2/2 合法；完整历史摘要在原 8,192 上限内返回正文，未发生参数冲突或截断。候选前容量检查拒绝已解除，受管字段覆盖仍被拒绝；Graphiti 工厂、LangExtract 参数构造及直接回答参数已核对，独立评审发现的图片附件描述遗漏已补齐并复核关闭。当前主路径、摘要、Graphiti 和 LangExtract 均消费同一配置。该轮构造检查的覆盖范围见评测记录。实际成本、时延与边界由[评测盘点](evals/02-current-case-inventory.md#2026-10-23-minimax-统一思考与-low-验证)拥有。
 
 2026-09-26 曾按用户要求统一切换到 MiMo v2.6 Flash，后续使用 MiMo Token Plan 接口，单请求等待时间为 480 秒。相关历史
 [DeepSeek 对照](evals/02-current-case-inventory.md#thinking-与输出额度的隔离诊断)保留原配置身份。
@@ -241,7 +257,6 @@ instruction 提供给模型，Runtime 随后执行同一 Pydantic 校验；首�
 默认值（不设环境变量时）：
 - 所有生成式 Adapter：`mimo-v2.6-flash`
 - `OPENAI_EMBEDDING_MODEL`：`BAAI/bge-m3`
-- `OPENAI_TRANSCRIPTION_MODEL`：`whisper-1`
 
 可选调参：
 

@@ -118,14 +118,6 @@ Consolidate the following notes about "{topic}" into a structured knowledge revi
 ## Source material
 {sources}""",
     ),
-    'artifacts.image.question_default': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template='Please summarize the image content.',
-    ),
-    'artifacts.image.describe': PromptTranslation(
-        source_version='2026-10-27.v1', version='2026-10-27.v1',
-        template="Objectively describe the visible content of the attachment and answer the user's question; do not claim it has been saved.\nUser request: {question}",
-    ),
     'knowledge.gap_question': PromptTranslation(
         source_version='2026-10-27.v1-md1', version='2026-10-27.v1-md1',
         template="""

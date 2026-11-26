@@ -1,8 +1,8 @@
-"""Read explicit execution permission and local Docker environment."""
+"""Read explicit execution permission and native sandbox deployment."""
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from personal_agent.application.bash_execution.models import BashExecutionAuthorization
 
@@ -10,7 +10,6 @@ from personal_agent.application.bash_execution.models import BashExecutionAuthor
 class BashExecutionDeploymentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     authorization: BashExecutionAuthorization
-    endpoint: str = Field(min_length=1)
 
 
 def load_bash_deployment(path: Path) -> BashExecutionDeploymentConfig:

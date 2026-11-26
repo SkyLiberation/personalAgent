@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from logging import Logger
@@ -46,6 +47,7 @@ class WebAppContext:
     knowledge_gap_runner: KnowledgeGapJobRunner
     research_runner: ResearchSchedulerRunner
     knowledge_service: KnowledgeService
+    on_turn_stopping: Callable[[], None] | None = None
 
     def attach_to(self, app: FastAPI) -> None:
         app.state.context = self

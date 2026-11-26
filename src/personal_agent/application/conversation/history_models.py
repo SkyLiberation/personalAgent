@@ -20,6 +20,14 @@ class HistorySummary(BaseModel):
     working_summary: str = Field(min_length=1, max_length=20_000)
 
 
+class HistoryToolPruningBoundary(BaseModel):
+    """A main decision prefix eligible for the shorter tool-result projection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    run_ref: str = Field(min_length=1)
+    through_step: int = Field(ge=1)
+
+
 class HistoryRunCoverage(BaseModel):
     """One exact, complete decision prefix on the visible conversation branch."""
     model_config = ConfigDict(extra="forbid", frozen=True)

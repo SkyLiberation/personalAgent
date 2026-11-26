@@ -49,4 +49,4 @@ description: 用于本仓库设计或改进 LLM 的任务判断、复杂任务�
 
 ## 6. 验证与交付
 
-在唯一设计记录每次调用的责任、证据交接、最小输出及消费者、运行支持与验收判据。用 `analyze-proposal-progress` 制定比较和重复计划，涉及模型依赖时连续消费真实前置输出。已有失败用 `troubleshoot-llm-decisions` 定位；回到本 skill 修正相应设计。
+在唯一设计记录每次调用的责任、证据交接、最小输出及消费者、运行支持与验收判据。用 `analyze-proposal-progress` 确定比较、重复及跨模型调用的连续验证方法。

@@ -55,7 +55,7 @@ claim 独有错误没有进入最终回答时，只计额外研究诊断；移�
 
 比较对象是现行 claim 消费契约整体；本轮没有分别消融重复正文、重复证据、定位粒度和一致性职责，不能把观察差异归为其中某一项的独立贡献。
 
-[FActScore](https://github.com/shmsw25/FActScore/blob/f28272deffcf33efc1f1117d5479c10bb75221a9/factscore/factscorer.py#L125-L184)默认从待评生成文本提取 atomic facts，也允许预标注 facts；[SAFE](https://github.com/google-deepmind/long-form-factuality/blob/9d27158d198ced0a9d8271a80147cae580614601/eval/safe/search_augmented_factuality_eval.py#L182-L192)从实际 response 提取事实后评分。这与并行写作的额外 claims 及其保真职责不同，不能用外部方法采用原子事实直接证明本机制有收益。[固定源码清单](../../.tmp/claim-verifier-ablation-20261018/method-references/manifest.json)已保存，本轮未执行外部评测器。
+[FActScore](https://github.com/shmsw25/FActScore/blob/f28272deffcf33efc1f1117d5479c10bb75221a9/factscore/factscorer.py#L125-L184)默认从待评生成文本提取 atomic facts，也允许预标注 facts；[SAFE](https://github.com/google-deepmind/long-form-factuality/blob/9d27158d198ced0a9d8271a80147cae580614601/eval/safe/search_augmented_factuality_eval.py#L182-L192)从实际 response 提取事实后评分。这与并行写作的额外 claims 及其保真职责不同，不能用外部方法采用原子事实直接证明本机制有收益。固定源码清单（`.tmp/claim-verifier-ablation-20261018/method-references/manifest.json`）已保存，本轮未执行外部评测器。
 
 ### 2.1 具体评估指标
 
@@ -127,7 +127,7 @@ claim 独有错误没有进入最终回答时，只计额外研究诊断；移�
 
 核验 Prompt、模型、输入物化、claim／回答契约、选证或反馈修订链变化时，在该变更的验收计划中复用这些指标并选择受影响真实用例；不默认启动全量模型矩阵。新数据使用新计划和归档，固定输入、模型、代码、评测身份及重复计划。跨模型、任务集或判据版本的结果分别展示，不直接合并成趋势或发布结论。新增真实任务复现失败时按 EVD 更新用例；此前有效局部结论保持原身份。
 
-本轮固化状态：当时的归档重算入口核对 11 个主配对、17 个局部关系及 8 组汇总字段，均与旧快照一致；重复输出目录被拒绝，原文件校验和未变。证据见[正式重算报告](../../.tmp/claim-metrics-solidify-20261018/frozen-v1/report.json)和[核对记录](../../.tmp/claim-metrics-solidify-20261018/validation.json)。
+本轮固化状态：当时的归档重算入口核对 11 个主配对、17 个局部关系及 8 组汇总字段，均与旧快照一致；重复输出目录被拒绝，原文件校验和未变。证据见正式重算报告（`.tmp/claim-metrics-solidify-20261018/frozen-v1/report.json`）和核对记录（`.tmp/claim-metrics-solidify-20261018/validation.json`）。
 
 #### 标注、汇总与判定
 
@@ -173,9 +173,9 @@ claim 独有错误没有进入最终回答时，只计额外研究诊断；移�
 | D5 有用差异没有稳定转化为判断，问题不限于“没注意到” | 按预设判据，N1 的 claim 保留“最多三个”，回答丢失该限定，完整组仍未报告。N3 末次移除组的既有记录已注意到“国家名不含海岸”，却将其当作轻微修饰未报告 | A1 包含判断阈值或报告取舍的问题，增加另一份稿不能自动解决；N3 此记录来自移除组，不能将该判断缺陷独占归因于 claim。N1 的具体放弃依据仍未知 |
 | D6 收益未完成用户结果闭环 | N2 的三个答案引用支持缺口和一个研究稿独有错误是有效局部观察；主配对没有继续消费两组实际反馈，A3—A5 尚无完整成绩 | 目前只证明局部诊断价值，未证明能以更少退化、更高通过率交付。这是评估缺口，不是机制已被证明没有用户收益 |
 
-输入计数、原输入校验和及 N1 各版实际变化见[只读审计](../../.tmp/claim-mechanism-analysis-20261018/input-analysis.json)。N1 第 2 版核验请求只含会话、要求、两稿、返回资料与读取状态，没有完整工具历史；不能将此例说成模型已见全部执行事实仍予推翻。它暴露的是以研究稿一致性判断运行事实的职责错配，不是 Runtime 执行事实失真。
+输入计数、原输入校验和及 N1 各版实际变化见只读审计（`.tmp/claim-mechanism-analysis-20261018/input-analysis.json`）。N1 第 2 版核验请求只含会话、要求、两稿、返回资料与读取状态，没有完整工具历史；不能将此例说成模型已见全部执行事实仍予推翻。它暴露的是以研究稿一致性判断运行事实的职责错配，不是 Runtime 执行事实失真。
 
-同轨记录抽查保存了物理请求与响应身份，见[记录定位](../../.tmp/claim-mechanism-analysis-20261018/reasoning-inspection.json)和[判据依据核对](../../.tmp/claim-mechanism-analysis-20261018/decision-basis.json)。N3 末次移除组体现了已注意但不报告的取舍，最终输出仍按原未识别计分；既有推理不是来源事实，也不能替代因果反事实。其他记录的有限关键词未匹配，不证明模型没有注意。
+同轨记录抽查保存了物理请求与响应身份，见记录定位（`.tmp/claim-mechanism-analysis-20261018/reasoning-inspection.json`）和判据依据核对（`.tmp/claim-mechanism-analysis-20261018/decision-basis.json`）。N3 末次移除组体现了已注意但不报告的取舍，最终输出仍按原未识别计分；既有推理不是来源事实，也不能替代因果反事实。其他记录的有限关键词未匹配，不证明模型没有注意。
 
 #### 两稿同错时，claim 的帮助停在哪里
 
@@ -220,7 +220,7 @@ N3 的聚焦诊断中完整组识别“海岸”、移除组未识别，但完�
 
 用户澄清的目标是：回答已经多写了不必要且有误或无据的细节，核验仍放过；不是要求回答补齐用户没问的细节。本例的已确认问题是“海岸”缺少本单元原文支持，不据此判定真实地点一定不是海岸。
 
-运行使用 N3 末次完整真实输入，复用旧 v36 的两组实发请求、原标签及判决作为对照。候选只删除“或穷尽资料全部细节”9 个字符，保留其余目标、来源支持、未知边界、claims 消费差异、Schema 与模型配置。两次实际 SDK 请求均与对应旧请求仅差这项删除；262 个生产 Python 文件及 `.env` 哈希不变。执行身份、预算和停止条件在派发前封存，主结果见[独立结果数据](claim-context-deletion-results.json)，完整原始记录见[归档清单](../../.tmp/claim-context-deletion-20261018/run-1/artifact-manifest.json)。
+运行使用 N3 末次完整真实输入，复用旧 v36 的两组实发请求、原标签及判决作为对照。候选只删除“或穷尽资料全部细节”9 个字符，保留其余目标、来源支持、未知边界、claims 消费差异、Schema 与模型配置。两次实际 SDK 请求均与对应旧请求仅差这项删除；262 个生产 Python 文件及 `.env` 哈希不变。执行身份、预算和停止条件在派发前封存，主结果见[独立结果数据](claim-context-deletion-results.json)，完整原始记录见归档清单（`.tmp/claim-context-deletion-20261018/run-1/artifact-manifest.json`）。
 
 | N3-final 组别 | 原海岸识别 | 删除后海岸识别 | 删除后已标合法关系误报 | 实际输入／输出 tokens | 秒数 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -249,7 +249,7 @@ N3 的聚焦诊断中完整组识别“海岸”、移除组未识别，但完�
 | claim 正文 `c3` | 不适用 | 1 |
 | claim 片段 `c3.f1`，重复正文 | 不适用 | 1 |
 
-计数核对“海岸、沿海、coast/coastal/coastline”等字面位置，只用于定位文字来源，不作语义评分。`c3` 与 `a3` 绑定同一组 49 条原文；其中 `d3:59` 为 `NES (Colombia Costa Rica + XCL Subset)`，没有给出海岸限定。已冻结的问题仍是该限定缺少本单元原文支持，不能解释为真实地点必定不是海岸。请求身份、位置及引用集合见[审计数据](../../.tmp/claim-persistent-analysis-20261018/context-audit.json)。
+计数核对“海岸、沿海、coast/coastal/coastline”等字面位置，只用于定位文字来源，不作语义评分。`c3` 与 `a3` 绑定同一组 49 条原文；其中 `d3:59` 为 `NES (Colombia Costa Rica + XCL Subset)`，没有给出海岸限定。已冻结的问题仍是该限定缺少本单元原文支持，不能解释为真实地点必定不是海岸。请求身份、位置及引用集合见审计数据（`.tmp/claim-persistent-analysis-20261018/context-audit.json`）。
 
 删除后的无 claim 记录在概述证据地点时带入了稿件的海岸描述，最终返回空报告。这支持用户提出的混用怀疑：模型比较的证据概述已经掺入待核验内容，再对照回答就不容易看到原有差异。该次记录还用 `d3:113`、`d3:129` 判断 `a3` 的训练／测试关系及声景形式；两条虽在返回资料中，却未绑定到 `a3`。按实际来源支持契约，其他单元的材料不能补成本段已经绑定的依据。
 
@@ -257,13 +257,13 @@ N3 的聚焦诊断中完整组识别“海岸”、移除组未识别，但完�
 
 代码核对也排除了两项解释：报告校验（旧版 `research.py`）没有“同一单元最多一项”的限制；两份新响应的 JSON 正文与保存报告逐字段一致，未发现后处理丢弃海岸反馈。校验只能检查实际报告的类别、目标及证据身份，不能据空报告证明每个事实都已查证。
 
-**“海岸”出现在输入里，不足以解释漏检。**原 MN3 聚焦完整组保留了与 N3-final 逐字段相同的 `c3`、`a3`，同样含三处海岸，却成功指出 `d3:59` 不支持该限定，还分别报告了同片段的声景问题。原归档哈希及这一对照见[聚焦审计](../../.tmp/claim-persistent-analysis-20261018/counterexample-audit.json)。聚焦输入删除了其他被评单元，不能替代完整阶段通过，也不能由此证明缩短输入即可解决。
+**“海岸”出现在输入里，不足以解释漏检。**原 MN3 聚焦完整组保留了与 N3-final 逐字段相同的 `c3`、`a3`，同样含三处海岸，却成功指出 `d3:59` 不支持该限定，还分别报告了同片段的声景问题。原归档哈希及这一对照见聚焦审计（`.tmp/claim-persistent-analysis-20261018/counterexample-audit.json`）。聚焦输入删除了其他被评单元，不能替代完整阶段通过，也不能由此证明缩短输入即可解决。
 
 本轮因此将问题定位到核验时的内容归属和逐项对应：被评文字可能进入证据概述，其他单元资料可能被当作本段依据，多个独立关系也可能被整段判断掩盖。被评回答必须保留原样，才能检查其错误；不能通过先删掉“海岸”来证明核验修复。claim 三次重复是否加重混用、完整输入的其他部分怎样影响判断，仍不能由这项审计确定；无 claim 仅一次也会漏检。展示归属与仅去重的两项独立模型对照见下节，决策由[唯一设计](../optimization/to_verify/research-goal-coverage.md#输入归属的验证与优化选择)拥有。上述只读审计自身的新增模型调用、生产改动及原成绩变更均为 0。
 
 ### 2.5 输入归属与去重对照
 
-**两项变化均未修复海岸漏检，已按预声明停止，不接入生产。**它们是原真实请求副本上的隔离模型诊断，不计完整阶段优化验收或 Product E2E 通过。结果见[独立数据](claim-input-provenance-results.json)，派发前计划、脚本、原始 SDK 请求及响应见[封存清单](../../.tmp/claim-input-provenance-20261018/run-1/artifact-manifest.json)。
+**两项变化均未修复海岸漏检，已按预声明停止，不接入生产。**它们是原真实请求副本上的隔离模型诊断，不计完整阶段优化验收或 Product E2E 通过。结果见[独立数据](claim-input-provenance-results.json)，派发前计划、脚本、原始 SDK 请求及响应见封存清单（`.tmp/claim-input-provenance-20261018/run-1/artifact-manifest.json`）。
 
 两组均从原 v36 的 N3-final 完整组派生，保留全部 claims、最终回答、用户目标、原文、绑定和读取状态，不叠加第 2.3 节的 9 字删除。B 仅将现有 JSON 键展示为待核验稿件、定位片段、本单元已绑定原文等标签；D 仅省略 claims 的重复 `draft`，逐条证明其可由片段顺序拼接逐字恢复。模型、两个 System 消息、输出 Schema 及其他 SDK 参数保持；两份实际 SDK 请求均与预期载荷逐参数一致。B 保留三处海岸，D 保留两处，原文均未增删。
 
@@ -284,7 +284,7 @@ B 报告 `c3.f1` 的声景／独立性缺证，以及 `c2.f2` 中精确录音条
 
 ### 2.6 外部同类问题检索
 
-复核日期：2026-10-19。**已有公开研究报告相近问题，最直接的是 CoVe 对初稿影响核验的比较。**本轮检索原始论文，核对方法、错误示例和评测范围，未执行外部评测器或新增本地模型调用。四篇会议论文 PDF、文本提取及哈希见[来源归档](../../.tmp/verifier-related-research-20261019/archive-manifest.json)。按 EVD，四篇均记为 C 级论文机制线索，各自实验不替代本工程失败、源码调用链和生产准入依据。
+复核日期：2026-10-19。**已有公开研究报告相近问题，最直接的是 CoVe 对初稿影响核验的比较。**本轮检索原始论文，核对方法、错误示例和评测范围，未执行外部评测器或新增本地模型调用。四篇会议论文 PDF、文本提取及哈希见来源归档（`.tmp/verifier-related-research-20261019/archive-manifest.json`）。按 EVD，四篇均记为 C 级论文机制线索，各自实验不替代本工程失败、源码调用链和生产准入依据。
 
 | 原始研究与具体位置 | 研究实际观察或采用的机制 | 与本例的对应及适用差异 |
 | --- | --- | --- |
@@ -299,7 +299,7 @@ B 报告 `c3.f1` 的声景／独立性缺证，以及 `c2.f2` 中精确录音条
 
 ### 2.7 原文阅读隔离诊断
 
-**人工选定失败单元和地理问题后，可见组第一步已指出“海岸”缺证，原核验器消费该笔记后本次识别；隔离组阅读不合格，未进入比较。**它不能证明独立阅读、普通二次核验或信息隔离的独立收益。本轮为同一个 N3-final 真实输入副本上的有界诊断，不是新任务、生产修复或 Product E2E。结果见[独立数据](claim-source-reading-isolation-results.json)，输入、两阶段 Schema、SDK 载荷、响应、审读及停止记录见[50 个文件的封存清单](../../.tmp/claim-source-reading-isolation-20261019/run-1/artifact-manifest.json)。
+**人工选定失败单元和地理问题后，可见组第一步已指出“海岸”缺证，原核验器消费该笔记后本次识别；隔离组阅读不合格，未进入比较。**它不能证明独立阅读、普通二次核验或信息隔离的独立收益。本轮为同一个 N3-final 真实输入副本上的有界诊断，不是新任务、生产修复或 Product E2E。结果见[独立数据](claim-source-reading-isolation-results.json)，输入、两阶段 Schema、SDK 载荷、响应、审读及停止记录见50 个文件的封存清单（`.tmp/claim-source-reading-isolation-20261019/run-1/artifact-manifest.json`）。
 
 阅读问题只询问数据集名称、所在地及原文明示的环境／地理范围，没有给出“海岸”或预期判决。两组收到相同的 49 条本单元原文、System、Schema 与配置；可见组另收到原 `c3` 正文、片段及 `a3`，隔离组看不到稿件。两组均仅采样一次。只有阅读忠实、地理主体与引用成立才允许进入第二步；第二步保留原完整核验请求，只新增本组实际阅读结果作为模型派生的只读笔记，不人工修正，不提升为来源或标准反馈。人工选定已知失败单元及问题的能力不计入模型收益。
 
@@ -329,7 +329,7 @@ B 报告 `c3.f1` 的声景／独立性缺证，以及 `c2.f2` 中精确录音条
 
 复核日期：2026-10-19。**已定位的直接问题有两条：模型发现无据限定后按“细节不重要”放弃报告；另一些轨迹把被评文字、背景推断或其他单元引用混成了本单元依据。**未讨论海岸的轨迹仍不能区分漏覆盖与概括判断。责任位于模型的来源支持判断和报告选择，未发现代码吞掉已输出 finding；不能把全部漏检归为同一原因，或把某一个 Prompt 词语宣布为唯一根因。
 
-本轮重新核对实际 SDK、原生输出、typed 报告及可用同轨记录。四份旧清单共 838 个文件、262 个生产 Python 及配置身份保持；新[审计归档](../../.tmp/claim-root-cause-review-20261019/artifact-manifest.json)封存 41 个文件，包含 26 份外部原始材料、根因证据坐标、候选全文及零调用预期载荷。未运行模型、第三方项目或单元测试。
+本轮重新核对实际 SDK、原生输出、typed 报告及可用同轨记录。四份旧清单共 838 个文件、262 个生产 Python 及配置身份保持；新审计归档（`.tmp/claim-root-cause-review-20261019/artifact-manifest.json`）封存 41 个文件，包含 26 份外部原始材料、根因证据坐标、候选全文及零调用预期载荷。未运行模型、第三方项目或单元测试。
 
 | 本地证据 | 直接定位 | 结论边界 |
 | --- | --- | --- |
@@ -339,11 +339,11 @@ B 报告 `c3.f1` 的声景／独立性缺证，以及 `c2.f2` 中精确录音条
 | MN3 聚焦完整组 | 同一 c3、a3、三处海岸仍能分别报告地理与声景缺口 | 排除“三次重复必然漏检”和“同段不能多报”；裁剪诊断不算完整阶段验收 |
 | 最新可见组两步链 | 第一步已比较稿件与原文并提出目标疑点；第二步实际采用笔记，仍权衡该限定是否足以报告，最后才输出 | 只证明聚焦发现和显式疑点交接本次命中；此前简称“先读原文有效”过宽，不能据此接入通用两阶段 |
 
-对应原生文件、SHA-256 和字符区间见[本地审计](../../.tmp/claim-root-cause-review-20261019/local-audit.json)，只公开语义摘要，不复制推理正文。隔离组停止也经过复核：事前规则要求地理阅读忠实且不得以背景补作原文明示事实；它新增“自然保护区”，又将 NBP 地点不明扩大成第八名称不明，属于本轮地理任务。原引用 ID 全部合法，失败在语义支持，不是 ID 校验；未执行的后续比较仍不计漏检。
+对应原生文件、SHA-256 和字符区间见本地审计（`.tmp/claim-root-cause-review-20261019/local-audit.json`），只公开语义摘要，不复制推理正文。隔离组停止也经过复核：事前规则要求地理阅读忠实且不得以背景补作原文明示事实；它新增“自然保护区”，又将 NBP 地点不明扩大成第八名称不明，属于本轮地理任务。原引用 ID 全部合法，失败在语义支持，不是 ID 校验；未执行的后续比较仍不计漏检。
 
 生产契约已有本单元来源限制、缺证无需证明为假及独立错误分别报告。当时的 Prompt同时使用来源支持的“必要关系”、两稿保真的“实质内容”和用户覆盖的“所需事实”；这些职责被交叉理解为重要性筛选，是有轨迹依据的候选解释，尚未证明哪段措辞造成了它。旧版 `application/conversation/research.py` 的校验只约束已报告问题的类别、定位和引用，空 findings 可通过；它不能确定模型是否检查过段内每个限定。增加一个 supported 自评也不能解决这个语义覆盖缺口。
 
-外部检索优先读取原始 issue、评论、关联 PR 和固定源码，未把机器人回复当作维护者结论。下列状态均截至本次复核，来源快照与 URL 由[来源清单](../../.tmp/claim-root-cause-review-20261019/source-manifest.json)拥有。
+外部检索优先读取原始 issue、评论、关联 PR 和固定源码，未把机器人回复当作维护者结论。下列状态均截至本次复核，来源快照与 URL 由来源清单（`.tmp/claim-root-cause-review-20261019/source-manifest.json`）拥有。
 
 | 一手案例 | 实际诊断、处理及状态 | 对本地的启发与差异 |
 | --- | --- | --- |
@@ -355,7 +355,7 @@ B 报告 `c3.f1` 的声景／独立性缺证，以及 `c2.f2` 中精确录音条
 
 Issue 和未合并 PR 均按 C 级机制线索；固定公开源码按 A 级解释实现，不证明本地收益。独立源码比较包括 TruLens 的来源保真／核验前过滤、Ragas 的 statement→verdict→分数链，以及 DeepEval 发布版 `python-v4.2.4@da9b2c969f8a15e8aa4ef67c372157ce060cd63e` 的 truths／claims→verdict→默认 borderline 通过链。均只读，未执行第三方评测。本轮另查询 LangChain、LlamaIndex 的相近评估问题，未找到比上述案例更充分的可比诊断；也未找到维护者确认的本地同款海岸归属错误。
 
-设计取舍由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#当前优化取舍)拥有：优先替换来源支持定义，明确已写事实不因非必问或不影响主结论而豁免；保留用户目标边界、一次调用和现有输出。候选只改变一个段落，增加 84 个字符，未改变 Schema、稿件、证据及角色顺序。三个完整真实输入的原 SDK 均逐参数匹配历史封存请求，候选预期载荷仅有该段落变化，见[设计计划](../../.tmp/claim-root-cause-review-20261019/prepared-design/plan.json)及[具体差异](../../.tmp/claim-root-cause-review-20261019/prepared-design/prompt.diff)。
+设计取舍由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#当前优化取舍)拥有：优先替换来源支持定义，明确已写事实不因非必问或不影响主结论而豁免；保留用户目标边界、一次调用和现有输出。候选只改变一个段落，增加 84 个字符，未改变 Schema、稿件、证据及角色顺序。三个完整真实输入的原 SDK 均逐参数匹配历史封存请求，候选预期载荷仅有该段落变化，见设计计划（`.tmp/claim-root-cause-review-20261019/prepared-design/plan.json`）及具体差异（`.tmp/claim-root-cause-review-20261019/prepared-design/prompt.diff`）。
 
 零调用准备曾因在全部阶段要求 SDK 匹配唯一而失败：原生产捕获和回放本来就存在相同载荷。现只将匹配限定到声明的历史回放阶段，原参数相等断言保留；失败记录和修正一并封存，未触发模型请求。该复审阶段只固定 N3、N1 的两种无据限定与五个合法保护关系，没有派发模型；后续补齐执行入口、审读表并取得的实际成绩另见下一节。候选针对已定位的重要性豁免，不预先声称单段替换已解决来源混用。生产和旧指标保持，A4 修订、A5 用户结果及完整链净收益仍未验证。
 
@@ -363,7 +363,7 @@ Issue 和未合并 PR 均按 C 级机制线索；固定公开源码按 A 级解�
 
 执行日期：2026-10-19。**明确“已写事实不能因不重要而免于核验”之后，N3 海岸缺证仍未进入反馈。该候选失败停止，不接入生产。**目标 A1 为 0/1，三个合法关系误报为 0/3；目标反馈没有形成，A3 没有可评分项，不能记通过。N1-final、H5 按事前门槛未执行，不算漏检，也不计入成绩分母。
 
-设计及验收正文由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#当前优化取舍)拥有。候选只替换 `citation_not_supported` 的定义段，增加 84 个字符，明确核对已写事实及限定，且非必问、不影响主结论都不能豁免。保留原完整输入、现有 claim、动态 Schema、消息顺序和供应商参数，没有加入前轮已指出疑点的笔记。冻结的[设计计划](../../.tmp/claim-root-cause-review-20261019/prepared-design/plan.json)保持，实际派发与逐项审读约束由[执行计划](../../.tmp/claim-source-support-boundary-20261019/run-1/execution-plan.json)拥有。
+设计及验收正文由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#当前优化取舍)拥有。候选只替换 `citation_not_supported` 的定义段，增加 84 个字符，明确核对已写事实及限定，且非必问、不影响主结论都不能豁免。保留原完整输入、现有 claim、动态 Schema、消息顺序和供应商参数，没有加入前轮已指出疑点的笔记。冻结的设计计划（`.tmp/claim-root-cause-review-20261019/prepared-design/plan.json`）保持，实际派发与逐项审读约束由执行计划（`.tmp/claim-source-support-boundary-20261019/run-1/execution-plan.json`）拥有。
 
 | 原定顺序 | 实际结果 | 计分边界 |
 | --- | --- | --- |
@@ -386,13 +386,13 @@ Issue 和未合并 PR 均按 C 级机制线索；固定公开源码按 A 级解�
 
 这次反事实否定了“只改清一段规则就能修复该输入”的候选。历史重要性豁免与来源混用证据仍保留；规则送达并不保证段内每个限定都实际进入判断。下一准入须重审来源判断与报告的任务设计，解释如何核对具体限定；本轮不再追加同义规则、重采样、claim 拆分或两阶段实验。生产 Python、配置及冻结数据／指标／计划／正式重算模块保持原身份。A4 修订、A5 正式用户结果和 A6 完整链净收益未执行，不宣称整个 claim 机制无用或回答质量改善。
 
-实际运行 `run_candidate.py prepare`、`run-one --sample N3-final`、`review-one --sample N3-final --review-file …` 及同目录 `finish.py`，均从仓库根以 `.venv\Scripts\python.exe -X utf8` 启动。收尾脚本只审计和封存，不调用模型；其独立审读修正了 SDK 中 Schema System 与业务 System 的索引区分。原派发脚本与计划未改。[封存清单](../../.tmp/claim-source-support-boundary-20261019/run-1/artifact-manifest.json)收录实际输入、输出、SDK、用量审计、语义复核及停止记录，N1-final、H5 状态由同一停止文件拥有。
+实际运行 `run_candidate.py prepare`、`run-one --sample N3-final`、`review-one --sample N3-final --review-file …` 及同目录 `finish.py`，均从仓库根以 `.venv\Scripts\python.exe -X utf8` 启动。收尾脚本只审计和封存，不调用模型；其独立审读修正了 SDK 中 Schema System 与业务 System 的索引区分。原派发脚本与计划未改。封存清单（`.tmp/claim-source-support-boundary-20261019/run-1/artifact-manifest.json`）收录实际输入、输出、SDK、用量审计、语义复核及停止记录，N1-final、H5 状态由同一停止文件拥有。
 
 ### 2.10 最小 Context 与错误类型核对
 
 执行日期：2026-10-19。**只减材料的 A 仍漏检；把任务简化为单个回答段落的来源判断后，B 准确报告了海岸缺证。现有 `citation_not_supported` 能承载该错误，无需新增类别。**两组是事前固定的隔离诊断，B 没有接收 A 的输出或前轮疑点笔记；本次不计完整阶段优化成功，不接入生产。
 
-设计及 MIN-1—MIN-4 判据由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#最小充分上下文诊断)拥有，原始[派发计划](../../.tmp/claim-minimal-context-20261019/run-1/plan.json)固定两个独立调用、每组一次语义采样。保留同一 N3-final 的实际 c3／a3 完整正文及本单元 49 条原文，未抽出海岸小句、补表头或提供预期判断；模型、thinking、完整动态输出 Schema 及其他供应商参数保持。
+设计及 MIN-1—MIN-4 判据由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#最小充分上下文诊断)拥有，原始派发计划（`.tmp/claim-minimal-context-20261019/run-1/plan.json`）固定两个独立调用、每组一次语义采样。保留同一 N3-final 的实际 c3／a3 完整正文及本单元 49 条原文，未抽出海岸小句、补表头或提供预期判断；模型、thinking、完整动态输出 Schema 及其他供应商参数保持。
 
 | 诊断条件 | 用户载荷字符数 | 业务 System 字符数 | 海岸目标 | 实际反馈 |
 | --- | ---: | ---: | ---: | --- |
@@ -426,13 +426,13 @@ B 的第一项反馈指出声景形式缺证，核心有据；但“或录制／
 
 本次说明在单稿及来源判断的整体条件下，该模型能够识别并用现有类型报告此错误。A、B 同时存在任务说明、输入外壳、稿件数量及重复表示差异，且只有一次采样，不能将命中单独归因于短 Prompt、删除 claim 或输入变短。已有 MN3 聚焦成功仍保留，两份新载荷在派发前核对无历史精确匹配，没有重跑旧载荷。本次两组结束后不再采样，不新增生产阶段；完整输入问题仍保持未修复，A4、A5 及完整链净收益未执行。
 
-实际从仓库根以 `.venv\Scripts\python.exe -X utf8` 运行 `run_diagnostic.py prepare`、A／B 各一次 `run-one`、逐项 `review-one` 及同目录 `finish.py`；脚本位于 `.tmp/claim-minimal-context-20261019/`。数据见[结果投影](claim-minimal-context-results.json)，原始输入、SDK、输出、独立审读、类型审计及停止记录见[封存清单](../../.tmp/claim-minimal-context-20261019/run-1/artifact-manifest.json)。生产 Python、配置和冻结 v1 数据／指标／计划／正式重算模块保持原身份。
+实际从仓库根以 `.venv\Scripts\python.exe -X utf8` 运行 `run_diagnostic.py prepare`、A／B 各一次 `run-one`、逐项 `review-one` 及同目录 `finish.py`；脚本位于 `.tmp/claim-minimal-context-20261019/`。数据见[结果投影](claim-minimal-context-results.json)，原始输入、SDK、输出、独立审读、类型审计及停止记录见封存清单（`.tmp/claim-minimal-context-20261019/run-1/artifact-manifest.json`）。生产 Python、配置和冻结 v1 数据／指标／计划／正式重算模块保持原身份。
 
 ### 2.11 最简输入逐组加回
 
 执行日期：2026-10-19。**尚未定位到可复现的误导 Context。第一组首次漏检，在完全相同的输入下重放又命中，不能把这次漏检归因于新增的原目标材料。**本轮按预声明的配对不一致规则停止，未继续加回后续组或拆查第一组。
 
-设计及 ADD-1—ADD-4 由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#最简输入的逐组加回诊断)拥有。[计划](../../.tmp/claim-context-addback-20261019/run-1/plan.json)在首调用前固定全部 16 个载荷及自适应执行树：从历史成功 B 的新身份基准 B0 出发，累计加回原目标与身份、同单元 claim／回答投影、其他稿件、同文档返回资料、其他返回资料；首次退化后仅做预定 C／P 配对，复现后才进入预先划定的两个子条件。
+设计及 ADD-1—ADD-4 由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#最简输入的逐组加回诊断)拥有。计划（`.tmp/claim-context-addback-20261019/run-1/plan.json`）在首调用前固定全部 16 个载荷及自适应执行树：从历史成功 B 的新身份基准 B0 出发，累计加回原目标与身份、同单元 claim／回答投影、其他稿件、同文档返回资料、其他返回资料；首次退化后仅做预定 C／P 配对，复现后才进入预先划定的两个子条件。
 
 四次实发请求的来源任务说明均为原短说明 444 字符，完整动态 Schema、模型及供应商参数不变，`unit=a3` 及其 49 条完整绑定原文逐字段相同。G1 只新增原 `conversation`、八条 `requirements`、`research_ref` 和空 `source_reading_state`，没有加入 claim、其他稿件或新原文，也没有新增海岸表述。B0 与历史 B、两次子输入、两次父输入分别按 SDK 全参数精确相等核对。新增材料仍不扩大被评对象和合法引用范围。
 
@@ -449,7 +449,7 @@ B 的第一项反馈指出声景形式缺证，核心有据；但“或录制／
 
 第一次配对为父通过／子失败，第二次反向配对为子通过／父通过，故 `boundary_not_reproduced`。本轮不支持“原目标材料就是误导项”，也未排除该组影响命中概率；两份输入各两次不是独立任务样本，不估计稳定成功率。G2—G5 及 H1／H2 未到达，不记失败；因此 claim 重复、其他稿件或额外原文的影响仍未由本轮验证。保持当前来源任务的加回实验也不能单独裁定原统一 Prompt 的作用。
 
-四个逻辑／物理调用合计输入 33,388、输出 6,818、总计 40,206 tokens，调用累计 231.230 秒；结构恢复、服务重试、未知用量、可见范围越界均为零，均未触发单次成本复审。派发遵守 2,000,000 已知 tokens 硬限及首调用后 7,200 秒的新派发截止；该截止不是已发原子调用的整组墙钟硬限。数据见[结果投影](claim-context-addback-results.json)，预制输入、实发 SDK、原始报告、独立审读、停止事实及工程核对见[封存清单](../../.tmp/claim-context-addback-20261019/run-1/artifact-manifest.json)。
+四个逻辑／物理调用合计输入 33,388、输出 6,818、总计 40,206 tokens，调用累计 231.230 秒；结构恢复、服务重试、未知用量、可见范围越界均为零，均未触发单次成本复审。派发遵守 2,000,000 已知 tokens 硬限及首调用后 7,200 秒的新派发截止；该截止不是已发原子调用的整组墙钟硬限。数据见[结果投影](claim-context-addback-results.json)，预制输入、实发 SDK、原始报告、独立审读、停止事实及工程核对见封存清单（`.tmp/claim-context-addback-20261019/run-1/artifact-manifest.json`）。
 
 实际从仓库根以 `.venv\Scripts\python.exe -X utf8` 运行 `.tmp/claim-context-addback-20261019/run_addback.py prepare`、四次 `run-next`、四次 `review-one` 和同目录 `finish.py`。本轮只增加隔离诊断及文档，生产代码、Prompt、配置与冻结 v1 指标身份保持；A4 修订、A5 用户结果、完整链净收益和 Product E2E 均未执行，不计生产优化验收或问题关闭。
 
@@ -457,7 +457,7 @@ B 的第一项反馈指出声景形式缺证，核心有据；但“或录制／
 
 执行日期：2026-10-19。**两次中性追问补齐了可核查依据说明，但仍未解释原同输入为什么一漏一中。**G1 对象现在指出海岸限定无据并承认旧报告没有单独覆盖；repeat-C 对象的解释与原命中报告一致。“原目标没有参与判断”只是事后自述，不能据此排除背景影响。
 
-设计及 BAS-1—BAS-3 由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#同输入异判的中性依据追问)拥有。[计划](../../.tmp/claim-context-neutral-20261019/run-1/plan.json)在派发前固定两条轨迹各一次，G1 在先、repeat-C 在后；原加回组保持停止，不重跑核验。每次将完整原 SDK messages 与自己的实际 assistant content 作为待核对数据，原字符串及顺序保持。两次原 SDK messages 相同，新输入只在历史报告字段不同；新答复相互不可见，没有附加审读结论、成功／失败标签、原生 reasoning 或理想反馈。
+设计及 BAS-1—BAS-3 由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#同输入异判的中性依据追问)拥有。计划（`.tmp/claim-context-neutral-20261019/run-1/plan.json`）在派发前固定两条轨迹各一次，G1 在先、repeat-C 在后；原加回组保持停止，不重跑核验。每次将完整原 SDK messages 与自己的实际 assistant content 作为待核对数据，原字符串及顺序保持。两次原 SDK messages 相同，新输入只在历史报告字段不同；新答复相互不可见，没有附加审读结论、成功／失败标签、原生 reasoning 或理想反馈。
 
 问句只指定本例的 NES 地点表述，要求说明明示原文、推断、适用规则及目标材料如有参与时的作用；没有提示海岸应判缺证，允许维持、修正或无法确认。完整问句及运行前 critic 随计划封存。输出只有 `explanation` 一个字段，模型／thinking及供应商配置沿原值；新任务使用该单字段 Schema，输出上限32,768、零结构恢复、零新增服务重试。这是新请求中的事后解释，无法恢复旧调用内部状态，也不是原context的因果消融或生产核验验收。
 
@@ -470,17 +470,17 @@ B 的第一项反馈指出声景形式缺证，核心有据；但“或录制／
 
 **当前定位仍是模型未稳定单独核对实际断言的附加限定。**定向问到这一关系时能够说明支持缺口，但问句范围变小、任务变成解释且旧报告可见，不能将两答一致外推为某种核验优化成功。没有取得原目标被当作来源支持的正面证据，也没有取得原目标实际完全未影响判断的可验证证据；为何原G1采用整体接受而另次分开核对仍未证实。不据此恢复claim拆分、增加类型、阶段或继续叠加Prompt。
 
-两逻辑／物理调用共输入19,037、输出985、总20,022 tokens，累计48.276秒，恢复、服务重试和未知用量为零，未触成本复审。预算遵守200,000已知tokens硬限、1,800秒新派发截止及2,400秒单物理时限；结束为 `two_questions_completed`，没有同义追问。实际运行 `.venv\Scripts\python.exe -X utf8 .tmp/claim-context-neutral-20261019/run_neutral.py prepare`、两次 `run-next` 和 `finish`。31个新文件及原97文件身份、两份预期／实际SDK、原生content与typed答复、逐物理用量均核对，见[封存清单](../../.tmp/claim-context-neutral-20261019/run-1/artifact-manifest.json)、[逐项审读](../../.tmp/claim-context-neutral-20261019/analysis.md)及[结果投影](claim-context-neutral-results.json)。审读由执行者完成，非独立人工盲审。生产代码、Prompt、配置及冻结v1指标身份保持，没有生产候选准入或完整问题关闭。
+两逻辑／物理调用共输入19,037、输出985、总20,022 tokens，累计48.276秒，恢复、服务重试和未知用量为零，未触成本复审。预算遵守200,000已知tokens硬限、1,800秒新派发截止及2,400秒单物理时限；结束为 `two_questions_completed`，没有同义追问。实际运行 `.venv\Scripts\python.exe -X utf8 .tmp/claim-context-neutral-20261019/run_neutral.py prepare`、两次 `run-next` 和 `finish`。31个新文件及原97文件身份、两份预期／实际SDK、原生content与typed答复、逐物理用量均核对，见封存清单（`.tmp/claim-context-neutral-20261019/run-1/artifact-manifest.json`）、逐项审读（`.tmp/claim-context-neutral-20261019/analysis.md`）及[结果投影](claim-context-neutral-results.json)。审读由执行者完成，非独立人工盲审。生产代码、Prompt、配置及冻结v1指标身份保持，没有生产候选准入或完整问题关闭。
 
 ### 2.13 直接追问未分类原因
 
 执行日期：2026-10-19。**明确追问“为什么没有把海岸判为citation_not_supported”后，模型仍未给出原漏检原因。**答复表示，原报告未记载不报告该项的理由，无法从本次材料确认当时是否刻意略过及采用了何种取舍。
 
-这是用户明确要求的定向问题，不称中性。[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#按用户要求直接追问漏检类别)及[计划](../../.tmp/claim-context-direct-question-20261019/run-1/plan.json)在调用前固定一次逻辑／物理。沿前次G1公开依据任务，只替换问句，原始SDK messages、原G1实际报告、两个System、单字段Schema及供应商参数均保持；没有加入中性答复、后次命中报告、审读结论或原生reasoning。
+这是用户明确要求的定向问题，不称中性。[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#按用户要求直接追问漏检类别)及计划（`.tmp/claim-context-direct-question-20261019/run-1/plan.json`）在调用前固定一次逻辑／物理。沿前次G1公开依据任务，只替换问句，原始SDK messages、原G1实际报告、两个System、单字段Schema及供应商参数均保持；没有加入中性答复、后次命中报告、审读结论或原生reasoning。
 
 答复准确核对了旧报告仅有声景及生态概括两项、没有海岸finding，以及d3:59只列国名和XCL子集；引用支持及缺证不等于反证的规则也与原短任务一致。它将当前外层question称为“原请求”，但该question是本次追问，不是旧G1的原研究请求；不能误读为原核验已经收到海岸及类别提示。新的说明没有补出原漏检理由，不能据此把未知写成“没检查”“觉得不重要”或“被目标背景干扰”。
 
-一逻辑／物理正常stop，9,431输入、699输出、10,130总tokens，25.406秒；结构恢复、服务重试、未知用量均为零，终止为 `single_direct_question_completed`。实际运行 `.venv\Scripts\python.exe -X utf8 .tmp/claim-context-direct-question-20261019/run_direct.py prepare`、`run`、`finish`。19个新文件及前序身份、唯一问句差异、实际SDK、原生content保真与物理用量核对通过，见[封存清单](../../.tmp/claim-context-direct-question-20261019/run-1/artifact-manifest.json)、[答复与审读](../../.tmp/claim-context-direct-question-20261019/analysis.md)、[实际原答复](../../.tmp/claim-context-direct-question-20261019/run-1/G1/basis.json)及[结果投影](claim-context-direct-question-results.json)。
+一逻辑／物理正常stop，9,431输入、699输出、10,130总tokens，25.406秒；结构恢复、服务重试、未知用量均为零，终止为 `single_direct_question_completed`。实际运行 `.venv\Scripts\python.exe -X utf8 .tmp/claim-context-direct-question-20261019/run_direct.py prepare`、`run`、`finish`。19个新文件及前序身份、唯一问句差异、实际SDK、原生content保真与物理用量核对通过，见封存清单（`.tmp/claim-context-direct-question-20261019/run-1/artifact-manifest.json`）、答复与审读（`.tmp/claim-context-direct-question-20261019/analysis.md`）、实际原答复（`.tmp/claim-context-direct-question-20261019/run-1/G1/basis.json`）及[结果投影](claim-context-direct-question-results.json)。
 
 问句明确给出了对象和类别，答复可能受提示；这只是事后依据说明，不是恢复旧内部状态或背景影响消融。此次未取得新的根因证据，执行者审读不是独立盲审；不继续问同义问题、不重采样核验，生产代码、Prompt、配置及冻结v1指标保持，无新候选或问题关闭。
 
@@ -527,7 +527,7 @@ B1 的呈现变更已送达，空报告却没有实际 finding 键序可检查�
 
 准确命中为 B0 的 R08、R09、R13，以及 G1 的 R07、R15、R18。B0 的 R01、R05、R16、R20 与 G1 的 R02、R03、R06、R10、R11、R14、R19 未报海岸。漏报报告仍能指出同段声景或训练独立性缺证，不能据此说整段没有检查，也不能用其他错误替代海岸关系。
 
-三个失败报告均来自 B0：R04、R12 的原生文字指出海岸缺证，却定位到未输入的 claim；R17 未指出海岸，还使用了错误或不存在的 claim 片段。三次原生响应均正常 stop、SDK 精确、用量完整，原动态校验拒绝，未人工改成 a3、未重试。它们属于模型坏输出，不是服务故障；其中两次“文字识别但定位失败”单列观察，不算可用反馈。原始响应及逐项依据见[失败输出审计](../../.tmp/verifier-repeatability-continuation-20261020/invalid-output-audit.md)。
+三个失败报告均来自 B0：R04、R12 的原生文字指出海岸缺证，却定位到未输入的 claim；R17 未指出海岸，还使用了错误或不存在的 claim 片段。三次原生响应均正常 stop、SDK 精确、用量完整，原动态校验拒绝，未人工改成 a3、未重试。它们属于模型坏输出，不是服务故障；其中两次“文字识别但定位失败”单列观察，不算可用反馈。原始响应及逐项依据见失败输出审计（`.tmp/verifier-repeatability-continuation-20261020/invalid-output-audit.md`）。
 
 为保持历史 SDK，输出 Schema 仍包含原全稿 claim 枚举，而裁剪任务只含 a3。R04／R12／R17 暴露了这个任务可见对象与输出候选不完全对齐的限制；**本轮不能用 3/10 宣称生产完整核验准确率只有 30%。**同一 Schema 在全部调用中保持，结论仅限两份固定诊断输入，不据此立即修改生产字段或类型。
 
@@ -541,13 +541,13 @@ B1 的呈现变更已送达，空报告却没有实际 finding 键序可检查�
 
 续跑第一个准备身份有未用导入的 Ruff F401，零模型调用；原身份保留，删除该导入后以 `continuation-v2`／`run-2` 执行。实际 `prepare`、`batch`、逐项 `review-one`、`finish` 分别位于 `.tmp/verifier-repeatability-20261020/` 及 `.tmp/verifier-repeatability-continuation-20261020/`。达到二十次后按 `fixed_sample_count_completed` 结束，没有未执行项、语义重采、结构恢复、服务重试、未知用量或成本复审。
 
-二十次共 **196,956 tokens、961.957 秒模型调用时间**。二十份实发 SDK 及逐物理用量均核对，十七份有效报告的原生 content 与 typed 结果一致；三份被拒报告的原生内容和用量保留在 SDK 归档。结果见[只读数据](verifier-repeatability-results.json)，前四次与后十六次分别见[首批清单](../../.tmp/verifier-repeatability-20261020/run-1/artifact-manifest.json)和[续跑清单](../../.tmp/verifier-repeatability-continuation-20261020/run-2/artifact-manifest.json)；文档、生产身份和冻结 v1 检查见[检查记录](../../.tmp/verifier-repeatability-continuation-20261020/validation.json)及[收尾清单](../../.tmp/verifier-repeatability-continuation-20261020/documentation-manifest.json)。生产、Prompt、Schema、配置和冻结指标改动为 0，没有单元测试或 Product E2E，不评价 A4／A5 或 claim 独立收益。
+二十次共 **196,956 tokens、961.957 秒模型调用时间**。二十份实发 SDK 及逐物理用量均核对，十七份有效报告的原生 content 与 typed 结果一致；三份被拒报告的原生内容和用量保留在 SDK 归档。结果见[只读数据](verifier-repeatability-results.json)，前四次与后十六次分别见首批清单（`.tmp/verifier-repeatability-20261020/run-1/artifact-manifest.json`）和续跑清单（`.tmp/verifier-repeatability-continuation-20261020/run-2/artifact-manifest.json`）；文档、生产身份和冻结 v1 检查见检查记录（`.tmp/verifier-repeatability-continuation-20261020/validation.json`）及收尾清单（`.tmp/verifier-repeatability-continuation-20261020/documentation-manifest.json`）。生产、Prompt、Schema、配置和冻结指标改动为 0，没有单元测试或 Product E2E，不评价 A4／A5 或 claim 独立收益。
 
 当前可以确认：最简输入本身也会漏报，加回背景不是漏报的必要条件；同一输入的关系覆盖及输出定位均存在不可靠表现。当前模型具有识别能力，但这两份诊断条件不能可靠地产生目标反馈。下一候选须分别说明漏报与不可用输出的责任及反事实，不能继续凭某次命中改判有效，也不在本轮启动多数投票或重试放行。
 
 ### 2.18 海岸漏报的逐轨判断审计
 
-2026-10-20，继续审读既有 G1 十份有效报告、实际 SDK 与同轨记录，**七次漏报呈现两条不同路径：六次整体接受名称／地点，一次已发现缺证却按细节轻微放过。**另三次成功独立核对限定并报告。新增模型调用为 0；人工判断及原记录坐标见[审计数据](../../.tmp/coast-decision-audit-20261020/audit.json)，唯一设计见[判断路径审计](../optimization/to_verify/research-goal-coverage.md#同输入海岸漏报的判断路径审计)。这仍是既有遗漏与取舍问题的复现，不另立根因或重置累计尝试。
+2026-10-20，继续审读既有 G1 十份有效报告、实际 SDK 与同轨记录，**七次漏报呈现两条不同路径：六次整体接受名称／地点，一次已发现缺证却按细节轻微放过。**另三次成功独立核对限定并报告。新增模型调用为 0；人工判断及原记录坐标见审计数据（`.tmp/coast-decision-audit-20261020/audit.json`），唯一设计见[判断路径审计](../optimization/to_verify/research-goal-coverage.md#同输入海岸漏报的判断路径审计)。这仍是既有遗漏与取舍问题的复现，不另立根因或重置累计尝试。
 
 原文 d3:59 为 `NES (Colombia Costa Rica + XCL Subset)`，稿件为“哥伦比亚与哥斯达黎加海岸（NES）”。国家名有据，不代表新增“海岸”属性有据。全部 49 条绑定均未给出该属性；这里应报告来源缺证，不应断言地点一定不在海岸。
 
@@ -587,7 +587,7 @@ R10 已注意到支持缺口，却另加“细节轻微、没有直接反证就�
 
 因此，新增字段有诊断价值，但**非空理由不保证核对完整或依据正确**。Q06 的理由还将 HSN 原文坐标写为不存在的 `d71`；Q08 末句误称两处已报告缺口“未报”，与 findings 不一致。Q01、Q03、Q04、Q06、Q07、Q08、Q10 又把训练／评测分别统计当作训练独立性的依据，其中 Q10 还以“未见反证”说明不再报告。分别统计不能建立独立关系，无反证也不能代替有支持。它们是新增理由本身的审读问题，不并入 finding 误报或新增独立样本数。
 
-本次说明当前通用 `reason` 仍可能解释一个省略限定的简化描述，而没有解释完整原句为何被接受。后续来源核验须保护被检查文字的完整含义，分别核对名称与附加属性；不能依赖模型再复述一次就认定已经检查。当前既无生产修复，也没有取得旧轨迹的唯一内因。原生十答均有其他 `citation_not_supported` finding，没有覆盖整稿零缺证的合法场景；不据此宣称该分支或生产整稿已验收。本轮新增十逻辑／物理调用，106,067 tokens、643.355 秒模型调用时间；完整输入及输出身份见[归档清单](../../.tmp/coast-reason-probe-20261020/run-1/artifact-manifest.json)。
+本次说明当前通用 `reason` 仍可能解释一个省略限定的简化描述，而没有解释完整原句为何被接受。后续来源核验须保护被检查文字的完整含义，分别核对名称与附加属性；不能依赖模型再复述一次就认定已经检查。当前既无生产修复，也没有取得旧轨迹的唯一内因。原生十答均有其他 `citation_not_supported` finding，没有覆盖整稿零缺证的合法场景；不据此宣称该分支或生产整稿已验收。本轮新增十逻辑／物理调用，106,067 tokens、643.355 秒模型调用时间；完整输入及输出身份见归档清单（`.tmp/coast-reason-probe-20261020/run-1/artifact-manifest.json`）。
 
 首次预检将适配器的紧凑 JSON 误按缩进文本比较，零模型调用即失败；修正比对后预检通过，原脚本及失败记录保留。实际执行 `run_reason.py prepare`、`batch`、逐项人工审读及 `finish.py`；十次实际 SDK、原生／typed 保真与逐物理用量逐一核对，恢复／重试为 0，停止原因为 `fixed_sample_count_completed`。生产、正式 Prompt／Schema、配置与冻结 v1 不改，临时字段在本轮结束后停止使用，仅保留实验定义与证据。新增输出要求会影响判断，且历史基线与候选非随机交错，不将一例差异解释为机制收益。自审非独立盲审，不运行单元测试或 Product E2E。
 
@@ -595,7 +595,7 @@ R10 已注意到支持缺口，却另加“细节轻微、没有直接反证就�
 
 2026-10-20，两组各十次交错对照的**海岸四项完整反馈为中英混合 4/10、中文 7/10，这不是整轮核验成功率。**用户明确不要求单轮找齐后，逐份复核确认：中英混合 6/10、中文 10/10 至少报告一处真实且定位正确的问题；中文 Z04／Z07 未报海岸，也都报告了其他真实缺证。此前将它们概括为整轮核验失败的表述撤回。原结果见[只读数据](coast-language-probe-results.json)，新口径见[验收复核](verifier-feedback-acceptance-review.json)及[第 2.22 节](#222-中文单类核验恢复基础反馈与验收复核)，原预声明由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#整体中文翻译的语言对照诊断)保留。旧 Q 组十次不并入本轮二十次。
 
-范围是当前 G1 的完整诊断请求，不是生产完整研究阶段。两臂的短来源任务、reason、Schema、模型和供应商参数相同，实发 SDK 仅 user 材料自然语言不同，不点名疑点或注入既有反馈。a3 与 49 条证据共 50 段逐项审读，11 段翻译、39 段纯数字保留；已有中文会话与八条要求不变。协议字段、引用／资源 ID、数字、来源元数据、类型／枚举、平台名、数据集标识和缩写保留。专名采用固定中文代称，不声称官方译名。原稿海岸、声景、训练独立性三项表述保留，49 条译文仍不提供这些属性。参见[完整中文输入](../../.tmp/coast-language-probe-20261020/run-1/Z-input.json)和[原／译对照](../../.tmp/coast-language-probe-20261020/run-1/translation-review.json)。译文只作实验镜像，不写回原文或 canonical 事实。
+范围是当前 G1 的完整诊断请求，不是生产完整研究阶段。两臂的短来源任务、reason、Schema、模型和供应商参数相同，实发 SDK 仅 user 材料自然语言不同，不点名疑点或注入既有反馈。a3 与 49 条证据共 50 段逐项审读，11 段翻译、39 段纯数字保留；已有中文会话与八条要求不变。协议字段、引用／资源 ID、数字、来源元数据、类型／枚举、平台名、数据集标识和缩写保留。专名采用固定中文代称，不声称官方译名。原稿海岸、声景、训练独立性三项表述保留，49 条译文仍不提供这些属性。参见完整中文输入（`.tmp/coast-language-probe-20261020/run-1/Z-input.json`）和原／译对照（`.tmp/coast-language-probe-20261020/run-1/translation-review.json`）。译文只作实验镜像，不写回原文或 canonical 事实。
 
 | 本轮观察 | 中英混合 E：十次 | 中文 Z：十次 |
 | --- | ---: | ---: |
@@ -610,21 +610,21 @@ E 的准确反馈为 E05／E06／E09／E10；Z 为 Z01／Z02／Z03／Z06／Z08�
 
 **中文 Z04／Z07 当轮未报海岸，但都报告了其他缺证。**译文原文为 `NES (哥伦比亚、哥斯达黎加 + XCL 子集)`，稿件仍写“哥伦比亚与哥斯达黎加海岸”。两份 reason 都只复述国家名，再称其余有据，没有说明海岸为何被接受；findings 则报告声景及训练独立性缺证。二者与其他中文请求 SDK 精确相同，说明海岸不是每次都被单独报告，不说明这两轮错误放行。不能用这两例否定已成立的单轮发现，也不能据此确认后续真实修订会消除海岸。
 
-**混合组的低分也不能全部解释为英文没看懂。**E02 的空 findings 同时在 reason 承认海岸和声景缺证，却声称没有 claim 片段 ID 而不能定位；实际输入有 a3，Schema 及其他有效答复允许该定位。同轨还把 user_id 中的 claim-ablation 猜作评测意图，见[局部判断审计](../../.tmp/coast-language-probe-20261020/decision-audit.json)。这是已有报告定位／猜测评测意图分支的具体复现，不另立唯一根因，本轮未调整身份或输出范围。E08 也在文字中准确指出海岸，却定位错误而被拒；最终反馈质量同时受语义覆盖和报告契约影响。
+**混合组的低分也不能全部解释为英文没看懂。**E02 的空 findings 同时在 reason 承认海岸和声景缺证，却声称没有 claim 片段 ID 而不能定位；实际输入有 a3，Schema 及其他有效答复允许该定位。同轨还把 user_id 中的 claim-ablation 猜作评测意图，见局部判断审计（`.tmp/coast-language-probe-20261020/decision-audit.json`）。这是已有报告定位／猜测评测意图分支的具体复现，不另立唯一根因，本轮未调整身份或输出范围。E08 也在文字中准确指出海岸，却定位错误而被拒；最终反馈质量同时受语义覆盖和报告契约影响。
 
 中文组的理由仍存在其他支持判断问题：Z02／Z03／Z05／Z06 以训练与评测分别陈述来支持独立性，Z10 也只列两部分统计便接受其余内容；分列统计不建立独立关系。Z01 已报告海岸缺证，reason 却又把“海岸/岛屿”作为原文环境信息。这些只作理由审读，不额外计为 finding 误报或更多样本。语言转换没有替代对具体关系、限定和来源归属的核对。
 
 本轮中文组每次均有真实且定位正确的错误反馈，满足单轮发现要求；海岸未逐次报告不否定该结果，也未证明后续实际修订能完成全部错误处理。两组各十次是同材料重复，翻译同时改变表达及长度，实际默认 temperature、seed、权重版本及缓存状态未知；不估计生产准确率或稳定收益，也不测 claim 收益。后续若验证错误放行，应消费真实修订后仍有错误的稿件，区分其被错误接受、有效拒稿及反馈不可用，不据此直接新增生产阶段或重试放行。
 
-实际执行 `run_language.py prepare`、`batch`、二十份逐项人工审读及 `finish.py`。二十个实际 SDK、原生／typed 保真、逐物理用量和翻译身份逐一核对；恢复／重试、未知用量、成本复审及未执行项均为 0，以 `fixed_sample_count_completed` 结束。新增 **214,229 tokens、1,254.222 秒模型调用时间**，E／Z 分别 108,152／106,077 tokens、753.681／500.541 秒，不据此宣称延迟收益。证据见[封存清单](../../.tmp/coast-language-probe-20261020/run-1/artifact-manifest.json)。执行者翻译并自审，非独立盲审；生产、正式 Prompt／Schema、配置与冻结 v1 改动为 0，没有单元测试或 Product E2E。本次语言实验结束，临时字段与译文仅保留作证据。
+实际执行 `run_language.py prepare`、`batch`、二十份逐项人工审读及 `finish.py`。二十个实际 SDK、原生／typed 保真、逐物理用量和翻译身份逐一核对；恢复／重试、未知用量、成本复审及未执行项均为 0，以 `fixed_sample_count_completed` 结束。新增 **214,229 tokens、1,254.222 秒模型调用时间**，E／Z 分别 108,152／106,077 tokens、753.681／500.541 秒，不据此宣称延迟收益。证据见封存清单（`.tmp/coast-language-probe-20261020/run-1/artifact-manifest.json`）。执行者翻译并自审，非独立盲审；生产、正式 Prompt／Schema、配置与冻结 v1 改动为 0，没有单元测试或 Product E2E。本次语言实验结束，临时字段与译文仅保留作证据。
 
 ### 2.21 中文单类二元输出诊断
 
 2026-10-20，执行者在单类诊断中误删了 true 分支的基础反馈：任务写明“不输出其他字段”，Schema 也只允许布尔字段并禁止额外字段。因此十次只有“是”源自协议设计，不是模型忘记解释。用户已明确反馈必须返回研究模型，**该纯布尔方案已撤回，不能作为可用核验器；以下十次仅保留旧二元诊断事实。**生产核验器原本仍有四项反馈，本轮未改生产。结果见[只读数据](coast-binary-probe-results.json)，实际先行条件由[唯一 Spec](../optimization/to_verify/research-goal-coverage.md#中文单类二元输出诊断)保留，恢复反馈的实验另记。
 
-沿用上一轮封存的[完整中文材料](../../.tmp/coast-binary-probe-20261020/run-1/input.json)：a3 全文、49 条绑定原文、原会话、八条要求、研究身份和读取状态不变。实发 SDK 的 user 字符串逐字相等，模型仍为 MiMo、thinking 和 JSON Object；供应商参数相同。仅将业务任务及 Schema 一起简化，移除其他类别、定位、解释、证据引用及全稿目标枚举，不点名海岸或注入旧反馈。这是当前 G1 材料的隔离诊断，不是完整生产阶段验收，也没有新的生产接口。
+沿用上一轮封存的完整中文材料（`.tmp/coast-binary-probe-20261020/run-1/input.json`）：a3 全文、49 条绑定原文、原会话、八条要求、研究身份和读取状态不变。实发 SDK 的 user 字符串逐字相等，模型仍为 MiMo、thinking 和 JSON Object；供应商参数相同。仅将业务任务及 Schema 一起简化，移除其他类别、定位、解释、证据引用及全稿目标枚举，不点名海岸或注入旧反馈。这是当前 G1 材料的隔离诊断，不是完整生产阶段验收，也没有新的生产接口。
 
-输出只允许两种对象：有问题为 `{"is_citation_not_supported":true}`；没有问题为 `{"is_citation_not_supported":false,"reason":"中文的简要支持依据"}`。否分支 reason 必须非空，是分支不能携带其他字段。原始响应不经结构恢复、语义重采或人工补齐，见[实际 Schema](../../.tmp/coast-binary-probe-20261020/run-1/schema.json)与[完整 SDK 请求](../../.tmp/coast-binary-probe-20261020/run-1/wire.json)。
+输出只允许两种对象：有问题为 `{"is_citation_not_supported":true}`；没有问题为 `{"is_citation_not_supported":false,"reason":"中文的简要支持依据"}`。否分支 reason 必须非空，是分支不能携带其他字段。原始响应不经结构恢复、语义重采或人工补齐，见实际 Schema（`.tmp/coast-binary-probe-20261020/run-1/schema.json`）与完整 SDK 请求（`.tmp/coast-binary-probe-20261020/run-1/wire.json`）。
 
 | 本轮观察 | 结果及含义 |
 | --- | --- |
@@ -637,19 +637,19 @@ E 的准确反馈为 E05／E06／E09／E10；Z 为 Z01／Z02／Z03／Z06／Z08�
 
 **这个二元任务不能单独检验海岸漏报。**当前稿件还包含声景形式和训练独立性的支持缺口；模型只发现声景就可以正确返回 true。历史中文 Z 组十份有效报告也都至少报告过一处 `citation_not_supported`，整段任一缺证本来就是 10/10。旧海岸四项质量是 7/10，本轮输出没有这些字段，不能将 7/10 与 10/10 作收益对比。历史组没有并入本轮分母或冒充随机对照。
 
-同轨审读见[简短观察与原生记录坐标](../../.tmp/coast-binary-probe-20261020/manual-reviews.json)。B01／B02／B04／B05／B06／B09 仍接受整个地点列表，或把 NES 复述成只有国家名，再认为地点有据，最终围绕声景缺证作出 true 判断。B03／B07／B08／B10 明确注意到原文没有海岸。B03 将该缺口称为轻微，随后把问题集中到声景与独立性；B07／B10 虽也出现轻微化表述，结尾仍将海岸列入缺证。B08 先接受地点，后来又单独比对发现新增限定。这四份不是同一种取舍，更不能从相同布尔结果判断具体错误是否覆盖。记录仅反映模型表达过的判断，不证明完整隐藏因果，也不替代外发反馈。
+同轨审读见简短观察与原生记录坐标（`.tmp/coast-binary-probe-20261020/manual-reviews.json`）。B01／B02／B04／B05／B06／B09 仍接受整个地点列表，或把 NES 复述成只有国家名，再认为地点有据，最终围绕声景缺证作出 true 判断。B03／B07／B08／B10 明确注意到原文没有海岸。B03 将该缺口称为轻微，随后把问题集中到声景与独立性；B07／B10 虽也出现轻微化表述，结尾仍将海岸列入缺证。B08 先接受地点，后来又单独比对发现新增限定。这四份不是同一种取舍，更不能从相同布尔结果判断具体错误是否覆盖。记录仅反映模型表达过的判断，不证明完整隐藏因果，也不替代外发反馈。
 
 **去掉其他类别和报告字段，没有消除具体限定的覆盖与取舍问题。**模型可以正确判断这一错误类型存在，同时没有说明海岸依据；不能把此前海岸漏报全部归因于类别选择或定位困难。当前简化接口只表达整段是否有问题，缺少支持局部修订所需的信息，不据此替换生产反馈。下一验证若要测具体限定，须先固定可单独观察其判决的真实材料边界，继续保持引用范围，避免用其他错误触发的 true 作为成功。
 
-实际执行 `run_binary.py prepare`、`batch`、逐份人工审读和 `finish.py`。十个实际 SDK 均与封存请求相同，原生／typed 输出及逐物理用量核对通过；**十物理调用、91,144 tokens、298.155 秒模型调用时间**，重试、恢复、未知用量、成本复审及未执行项均为 0，以 `fixed_sample_count_completed` 结束，见[封存清单](../../.tmp/coast-binary-probe-20261020/run-1/artifact-manifest.json)。这仍是同材料十次，不是十个独立研究任务；没有合法稿对照，不能估计误报率、生产准确率或 claim 收益。执行者自审，非独立盲审；生产、正式 Prompt／Schema、冻结 v1 和旧证据保持，没有单元测试或 Product E2E。本次临时实验结束。
+实际执行 `run_binary.py prepare`、`batch`、逐份人工审读和 `finish.py`。十个实际 SDK 均与封存请求相同，原生／typed 输出及逐物理用量核对通过；**十物理调用、91,144 tokens、298.155 秒模型调用时间**，重试、恢复、未知用量、成本复审及未执行项均为 0，以 `fixed_sample_count_completed` 结束，见封存清单（`.tmp/coast-binary-probe-20261020/run-1/artifact-manifest.json`）。这仍是同材料十次，不是十个独立研究任务；没有合法稿对照，不能估计误报率、生产准确率或 claim 收益。执行者自审，非独立盲审；生产、正式 Prompt／Schema、冻结 v1 和旧证据保持，没有单元测试或 Product E2E。本次临时实验结束。
 
 ### 2.22 中文单类核验恢复基础反馈与验收复核
 
 用户指出 true 必须解释并返回研究模型后，已恢复单类核验的四项基础反馈。**十次首响应均返回至少一条真实、说明具体且定位正确的错误；不要求单轮同时发现海岸和其他全部错误。**这与[已有渐进核验契约](../optimization/completed/multi-error-verification-revision.md)一致。旧纯布尔任务把解释从协议中禁掉，是执行者的实验设计错误；生产Finding 契约（旧版 `research.py`）和研究模型消费说明（旧版 `research.py`）原本就保留基础反馈。
 
-当前输出中，true 必须带非空 findings，每项保留 category、target、error_description、evidence_ids；类别固定为 `citation_not_supported`，说明用中文，定位及原文 ID 来自当前实际输入。false 仍须中文 reason。完整中文材料逐字不变，模型、thinking、JSON Object 和供应商参数保持；只恢复反馈任务及 Schema，并收窄到当前可见单元 ID，不点名海岸或注入期望解释。参见[实际请求](../../.tmp/coast-feedback-probe-20261020/run-1/wire.json)、[输出 Schema](../../.tmp/coast-feedback-probe-20261020/run-1/schema.json)及[先行设计](../optimization/to_verify/research-goal-coverage.md#中文单类核验恢复基础反馈)。任务与输出约束共同变化，不作为单分类或某字段的独立收益。
+当前输出中，true 必须带非空 findings，每项保留 category、target、error_description、evidence_ids；类别固定为 `citation_not_supported`，说明用中文，定位及原文 ID 来自当前实际输入。false 仍须中文 reason。完整中文材料逐字不变，模型、thinking、JSON Object 和供应商参数保持；只恢复反馈任务及 Schema，并收窄到当前可见单元 ID，不点名海岸或注入期望解释。参见实际请求（`.tmp/coast-feedback-probe-20261020/run-1/wire.json`）、输出 Schema（`.tmp/coast-feedback-probe-20261020/run-1/schema.json`）及[先行设计](../optimization/to_verify/research-goal-coverage.md#中文单类核验恢复基础反馈)。任务与输出约束共同变化，不作为单分类或某字段的独立收益。
 
-十份实际 findings 仅去掉布尔外壳，原样通过 ResearchSupportReport 校验并保存，如 [F01 反馈](../../.tmp/coast-feedback-probe-20261020/run-1/F01/feedback.json)。这说明结构能接入现有反馈契约，不代表已经交给研究模型完成修订或正式交付。本轮没有 false 样本，未验证其原因质量。
+十份实际 findings 仅去掉布尔外壳，原样通过 ResearchSupportReport 校验并保存，如 F01 反馈（`.tmp/coast-feedback-probe-20261020/run-1/F01/feedback.json`）。这说明结构能接入现有反馈契约，不代表已经交给研究模型完成修订或正式交付。本轮没有 false 样本，未验证其原因质量。
 
 **两次未报海岸不是分类错误或本轮失败。**F02 报告“声景形式”和“独立于训练数据”缺证，F05 只报告声景缺证，类别均为 `citation_not_supported`，说明、a3 定位和相关原文均成立。海岸四项完整反馈为 8/10，只是该检查点的覆盖观察。要确认真正漏放，应观察真实修订后仍有错误时是否返回无问题；不能要求当前先报其他真实错误的一轮已经找齐。现有循环不在本轮重建或扩大。
 
@@ -663,13 +663,13 @@ E 的准确反馈为 E05／E06／E09／E10；Z 为 Z01／Z02／Z03／Z06／Z08�
 
 上一轮中文 Z04／Z07 未报海岸，但报告了其他缺证；Z05 已指出海岸，结构化引用为空。Z04 的两项引用也为空，所以结构化引用完整的报告为 8/10。这是额外的完整性观察；生产契约允许空列表，不能将其改判为类型非法或抹掉真实发现。混合 E01／E03 同样报告了其他真实缺证但引用为空；E02 则是空 findings，另外 E04 定位单元外对象、E07／E08 动态校验拒绝，后三份不构成可消费报告。不能把整组所有未报海岸都算错误放行，也不能把空报告或非法定位当成成功。
 
-本轮二十三项实际反馈中二十二项成立，一项 F10 对“不同生态环境”的缺证意见未决：地名包含盆地、群岛、山地与树林，可能足以支持宽泛环境概括，但未描述实际采集条件；本轮未预先固定该推导粒度，单列审读，不算确认准确或误报。它不影响 F10 同份报告中其他成立反馈，也不能把“至少一条正确”夸为全部反馈正确。两项既定保护关系误拒 0/20，范围不扩大到整稿误报率。逐项审读与原生坐标见[审读记录](../../.tmp/coast-feedback-probe-20261020/manual-reviews.json)及[局部判断审计](../../.tmp/coast-feedback-probe-20261020/decision-audit.json)。
+本轮二十三项实际反馈中二十二项成立，一项 F10 对“不同生态环境”的缺证意见未决：地名包含盆地、群岛、山地与树林，可能足以支持宽泛环境概括，但未描述实际采集条件；本轮未预先固定该推导粒度，单列审读，不算确认准确或误报。它不影响 F10 同份报告中其他成立反馈，也不能把“至少一条正确”夸为全部反馈正确。两项既定保护关系误拒 0/20，范围不扩大到整稿误报率。逐项审读与原生坐标见审读记录（`.tmp/coast-feedback-probe-20261020/manual-reviews.json`）及局部判断审计（`.tmp/coast-feedback-probe-20261020/decision-audit.json`）。
 
-实际执行 `run_feedback.py prepare`、`batch`、十份人工审读及 `finish.py`，新增**十物理调用、100,967 tokens、417.033 秒**。SDK 精确、原生／typed 保真及 canonical 反馈原样交接均核对，重试、恢复、未知用量、成本复审和未执行项为 0，以固定次数结束，见[封存清单](../../.tmp/coast-feedback-probe-20261020/run-1/artifact-manifest.json)。脚本生成首次因标题出现次数断言失败，零模型调用即修正，另留[准备记录](../../.tmp/coast-feedback-probe-20261020/preparation-notes.json)。实验已结束，基础反馈缺失已在临时任务中纠正；生产、正式 Prompt／Schema 和冻结 v1 未改，没有单元测试、研究模型修订链或 Product E2E。当前与历史仍是同材料重复，执行者自审，不从这组数据推生产准确率、最终交付质量或稳定收益。
+实际执行 `run_feedback.py prepare`、`batch`、十份人工审读及 `finish.py`，新增**十物理调用、100,967 tokens、417.033 秒**。SDK 精确、原生／typed 保真及 canonical 反馈原样交接均核对，重试、恢复、未知用量、成本复审和未执行项为 0，以固定次数结束，见封存清单（`.tmp/coast-feedback-probe-20261020/run-1/artifact-manifest.json`）。脚本生成首次因标题出现次数断言失败，零模型调用即修正，另留准备记录（`.tmp/coast-feedback-probe-20261020/preparation-notes.json`）。实验已结束，基础反馈缺失已在临时任务中纠正；生产、正式 Prompt／Schema 和冻结 v1 未改，没有单元测试、研究模型修订链或 Product E2E。当前与历史仍是同材料重复，执行者自审，不从这组数据推生产准确率、最终交付质量或稳定收益。
 
 ### 2.23 claim 收益价值复核
 
-日期：2026-10-21。分类：复用封存数据的只读分析，新增项目模型调用为 0，未新增语义标签或独立人工金标准。[派生数据](claim-value-analysis-20261021.json)与[计算脚本](../../.tmp/claim-value-analysis-20261021/analyze.py)另立身份；原 `v1`、完整初审及 N2 续跑的评分、判据和封存均保持。
+日期：2026-10-21。分类：复用封存数据的只读分析，新增项目模型调用为 0，未新增语义标签或独立人工金标准。[派生数据](claim-value-analysis-20261021.json)与计算脚本（`.tmp/claim-value-analysis-20261021/analyze.py`）另立身份；原 `v1`、完整初审及 N2 续跑的评分、判据和封存均保持。
 
 **现有证据支持 claim 核验的局部来源支持检查与研究资源纠错价值，尚不支持最终用户结果的净收益；整个 claim 工作表示的必要性没有被消融。** N2 的增量修复主要是引用支持问题，不能直接解释成实质事实正确率提升。之前“终稿未达标”的说法限定于本次来源支持验收，A5 正式用户结果仍未测。
 
@@ -688,7 +688,7 @@ E 的准确反馈为 E05／E06／E09／E10；Z 为 Z01／Z02／Z03／Z06／Z08�
 
 代码审计依据实验使用的封存源码：`_research_selection_request` 把当前研究资源交给选证，`_decide` 将研究稿及继承引用交给 writer，`admit_claim_change` 要求回答引用属于研究稿绑定集合。现有“移除组”没有删除这些消费者。因此，直接去掉核验中的 claim，与取消独立研究稿，是两个不同的比较。
 
-另对当前工作树的实验文件交付做了[快照审计](../../.tmp/claim-value-analysis-20261021/observed-current-delivery.py.txt)：该消费者读取 `ResearchClaims.final_answer` 和 `resource_ref` 发布正文。依赖外层研究资源类型，不等于证明额外 claim 正文必需；该新增路径也不在历史 N2 实验中。知识库中其他类型的 claim 不属于本次消融。
+另对当前工作树的实验文件交付做了快照审计（`.tmp/claim-value-analysis-20261021/observed-current-delivery.py.txt`）：该消费者读取 `ResearchClaims.final_answer` 和 `resource_ref` 发布正文。依赖外层研究资源类型，不等于证明额外 claim 正文必需；该新增路径也不在历史 N2 实验中。知识库中其他类型的 claim 不属于本次消融。
 
 #### 增量发现集中在哪里
 
@@ -739,7 +739,7 @@ N2 的严格 A4 为完整组 0/4、移除组 2/4，原问题实际消除数为 3
 
 当前推荐保持生产契约，暂不增加 claim 复杂度。继续评价核验消费侧前，先验证渐进修订中未完成反馈的上下文交接，同时保持新版重新核验和旧版不得放行；这项修正若提出，应独立归因和验收，再看 claim 增量发现能否成为实际收益。若目标转为判断整个 claim 工作表示是否必要，则比较还必须覆盖选证、writer 和引用准入，保留同样的用户结果、来源与版本约束；现有移除组不能充当这一完整替代。
 
-本轮已用 128 个输入文件身份完成分账、配对输入及反馈暴露审计，23 次物理费用全部对账；文件数是审计规模，没有增加原四个独立任务或新增模型判定。无生产、Prompt 或评测判据变更，无新模型采样。计算结果与来源见[分析归档](../../.tmp/claim-value-analysis-20261021/result.json)、[输入清单](../../.tmp/claim-value-analysis-20261021/source-manifest.json)，实际命令及检查范围见[执行与验证](../../.tmp/claim-value-analysis-20261021/completion-notes.md)。下一次模型验证须另在唯一 Spec 固定完整输入、连续消费者、适用重复次数、预算与停止条件，本轮没有派发后续修复实验。
+本轮已用 128 个输入文件身份完成分账、配对输入及反馈暴露审计，23 次物理费用全部对账；文件数是审计规模，没有增加原四个独立任务或新增模型判定。无生产、Prompt 或评测判据变更，无新模型采样。计算结果与来源见分析归档（`.tmp/claim-value-analysis-20261021/result.json`）、输入清单（`.tmp/claim-value-analysis-20261021/source-manifest.json`），实际命令及检查范围见执行与验证（`.tmp/claim-value-analysis-20261021/completion-notes.md`）。下一次模型验证须另在唯一 Spec 固定完整输入、连续消费者、适用重复次数、预算与停止条件，本轮没有派发后续修复实验。
 
 ### 2.24 历史反馈交接的真实续验
 
@@ -776,7 +776,7 @@ N2 的严格 A4 为完整组 0/4、移除组 2/4，原问题实际消除数为 3
 
 ## 3. 样本与预声明
 
-历史样本 H1、H3、H4、H5、H7 来自同一个 MCP 协作说明任务的第 1、3、4、5、7 版，共五个配对、十个调用。它们原样保留完整真实阶段输入，本轮两组均使用当前 `v36`。历史报告不作真值，原始标签及顺序见 [pilot 计划](../../.tmp/claim-verifier-ablation-20261018/pilot/plan.json)和[扩展计划](../../.tmp/claim-verifier-ablation-20261018/main/plan.json)。
+历史样本 H1、H3、H4、H5、H7 来自同一个 MCP 协作说明任务的第 1、3、4、5、7 版，共五个配对、十个调用。它们原样保留完整真实阶段输入，本轮两组均使用当前 `v36`。历史报告不作真值，原始标签及顺序见 pilot 计划（`.tmp/claim-verifier-ablation-20261018/pilot/plan.json`）和扩展计划（`.tmp/claim-verifier-ablation-20261018/main/plan.json`）。
 
 本轮另取得三个独立公开来源的 301 道研究任务，核查 13 个具体场景，选取软件学习、公共政策和科研数据发现。题库身份、许可、中文请求及改编范围见[研究任务来源与采样](research-tasks.md)。公开题库不冒称真实用户原始日志，下载数量不计产品样本，原 benchmark 成绩不沿用。
 
@@ -796,7 +796,7 @@ N2 的严格 A4 为完整组 0/4、移除组 2/4，原问题实际消除数为 3
 | 历史扩展 | H1 移除→完整；H3 完整→移除；H5 移除→完整 | 600,000 tokens、60 分钟 |
 | 局部诊断 | M1、M3 两个裁剪配对 | 200,000 tokens、20 分钟 |
 | 中立依据核对 | 同轨迹一次追问，无结构恢复 | 160,000 tokens、15 分钟，输出 32,768 |
-| 新场景真实采样 | N1→N2→N3；正式计划见[冻结文件](../../.tmp/claim-verifier-ablation-20261018/new-scenarios-plan.json) | 全组 5,000,000 已知 tokens、4 小时；单例 1,500,000 tokens、1 小时或用量不完整触发复审 |
+| 新场景真实采样 | N1→N2→N3；正式计划见冻结文件（`.tmp/claim-verifier-ablation-20261018/new-scenarios-plan.json`） | 全组 5,000,000 已知 tokens、4 小时；单例 1,500,000 tokens、1 小时或用量不完整触发复审 |
 | 新场景配对 | 首次／末次去重后最多六对、十二次 | 2,000,000 已知 tokens、2 小时 |
 | 数量限定诊断 | MN1 一个裁剪配对 | 150,000 tokens、20 分钟 |
 | 地点范围诊断 | MN3 一个裁剪配对 | 150,000 tokens、20 分钟 |
@@ -805,7 +805,7 @@ N2 的严格 A4 为完整组 0/4、移除组 2/4，原问题实际消除数为 3
 
 ## 4. 历史完整输入结果
 
-十次调用均取得合法输出，结构恢复 0，共 **741,899 tokens、995.43 秒**。原始结果见 [pilot](../../.tmp/claim-verifier-ablation-20261018/pilot/results.json)和[扩展组](../../.tmp/claim-verifier-ablation-20261018/main/results.json)。
+十次调用均取得合法输出，结构恢复 0，共 **741,899 tokens、995.43 秒**。原始结果见 pilot（`.tmp/claim-verifier-ablation-20261018/pilot/results.json`）和扩展组（`.tmp/claim-verifier-ablation-20261018/main/results.json`）。
 
 | 版本 | 完整输入 tokens | 移除输入 tokens | 完整秒数 | 移除秒数 | 关系结果与资格 |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -822,7 +822,7 @@ H5 的额外反馈属于探索性发现：原回答只将“应用执行”的**
 
 H1 的两条 claim 遗漏符合额外保真职责，但没有识别同稿本段引用缺口。H4 原始标签成绩及报告不改写；`a8` 的全局限定、`a1` 的 CIMD 条件均属实际语境，不能裁掉后再声称原稿确定错误。H3 的角色粒度也不能用更严格标签补造缺陷。
 
-当前输入的成本还包含重复证据：每个历史版本 claim 的 57 条唯一绑定证据都逐字出现在回答绑定集合中，claim 内又因多处引用展开为 119—129 次。claim 正文约 2,211—2,473 字符，在 fragments 中再重复一次；整个 claims JSON 为 60,063—65,646 字符。六份新增输入的唯一 claim 证据也全部出现在相应回答绑定集合中，见[全量占用记录](../../.tmp/claim-verifier-ablation-20261018/input-footprint/H4-H7-H1-H3-H5-N1-final-N1-first-N2-final-N2-first-N3-final-N3-first.json)。因此 token 差额是当前消费契约的整体开销，不能全归为 claim 正文的固有成本；证据重合也不等于正文事实相同。
+当前输入的成本还包含重复证据：每个历史版本 claim 的 57 条唯一绑定证据都逐字出现在回答绑定集合中，claim 内又因多处引用展开为 119—129 次。claim 正文约 2,211—2,473 字符，在 fragments 中再重复一次；整个 claims JSON 为 60,063—65,646 字符。六份新增输入的唯一 claim 证据也全部出现在相应回答绑定集合中，见全量占用记录（`.tmp/claim-verifier-ablation-20261018/input-footprint/H4-H7-H1-H3-H5-N1-final-N1-first-N2-final-N2-first-N3-final-N3-first.json`）。因此 token 差额是当前消费契约的整体开销，不能全归为 claim 正文的固有成本；证据重合也不等于正文事实相同。
 
 ## 5. 新场景采样、标签与结果
 
@@ -832,25 +832,25 @@ H1 的两条 claim 遗漏符合额外保真职责，但没有识别同稿本段�
 | N2 学生体育活动 | 已返回，第 1／6 版配对已完成；采样1,319,578已知tokens、3,338.31秒，用量完整 | 首稿两个合法关系与 claim 独有地域错误；末稿另保护已修正的地域排序 |
 | N3 鸟类音频数据集 | 正式 HTTP 500 结束；第 1／2 版完整输入配对均完成，不计产品成功 | NES 无据新增“海岸”的支持缺口；ICLR 2025、训练量级、有版本限制的加载路径三个合法关系 |
 
-N1 两点依据见[首次标签](../../.tmp/claim-verifier-ablation-20261018/new-labels/N1-first.json)和[末次标签](../../.tmp/claim-verifier-ablation-20261018/new-labels/N1-final.json)。`d2:365` 是“最多三个”；`checkout -b`／`switch -c` 有同段官方原文支持，`branch`／`tag` 只被表述为建立引用，不能误读成也承诺切换 HEAD。数量限定只是局部精度检查，不预判整份教程失败。
+N1 两点依据见首次标签（`.tmp/claim-verifier-ablation-20261018/new-labels/N1-first.json`）和末次标签（`.tmp/claim-verifier-ablation-20261018/new-labels/N1-final.json`）。`d2:365` 是“最多三个”；`checkout -b`／`switch -c` 有同段官方原文支持，`branch`／`tag` 只被表述为建立引用，不能误读成也承诺切换 HEAD。数量限定只是局部精度检查，不预判整份教程失败。
 
-N2 的[答案标签](../../.tmp/claim-verifier-ablation-20261018/new-labels/N2-first.json)保护两点：在“小于1小时／大于等于1小时”二分下，76.2% 的互补为 23.8%；原稿区分了政策2小时、2014年在校时长、2018年每周锻炼习惯、重庆地方放学后时段，并按用户允许说明未找到全国同口径数据，不能仅因此拒绝。
+N2 的答案标签（`.tmp/claim-verifier-ablation-20261018/new-labels/N2-first.json`）保护两点：在“小于1小时／大于等于1小时”二分下，76.2% 的互补为 23.8%；原稿区分了政策2小时、2014年在校时长、2018年每周锻炼习惯、重庆地方放学后时段，并按用户允许说明未找到全国同口径数据，不能仅因此拒绝。
 
-N2 的 `c3.f1` 则把东中西部与城乡序列一并写成递减；绑定原文四年级东中西为 32.4／25.7／26.1%，八年级为 20.7／16.3／18.4%，实际均东部最高、中部最低。最终回答没有地域梯度断言。该[claim 独有错误](../../.tmp/claim-verifier-ablation-20261018/new-labels/N2-first-claim-only.json)单列研究诊断：指出错误顺序才算识别，仅要求答案补入错误梯度不算成功；移除组对此不记漏检。
+N2 的 `c3.f1` 则把东中西部与城乡序列一并写成递减；绑定原文四年级东中西为 32.4／25.7／26.1%，八年级为 20.7／16.3／18.4%，实际均东部最高、中部最低。最终回答没有地域梯度断言。该claim 独有错误（`.tmp/claim-verifier-ablation-20261018/new-labels/N2-first-claim-only.json`）单列研究诊断：指出错误顺序才算识别，仅要求答案补入错误梯度不算成功；移除组对此不记漏检。
 
-末稿已正确表述地域排序，[末稿标签](../../.tmp/claim-verifier-ablation-20261018/new-labels/N2-final.json)保留互补计算和全国口径两个控制，并加入这一正确排序。生产首份反馈确实指出 claim 的地域错误，实际修订消费了反馈；这证明一次额外研究诊断有效，不证明没有 claim 时原先已省略该错误的用户答案会出错。
+末稿已正确表述地域排序，末稿标签（`.tmp/claim-verifier-ablation-20261018/new-labels/N2-final.json`）保留互补计算和全国口径两个控制，并加入这一正确排序。生产首份反馈确实指出 claim 的地域错误，实际修订消费了反馈；这证明一次额外研究诊断有效，不证明没有 claim 时原先已省略该错误的用户答案会出错。
 
 另有预设外关系：末稿 `a6` 将其自身绑定 `d6:54` 的“可能是主要原因”写成“是主要原因”，提高了原因解释的确定性。该方向曾由中间生产反馈提示，后来审读实际末稿确认，保留为探索性检查，不修改已封存主标签，也不回填先验成绩。
 
-N3 的[首稿标签](../../.tmp/claim-verifier-ablation-20261018/new-labels/N3-first.json)在配对前冻结：`a3`／`c3` 将原文 `NES (Colombia Costa Rica + XCL Subset)` 加写成“哥伦比亚与哥斯达黎加海岸”，其完整绑定表格未提供海岸地形。正确反馈应指出这一支持不足，不能推断真实地点一定不是海岸。合法控制保护 ICLR 官方论文集明确的 2025 会议年份、6,800 多小时及近万类的训练归属，以及 HF 示例在保留版本限制时仍可说明有加载路径；不把 Viewer 错误等同于不存在加载器。未下载音频或执行加载代码。
+N3 的首稿标签（`.tmp/claim-verifier-ablation-20261018/new-labels/N3-first.json`）在配对前冻结：`a3`／`c3` 将原文 `NES (Colombia Costa Rica + XCL Subset)` 加写成“哥伦比亚与哥斯达黎加海岸”，其完整绑定表格未提供海岸地形。正确反馈应指出这一支持不足，不能推断真实地点一定不是海岸。合法控制保护 ICLR 官方论文集明确的 2025 会议年份、6,800 多小时及近万类的训练归属，以及 HF 示例在保留版本限制时仍可说明有加载路径；不把 Viewer 错误等同于不存在加载器。未下载音频或执行加载代码。
 
-N3 在第三次写作请求等待期间由正式入口返回 HTTP 500，约 2,025.77 秒；最后一次 SDK 调用没有原生响应，用量未知，具体服务端原因未取得。[失败记录](../../.tmp/claim-verifier-ablation-20261018/continuation-1/new-scenarios/N3/failure.json)保留，不强行归因于 claim。末次完整输入的答案、claims、要求、会话及读取状态与首稿逐字段相同，只有返回资料目录改变；[末次标签](../../.tmp/claim-verifier-ablation-20261018/new-labels/N3-final.json)沿用同四个关系。这是失败任务的真实中间产物，仍可用于核验阶段比较，不作为成功 E2E 或新增独立题目。
+N3 在第三次写作请求等待期间由正式入口返回 HTTP 500，约 2,025.77 秒；最后一次 SDK 调用没有原生响应，用量未知，具体服务端原因未取得。失败记录（`.tmp/claim-verifier-ablation-20261018/continuation-1/new-scenarios/N3/failure.json`）保留，不强行归因于 claim。末次完整输入的答案、claims、要求、会话及读取状态与首稿逐字段相同，只有返回资料目录改变；末次标签（`.tmp/claim-verifier-ablation-20261018/new-labels/N3-final.json`）沿用同四个关系。这是失败任务的真实中间产物，仍可用于核验阶段比较，不作为成功 E2E 或新增独立题目。
 
-N2 有独立完成阻塞：[运行中只读快照](../../.tmp/claim-verifier-ablation-20261018/N2-progress-trace-0626.json)显示第 2 版报告已为空，但 `offloaded_output_unread` 门禁因 PMC 资料截断后仍未补读而阻止 `answer`，随后链路继续取证。不能把后续全部修订或整例耗时归为 claim 负担，也不能将该空报告计作用户任务完成。
+N2 有独立完成阻塞：运行中只读快照（`.tmp/claim-verifier-ablation-20261018/N2-progress-trace-0626.json`）显示第 2 版报告已为空，但 `offloaded_output_unread` 门禁因 PMC 资料截断后仍未补读而阻止 `answer`，随后链路继续取证。不能把后续全部修订或整例耗时归为 claim 负担，也不能将该空报告计作用户任务完成。
 
-N1 用时 2,169.11 秒，已知物理用量 462,346 tokens，另一次 HTTP 500 用量未知。相同 kwargs 的重试成功后，以已知输入 24,602 加原输出上限 131,072 预留 155,674 tokens，作预算复审而非实际用量。原子样本结束后暂停并登记[成本复审](../../.tmp/claim-verifier-ablation-20261018/collection-cost-review.json)，在原组额度内继续未执行 N2／N3，没有重跑 N1。
+N1 用时 2,169.11 秒，已知物理用量 462,346 tokens，另一次 HTTP 500 用量未知。相同 kwargs 的重试成功后，以已知输入 24,602 加原输出上限 131,072 预留 155,674 tokens，作预算复审而非实际用量。原子样本结束后暂停并登记成本复审（`.tmp/claim-verifier-ablation-20261018/collection-cost-review.json`），在原组额度内继续未执行 N2／N3，没有重跑 N1。
 
-N1 的三份生产报告依次拒绝无绑定原文的 URL claim、因 claims 未承载而拒绝“未实际执行仓库命令”的 `a6` 执行声明、最终为空。完整 Trace 只有网页与资料读取，执行声明成立，实际 writer 随后删去了该段。[该项审读](../../.tmp/claim-verifier-ablation-20261018/N1-exploratory-review.json)由生产反馈提示，属于探索性额外拒绝负担，不加入先验分母。核验输入没有完整工具历史，不能声称模型已见全部执行事实后仍否定它；后续输入物化与事实 owner 调整不在本轮实施。
+N1 的三份生产报告依次拒绝无绑定原文的 URL claim、因 claims 未承载而拒绝“未实际执行仓库命令”的 `a6` 执行声明、最终为空。完整 Trace 只有网页与资料读取，执行声明成立，实际 writer 随后删去了该段。该项审读（`.tmp/claim-verifier-ablation-20261018/N1-exploratory-review.json`）由生产反馈提示，属于探索性额外拒绝负担，不加入先验分母。核验输入没有完整工具历史，不能声称模型已见全部执行事实后仍否定它；后续输入物化与事实 owner 调整不在本轮实施。
 
 新增十二次调用均成功、结构恢复0次，共858,142 tokens。主判据如下；四个严格精度／范围负例实例均未识别，十三个合法关系实例均未误拒，两组相同。同一题的修订关系重复不计独立缺陷或独立任务。N1首稿两组对URL目录本单元无绑定原文的反馈，分别从 `c5`、`a5` 定位同一关系，不算质量差异。
 
@@ -893,9 +893,9 @@ N3 首稿两组均报告精确数字缺表头／XCL行归属、声景类型缺�
 
 | 组别 | 调用数 | 实际tokens | 实际秒数 | 原始结果 |
 | --- | ---: | ---: | ---: | --- |
-| M1、M3 | 4 | 87,465 | 548.94 | [历史聚焦组](../../.tmp/claim-verifier-ablation-20261018/minimal/results.json) |
-| MN1数量限定 | 2 | 17,821 | 49.35 | [数量诊断](../../.tmp/claim-verifier-ablation-20261018/quantity-diagnostic/results.json) |
-| MN3海岸范围 | 2 | 36,316 | 153.63 | [地点诊断](../../.tmp/claim-verifier-ablation-20261018/coast-diagnostic/results.json) |
+| M1、M3 | 4 | 87,465 | 548.94 | 历史聚焦组（`.tmp/claim-verifier-ablation-20261018/minimal/results.json`） |
+| MN1数量限定 | 2 | 17,821 | 49.35 | 数量诊断（`.tmp/claim-verifier-ablation-20261018/quantity-diagnostic/results.json`） |
+| MN3海岸范围 | 2 | 36,316 | 153.63 | 地点诊断（`.tmp/claim-verifier-ablation-20261018/coast-diagnostic/results.json`） |
 
 | 关系 | 完整输入 | 聚焦输入 | 解释 |
 | --- | --- | --- | --- |
@@ -904,9 +904,9 @@ N3 首稿两组均报告精确数字缺表头／XCL行归属、声景类型缺�
 | N1／MN1数量上限 | 两版本两组均未报告 | 两组仍未报告 | 反馈只有裁剪造成的r2、r3、r4缺项；未取得纯局部能力失败的结论，也未证明删claim能解决该点 |
 | N3／MN3海岸范围 | 两版本两组均未报告 | 完整1/1，移除0/1 | 完整组明确指出国家名缺少海岸限定；本次局部收益未迁移到完整输入，不作为稳定能力保证 |
 
-一次中立核对复用 H1 完整组的实发消息与实际响应，只询问明示材料、推断、引用范围和规则，不提供缺口标签或理想答案。实际 **84,216 tokens、29.40 秒**，见[原始结果](../../.tmp/claim-verifier-ablation-20261018/basis/result.json)。解释只确认前次两条 claim 遗漏的依据，原报告没有覆盖独立的 OpenAI 引用支持检查；不回填为原识别成功，也不作为隐藏因果证明。
+一次中立核对复用 H1 完整组的实发消息与实际响应，只询问明示材料、推断、引用范围和规则，不提供缺口标签或理想答案。实际 **84,216 tokens、29.40 秒**，见原始结果（`.tmp/claim-verifier-ablation-20261018/basis/result.json`）。解释只确认前次两条 claim 遗漏的依据，原报告没有覆盖独立的 OpenAI 引用支持检查；不回填为原识别成功，也不作为隐藏因果证明。
 
-MN1、MN3在新场景主配对前已按 [QLT 最小充分输入规则](../devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)封存，分别保留 `c1`／`a1`、`c3`／`a3`，准备过程见[数量脚本](../../.tmp/claim-verifier-ablation-20261018/prepare_quantity_diagnostic.py)和[地点脚本](../../.tmp/claim-verifier-ablation-20261018/prepare_coast_diagnostic.py)。两组均在完整回放结束后串行执行，未因结果更换判据或追加通用规则。
+MN1、MN3在新场景主配对前已按 [QLT 最小充分输入规则](../devSpec/quality-security.md#21-核验漏放先验证最小充分上下文)封存，分别保留 `c1`／`a1`、`c3`／`a3`，准备过程见数量脚本（`.tmp/claim-verifier-ablation-20261018/prepare_quantity_diagnostic.py`）和地点脚本（`.tmp/claim-verifier-ablation-20261018/prepare_coast_diagnostic.py`）。两组均在完整回放结束后串行执行，未因结果更换判据或追加通用规则。
 
 诊断仍保留完整原目标，裁剪会制造其他核心缺项。MN1报告只覆盖这些缺项，不能用来宣称模型完全不具备数量范围判断能力；MN3则在这些缺项之外命中海岸，表明完整组在该聚焦输入下能够判断。完整输入与聚焦输入同时改变其他正文和目录，不能把差异唯一归因于claim干扰。MN1严格精度及N2预设外强度关系没有形成生产修复依据；若要继续修复，应先重审判据、任务边界及输入充分性，本轮不以补规则追求命中。
 
@@ -922,17 +922,17 @@ MN1、MN3在新场景主配对前已按 [QLT 最小充分输入规则](../devSpe
 | 中立核对 | 1 | 84,216 | 0 |
 | 合计 | **90** | **4,006,802** | **2** |
 
-[汇总JSON](claim-verifier-data.json)保存30次配对／诊断的完整结构化报告、17个新增主关系的裁判、用量细节、源码及计划身份；中立核对另存上述原始结果。物理调用逐条见[账本](../../.tmp/claim-verifier-ablation-20261018/physical-call-ledger.json)，采样终态及两次未知用量见[终态复审](../../.tmp/claim-verifier-ablation-20261018/collection-terminal-review.json)。N1已知462,346、N2为1,319,578，N3可取得的物理用量为399,019；N3整例失败记录的完整用量仍未知。
+[汇总JSON](claim-verifier-data.json)保存30次配对／诊断的完整结构化报告、17个新增主关系的裁判、用量细节、源码及计划身份；中立核对另存上述原始结果。物理调用逐条见账本（`.tmp/claim-verifier-ablation-20261018/physical-call-ledger.json`），采样终态及两次未知用量见终态复审（`.tmp/claim-verifier-ablation-20261018/collection-terminal-review.json`）。N1已知462,346、N2为1,319,578，N3可取得的物理用量为399,019；N3整例失败记录的完整用量仍未知。
 
-配对请求、模型原始响应、用量、错误、配置及代码身份存于 `.tmp/claim-verifier-ablation-20261018/`。生产 262 个 Python 文件、dirty patch、配置摘要及[代码快照](../../.tmp/claim-verifier-ablation-20261018/pilot/production-source.zip)已封存，比较前核对身份；内部片段偏移只用生产分段函数无损恢复，并断言模型可见 JSON 与归档完全相同。首次恢复准备失败为零模型调用，留在 `preflight-failed-1/`。
+配对请求、模型原始响应、用量、错误、配置及代码身份存于 `.tmp/claim-verifier-ablation-20261018/`。生产 262 个 Python 文件、dirty patch、配置摘要及代码快照（`.tmp/claim-verifier-ablation-20261018/pilot/production-source.zip`）已封存，比较前核对身份；内部片段偏移只用生产分段函数无损恢复，并断言模型可见 JSON 与归档完全相同。首次恢复准备失败为零模型调用，留在 `preflight-failed-1/`。
 
-[实发输入审计](../../.tmp/claim-verifier-ablation-20261018/transport-input-audit.json)逐一核对30次物理回放：主输入等于封存值，组间非claim字段相同，传输及采样参数相同。[生产请求对照](../../.tmp/claim-verifier-ablation-20261018/source-full-wire-audit.json)另证实六个新增完整组的SDK参数JSON与原生产请求逐消息、逐参数一致，快照SHA也相同。实际反馈仍有差异，原生产报告不作为真值或稳定性保证。
+实发输入审计（`.tmp/claim-verifier-ablation-20261018/transport-input-audit.json`）逐一核对30次物理回放：主输入等于封存值，组间非claim字段相同，传输及采样参数相同。生产请求对照（`.tmp/claim-verifier-ablation-20261018/source-full-wire-audit.json`）另证实六个新增完整组的SDK参数JSON与原生产请求逐消息、逐参数一致，快照SHA也相同。实际反馈仍有差异，原生产报告不作为真值或稳定性保证。
 
-[原始证据清单](../../.tmp/claim-verifier-ablation-20261018/artifact-manifest.json)封存本地实验文件及汇总JSON的大小与SHA-256，排除Python缓存和清单自身。原始响应、失败与未命中均保留，没有用较好结果替换。
+原始证据清单（`.tmp/claim-verifier-ablation-20261018/artifact-manifest.json`）封存本地实验文件及汇总JSON的大小与SHA-256，排除Python缓存和清单自身。原始响应、失败与未命中均保留，没有用较好结果替换。
 
-新增计划及标签的 `input_sha256` 指 `new-stage-inputs/` 冻结原件；回放复制件因 Windows 文件换行不同而有不同字节哈希，JSON逐字段相同。[复制审计](../../.tmp/claim-verifier-ablation-20261018/source-copy-audit.json)分别保留两种哈希，汇总导出再校验仅有文件换行差异；不将文件格式变化说成模型输入变化。
+新增计划及标签的 `input_sha256` 指 `new-stage-inputs/` 冻结原件；回放复制件因 Windows 文件换行不同而有不同字节哈希，JSON逐字段相同。复制审计（`.tmp/claim-verifier-ablation-20261018/source-copy-audit.json`）分别保留两种哈希，汇总导出再校验仅有文件换行差异；不将文件格式变化说成模型输入变化。
 
-首次 Docker 启动失败及 PostgreSQL 不可用单列环境事件；随后 `16432` 可连接 PostgreSQL 18.4 与所需扩展，见[实际预检](../../.tmp/claim-verifier-ablation-20261018/database-restored-preflight.json)，不推断恢复原因。采集器只创建自己的数据库，不清理用户或原测试库，实际模型决策未替换。首轮脚手架曾只读提取旧连接常量，现已保存[原使用版本](../../.tmp/claim-verifier-ablation-20261018/historical-harness/start_capture-used.py.txt)，改从 Settings 读取同一连接并[核对相等](../../.tmp/claim-verifier-ablation-20261018/harness-cleanup-audit.json)；未加载或运行单元测试。
+首次 Docker 启动失败及 PostgreSQL 不可用单列环境事件；随后 `16432` 可连接 PostgreSQL 18.4 与所需扩展，见实际预检（`.tmp/claim-verifier-ablation-20261018/database-restored-preflight.json`），不推断恢复原因。采集器只创建自己的数据库，不清理用户或原测试库，实际模型决策未替换。首轮脚手架曾只读提取旧连接常量，现已保存原使用版本（`.tmp/claim-verifier-ablation-20261018/historical-harness/start_capture-used.py.txt`），改从 Settings 读取同一连接并核对相等（`.tmp/claim-verifier-ablation-20261018/harness-cleanup-audit.json`）；未加载或运行单元测试。
 
 下列脚本均位于 `.tmp/claim-verifier-ablation-20261018/`；从仓库根以 `.venv\Scripts\python.exe -X utf8` 运行，表内保留实际脚本名与参数。
 

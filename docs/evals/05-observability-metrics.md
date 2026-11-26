@@ -1,8 +1,8 @@
-# E2E 观测指标
+# 旧 E2E 矩阵的观测记录
 
-**归档器现在从经过 `InteractionTrace` 类型校验的生产 trace 自动提取 measurement；Product E2E 不再逐条手工选择是否写入。缺失的 provider 或恢复事实仍保持 unavailable。**
+本文用于解释清理前自建 E2E 矩阵的归档。其 `evals.e2e_quality.metrics_report` 入口随旧矩阵退出当前工作树。查看公开数据集的现行入口、归档和发布要求时，从[评测运行与发布](04-running-and-release.md#公开数据集运行)进入。
 
-## 当前 MeasurementProfile
+## 历史归档字段
 
 每个 archive 冻结：
 
@@ -16,9 +16,9 @@
 
 这些字段共同决定 cohort。同一个 `profile_id` 不能替代完整 cohort key。
 
-## 当前可用指标
+## 历史指标来源
 
-| 指标 | 当前来源 | 当前覆盖 |
+| 指标 | 归档来源 | 当时覆盖 |
 | --- | --- | --- |
 | case pass/fail/skip | `summary.json` | 所有被执行用例 |
 | case call duration | pytest call phase | 所有被执行用例 |
@@ -34,30 +34,11 @@
 
 自动 extractor 只接受能完整校验为 `InteractionTrace` 的对象，并按 run ref 保留最新 revision；它不会从任意 raw dict 猜测字段或补零。
 
-## 当前 reporter 输出
+旧 reporter 按 cohort 汇总完成率、用量、调用、延迟及恢复指标。只有同 profile 至少 20 个可用样本时才输出 P95。缺失 measurement 标为 `unavailable`。
 
-`metrics_report.py` 定义：
+## 已有报告
 
-- goal completion rate；
-- input/output/total tokens；
-- model calls/turns；
-- tool/agent calls；
-- case latency min/median/P95；
-- recovery success rate；
-- recovery duration；
-- replay new side effects。
-
-P95 只有同 profile 至少 20 个可用样本时才输出。缺失 measurement 是 unavailable，不是 0。
-
-## Cohort 选择与已执行报告
-
-实际命令：
-
-```powershell
-uv run python -m evals.e2e_quality.metrics_report --trace-root data/e2e_traces --list-cohorts
-```
-
-历史 `current-runtime` 的 collision 被保留并显式列出；新默认 profile id 包含完整 cohort digest。独立验证 profile `target-eval-infra-20260812-usage` 已成功输出 1/1 completion、0/1 limitation、7041 input / 208 output / 7249 total tokens、2 model calls、1 model turn 和 23.191393 秒 call latency；样本数不足 20，因此 P95 正确保持 unavailable。
+历史 `current-runtime` 中的 profile ID 冲突被保留，后续 profile ID 使用完整 cohort digest。`target-eval-infra-20260812-usage` 记录 1/1 完成、0/1 受限结束、7,041 输入 tokens、208 输出 tokens、7,249 总 tokens、2 次模型调用、1 个模型轮次及 23.191393 秒用例耗时。该 profile 的 P95 为 `unavailable`。其他历史样本和归档位置见[评测盘点](02-current-case-inventory.md)。
 
 ## 指标解释边界
 

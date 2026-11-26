@@ -22,12 +22,6 @@ PROMPTS = {
         template='本次任务运行时限已到；已提交产物保留，未完成部分不计为完整交付。',
         owner="conversation",
     ),
-    'conversation.service.repeated_invalid_actions': PromptSpec(
-        name='conversation.service.repeated_invalid_actions',
-        version='2026-10-27.v1',
-        template='模型连续提交了同一类无效动作，本次交互已安全停止；所有被拒绝的动作均未执行。',
-        owner="conversation",
-    ),
     'conversation.service.experiment_delivery_check_unavailable': PromptSpec(
         name='conversation.service.experiment_delivery_check_unavailable',
         version='2026-10-27.v1',
@@ -193,12 +187,6 @@ PROMPTS = {
     'conversation.service.artifact_repair_unavailable': PromptSpec(
         name='conversation.service.artifact_repair_unavailable', version='v2-file-path', owner='conversation',
         template='当前声明中没有可用于原件 `{file_path}` 的读搜动作。',
-    ),
-    'conversation.service.historical_source_rejected': PromptSpec(
-        name='conversation.service.historical_source_rejected',
-        version='2026-11-06.v2',
-        template='历史原件 `{resource_id}` 仅可作为工作上下文读取，不能作为来源核验材料。',
-        owner="conversation",
     ),
     'conversation.service.duplicate_call_id': PromptSpec(
         name='conversation.service.duplicate_call_id', version='v1', owner='conversation',

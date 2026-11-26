@@ -16,6 +16,8 @@
 
 历史 LangGraph checkpoint 表可能仍存在于数据库或运维清理范围；当前 Conversation 由 Interaction Journal 恢复，个人知识由其业务存储维护。已撤回后台调查的边界见 [ADR 0015](../adr/0015-withdraw-investigation-project.md)。
 
+`AgentRuntime` 装配 `MemoryFacade` 供长期记忆读写使用。用户标识和 episode 查询的可选会话标识由调用方传入。参见 [Runtime 装配](../../src/personal_agent/orchestration/runtime.py)与[长期记忆入口](../../src/personal_agent/memory/facade.py)。
+
 ## 唯一写入口
 
 长期知识只能通过明确的 Capture、Personal Knowledge ingest 或 governed Conversation save 进入：
@@ -81,6 +83,10 @@ Conversation 历史只帮助解析追问、用户选择和当前义务。历史 
 ## Graph 与 grounded read 的位置
 
 Graph 与 Retrieval Index 是可重建读投影，不是长期事实 owner。Personal Knowledge 的 Claim、EvidenceSpan、conflict 和 scope 仍由 `KnowledgeService` 管理。
+
+`GraphitiStore` 为图谱写入和查询装配嵌入适配器。单条嵌入沿用 Graphiti SDK 的 `OpenAIEmbedder.create()`。本地适配器负责批量分片，默认每批最多 10 条，按请求顺序合并结果。参见 [Graphiti 装配](../../src/personal_agent/memory/graphiti/store.py)和[嵌入适配器](../../src/personal_agent/memory/graphiti/dashscope_compatible_embedder.py)。
+
+原适配器的 `create()` 只向 SDK 转发，造成两处签名需要维护。移除覆写后，方法绑定和源码对照确认单条调用继承本地 Graphiti SDK 0.29.0 的同签名异步方法，构造器和批量方法的语法树与变更前一致。
 
 面向用户的 grounded answer 只有一条链：
 

@@ -59,7 +59,7 @@ from .controller import (
 from .deployment import LocalExperimentEnvironment
 from .file_io import read_json, replace_json, sha256_file, write_json
 from .retrieval import prepare_data
-from personal_agent.infra.bash_execution.sandbox import (
+from personal_agent.infra.retrieval_experiment.sandbox import (
     _JobRecord, _SavedResult, _remove_staging,
 )
 

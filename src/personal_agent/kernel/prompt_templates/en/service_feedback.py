@@ -19,11 +19,6 @@ TRANSLATIONS = {
         version="2026-10-27.en.v1",
         template="This task's runtime limit has been reached. Committed artifacts are preserved; unfinished work does not count as complete delivery.",
     ),
-    'conversation.service.repeated_invalid_actions': PromptTranslation(
-        source_version='2026-10-27.v1',
-        version="2026-10-27.en.v1",
-        template='The model repeatedly submitted the same kind of invalid action, so this interaction stopped safely. None of the rejected actions were executed.',
-    ),
     'conversation.service.experiment_delivery_check_unavailable': PromptTranslation(
         source_version='2026-10-27.v1',
         version="2026-10-27.en.v1",
@@ -164,11 +159,6 @@ TRANSLATIONS = {
     'conversation.service.artifact_repair_unavailable': PromptTranslation(
         source_version='v2-file-path', version='en.v2-file-path',
         template='No declared read or search action accepts original `{file_path}` in this request.',
-    ),
-    'conversation.service.historical_source_rejected': PromptTranslation(
-        source_version='2026-11-06.v2',
-        version="2026-11-06.en.v2",
-        template='Historical original `{resource_id}` is readable as working context and is ineligible as source-verification material.',
     ),
     'conversation.service.duplicate_call_id': PromptTranslation(
         source_version='v1', version='en.v1',

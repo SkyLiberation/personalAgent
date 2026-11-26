@@ -6,7 +6,7 @@
 
 ### 模型编辑工具
 
-LongDS NYC Task 1 的真实请求中，模型通过 Bash 读取和修改 `/work` 脚本。旧专用编辑工具接收 Artifact 的行列范围，无沙箱文件入口。采用 DeepSeek Harness 固定版本的 `edit(file_path, old_string, new_string, replace_all=false)` 作为统一模型编辑入口，保留精确匹配、歧义拒绝和可选全量替换。LongDS 对照当时使用 Bash，专用编辑器的效果需单独验证。[本 Agent 对照记录](../../problems/longds/2026-11-18-nyc-restaurants-task1.md) · [DeepSeek edit 源码](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/fs/tool-fs/src/edit.ts#L78)
+LongDS NYC Task 1 的真实请求中，模型通过 Bash 读取和修改 `/work` 脚本。旧专用编辑工具接收 Artifact 的行列范围，无沙箱文件入口。采用 DeepSeek Harness 固定版本的 `edit(file_path, old_string, new_string, replace_all=false)` 作为统一模型编辑入口，保留精确匹配、歧义拒绝和可选全量替换。LongDS 对照当时使用 Bash，专用编辑器的效果需单独验证。[本 Agent 对照记录](../../problems/longds/nyc-restaurants.md#task-1-对照评测) · [DeepSeek edit 源码](https://github.com/deepseek-ai/deepseek-harness/blob/2e39e70496aa02986ca6a820c5d497e816b69d7e/packages/fs/tool-fs/src/edit.ts#L78)
 
 | 路径 | 可见性与实际写入 | 成功结果 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ LongDS NYC Task 1 的真实请求中，模型通过 Bash 读取和修改 `/work`
 
 验收使用 NYC Task 1 已落盘脚本阶段和实际任务容器，验证工具声明、替换后的完整脚本和下一轮可见性。Artifact 使用正式草稿写入和读取边界验证基稿保留、派生正文及引用。反例覆盖零匹配、多匹配、全量替换、无权限、只读来源和异常路径。采用固定源码及实际模型调用验证可达性；公开数据集整例成绩单独记录。
 
-精确编辑初版的 Artifact 持久恢复及边界回放已通过。迁入 `/tmp` 后，两轮正式 HTTP 验证确认两类文件可编辑，任务脚本可跨轮继续使用。[初版编辑记录](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#专用文本编辑工具的定向验证) · [单目录验证](../../problems/longds/2026-11-18-nyc-restaurants-task1.md#任务沙箱单目录验证)
+精确编辑初版的 Artifact 持久恢复及边界回放已通过。迁入 `/tmp` 后，两轮正式 HTTP 验证确认两类文件可编辑，任务脚本可跨轮继续使用。[初版编辑记录](../../problems/longds/nyc-restaurants.md#专用文本编辑工具的定向验证) · [单目录验证](../../problems/longds/nyc-restaurants.md#任务沙箱单目录验证)
 
 ### Artifact 工具与快照
 
@@ -65,7 +65,7 @@ P1 可直接创建正确脚本。创建、编辑、后续读取及执行同一�
 | 新程序及配置 | 创建和编辑归一为 `write_artifact` 的 typed 请求。Python、JSON 和 Markdown 采用匹配的媒体类型和后缀。文件名为最多 120 个字符的安全显示名。单份草稿最多 65,536 UTF-8 字节。程序执行另验 |
 | 上传身份 | 上传身份绑定认证 owner、filename、MIME 和确切原字节，不再只由 filename／bytes 生成全用户共用身份；跨用户同名同内容互不覆盖，同用户不同不可变描述形成不同快照。重复同一请求只复用完整一致记录，不覆写已绑定 owner／描述 |
 | 坐标与读取 | 读搜使用 Python `splitlines` 的逻辑行语义。CRLF 是完整换行单位。末尾换行的 EOF 为下一行第 1 列，空文为 `(1,1)`。读取恰在 EOF 返回空页且无续页，读取窗口附同一快照 digest 和 EOF |
-| 可信调用身份 | Gateway 在 `RunnableConfig.configurable["__personal_agent_gateway_context"]` 传现有 typed `ToolGatewayContext`，并携带由当前初始资源及已提交事实投影的 `allowed_resource_refs`；工具函数只接受该实际 typed 对象，缺失即拒绝。`write_artifact`／`inspect_artifact` 不接收模型填写的 user／owner／producer；不能从引用内的 owner 自我授权 |
+| 可信调用身份 | Gateway 在 `RunnableConfig.configurable["__personal_agent_gateway_context"]` 传现有 typed `ToolGatewayContext`，并携带由当前初始资源及已提交事实投影的 `allowed_resource_refs`。`write_artifact` 从实际 Gateway Context 取得调用归属。Conversation 的文件读取与搜索将 `file_path` 解析为当前可读引用，再校验归属 |
 | 稳定提交 | Artifact owner 将真实 principal、执行 scope、稳定 tool_call_id 及完整已接受 request 绑定 producer。跨进程同 producer 排他。先持久化不可变 producer 绑定，再原子提交正文及 canonical metadata，齐备后返回成功。响应丢失或部分提交只按同请求补齐，同 producer 不同 payload 拒绝 |
 | 已有产物保护 | 默认 data 有 0 份上传 sidecar、6 份普通 generated 报告。原字节复核 5/6 摘要及长度一致；`artg_bb8a7eeb887bd783dd92` 登记 3,285 bytes、实为 3,313 bytes，28 处 CRLF 转 LF 后才符合旧摘要。保留原件并明确拒绝其完整性，不静默标准化或改登记值；初次以 read_text 核对产生的 6/6 结论撤回。历史记录没有 execution_scope 或完整 producer 请求，其未知 scope 如实表达，不填当前 run；只读历史不能作为草稿或实验执行事实。缺完整绑定的旧 producer 拒绝重放，新写入绑定实际 scope／用途，不由外部报告名字推导权限，历史证据不批量改写 |
 | 当前任务权限 | 初始材料由 `input_artifact_refs` 字段传入并校验 owner 和版本，保存到 InteractionTrace。同 run 恢复必须与原字段相同。新草稿由本任务的成功写回执进入可改集合，编辑复核原记录的 execution_id 和草稿用途 |

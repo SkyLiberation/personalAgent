@@ -1,10 +1,12 @@
 """Current readable references projected only from named committed facts."""
 
 from collections.abc import Iterable
+from personal_agent.application.bash_execution.models import BashExecutionReceipt
 from personal_agent.kernel.contracts.resource import ResourceRef
 from .goal_models import AnalysisGoalRef
 from .models import (
     AcceptedArtifactToolRequest,
+    AcceptedBashToolRequest,
     ActionObservation,
     ArtifactSourceInput,
     InteractionInput,
@@ -40,6 +42,25 @@ def trace_goal_draft_refs(trace: InteractionTrace, *, base: AnalysisGoalRef | No
     return tuple(sorted(refs, key=lambda ref: ref.resource_id))
 
 
+def _bash_receipt_refs(receipt: BashExecutionReceipt) -> tuple[ResourceRef, ...]:
+    return tuple(ref for ref in (
+        receipt.program_ref, receipt.input_manifest_ref, receipt.stdout_ref, receipt.stderr_ref,
+    ) if ref is not None)
+
+
+def bash_audit_artifact_refs(sources: Iterable[InteractionTrace]) -> set[ResourceRef]:
+    """Identify Bash bookkeeping even when the same file has an ArtifactSourceInput."""
+    refs: set[ResourceRef] = set()
+    for trace in sources:
+        for accepted in trace.accepted_tool_requests:
+            if isinstance(accepted, AcceptedBashToolRequest):
+                if accepted.command is not None:
+                    refs.add(accepted.command.program.resource_ref)
+                if accepted.receipt is not None:
+                    refs.update(_bash_receipt_refs(accepted.receipt))
+    return refs
+
+
 def tool_result_artifact_refs(trace: InteractionTrace) -> dict[str, tuple[ResourceRef, ...]]:
     """Files published by each tool's committed receipt."""
     refs = {}
@@ -47,10 +68,7 @@ def tool_result_artifact_refs(trace: InteractionTrace) -> dict[str, tuple[Resour
         if accepted.tool_name == "write_artifact" and accepted.receipt is not None:
             refs[accepted.action_id] = (accepted.receipt.resource_ref,)
         elif accepted.tool_name == "bash" and accepted.receipt is not None:
-            receipt = accepted.receipt
-            refs[accepted.action_id] = tuple(ref for ref in (
-                receipt.program_ref, receipt.input_manifest_ref, receipt.stdout_ref, receipt.stderr_ref,
-            ) if ref is not None)
+            refs[accepted.action_id] = _bash_receipt_refs(accepted.receipt)
     for record in trace.experiment_records:
         receipt = record.receipt
         if receipt is not None:

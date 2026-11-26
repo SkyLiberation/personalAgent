@@ -24,6 +24,8 @@ Application Service
 
 ## 注册与曝光
 
+MCP 工具在宿主启动时发现。客户端握手后逐页请求 `tools/list`，把 `nextCursor` 原样传入下一次请求的 `params.cursor`，到末页才把完整目录交给组合根。组合根只注册部署中映射的工具。页格式错误、循环游标、第 64 页仍有续页或请求失败都会中止发现并拒绝启动。发现和注册由 Runtime 完成，模型随后从可见工具中选择调用。 [MCP 分页设计与验收](../mcpDesign/README.md#mcp-01-工具目录分页)
+
 `ToolExecutor` 在 [governance/registry.py](../../src/personal_agent/governance/registry.py)维护已注册工具，按调用入口生成只读定义。`ToolGovernance.exposure` 区分四种声明：
 
 | 声明 | 当前消费边界 |
@@ -37,7 +39,7 @@ Application Service
 
 HTTP 直接执行通过 `invoke_direct()` 复用 Gateway；它有独立的身份及作用域入口，接口见 [API](../api.md#post-apitoolsnameexecute)。注册工具清单不等于普通模型可选工具清单。
 
-Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入知识和 Artifact 操作；个人知识读取器存在时隐藏三个底层 note 读取工具。`retrieval_experiment` 只在当前 run 已绑定实验许可时投影；`execute_python` 还要求主体与部署匹配、截止和共享额度可用、没有待对账执行。文件工具以稳定的路径参数声明。Runtime 从初始材料、已提交回执及外置结果恢复当前可读范围；本交互已成功消费的个人知识搜索不再投影。主决策另接收工作清单、回答提交及已配置的 Agent 委托动作，回答模块按当前任务决定可用的提交操作。
+Conversation 在 [`_effective_capabilities()`](../../src/personal_agent/application/conversation/service.py)中加入知识、文件和工作区动作，并按部署与当轮权限筛选注册工具。Runtime 从初始材料、已提交回执及外置结果恢复当前可读范围。主请求还接收适用的控制动作及已配置的 Agent 委托动作。现行调用名及其可见条件见[本地工具列表](../context/tool.md#当前本地工具列表)。
 
 `TurnContextComposition.model_action_definition_chars` 记录每轮动作定义的字符量。模型实际收到的菜单取决于该轮投影，不能从注册总数推导输入体积、误选率或用户结果。
 

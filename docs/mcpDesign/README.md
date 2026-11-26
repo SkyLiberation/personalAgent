@@ -95,6 +95,14 @@ toolServer/Toolathlon/           独立上游 checkout 或评测容器来源
 3. Web lifespan、CLI 命令和 worker 共享 `AgentService.close()`。先停止消费或等待在途运行收尾，再关闭客户端。Web 若在服务创建后、lifespan 接管前装配失败，创建方也负责关闭。实现时沿全部 `AgentService` 构造点迁移显式持有资源的调用方，含运维脚本和评测辅助。
 4. 连接以实际配置、凭据和隔离环境为界。首个切片在一个产品实例内，每个 Server 使用一个连接。握手完整成功后才标记就绪。发现进程退出或会话失效后，当前客户端报告不可用，显式重启产品实例时以新客户端重新握手。当前 stdio 实现会补起进程而沿用初始化状态和队列，迁移时移除该隐式重启行为。关闭需等待子进程退出，评测容器和账号由 Runner 回收。V2 同时检查客户端进程与实际 Server 的退出。
 
+#### MCP-01 工具目录分页
+
+基线客户端只读取首页。正式 Web 入口接入双页只读 MCP 服务后，服务只收到首页请求，组合根在名称匹配处报 `does not expose tool 'lookup'`。以相同服务单独请求 `cursor: p2` 可读到 `lookup`。最早的责任边界是客户端丢弃续页游标。 [基线报告](../../.tmp/mcp-tool-pages-20261123/baseline-isolated/report.json)
+
+本工程启动发现沿用 DeepSeek Harness 先聚合后发布的顺序。HTTP 与 stdio 共用客户端的分页循环。客户端在同一连接上从首个 `tools/list` 读起，每次将返回的 `nextCursor` 原样传给下一次请求的 `params.cursor`。末页成功后，组合根按本地配置映射和注册工具。客户端沿用 TypeScript SDK 的 64 页上限及本工程逐请求超时。非列表的 `tools`、非字符串的续页游标、重复游标、第 64 页仍有续页、请求超时或远端错误都使发现失败，由现有资源栈关闭已建连接。重复游标按失败处理，因为本地装配要求完整目录。 [本工程客户端](../../src/personal_agent/infra/mcp.py) · [MCP 分页契约](https://modelcontextprotocol.io/specification/2024-11-05/server/utilities/pagination) · [DeepSeek 聚合后发布](https://github.com/deepseek-ai/deepseek-harness/blob/4b399c39a6d1479cd84ca591b4d7c88e24d38a96/packages/mcp/mcp-client/src/tools.ts#L144-L238) · [SDK 分页实现](https://github.com/modelcontextprotocol/typescript-sdk/blob/dd22ba25ddbe7cd8822e1fe9c738a974996a28f6/packages/client/src/client/client.ts#L1727-L1753)
+
+验收经 Web 工具清单与执行接口完成。双页 HTTP、双页 stdio、空中间页、单页及接回健康服务后重启共 5 个场景成功注册并调用配置的 `lookup`，未配置的工具均未暴露。第二页协议错误、坏页、非法游标、重复游标、达到上限仍有续页、跨页重名及目录缺少配置工具共 7 个场景按预期拒绝启动，远端 `tools/call` 均为零。基线与目标均禁用工作区 `.env`，使用独立数据库和受控只读服务，每个场景运行一次。证据覆盖 Web 装配和 HTTP、stdio 协议链路。 [验收报告](../../.tmp/mcp-tool-pages-20261123/target-isolated/report.json)
+
 ### 5.2 从发现到用户交付
 
 ```text
@@ -163,7 +171,7 @@ V4 的真实反例中，Policy 已返回 `require_confirmation`，网关仍派�
 
 #### 5.2.4 沿用上游输入 Schema
 
-Toolathlon 的 `fetch.fetch_json` 曾在第二轮传入上游允许的 `Accept` 对象，仍被本地严格化封闭的请求头 Schema 拒绝。`filesystem.read_file` 也曾因省略上游允许缺省的 `tail` 被拒绝。[原始 Schema 对照](../../.tmp/ta14-rerun-1111/schema-projection.json) · [原始输入回放](../../.tmp/mcp-upstream-contract-1111/replay.json)
+Toolathlon 的 `fetch.fetch_json` 曾在第二轮传入上游允许的 `Accept` 对象，仍被本地严格化封闭的请求头 Schema 拒绝。`filesystem.read_file` 也曾因省略上游允许缺省的 `tail` 被拒绝。原始 Schema 对照（`.tmp/ta14-rerun-1111/schema-projection.json`） · 原始输入回放（`.tmp/mcp-upstream-contract-1111/replay.json`）
 
 LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并把调用参数送给 MCP 会话。MCP Server 声明输入约束并验证收到的调用。personalAgent 的 MCP 装配同样采用发现的 Schema。模型工具定义、动作解码、准入预检查和派发前校验消费这份契约。服务方工具声明使用 `strict: false`，保留上游的字段可选性和开放对象。权限、域名和确认仍由现有 ToolGateway 执行。[LangChain 装配与调用](https://github.com/langchain-ai/langchain-mcp-adapters/blob/52a4535f3eb4b98f386836e4d9b8c4cadf99afca/langchain_mcp_adapters/tools.py#L419-L485) · [MCP 工具规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) · [OpenAI 工具严格模式](https://developers.openai.com/api/docs/guides/function-calling#strict-mode)
 
@@ -171,7 +179,7 @@ LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并
 
 验收回放 `git-milestone` 的真实数组和对象两轮、`identify-all-songs` 的语言头以及 `profile-update-online` 省略 `tail` 的调用。合法原参数和自定义请求头应原样派发，非法类型及上游明确禁止的未知字段应在派发前被拒。通过正式入口与实际 MCP Server 检查 HTTP 实收请求头及文件读取范围。本轮证据限定到参数与派发链路，完整任务评分独立。
 
-已核对上轮归档发现的 134 份不同工具 Schema。原始数组在回放中被拒，合法请求头对象及省略 `tail` 的参数通过。正式入口经真实 MCP Server 发送自定义头 `X-Example` 并成功读取指定首行。MiniMax 发出的自定义头也由目标 HTTP 服务回显。对话后续答复核验未通过，归档未形成最终答复。[轨迹回放](../../.tmp/mcp-upstream-contract-1111/replay.json) · [正式入口与模型验证](../../.tmp/mcp-upstream-contract-1111/verification.json)
+已核对上轮归档发现的 134 份不同工具 Schema。原始数组在回放中被拒，合法请求头对象及省略 `tail` 的参数通过。正式入口经真实 MCP Server 发送自定义头 `X-Example` 并成功读取指定首行。MiniMax 发出的自定义头也由目标 HTTP 服务回显。对话后续答复核验未通过，归档未形成最终答复。轨迹回放（`.tmp/mcp-upstream-contract-1111/replay.json`） · 正式入口与模型验证（`.tmp/mcp-upstream-contract-1111/verification.json`）
 
 ### 5.3 选择 Toolathlon 传输
 
@@ -199,7 +207,7 @@ LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并
 
 验收固定为 `upenn-campus-route` 的书店到博物馆真实输入。先检查网关发现 `maps_directions` 且正式工具入口可以派发，再用原评分器的取步行时间函数读取相同路线。两端均须取得上游提供的距离和耗时。未定义的出行方式在派发前返回参数错误。若运行整例，固定上游题面、评分器与现有对话预算，保留模型生成的路线文件和评分。评分器构建矩阵最多发出 30 次有向路线查询。供应商变化随报告记录，结果属于 SerpApi 条件下的定向评测。
 
-2026-11-12 的定向运行中，正式工具入口与原评分器均取得 568 秒的步行耗时，非法出行方式被拒绝。真实对话生成五段路线的 JSON 文件，上游评分器通过 SerpApi 完成 30 次路线查询并通过文件评分。对话请求在 600 秒时超时，未取得最终答复，整例未通过。[路线预检](../../.tmp/ta-serpapi-1112/run-ef9790/upenn-campus-route/maps-preflight.json) · [运行报告](../../.tmp/ta-serpapi-1112/run-ef9790/upenn-campus-route/report.json)
+2026-11-12 的定向运行中，正式工具入口与原评分器均取得 568 秒的步行耗时，非法出行方式被拒绝。真实对话生成五段路线的 JSON 文件，上游评分器通过 SerpApi 完成 30 次路线查询并通过文件评分。对话请求在 600 秒时超时，未取得最终答复，整例未通过。路线预检（`.tmp/ta-serpapi-1112/run-ef9790/upenn-campus-route/maps-preflight.json`） · 运行报告（`.tmp/ta-serpapi-1112/run-ef9790/upenn-campus-route/report.json`）
 
 #### 5.3.3 SerpApi 地点与距离矩阵
 
@@ -209,7 +217,7 @@ LangChain MCP 适配器把发现结果的 `inputSchema` 直接交给工具，并
 
 使用巴黎原评分器的地点和距离函数验收已核实景点的地点 ID、周一与周二营业时间，以及相邻景点的步行距离。用真实的东京、新加坡和洛杉矶查询检查地点搜索、公交和驾车输入。东京上游评分器中的模拟地图结果仍按上游版本解释。此阶段验收地图依赖，整例评分及 Notion、邮件等其他服务按各用例实际运行状态记录。
 
-2026-11-12 的容器预检发现四项工具。巴黎原评分器读取七个景点的营业时间及埃菲尔铁塔到卢浮宫的步行距离。四个矩阵元素与逐对路线的距离和耗时一致，超过上限的请求被拒绝。东京地点搜索、新加坡沿途站点、洛杉矶驾车和宾大步行回归均通过。一次复验中原评分器收到无法按 JSON 读取的地点详情，同一适配器版本再次执行通过。[最终预检报告](../../.tmp/ta-serpapi-tools-1112/run-16b2fd/report.json) · [失败记录](../../.tmp/ta-serpapi-tools-1112/run-ce19c0/probe.stderr)
+2026-11-12 的容器预检发现四项工具。巴黎原评分器读取七个景点的营业时间及埃菲尔铁塔到卢浮宫的步行距离。四个矩阵元素与逐对路线的距离和耗时一致，超过上限的请求被拒绝。东京地点搜索、新加坡沿途站点、洛杉矶驾车和宾大步行回归均通过。一次复验中原评分器收到无法按 JSON 读取的地点详情，同一适配器版本再次执行通过。最终预检报告（`.tmp/ta-serpapi-tools-1112/run-16b2fd/report.json`） · 失败记录（`.tmp/ta-serpapi-tools-1112/run-ce19c0/probe.stderr`）
 
 #### 5.3.4 百度地图接入预检
 
@@ -270,7 +278,9 @@ Conversation 在 `EffectiveCapabilities` 投影处将部署限制与既有身份
 
 #### 可比的执行环境
 
-`canvas-arrange-exam` 的正式归档显示，官方 Python 在 Toolathlon 项目环境中用 `openpyxl` 就地写入 9 行。本 Agent 识别出相同的 9 门课，但通用镜像缺少 `openpyxl`，且 Bash 的附件快照与 MCP、评分器所读的可写工作区分离。该题声明的 MCP 服务为 Canvas、邮件、记忆和 Terminal，Excel 是题目材料，单凭服务名无法推导工作区执行依赖。[官方轨迹](../../.tmp/tac1114/runs/canvas-arrange-exam/official/traj_log.json) · [本 Agent 报告](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/canvas-arrange-exam/personal/report.json)
+现行本 Agent 通过 Linux 原生 `bwrap` 执行 Bash。具名 MCP 服务与 Bash 使用同一份可写宿主目录，部署将该目录绑定到会话许可。Toolathlon 的网关工作区须由 Agent 执行账户访问。下方容器与镜像说明对应迁移前的对照。 [现行 Bash 约束](../adr/0056-bash-workspace.md#linux-原生沙箱迁移)
+
+`canvas-arrange-exam` 的正式归档显示，官方 Python 在 Toolathlon 项目环境中用 `openpyxl` 就地写入 9 行。本 Agent 识别出相同的 9 门课，但通用镜像缺少 `openpyxl`，且 Bash 的附件快照与 MCP、评分器所读的可写工作区分离。该题声明的 MCP 服务为 Canvas、邮件、记忆和 Terminal，Excel 是题目材料，单凭服务名无法推导工作区执行依赖。官方轨迹（`.tmp/tac1114/runs/canvas-arrange-exam/official/traj_log.json`） · [本 Agent 报告](../../.tmp/ta-rerun-1117/window-20261117-012238-949703/canvas-arrange-exam/personal/report.json)
 
 采用 DeepSeek Harness 的职责划分。MCP Client 根据部署参数连接、发现和注册工具。Bash 按会话工作区执行，Linux 本地实现授予该目录写权限。评测环境负责提供项目依赖，MCP 工具描述不承担软件安装。Toolathlon 的固定任务镜像已装配上游锁定依赖。Bash 复用同一镜像及其中的包。评测接入从已就绪的网关将位于 root 私有目录的 Python 解释器放到卷中的只读运行时目录，继续以非 root 执行。相比维护按用例或服务名推断的包表，这一做法同时覆盖 MCP 服务和题目文件使用同一项目环境的情况。[MCP 连接](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/mcp/mcp-client/src/transport.ts#L31) · [工作区权限](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/sandbox/sandbox-local/src/profiles.ts#L17) · [上游镜像](../../toolServer/Toolathlon/Dockerfile#L91)
 

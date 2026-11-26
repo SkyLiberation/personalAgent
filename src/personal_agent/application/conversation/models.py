@@ -19,8 +19,10 @@ from personal_agent.application.knowledge_lifecycle.models import (
 )
 from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.answer_result import AnswerProtocolVersion, AnswerResultConfig
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from personal_agent.kernel.feature_flags import FeatureFlags
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
+from personal_agent.kernel.contracts.tool import ConversationToolProfile
 from personal_agent.application.conversation.workspace_changes import WorkspaceChangeConfirmation, WorkspaceChangeOperation
 from personal_agent.application.artifacts.models import (
     ArtifactResourceItem,
@@ -39,7 +41,10 @@ from personal_agent.application.bash_execution.models import (
     BashWorkspaceFile,
 )
 from .tool_requests import WriteArtifactArgs
-from .history_models import HistoryCompactionCheckpoint, HistoryItemKey, VerificationHistoryCheckpoint
+from .skills import PublishedSkillScripts
+from .history_models import (
+    HistoryCompactionCheckpoint, HistoryItemKey, HistoryToolPruningBoundary, VerificationHistoryCheckpoint,
+)
 from .goal_models import AnalysisGoalRef, GoalItemId, GoalMaintenanceInvocation, GoalOperationRecord, GoalReadInvocation
 
 
@@ -75,6 +80,16 @@ class ConversationMessage(_StrictModel):
         if info.data.get("role") == "user":
             return _USER_MESSAGE_CONTENT.validate_python(content)
         return content
+
+
+class TurnSteeringRequest(_StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    client_request_id: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class TurnSteering(TurnSteeringRequest):
+    after_step: int = Field(ge=0)
 
 
 WORKING_PLAN_MAX_STEPS = 12
@@ -385,6 +400,8 @@ class ActionObservation(_StrictModel):
         serialized = handler(self)
         if self.evidence_eligible:
             serialized.pop("evidence_eligible", None)
+        if self.skill_scripts is None:
+            serialized.pop("skill_scripts", None)
         return serialized
     kind: Literal[
         "context_evidence",
@@ -396,6 +413,7 @@ class ActionObservation(_StrictModel):
     capability_id: str
     status: Literal["succeeded", "failed", "running", "cancelled", "unknown"]
     payload: dict[str, Any] = Field(default_factory=dict)
+    skill_scripts: PublishedSkillScripts | None = None
     plan_step_id: str | None = Field(default=None, min_length=1, max_length=100)
     execution_request_digest: str | None = Field(
         default=None,
@@ -481,7 +499,7 @@ InteractionInput = (
 class LoopBudgetPolicy(_StrictModel):
     policy_revision: str = "interaction-loop-v1"
     max_model_turns: int = Field(default=8, ge=1)
-    max_tool_calls: int = Field(default=12, ge=0)
+    max_tool_calls: int | None = Field(default=12, ge=0)
     max_agent_calls: int = Field(default=4, ge=0)
     max_total_tokens: int = Field(default=32_000, ge=1)
     max_concurrency: int = Field(default=4, ge=1)
@@ -800,13 +818,18 @@ class InteractionTrace(_StrictModel):
     answer_protocol_version: AnswerProtocolVersion | None = None
     answer_result_binding: AnswerResultConfig | None = None
     feature_flags_binding: FeatureFlags = Field(default_factory=FeatureFlags)
+    tool_profile_binding: ConversationToolProfile = Field(default_factory=ConversationToolProfile)
+    skill_scope_digest: ContentDigest | None = None
+    goal_mode: ConversationGoalMode = ConversationGoalMode.ENABLED
     history_compaction: HistoryCompactionCheckpoint | None = None
+    history_tool_pruning: tuple[HistoryToolPruningBoundary, ...] = ()
     verification_history_compactions: tuple[VerificationHistoryCheckpoint, ...] = Field(default=(), max_length=2)
     revision: int = Field(default=1, ge=1)
     interaction_run_ref: str
     conversation_id: SessionId
     principal: AuthenticatedPrincipal
     messages: tuple[ConversationMessage, ...]
+    steering: tuple[TurnSteering, ...] = ()
     input_artifact_refs: tuple[ResourceRef, ...] = ()
     accepted_tool_requests: tuple[AcceptedToolRequest, ...] = ()
     # None identifies snapshots written before this dispatch checkpoint existed.
@@ -831,14 +854,14 @@ class InteractionTrace(_StrictModel):
 
     @model_validator(mode="before")
     @classmethod
-    def read_retired_intent_metadata(cls, value):
+    def read_retired_metadata(cls, value):
         if not isinstance(value, dict):
             return value
         fields = {key: item for key, item in value.items() if key != "review_criteria"}
         flags = fields.get("feature_flags_binding")
-        if isinstance(flags, dict) and "interaction_intent_classification" in flags:
+        if isinstance(flags, dict):
             fields["feature_flags_binding"] = {key: item for key, item in flags.items()
-                                               if key != "interaction_intent_classification"}
+                                               if key not in {"interaction_intent_classification", "low_budget_warning"}}
         return fields
 
     @model_validator(mode="before")
@@ -865,6 +888,12 @@ class InteractionTrace(_StrictModel):
     @property
     def responded_steps(self) -> tuple[ModelDecisionRecord, ...]:
         return tuple(record for record in self.model_decisions if record.step_no is not None and record.response_refs)
+
+    def goal_messages(self, *, step: int | None = None) -> tuple[ConversationMessage, ...]:
+        return self.messages + tuple(
+            ConversationMessage(role="user", content=item.text)
+            for item in self.steering if step is None or item.after_step < step
+        )
 
     @property
     def current_step_no(self) -> int:

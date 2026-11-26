@@ -42,6 +42,8 @@ Application 调用 StructuredModelClient.generate(request)
 
 返回与异常沿相反方向传播。计量位于重试外层，消费重试器汇总的响应信息；观测开关决定追踪包装是否装配。输出协议修复与暂时失败重试是不同边界，额度由现行请求和配置约束，不能叠加为无界重试。
 
+结构化模型工厂从 [`StructuredConfig.model`](../../src/personal_agent/kernel/config_models.py) 取得模型名，并将同一名称绑定到治理客户端。默认配置与本地 `Settings.from_env()` 的前后对照确认，删除旧同值属性后，配置 Schema、配置序列化和客户端绑定一致。
+
 Conversation 的普通核验工作流由 Runtime 注入按受信 `ExecutionScope` 绑定的模型调用方法；各次分段／整体核验分别执行当前 run 准入及 Journal 消费提交。工具同步执行，模型单请求超时及运行截止拥有停止责任，避免外层线程超时遗留继续消费的核验。该入口仍调用上述模型 Port 组合，任务额度由 Conversation／Journal 拥有，不由遥测收集器授权或计费。
 
 模型调用统一消费完整的 `StructuredModelResponse`。Adapter 的 `_create_structured_completion()` 可用 SDK 流式 transport 取得最终完整响应；MiMo 官方 API／中国区 Token Plan 的原生工具调用也使用 SDK 流式合并及完整用量，wire 选择为服务方支持的 `auto`，原请求的 required 校验与有界修复保持。工具流仅关闭 SDK 本地 strict 自动参数解析，完整参数交原解码器，部分增量不进入执行；其上下文关闭、deadline、重试及耗用继续经过上述组合。协议依据及验证边界见[传输规格](../optimization/model-provider-transport.md#2026-10-23-mimo-工具流式接入规格)。
@@ -60,7 +62,7 @@ Loop 已将逐响应记录和续接接入同一 Port：response_sink 在 typed �
 
 主模型调用用 Turn 标识和 `invocation_id` 定位请求及响应原件。文件 Journal 内部沿用 `interaction_run_ref` 字段保存 Turn 标识。`step_no` 为轮内主决策顺序，响应记录与 HTTP 诊断各有 `attempt_id`。[生命周期 Spec](../optimization/to_verify/conversation-loop-boundaries.md#320-sessionturn-与-step-生命周期)
 
-生成式 Provider 在构造时由配置与[唯一策略工厂](../../src/personal_agent/infra/model_providers/__init__.py)选定，SDK 请求过程只调用注入的 `ModelProviderPolicy.prepare_chat_parameters()`。未显式声明时识别已知官方 hostname；自定义服务可以使用注册 ID。未注册 ID 在装配时明确拒绝，不能静默降为通用服务。配置加载器只向相同实际 provider/endpoint/model 的消费者继承 canonical 附加参数；独立绑定、显式空对象和非法 JSON 仍分别表示独立配置、清空与拒绝。不同图片模型及 `model_override` 不自动继承主模型参数，环境契约由[环境说明](../env.md#provider-选择与参数绑定)拥有。
+生成式 Provider 在构造时由配置与[唯一策略工厂](../../src/personal_agent/infra/model_providers/__init__.py)选定，SDK 请求过程只调用注入的 `ModelProviderPolicy.prepare_chat_parameters()`。未显式声明时识别已知官方 hostname；自定义服务可以使用注册 ID。未注册 ID 在装配时明确拒绝，不能静默降为通用服务。配置加载器只向相同实际 provider/endpoint/model 的消费者继承 canonical 附加参数；独立绑定、显式空对象和非法 JSON 仍分别表示独立配置、清空与拒绝。`model_override` 选择不同模型时使用该模型的服务方默认值，环境契约由[环境说明](../env.md#provider-选择与参数绑定)拥有。
 
 参数适配按以下职责分开，原 SDK、解析、重试、容量和预算准入位置保持：
 
@@ -69,7 +71,7 @@ Loop 已将逐响应记录和续接接入同一 Port：response_sink 在 typed �
 | 共享 typed 契约 | [`kernel/model_provider.py`](../../src/personal_agent/kernel/model_provider.py)：provider ID、官方端点识别、`ChatModelCapabilities` 和 `ModelProviderPolicy` Protocol |
 | 公共编码 | [`OpenAICompatiblePolicy`](../../src/personal_agent/infra/model_providers/openai_compatible.py)：合并默认值、校验受管字段/effort、按能力投影 token 和采样字段；`ChatParameters` 仅持有单次请求的外部 SDK 载荷 |
 | 服务方规则 | [`MiniMaxPolicy`](../../src/personal_agent/infra/model_providers/minimax.py)、[`MiMoPolicy`](../../src/personal_agent/infra/model_providers/mimo.py)、[`DeepSeekPolicy`](../../src/personal_agent/infra/model_providers/deepseek.py)：分别处理实际模型的 thinking/effort 和工具传输差异 |
-| 选择与装配 | Infra 的不可变默认注册表和 `build_provider_policy()`；主模型工厂可注入策略，直接构造 Adapter 时也只选择一次。AgentService 向 GraphitiStore 注入，Runtime 向 ArtifactService 注入；LangExtract 实验构造链显式传入策略 |
+| 选择与装配 | Infra 的不可变默认注册表和 `build_provider_policy()`。主模型工厂可注入策略，直接构造 Adapter 时也只选择一次。AgentService 向 GraphitiStore 注入策略，LangExtract 实验构造链显式传入策略 |
 
 公共编码器先建立请求内载荷，调用策略 `configure()` 取得能力，再投影 token/采样字段，调用 `prepare_tools()` 处理传输约束，最后写回 effort 和附加参数。SDK 使用所得字典发送；策略没有模型调用、历史、重试和计量状态。`ModelProviderProfile` 集中品牌分支已删除，memory/application 只依赖 kernel Protocol，不反向导入 infra。
 

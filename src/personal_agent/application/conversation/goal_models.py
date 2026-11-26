@@ -2,7 +2,7 @@
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_validator
 
 from personal_agent.application.artifacts.models import DRAFT_MAX_BYTES
 from .history_models import HistoryItemKey
@@ -54,13 +54,11 @@ class AnalysisGoal(BaseModel):
             item.scope == "task" or item.source_message_ids[-1].startswith(f"{run_ref}:user:")
         ))
 
-    def verification_text(self, run_ref: str, control: GoalExecutionControl | None = None,
-                          delivery: "SetGoalDelivery | None" = None) -> str:
-        if self.goal_id is None:
-            return self.objective
+    def snapshot(self, run_ref: str, control: GoalExecutionControl | None = None,
+                 delivery: "SetGoalDelivery | None" = None) -> dict[str, JsonValue]:
         items = self.active_items(run_ref)
         objective = self.objective or next((item.text for item in items if item.kind == "requirement"), "")
-        snapshot = {
+        snapshot: dict[str, JsonValue] = {
             "goal_id": self.goal_id, "objective": objective,
             "items": {item.item_id: item.model_dump(mode="json", exclude={"item_id"})
                       for item in items},
@@ -68,7 +66,13 @@ class AnalysisGoal(BaseModel):
         }
         if delivery is not None:
             snapshot["delivery"] = delivery.model_dump(mode="json")
-        return json.dumps(snapshot, ensure_ascii=False, indent=2)
+        return snapshot
+
+    def verification_text(self, run_ref: str, control: GoalExecutionControl | None = None,
+                          delivery: "SetGoalDelivery | None" = None) -> str:
+        if self.goal_id is None:
+            return self.objective
+        return json.dumps(self.snapshot(run_ref, control, delivery), ensure_ascii=False, indent=2)
 
     @field_validator("objective")
     @classmethod

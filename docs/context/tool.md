@@ -1,4 +1,46 @@
-# 工具输出超限的处理
+# 本地工具与输出续读
+
+## 当前本地工具列表
+
+组合根为已启用能力注册本地工具。已配置且实际存在的知识目录可生成 `enterprise.raw_wiki_<目录名>`。实际部署查看 `GET /api/capabilities/inventory` 的 `local_tools`，其中包含注册名、曝光级别、描述和完整输入 Schema。远端 MCP 和子 Agent 在能力清单中单列。[组合根注册](../../src/personal_agent/orchestration/runtime.py) · [能力清单投影](../../src/personal_agent/orchestration/capability_inventory.py) · [工具参数明细](local-tools.md)
+
+### Conversation 的本地工具
+
+下表使用模型请求中的调用名。普通注册工具通常由注册名加 `tool_` 得到调用名。`write_artifact` 由 Conversation 投影为 `tool_create_artifact` 和可用的 `tool_edit`。本轮工具集由部署装配、主体权限、[工具组配置](local-tools.md#conversation-工具组配置)、目标阶段、执行控制及预算共同决定。[能力筛选](../../src/personal_agent/application/conversation/service.py) · [工具组定义](../../src/personal_agent/application/conversation/tool_groups.py) · [模型动作声明](../../src/personal_agent/application/conversation/model_actions.py)
+
+| 工具组 | 模型调用名 | 用途及可见条件 |
+| --- | --- | --- |
+| `files_and_artifacts` | `tool_read_file`、`tool_grep_file` | 按 `file_path` 读取和搜索当前有权访问的文本。搜索依赖已装配的搜索适配器。启用获准的任务工作区时，读取还可用于 `/tmp` 文件。 |
+| `files_and_artifacts` | `tool_create_artifact`、`tool_edit` | 创建草稿，或精确替换既有草稿中的文本。启用获准的任务工作区且 Bash 和文件读取可用时，`tool_edit` 也可编辑其中已读取的 `/tmp` 文件。 |
+| `bash` | `tool_bash` | 在隔离容器中执行命令。本轮须绑定执行许可且有可用的执行预算。 |
+| `skills` | `tool_load_skill` | 按当前会话可见的技能名称读取说明。[Skill 处理流程](skill.md) |
+| `network` | `tool_web_search`、`tool_web_read` | 发现网页来源，或读取指定 URL 的正文。搜索依赖可用搜索配置，读取依赖采集服务。 |
+| `knowledge` | `tool_search_personal_knowledge`、`tool_list_personal_knowledge` | 已装配个人知识读取器时查询已存事实或列出条目。已选任务的可见历史里已有成功检索时，后续请求撤下检索动作。 |
+| `knowledge` | `tool_prepare_conversation_knowledge_save`、`tool_prepare_knowledge_delete` | 分别依赖知识写入口及知识读取与生命周期服务，准备需要用户确认的保存或删除。 |
+| `knowledge` | `tool_graph_search`、`tool_inspect_knowledge_gaps`、`tool_list_recent_notes`、`tool_get_note`、`tool_find_similar_notes` | 查询图谱、知识缺口和底层笔记。当前组合根装配个人知识读取器，主循环隐藏后三个笔记工具。 |
+| `research_and_operations` | `tool_list_research_subscriptions`、`tool_list_research_runs`、`tool_get_research_digest`、`tool_inspect_worker_queue` | 读取研究订阅、运行、简报或后台队列。 |
+| `workspace_changes` | `tool_prepare_workspace_changes` | 在绑定了获准工作区的入口，提交建目录和移动文件的清单供确认。 |
+| `retrieval_experiment` | `tool_retrieval_experiment` | 运行开发实验、冻结结果或执行最终评测。本轮须绑定实验部署。 |
+| `conversation_control` | `submit_goal_patch`、`read_current_goal`、`control_working_plan`、`control_request_clarification`、`control_report_turn_status` | 装配 Goal 时提供目标动作，有效目标存在时可读。目标待维护时仅提供适用的目标、澄清和状态动作。关闭 Goal 时保留独立的计划和状态动作，计划步骤参数省略 `goal_item_ids`。回答测试模式撤下澄清工具。 |
+
+### 会话附件
+
+Runtime 通过用户轮次绑定的附件引用校验权限，并按执行授权将文件只读挂载给 Bash。Bash 工具说明提供附件目录，模型可以列出并读取目录中的文件。已知 `file_path` 的获准文本原件仍可使用会话读搜工具。主请求不另发附件清单。[共享卷的输入范围](../optimization/to_verify/python-data-analysis-tool.md#共享工作区的命令输入) · [跨轮请求验收](agent-loop.md#33-移除主请求的前置执行输入)
+
+LongDS Task 3 第 34 轮第 6 步的同源回放验证了附件检查工具退役后的请求投影。该请求保留 9 项声明，分别为 `tool_read_file`、`tool_grep_file`、`tool_create_artifact`、`tool_bash`、`tool_edit`、`control_working_plan`、`control_report_turn_status`、`submit_goal_patch` 和 `read_current_goal`。[LongDS 工具声明回放](../../.tmp/inspect-artifact-retirement-20261121/report.json)
+
+### 专用入口和内部工作流工具
+
+这里使用注册名。专用入口按自身授权调用 `scoped_agent` 工具，固定工作流调用 `workflow_activity` 工具。[注册与曝光](../topics/tools.md#注册与曝光)
+
+| 曝光级别 | 用途 | 注册名 |
+| --- | --- | --- |
+| `scoped_agent` | 笔记变更 | `update_note`、`supersede_note`、`mark_note_deprecated`、`mark_notes_conflicted` |
+| `scoped_agent` | 订阅管理和研究反馈 | `update_research_subscription`、`pause_research_subscription`、`resume_research_subscription`、`run_research_subscription_now`、`submit_research_feedback`、`save_research_event` |
+| `scoped_agent` | 队列与企业知识 | `retry_worker_task`、`enterprise_knowledge_search`、按目录注册的 `enterprise.raw_wiki_<目录名>` |
+| `workflow_activity` | 采集、知识整理与简报 | `capture_url`、`capture_upload`、`capture_text`、`consolidate_knowledge`、`review_digest` |
+| `workflow_activity` | 周期研究 | `create_research_subscription`、`research_prepare_run`、`research_initialize_state`、`research_run_loop`、`research_synthesize_digest`、`research_verify_digest` |
+| `workflow_activity` | 稿件核验 | `verify_interaction_draft`，依赖结构化模型客户端 |
 
 ## 会话文件替换决定
 
@@ -7,7 +49,7 @@
 | 需求 | 决定 | 验收 |
 | --- | --- | --- |
 | F1 回执提供可执行的续读入口 | 采用 [DeepSeek Harness 固定实现](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/spill/spill-policy/src/index.ts#L92-L150)。超限后将原始正文一次写入应用数据目录下的会话子目录，原调用回执提供文件路径。路径相对会话文件系统根。继续复用 Artifact 的不可变文件、摘要和内部来源身份，支持引用、跨轮恢复和 Bash 命令恢复。删除 `action_output` 通用成品写入口。 | 回放真实商品结果，校验原始字节、文件提交、回执配对、限长预览、只读分页、搜索命中及续页。 |
-| F2 稳定工具契约与权限 | 替换旧三种结果读取能力为 `read_file` 和 `grep_file`。已经授权的普通 Artifact 通过 `artifacts/<ID>` 路径读取。Runtime 依据当前任务已提交事实匹配精确路径，文件存储继续校验归属和内容摘要。工具 Schema 保持参数形状，观察到的新文件只加在工具回执中。Bash 容器可用回执中的原相对路径读取卸载文件。 | 同轨迹对照新增文件前后，Schema 字节一致，旧工具名消失，指定路径可读，跨会话、未发布路径和路径穿越请求被拒绝。核对相对路径对应的 Bash 工作区原件。 |
+| F2 稳定工具契约与权限 | 替换旧三种结果读取能力为 `read_file` 和 `grep_file`。已经授权的普通 Artifact 通过 `artifacts/<ID>` 路径读取。Runtime 依据当前任务已提交事实匹配精确路径，文件存储继续校验归属和内容摘要。工具 Schema 保持参数形状，观察到的新文件只加在工具回执中。Bash 的容器读取范围由[工作区输入契约](../optimization/to_verify/python-data-analysis-tool.md#任务工作区的内容边界)确定。 | 同轨迹对照新增文件前后，Schema 字节一致，旧工具名消失，指定路径可读，跨会话、未发布路径和路径穿越请求被拒绝。核对 Bash 挂载和读搜的原件路径。 |
 | F3 保留跨轮依据 | 原调用回执携带路径，压缩后通过已有原件定位区继续提供路径。成功续读及搜索仍按内部来源和正文范围归因。失败保存只返回限长预览和原因。按已保存结果约束重复抓取。 | 回放归档中的真实回执及其有效后续读取。验证文件重启可读，压缩定位能指回同一文件，保存失败不产生可执行路径。使用同端点可比的 MiniMax replay 核对缓存用量；正式用例结果独立记录。 |
 | F4 按需补读 | 外置结果是否还需查阅由模型依据当前用户目标决定。Conversation 按原交付契约处理最终答复，移除逐份检查外置结果读取回执的规则和对应拒绝提示。 | 从 GDP 正式轨迹第 26 轮交付判定前的已提交状态，通过正式 HTTP 入口回放。相同输入下旧运行时拒绝，新运行时提交原答复，零新增模型请求和外部写入。原整题评分和历史运行保留独立身份。 |
 
@@ -27,6 +69,8 @@
 
 普通工具回执按 JSON 序列化后的 UTF-8 体积检查 **50 KiB（51,200 字节）**上限，正文、预览和元数据共用。续读与搜索窗口沿用独立的 20,000 字符限制，完整模型请求继续独立检查容量。[体积检查](../../src/personal_agent/application/conversation/observation_bounds.py) · [原始契约](../adr/0013-bounded-observation-and-offloaded-read.md)
 
+Bash 由执行服务对已捕获的 stdout、stderr 分别提供至多 **64,000 字节**的有效 UTF-8 尾部预览，短流完整显示。原生回执保留截断标记、退出状态和模型当前可读的 Artifact 定位。Conversation 直接投影已限长的 Bash 回执，完整模型请求仍参与容量计量。历史已保存回执按原记录显示。[Bash 双流尾部预览规格](../optimization/to_verify/python-data-analysis-tool.md#bash-双流尾部预览)
+
 ## 2. 外置原件并返回限长回执
 
 - **原件保存成功。** Runtime 将工具实际取得的内容保存为可读资源。主模型收到与原调用配对的限长回执，内含状态、省略信息、完整文件路径和一份文本预览。续读指引只列出当轮已声明且允许访问该原件的工具。没有可用预览时，沿用回执中的元数据。
@@ -44,15 +88,15 @@ Runtime 从执行时的完整文本生成 `observation_excerpt`。优先使用�
 
 ### 普通 MCP 回执正文去重
 
-`k8s-redis-helm-upgrade` 的第 31 个模型请求包含 45 条原生工具消息，每条都同时展示 `data.content`、`data.raw.content` 和从同一内容块拼接的 `data.text`。一次 7,568 字符的文件读取形成 24,136 字符的工具消息，随后随历史重复进入模型请求。[实发请求归档](../../.tmp/ta27-1113-k8s/final-redis-helm-upgrade/k8s-redis-helm-upgrade/product-data/interaction_runs/irun_e4434c8b063b4519/ed48ae1b648a41e887e782f395735a45/request.json)
+`k8s-redis-helm-upgrade` 的第 31 个模型请求包含 45 条原生工具消息，每条都同时展示 `data.content`、`data.raw.content` 和从同一内容块拼接的 `data.text`。一次 7,568 字符的文件读取形成 24,136 字符的工具消息，随后随历史重复进入模型请求。实发请求归档（`.tmp/ta27-1113-k8s/final-redis-helm-upgrade/k8s-redis-helm-upgrade/product-data/interaction_runs/irun_e4434c8b063b4519/ed48ae1b648a41e887e782f395735a45/request.json`）
 
 - **TOOL-CTX-01 正文只展示一次。** 对 MCP 适配器生成的回执，Conversation 在回执渲染处投影模型所需内容。保留 `data.content` 及各内容块，省略完全相同的 `data.raw.content`、由这些文本块原样拼接的 `data.text`，以及与 `data.structured_content` 相同的原始结构化副本。保留不同值、结构化结果、状态、错误和原始回包中的独有元数据。比较采用完整值等价，正文相似或部分相同不触发省略。
 - **TOOL-CTX-02 保留结果来源和原件位置。** 展示与历史摘要读取同一去重投影。未配对回执也使用这一投影。工具适配器继续拥有 MCP 校验和完整回包，Conversation 只生成请求内投影。Journal、审计、外置原件、读取授权及预算边界沿用现行契约。
 - **验收。** 复用 Redis 样本 31 次已封存模型请求及同轨迹 45 条原始回执，验证调用 ID 和消息顺序、正文与结构化数据保真、重复字段消除以及原件位置保真。用已有 Toolathlon 结构化回执及一份超限 PDF 回执核对结构化结果和原件预览。对比相同历史上重新组装的 SDK 请求 UTF-8 字节数。回放通过后使用原评测入口及预算复跑 Redis 一次，单独记录实际模型用量和官方评分。不同模型轨迹的总量和得分按各自结果解读。
 
-离线回放通过。Redis 31 轮请求体累计从 7,008,709 字节降至 4,301,925 字节，减少 38.6%。末轮从 422,699 字节降至 239,745 字节，减少 43.3%。45 条 Redis 回执、8 条结构化回执和 1 条超限 PDF 回执均通过对应检查。请求体字节用于同输入对照，实际 token 用量由模型服务统计。[回放报告](../../.tmp/mcp-model-dedup-1113/report.json)
+离线回放通过。Redis 31 轮请求体累计从 7,008,709 字节降至 4,301,925 字节，减少 38.6%。末轮从 422,699 字节降至 239,745 字节，减少 43.3%。45 条 Redis 回执、8 条结构化回执和 1 条超限 PDF 回执均通过对应检查。请求体字节用于同输入对照，实际 token 用量由模型服务统计。回放报告（`.tmp/mcp-model-dedup-1113/report.json`）
 
-原预算下的真实复跑使用 32 个决策轮和 47 次工具调用，计 1,280,897 token。第 28 轮将 Chart 升至 `22.0.0`。官方评分确认版本和自定义配置符合要求，Pod 运行检查未通过，整例评分为 0.8。对话耗尽决策轮数后结束。[复跑报告](../../.tmp/mcp-model-dedup-1113/live/k8s-redis-helm-upgrade/report.json) · [官方评分](../../.tmp/mcp-model-dedup-1113/live/k8s-redis-helm-upgrade/grader.log)
+原预算下的真实复跑使用 32 个决策轮和 47 次工具调用，计 1,280,897 token。第 28 轮将 Chart 升至 `22.0.0`。官方评分确认版本和自定义配置符合要求，Pod 运行检查未通过，整例评分为 0.8。对话耗尽决策轮数后结束。复跑报告（`.tmp/mcp-model-dedup-1113/live/k8s-redis-helm-upgrade/report.json`） · 官方评分（`.tmp/mcp-model-dedup-1113/live/k8s-redis-helm-upgrade/grader.log`）
 
 ## 3. 续读与跨轮保留
 
@@ -78,10 +122,10 @@ GDP 的第 26 轮提交了已写入正确表格的答复。旧检查要求单独
 
 2026-11-10 调整单条上限与预览。Toolathlon 已封存的九份超限 PDF 回执中，同一正文在 MCP 回执的多个字段重复出现。旧算法按所有长字段分配空间，九条展示均只有 2,483 字符。新方案采用 [OpenCode 固定版本的 UTF-8 字节上限及开头预览](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/tool/truncate.ts#L76-L139)，保留本工程既有 Artifact 引用、原生调用配对和授权读搜。统一字节上限处理长单行，继续使用已有分页工具。
 
-九份原始回执经现行回执构造和主请求投影回放，均完整展示一份正文文本字段。正文为 3,828 至 11,754 字符，`case1.pdf` 第 1–4 页从 2,483 增至 4,842 字符。以同一真实回执放大正文验证长行截断，回执为 51,199 字节，下一字符即超限。原件保存失败仍给出原文前缀和不可续读原因。历史回放核对了调用配对、旧检查点的原件定位和续读。验证覆盖回执及请求契约，模型选择和整例成绩未重跑。[九条回放](../../.tmp/tool-result-preview-50k-20261110/replay-report.json) · [边界反事实](../../.tmp/tool-result-preview-50k-20261110/boundary-report.json)
+九份原始回执经现行回执构造和主请求投影回放，均完整展示一份正文文本字段。正文为 3,828 至 11,754 字符，`case1.pdf` 第 1–4 页从 2,483 增至 4,842 字符。以同一真实回执放大正文验证长行截断，回执为 51,199 字节，下一字符即超限。原件保存失败仍给出原文前缀和不可续读原因。历史回放核对了调用配对、旧检查点的原件定位和续读。验证覆盖回执及请求契约，模型选择和整例成绩未重跑。九条回放（`.tmp/tool-result-preview-50k-20261110/replay-report.json`） · 边界反事实（`.tmp/tool-result-preview-50k-20261110/boundary-report.json`）
 
 2026-11-10 调整原生工具回执展示。前版 Toolathlon 真实回执回放中，长行预览的原文占 45,918 个 UTF-8 字节，作为 JSON 字符串占 50,510 字节。采用 [OpenCode](https://github.com/anomalyco/opencode/blob/3104c1428ec91f809e5ab86631300de41eb6952e/packages/opencode/src/tool/truncate.ts#L124-L139) 和 [DeepAgents](https://github.com/langchain-ai/deepagents/blob/fd3e64ab6b605450bed5a2c22ef2ec84cd40542e/libs/deepagents/deepagents/middleware/_message_eviction.py#L241-L280) 的可读正文形式，保留本工程的结构化来源身份和引用边界。验收重放同一批 PDF 回执及长行反例，核对适配器实际组装的工具消息角色、调用 ID、原文保真、可用续读、保存失败和压缩后定位。普通回执、已读证据行和结构化回执保留原有契约。
 
-展示验证重放 9 条真实 PDF 回执，工具消息保持原调用 ID，正文与工具文本逐字一致。长行反例保留同一份 36,738 字符预览，工具消息正文从 51,458 字节降到 46,891 字节。中英文、原件不可读、结构化输入和第 17、18、27 轮历史回放通过。抽查的 5 条已读原件和搜索工具消息与归档逐字一致。此处核对的是适配器组装结果，整例模型与评分未重跑。[请求回放](../../.tmp/tool-result-preview-display-20261110/replay-report.json) · [展示边界](../../.tmp/tool-result-preview-display-20261110/boundary-report.json)
+展示验证重放 9 条真实 PDF 回执，工具消息保持原调用 ID，正文与工具文本逐字一致。长行反例保留同一份 36,738 字符预览，工具消息正文从 51,458 字节降到 46,891 字节。中英文、原件不可读、结构化输入和第 17、18、27 轮历史回放通过。抽查的 5 条已读原件和搜索工具消息与归档逐字一致。此处核对的是适配器组装结果，整例模型与评分未重跑。请求回放（`.tmp/tool-result-preview-display-20261110/replay-report.json`） · 展示边界（`.tmp/tool-result-preview-display-20261110/boundary-report.json`）
 
-调整前，同一 PDF 回执的离线回放通过 10 项检查，覆盖预览限长、调用配对、不同请求视图和当轮续读能力。Toolathlon 实际运行中，9 条超限 PDF 回执均携带配对预览、原件引用和合法读取指引，随后读搜了其中 6 个原件。整例因预算结束且上游评分未通过，验证结论限于超限回执机制。[离线回放](../../.tmp/tool-observation-preview-20261110/result.json) · [实发请求审计](../../.tmp/tool-observation-preview-live-20261110/model-input-audit.json) · [整例报告](../../.tmp/tool-observation-preview-live-20261110/target/report.json)
+调整前，同一 PDF 回执的离线回放通过 10 项检查，覆盖预览限长、调用配对、不同请求视图和当轮续读能力。Toolathlon 实际运行中，9 条超限 PDF 回执均携带配对预览、原件引用和合法读取指引，随后读搜了其中 6 个原件。整例因预算结束且上游评分未通过，验证结论限于超限回执机制。离线回放（`.tmp/tool-observation-preview-20261110/result.json`） · 实发请求审计（`.tmp/tool-observation-preview-live-20261110/model-input-audit.json`） · 整例报告（`.tmp/tool-observation-preview-live-20261110/target/report.json`）

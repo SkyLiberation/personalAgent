@@ -25,6 +25,8 @@ def build_bash_tool(
         tool_description = prompts.render(
             "bash_execution.shared_workspace", workspace_root=workspace.root, inputs_root=BASH_SHARED_INPUTS_DIR,
         )
+    elif service.profile.persistent_bash:
+        tool_description = prompts.render("bash_execution.persistent_bash", temp_dir=BASH_TEMP_DIR)
     elif service.profile.task_workspace is not None:
         tool_description = prompts.render("bash_execution.task_workspace", temp_dir=BASH_TEMP_DIR)
     else:
@@ -36,8 +38,7 @@ def build_bash_tool(
         args_schema=BashArgs,
         response_format="content_and_artifact",
         extras={"strict": False, **governance_extras(
-            side_effects=("write_local", "external_network")
-            if workspace is not None and workspace.network_container_id is not None else ("write_local",),
+            side_effects=("write_local", "external_network") if service.profile.allow_network else ("write_local",),
             permission_scope="bash:execute",
             timeout_seconds=None,
             max_retries=0,

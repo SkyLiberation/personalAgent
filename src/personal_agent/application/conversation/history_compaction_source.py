@@ -15,8 +15,10 @@ from .interaction_projection import ProjectedInteractionInput, render_interactio
 from .context_materialization import materialize_interaction_inputs
 from .goal_maintenance import goal_tool_result
 from .history_models import HistoryCompactionCheckpoint, HistoryRunCoverage
+from .history_tool_pruning import prune_history_tool_result
 from .model_history import decision_input_indices, goal_pending_rejection, render_control_disposition
 from .models import AcceptedArtifactToolRequest, AcceptedBashToolRequest, ActionObservation, InteractionInput, InteractionTrace, ModelDecisionRecord
+from .skills import LOAD_SKILL_CAPABILITY
 
 
 def history_digest(value: object) -> str:
@@ -176,9 +178,16 @@ def _assistant_history(assistant: ModelAssistantMessage, *, prompts: PromptCatal
     return tuple(parts)
 
 
-def _summarizer_observation(item: InteractionInput, *, prompts: PromptCatalog) -> str:
+def _summarizer_observation(item: InteractionInput, *, prompts: PromptCatalog, prune_result: bool = False) -> str:
     projected, = materialize_interaction_inputs((item,), actions=(), prompts=prompts)
     if isinstance(projected, ActionObservation):
+        if projected.capability_id == LOAD_SKILL_CAPABILITY and projected.status == "succeeded":
+            content = render_interaction_input(ProjectedInteractionInput(observation=projected),
+                prompts=prompts, native_tool_result=True)
+            if prune_result:
+                content = prune_history_tool_result(content, prompts=prompts)
+            return prompts.render("conversation.context.history_protocol_result", call_id=projected.action_id,
+                                  text=content)
         retrieval = projected.payload.get("retrieval")
         if isinstance(retrieval, dict):
             projected = projected.model_copy(update={"payload": {
@@ -187,7 +196,9 @@ def _summarizer_observation(item: InteractionInput, *, prompts: PromptCatalog) -
     return render_interaction_input(ProjectedInteractionInput(observation=projected), prompts=prompts)
 
 
-def _summarizer_decision(trace: InteractionTrace, record: ModelDecisionRecord, *, prompts: PromptCatalog) -> str:
+def _summarizer_decision(
+    trace: InteractionTrace, record: ModelDecisionRecord, *, prompts: PromptCatalog, prune_results: bool,
+) -> str:
     parts = [prompts.render("conversation.context.history_decision", turn=record.step_no)]
     rejected = goal_pending_rejection(trace, record)
     if rejected is not None:
@@ -200,7 +211,7 @@ def _summarizer_decision(trace: InteractionTrace, record: ModelDecisionRecord, *
         parts.extend(exchange.runtime_feedback)
     assert record.assistant is not None
     parts.extend(_assistant_history(record.assistant, prompts=prompts))
-    parts.extend(_summarizer_observation(trace.inputs[index], prompts=prompts)
+    parts.extend(_summarizer_observation(trace.inputs[index], prompts=prompts, prune_result=prune_results)
                  for index in decision_input_indices(trace, record))
     goal_ops = {op.call_id: op for op in trace.goal_operations if op.decision_turn == record.step_no}
     for disposition in record.dispositions:
@@ -211,7 +222,8 @@ def _summarizer_decision(trace: InteractionTrace, record: ModelDecisionRecord, *
 
 
 def render_history_run(
-    trace: InteractionTrace, coverage: HistoryRunCoverage, *, after_turn: int, prompts: PromptCatalog,
+    trace: InteractionTrace, coverage: HistoryRunCoverage, *, after_turn: int, pruned_through_step: int,
+    prompts: PromptCatalog,
 ) -> str:
     """Build only the model view. Snapshot export keeps the original typed data."""
     parts = [prompts.render("conversation.context.history_run", run_ref=coverage.run_ref,
@@ -219,7 +231,8 @@ def render_history_run(
     switch_turn = task_switch_turn(trace)
     if after_turn < switch_turn <= coverage.through_turn and trace.first_goal_operation is not None:
         parts.append(goal_tool_result(trace.first_goal_operation, prompts=prompts))
-    parts.extend(_summarizer_decision(trace, record, prompts=prompts) for record in main_decisions(trace)
+    parts.extend(_summarizer_decision(trace, record, prompts=prompts, prune_results=record.step_no <= pruned_through_step)
+                 for record in main_decisions(trace)
                  if after_turn < record.step_no <= coverage.through_turn)
     final = trace.final_message
     if coverage.includes_final and final is not None:

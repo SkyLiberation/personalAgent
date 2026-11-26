@@ -56,4 +56,4 @@ same-revision trusted loop evidence: 0
 release capabilities: all unverified
 ```
 
-该快照及历史 archive 可以解释缺陷和设计决策；它们不证明后续版本的发布资格。目标版本须按 [Release gate](04-running-and-release.md#release-gate)核对完整证据。
+该快照及历史归档可用于解释当时的缺陷和设计决定。目标版本的证据要求见[正式发布验证](04-running-and-release.md#正式发布验证)。

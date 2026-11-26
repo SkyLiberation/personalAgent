@@ -14,7 +14,7 @@ from typing import TypedDict
 from uuid import uuid4
 
 
-CHECKOUT = Path(__file__).resolve().with_name("deepseek-harness")
+CHECKOUT = Path(__file__).resolve().parent / "agents" / "deepseek-harness"
 RUNTIME = CHECKOUT / "packages/examples/jsonrpc-demo/lib/bin.js"
 SDK_SOURCE = CHECKOUT / "python/sdk/src"
 

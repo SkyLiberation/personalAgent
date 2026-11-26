@@ -61,12 +61,7 @@ def _graph_sync_task_from_note(note: KnowledgeNote) -> GraphSyncTask:
 
 
 class MemoryFacade:
-    """Unified read facade over Postgres long-term memory stores.
-
-    AgentService uses this single entry-point instead of juggling separate
-    store objects. Conversation history (short-term memory) lives entirely in
-    LangGraph checkpoints; this facade only owns long-term knowledge.
-    """
+    """Provide long-term memory access for application services and tools."""
 
     def __init__(
         self,
@@ -83,7 +78,6 @@ class MemoryFacade:
         # root injects the real engine. Keeps memory free of an upward dependency.
         self._policy = policy_engine
         self._policy_decisions = policy_decisions or PolicyDecisionRecorder()
-        self._session_key: str | None = None
 
     # -- policy enforcement -------------------------------------------------
 
@@ -126,13 +120,6 @@ class MemoryFacade:
                 )
             )
         return decision
-
-    # -- session lifecycle --------------------------------------------------
-
-    def bind_session(self, user_id: str, session_id: str) -> None:
-        key = f"{user_id}:{session_id}"
-        if self._session_key != key:
-            self._session_key = key
 
     def ensure_schema(self) -> None:
         self.local.ensure_schema()

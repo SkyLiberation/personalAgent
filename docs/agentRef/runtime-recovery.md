@@ -34,13 +34,13 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 - Gemini CLI 在 [client.ts](https://github.com/google-gemini/gemini-cli/blob/55b495d6db1794bf5b7f37a9bc03ebcab5103673/packages/core/src/core/client.ts) 中超出 `maxSessionTurns` 后先产生 `MaxSessionTurns` 事件并停止模型调用；[Session management](https://github.com/google-gemini/gemini-cli/blob/55b495d6db1794bf5b7f37a9bc03ebcab5103673/docs/cli/session-management.md#session-limits) 把交互模式定义为停止发送，非交互模式定义为错误退出。该路径也不依赖模型自觉停止。
 - Hermes Agent 的[当前配置文档](https://github.com/NousResearch/hermes-agent/blob/37fd6eea9753cb2b6de08b7ab83a9e385a97b144/website/docs/user-guide/configuration.md#iteration-budget) 记录：早期在 70% 和 90% 反复注入轮次压力会让模型过早放弃复杂任务，因而已被移除。显式设置轮次上限后，预算耗尽时只注入一次收尾指令并允许一次宽限调用；可选墙钟预算只在 80% 注入一次收尾提示。
 
-2026-10-21 再核对两个固定实际装配：[Gemini local executor](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/agents/local-executor.ts)用 DeadlineTimer／AbortSignal 控制整次运行，超限收尾另有明确 grace；[OpenHands local conversation](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py)核对原成本和迭代上限，写入对应 limit error 后停止。所读路径没有证明“每轮给模型墙钟倒计时”是共同机制。源码与摘要见[本轮归档](../../.tmp/research-capability-20261020/t5/deadline-reference-1/manifest.json)。本工程保留硬限和 Completion，不移植宽限或强制收尾；根据本地真实误估时间提出既有截止的事实投影候选，效果仍由本地用例判定。
+2026-10-21 再核对两个固定实际装配：[Gemini local executor](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/agents/local-executor.ts)用 DeadlineTimer／AbortSignal 控制整次运行，超限收尾另有明确 grace；[OpenHands local conversation](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py)核对原成本和迭代上限，写入对应 limit error 后停止。所读路径没有证明“每轮给模型墙钟倒计时”是共同机制。源码与摘要见本轮归档（`.tmp/research-capability-20261020/t5/deadline-reference-1/manifest.json`）。本工程保留硬限和 Completion，不移植宽限或强制收尾；根据本地真实误估时间提出既有截止的事实投影候选，效果仍由本地用例判定。
 
 这些实现区分模型提示与确定性硬停止，但不证明本工程某次失败由预算感知导致。本工程预算提示的准入由 [EVD](../devSpec/change-evidence.md)拥有，实际输入与事实投影由 [CTX](../devSpec/context-memory-retrieval.md)拥有；本页不另设实现门禁。
 
 ### 3.1 窗口、消费与工作量预算的不同口径
 
-2026-10-21围绕长任务累计额度重新核对3个实现及Anthropic Messages API。源码、固定提交、官方文档原件和SHA-256见[来源清单](../../.tmp/long-task-budget-reference-20261021/source-manifest.json)。仅调研，没有运行第三方项目或发出付费模型请求；固定源码证明对应实现，动态官方文档按本次日期解释，不代表本工程已经接入。
+2026-10-21围绕长任务累计额度重新核对3个实现及Anthropic Messages API。源码、固定提交、官方文档原件和SHA-256见来源清单（`.tmp/long-task-budget-reference-20261021/source-manifest.json`）。仅调研，没有运行第三方项目或发出付费模型请求；固定源码证明对应实现，动态官方文档按本次日期解释，不代表本工程已经接入。
 
 | 对象及证据 | 实际装配或文档契约 | 可借鉴的边界 |
 | --- | --- | --- |
@@ -53,7 +53,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 ### 3.2 单请求超时、重试与任务截止
 
-2026-10-21 为研究初步E1的单次480秒失败复核两个独立A类实现。[四份固定源码与摘要](../../.tmp/research-initial-closure-20261021/timeout-reference-1/manifest.json)只读保存，未运行第三方代码。
+2026-10-21 为研究初步E1的单次480秒失败复核两个独立A类实现。四份固定源码与摘要（`.tmp/research-initial-closure-20261021/timeout-reference-1/manifest.json`）只读保存，未运行第三方代码。
 
 | 实现 | 实际调用边界 | 对本工程的取舍 |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 同日核对可调参数，仍按B类官方契约解释：[Chat Completions](https://mimo.mi.com/docs/en-US/api/chat/openai-api)公开的thinking.type只有enabled／disabled；[Responses兼容说明](https://mimo.mi.com/docs/en-US/api/chat/responses)明确none关闭思考，其余effort值当前行为相同，尚不区分强度。因此不能把兼容SDK的low／medium／high字段当作MiMo已支持的强度调节。max_completion_tokens同时限制推理与最终输出，降低它可能截断交付，不能代替单独推理预算；stream只按生成进度传输。公开参数未提供tokens/秒控制，thinking开启时temperature／top_p还会被服务端固定。[Token Plan说明](https://mimo.mi.com/docs/en-US/quick-start/faq/token-plan/desktop-guide)明确当前各档均不支持mimo-v2.6-pro-ultraspeed；按量API的独立模型选项不能当作当前Token Plan的速率开关。
 
-本地真实请求已通过当前容量策略，最后失败没有完整响应或推理，仍无法区分合法慢生成与服务停滞。[本地归因审计](../../.tmp/request-deadline-audit-20261021/diagnosis.md)确认当前观察器只在完整body读取后记录send返回，不能用其response_received=false推断无首字节。下一步围绕同一实际失败body核对响应头、正文进展及本地关闭，再隔离验证单次时限。流式改造和自动重试都需要本服务的协议、取消与完整usage证据，当前不据外部实现准入；具体停止与恢复条件由[研究Spec](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)拥有。
+本地真实请求已通过当前容量策略，最后失败没有完整响应或推理，仍无法区分合法慢生成与服务停滞。本地归因审计（`.tmp/request-deadline-audit-20261021/diagnosis.md`）确认当前观察器只在完整body读取后记录send返回，不能用其response_received=false推断无首字节。下一步围绕同一实际失败body核对响应头、正文进展及本地关闭，再隔离验证单次时限。流式改造和自动重试都需要本服务的协议、取消与完整usage证据，当前不据外部实现准入；具体停止与恢复条件由[研究Spec](../optimization/to_verify/verify_results/research-experiment.md#长任务预算与诊断范围)拥有。
 
 ## 4. 可恢复状态的最小集合
 
@@ -96,7 +96,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 ## 6. 长任务失败模式与评价边界
 
-2026-10-18 实际检索并读取以下一手资料。工程报告用于提出机制候选，原始研究用于界定测量含义；它们都不证明 personalAgent 已复现对应失败。检索范围与适用限制见[本次来源记录](../../.tmp/long-task-capability-review-20261018/external-review.json)。开源压缩装配另见[源码比较](context-engineering.md#5-压缩的实际装配消费与恢复)。
+2026-10-18 实际检索并读取以下一手资料。工程报告用于提出机制候选，原始研究用于界定测量含义；它们都不证明 personalAgent 已复现对应失败。检索范围与适用限制见本次来源记录（`.tmp/long-task-capability-review-20261018/external-review.json`）。开源压缩装配另见[源码比较](context-engineering.md#5-压缩的实际装配消费与恢复)。
 
 | 一手来源 | 支持关注的问题 | 不能据此推出的结论 |
 | --- | --- | --- |
@@ -110,7 +110,7 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 ## 7. 机器产物与模型的读取单位
 
-2026-10-21 为复审研究场景的重复读取阻塞，核对 Gemini CLI 固定提交 `ed96faedfd5571f055c44f2c9509d62321d1138d` 的实际 [read-file 装配](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/tools/read-file.ts)、[文件物化](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/utils/fileUtils.ts)及 [ripgrep 解析](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/tools/ripGrep.ts)。读取以物理行切片并截断超长行，搜索保留 rg 的实际行号；这不能自动把单行 JSON 中的对象当成独立记录。源码及 SHA 见[复核归档](../../.tmp/research-capability-20261020/t5/artifact-record-reference-1/manifest.json)。
+2026-10-21 为复审研究场景的重复读取阻塞，核对 Gemini CLI 固定提交 `ed96faedfd5571f055c44f2c9509d62321d1138d` 的实际 [read-file 装配](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/tools/read-file.ts)、[文件物化](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/utils/fileUtils.ts)及 [ripgrep 解析](https://github.com/google-gemini/gemini-cli/blob/ed96faedfd5571f055c44f2c9509d62321d1138d/packages/core/src/tools/ripGrep.ts)。读取以物理行切片并截断超长行，搜索保留 rg 的实际行号；这不能自动把单行 JSON 中的对象当成独立记录。源码及 SHA 见复核归档（`.tmp/research-capability-20261020/t5/artifact-record-reference-1/manifest.json`）。
 
 [Anthropic 工具实践](https://www.anthropic.com/research/writing-tools-for-agents)，2025-09-11 工程报告，建议从实际轨迹定位低效调用，再调整工具返回的信息、分页和描述。它不规定本工程必须添加分析执行器或使用某种 JSON 格式，也不能替代真实失败与效果验收。
 
@@ -118,13 +118,13 @@ Anthropic 的做法是面向全栈 Web 开发的一组实验机制，不代表 C
 
 ## 8. 重复动作检测只提供停止边界
 
-2026-10-21 为复审三轮相同实验，核对 OpenHands SDK 固定提交 `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1` 的 [StuckDetector](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/stuck_detector.py) 和 [LocalConversation](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py)，A级源码及 SHA 见[归档](../../.tmp/research-capability-20261020/t5/repeated-experiment-reference-1/manifest.json)。启用时由会话装配 detector，同步／异步循环消费 `_check_stuck_or_nudge`：重复错误先给一次反馈，满足检测则写 STUCK 并停止；动作／观察相等和交替模式各有判据。
+2026-10-21 为复审三轮相同实验，核对 OpenHands SDK 固定提交 `6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1` 的 [StuckDetector](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/stuck_detector.py) 和 [LocalConversation](https://github.com/OpenHands/software-agent-sdk/blob/6530325e9dd0ea1b6b4f1994d7dab52764cfc3f1/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py)，A级源码及 SHA 见归档（`.tmp/research-capability-20261020/t5/repeated-experiment-reference-1/manifest.json`）。启用时由会话装配 detector，同步／异步循环消费 `_check_stuck_or_nudge`：重复错误先给一次反馈，满足检测则写 STUCK 并停止；动作／观察相等和交替模式各有判据。
 
 它不能替模型分析错例或保证完成。当前比较还会比较动作 thought 和观察正文；本地每次实验的引用、耗时及中间读取不同，不能仅因配置相同就声称会命中该 detector。只读源码、未运行该项目；本工程暂不移植新检测状态、提示或阈值。先核实际输入和重复原因，确定性硬停止与局部拒绝边界继续保留；本地采用准入由唯一研究 Spec 拥有，当前没有新增机制或付费实验准入。
 
 ## 9. 原始目标、工作记录与最终复核的分工
 
-2026-10-26 围绕 LongDS 的约束解释、分支混用和成文偏差，复核两个独立 A 级实现的实际装配及消费链。固定源码、19 份文件 SHA-256 和完整边界见[来源清单](../../.tmp/longtask-semantic-design-20261026/sources/source-manifest.json)与[机制比较](../../.tmp/longtask-semantic-design-20261026/sources/mechanism-comparison.json)。只读源码，没有运行第三方项目或调用付费模型。
+2026-10-26 围绕 LongDS 的约束解释、分支混用和成文偏差，复核两个独立 A 级实现的实际装配及消费链。固定源码、19 份文件 SHA-256 和完整边界见来源清单（`.tmp/longtask-semantic-design-20261026/sources/source-manifest.json`）与机制比较（`.tmp/longtask-semantic-design-20261026/sources/mechanism-comparison.json`）。只读源码，没有运行第三方项目或调用付费模型。
 
 | 实现与固定提交 | 实际装配及消费者 | 默认值、限制与可复用机制 |
 | --- | --- | --- |

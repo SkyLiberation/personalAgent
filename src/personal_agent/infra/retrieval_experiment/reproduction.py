@@ -382,7 +382,6 @@ def reproduce_from_settings(manifest_path: Path, output: Path) -> Path:
     # and --help do not load the product Runtime or Artifact service.
     from personal_agent.application.artifacts.service import ArtifactService
     from personal_agent.kernel.config import Settings
-    from personal_agent.infra.model_providers import build_provider_policy
     from .deployment import load_retrieval_deployment
 
     settings = Settings.from_env()
@@ -396,7 +395,5 @@ def reproduce_from_settings(manifest_path: Path, output: Path) -> Path:
         output,
         deployment=deployment,
         environment=environment,
-        artifacts=ArtifactService(settings, provider_policy=build_provider_policy(
-            base_url=settings.openai.base_url, provider=settings.openai.provider,
-        )),
+        artifacts=ArtifactService(settings),
     )

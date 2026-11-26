@@ -17,7 +17,6 @@ from personal_agent.tools.capture_url import build_capture_url_tool
 from personal_agent.tools.consolidate_knowledge import build_consolidate_knowledge_tool
 from personal_agent.tools.enterprise_knowledge import build_enterprise_knowledge_search_tool
 from personal_agent.tools.graph_search import build_graph_search_tool
-from personal_agent.tools.inspect_artifact import build_inspect_artifact_tool
 from personal_agent.tools.write_artifact import build_write_artifact_tool
 from personal_agent.tools.retrieval_experiment import build_retrieval_experiment_tool
 from personal_agent.tools.bash import build_bash_tool
@@ -77,7 +76,6 @@ __all__ = [
     "build_consolidate_knowledge_tool",
     "build_enterprise_knowledge_search_tool",
     "build_graph_search_tool",
-    "build_inspect_artifact_tool",
     "build_write_artifact_tool",
     "build_retrieval_experiment_tool",
     "build_bash_tool",

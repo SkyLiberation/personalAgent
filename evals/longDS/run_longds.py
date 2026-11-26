@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 import json
 import os
@@ -21,7 +20,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from evals.conversation_http import (
-    ROOT, UNVERIFIED_FLOW, benchmark_feature_flags, local_attachments, product, submit_turn, turn_path,
+    ROOT, UNVERIFIED_FLOW, WebSettingsSnapshot, benchmark_feature_flags, local_attachments, product, submit_turn, turn_path,
     upload_attachments, wait_for_product,
 )
 from evals.sdk_capture import redact_payload
@@ -31,6 +30,8 @@ from personal_agent.adapters.web.routes.conversation import (
     PendingConversationTurn,
 )
 from personal_agent.application.bash_execution.models import BashExecutionAuthorization
+from personal_agent.infra.skill_files import BUNDLED_SKILL_ROOT
+from .skill_session import SKILL_NAME, SKILL_REVISION, first_question
 from personal_agent.infra.storage.sqlite_conversation_journal import SqliteInteractionJournal
 from personal_agent.infra.bash_execution.deployment import BashExecutionDeploymentConfig
 from personal_agent.kernel.config import Settings
@@ -38,6 +39,8 @@ from personal_agent.kernel.feature_flags import write_feature_flags
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
 from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
 from personal_agent.kernel.contracts.resource import ResourceRef
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
+from personal_agent.kernel.contracts.tool import ConversationToolProfile
 
 from .longds_materials import json_bytes, prepare, seal, verify_preparation, verify_seal
 from .retrieval_capture_audit import (
@@ -61,6 +64,9 @@ class LongDSOutcomeContract:
 
 
 LONGDS_ANSWER_RESULT = AnswerResultConfig(test_mode=True)
+LONGDS_CONVERSATION_TOOLS = ConversationToolProfile(
+    enabled_groups=("bash", "files_and_artifacts", "conversation_control", "skills"),
+)
 LONGDS_OUTCOME = LongDSOutcomeContract(
     outcome_id="LONGDS-NETFLIX-003",
     persona="持续调整市场分析条件并回看历史口径的中文分析用户",
@@ -165,6 +171,10 @@ def _configuration(settings: Settings) -> dict[str, object]:
         "extra_body_digest": _digest(settings.structured.extra_body),
     })
     return {**result, "answer_result": settings.answer_result.model_dump(mode="json"),
+            "conversation_tools": settings.conversation_tools.model_dump(mode="json"),
+            "conversation_goal_mode": settings.conversation_goal_mode.value,
+            "bundled_skills": [path.parent.name for path in sorted(settings.skill_root.glob("*/SKILL.md"))]
+            if settings.skill_root is not None else [],
             "feature_flags": settings.feature_flags.model_dump(mode="json"),
             "prompt_language": settings.prompt_language,
             "web_search_available": settings.web_search_available}
@@ -172,6 +182,7 @@ def _configuration(settings: Settings) -> dict[str, object]:
 
 def _source_paths() -> list[Path]:
     return [*ROOT.joinpath("src").rglob("*.py"),
+            *(path for path in BUNDLED_SKILL_ROOT.rglob("*") if path.is_file() and "__pycache__" not in path.parts),
             *Path(__file__).resolve().parent.glob("*.py"),
             *(ROOT / "evals" / name for name in ("conversation_http.py", "sdk_capture.py", "web_process.py")),
             Path(__file__).with_name("longds_zh.json"), ROOT / "pyproject.toml"]
@@ -202,7 +213,8 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
     if not parsed.username or not parsed.password:
         raise ValueError("缺少既有本机评测数据库凭据")
     auth = parsed.netloc.rsplit("@", 1)[0]
-    database = urlunsplit((parsed.scheme, auth + "@127.0.0.1:16432", "/personal_agent_test", parsed.query, ""))
+    address = os.getenv("LONGDS_POSTGRES_ADDRESS", "127.0.0.1:16432")
+    database = urlunsplit((parsed.scheme, f"{auth}@{address}", "/personal_agent_test", parsed.query, ""))
     env = os.environ.copy()
     env.update({
         "PERSONAL_AGENT_POSTGRES_URL": database,
@@ -218,9 +230,18 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
         "PERSONAL_AGENT_GRAPHITI_GROUP_PREFIX": "longds-" + uuid4().hex,
         "PERSONAL_AGENT_E2E_TRACE_DIR": str(directory / "e2e"),
         "PERSONAL_AGENT_PRODUCT_EVIDENCE_DIR": str(directory / "product"),
+        "PERSONAL_AGENT_INTERACTION_MAX_TOTAL_TOKENS": str(settings.interaction_loop.max_total_tokens),
         "PERSONAL_AGENT_ANSWER_RESULT": settings.answer_result.model_dump_json(),
+        "PERSONAL_AGENT_CONVERSATION_TOOLS": settings.conversation_tools.model_dump_json(),
+        "PERSONAL_AGENT_CONVERSATION_GOAL_MODE": settings.conversation_goal_mode.value,
+        "PERSONAL_AGENT_SKILL_ROOT": str(settings.skill_root) if settings.skill_root is not None else "",
+        "PERSONAL_AGENT_SKILL_SCOPES": "",
         "PERSONAL_AGENT_FEATURE_FLAGS_CONFIG": str((directory / "feature_flags.toml").resolve()),
     })
+    if settings.conversation_goal_mode is ConversationGoalMode.DISABLED:
+        denied = tuple(dict.fromkeys((*settings.policy.deny_scopes, "network:read")))
+        env["PERSONAL_AGENT_POLICY_DENY_SCOPES"] = ",".join(denied)
+        env["PERSONAL_AGENT_WEB_SEARCH_API_KEY"] = ""
     for name in ("PERSONAL_AGENT_RETRIEVAL_EXPERIMENT_CONFIG", "PERSONAL_AGENT_BASH_EXECUTION_CONFIG", "PERSONAL_AGENT_ADMIN_API_KEYS",
                  "RETRIEVAL_E2E_WRITE_AUDIT_CONFIGURATION", "RETRIEVAL_E2E_FAULT_CONFIGURATION",
                  "FEISHU_APP_ID", "FEISHU_APP_SECRET"):
@@ -232,47 +253,59 @@ def _environment(settings: Settings, directory: Path, *, principal: Authenticate
 
 
 def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "target"] = "baseline",
-             user_turns: int = 2, bash_image_id: str | None = None,
-             docker_endpoint: str | None = None, recovery_checkpoint: Path | None = None,
+             user_turns: int = 2, enable_bash: bool = False,
+             recovery_checkpoint: Path | None = None,
              task_token_limit: int | None = None, stop_after_checkpoint: bool = False,
-             retain_task_workspace: bool = False) -> LongDSCapture:
+             retain_task_workspace: bool = False,
+             persistent_bash: bool = False,
+             goal_mode: ConversationGoalMode = ConversationGoalMode.ENABLED) -> LongDSCapture:
     prepared = verify_preparation(materials)
     total_turns = len(prepared.turns)
     if not 2 <= user_turns <= total_turns or (purpose == "baseline" and user_turns != 2):
         raise ValueError("baseline固定两轮；target须显式选择2至原题总轮数的连续前缀")
-    if (bash_image_id is None) != (docker_endpoint is None):
-        raise ValueError("分析镜像和Docker端点须同时显式提供")
-    if retain_task_workspace and (bash_image_id is None or stop_after_checkpoint):
-        raise ValueError("任务工作区须绑定独立 Bash 镜像并连续执行")
-    if user_turns > 2 and bash_image_id is None and recovery_checkpoint is None:
+    goal_mode = ConversationGoalMode(goal_mode)
+    if goal_mode is ConversationGoalMode.DISABLED and not (retain_task_workspace or recovery_checkpoint is not None):
+        raise ValueError("关闭 Goal 须启用 LongDS 任务工作区")
+    if retain_task_workspace and (not enable_bash or stop_after_checkpoint):
+        raise ValueError("任务工作区须启用 Linux 原生 Bash 并连续执行")
+    if persistent_bash and (not retain_task_workspace or recovery_checkpoint is not None):
+        raise ValueError("持久 Bash 须从新的任务工作区启动")
+    if user_turns > 2 and not enable_bash and recovery_checkpoint is None:
         raise ValueError("L2须使用已固定的通用分析环境")
     if task_token_limit is not None and (type(task_token_limit) is not int or task_token_limit <= 0):
         raise ValueError("任务停止阈值必须为显式正整数")
     if purpose == "baseline" and task_token_limit not in (None, 20_000_000):
         raise ValueError("L1固定20M任务额度")
     if (purpose == "target" and task_token_limit not in (None, 20_000_000)
-            and bash_image_id is None and recovery_checkpoint is None):
+            and not enable_bash and recovery_checkpoint is None):
         raise ValueError("显式任务额度须绑定Bash 执行授权，不能只在用户轮次之间计量")
     if stop_after_checkpoint and (purpose != "target" or user_turns != total_turns or recovery_checkpoint is not None):
         raise ValueError("仅完整任务的原始运行可在第17轮真实完成后退出")
     effective_task_limit = task_token_limit if task_token_limit is not None else 20_000_000
     recovery = None
     if recovery_checkpoint is not None:
-        if purpose != "target" or user_turns != total_turns or bash_image_id is not None:
-            raise ValueError("恢复必须为完整target，且继承原许可而非提供新镜像")
+        if purpose != "target" or user_turns != total_turns or enable_bash:
+            raise ValueError("恢复必须为完整target，且继承原 Bash 许可")
         verify_seal(recovery_checkpoint)
         original_authorization = BashExecutionDeploymentConfig.model_validate_json(
             (recovery_checkpoint / "bash-deployment.json").read_bytes()).authorization
+        if original_authorization.persistent_bash:
+            raise ValueError("持久 Bash 内存状态无法从检查点恢复，须从第 1 轮重跑")
         if task_token_limit is not None and task_token_limit != original_authorization.max_total_tokens:
             raise ValueError("恢复不能更换原任务额度")
         effective_task_limit = original_authorization.max_total_tokens
+        retain_task_workspace = bool(original_authorization.retain_task_workspace)
         recovery = LongDSRecoveryInput.model_validate_json((recovery_checkpoint / "recovery-input.json").read_bytes())
         if recovery.preparation_sha256 != sha256((materials / "preparation.json").read_bytes()).hexdigest():
             raise ValueError("恢复检查点与本次原题准备身份不同")
     settings = Settings.from_env()
     settings = settings.model_copy(update={
+        "interaction_loop": settings.interaction_loop.model_copy(update={"max_total_tokens": effective_task_limit}),
         "feature_flags": benchmark_feature_flags(settings.feature_flags),
         "answer_result": LONGDS_ANSWER_RESULT,
+        "conversation_tools": LONGDS_CONVERSATION_TOOLS,
+        "conversation_goal_mode": goal_mode,
+        "skill_root": BUNDLED_SKILL_ROOT if retain_task_workspace else None,
     })
     if recovery is not None and recovery.configuration_sha256 != sha256(json_bytes(_configuration(settings))).hexdigest():
         raise ValueError("恢复必须保持原模型、容量、预算和调用配置")
@@ -281,8 +314,8 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
             raise ValueError("基线需要显式真实模型及容量配置")
         if model.model != model.capacity.model or urlsplit(model.base_url or "").hostname != model.capacity.provider_host:
             raise ValueError("模型身份与容量配置不符")
-    if settings.interaction_loop.max_total_tokens != 10_000_000 or settings.interaction_loop.max_model_turns != 40:
-        raise ValueError("本轮基线每 run 预算须为已预声明的 10M／40 次决策")
+    if settings.interaction_loop.max_model_turns != 40:
+        raise ValueError("LongDS 单轮主决策上限须为 40 次")
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     _source_identity(directory)
@@ -306,6 +339,8 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         "checksums_sha256": sha256((materials / "checksums.json").read_bytes()).hexdigest(),
         "case_total_token_limit": effective_task_limit, "per_user_turn_timeout_seconds": 3600,
         "stop_after_checkpoint": stop_after_checkpoint,
+        "persistent_bash": persistent_bash,
+        "skill_revision": SKILL_REVISION if persistent_bash else None,
         "recovery_checksums_sha256": (sha256((recovery_checkpoint / "checksums.json").read_bytes()).hexdigest()
                                       if recovery_checkpoint is not None else None),
     })
@@ -315,18 +350,18 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
     if recovery is not None:
         deployment = BashExecutionDeploymentConfig.model_validate_json(authorization_file.read_bytes())
         if (deployment.authorization.authorized_principal != principal
-                or deployment.authorization.conversation_id != session_id
-                or datetime.now(UTC) >= deployment.authorization.expires_at):
-            raise ValueError("原恢复授权不匹配或已经到期，不能重置许可")
-    if bash_image_id is not None:
+                or deployment.authorization.conversation_id != session_id):
+            raise ValueError("原恢复授权不匹配，不能重置许可")
+    if enable_bash:
         authorization = BashExecutionAuthorization(
             authorized_principal=principal, conversation_id=session_id,
-            expires_at=datetime.now(UTC) + timedelta(seconds=user_turns * 3600),
             max_total_tokens=effective_task_limit, max_execution_seconds=user_turns * 3600,
-            image_id=bash_image_id,
+            allow_network=False,
+            hidden_directories=(Path(__file__).resolve().parents[2], materials.resolve(), directory.resolve()),
             retain_task_workspace=True if retain_task_workspace else None,
+            persistent_bash=True if persistent_bash else None,
         )
-        deployment = BashExecutionDeploymentConfig(authorization=authorization, endpoint=docker_endpoint)
+        deployment = BashExecutionDeploymentConfig(authorization=authorization)
         authorization_file = directory / "bash-deployment.json"
         authorization_file.write_text(deployment.model_dump_json(indent=2), encoding="utf-8")
     api_key = secrets.token_urlsafe(32)
@@ -341,6 +376,13 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
         with product(directory, env, sdk_directory=directory / "sdk", log_name="server.log") as (base, process):
             if not wait_for_product(base, process, 45):
                 raise RuntimeError("正式 Web 进程启动失败")
+            web_settings = WebSettingsSnapshot.model_validate_json((directory / "web-settings.json").read_bytes())
+            if web_settings.conversation_tools != settings.conversation_tools:
+                raise ValueError("正式 Web 进程的 Conversation 工具组与 LongDS 配置不一致")
+            if web_settings.conversation_goal_mode != settings.conversation_goal_mode:
+                raise ValueError("正式 Web 进程的 Goal 模式与 LongDS 配置不一致")
+            if web_settings.budget != settings.interaction_loop:
+                raise ValueError("正式 Web 进程的 Conversation 预算与 LongDS 配置不一致")
             with httpx.Client(base_url=base,
                               headers={"Authorization": "Bearer " + api_key}, timeout=30) as client:
                 schema = client.get("/openapi.json")
@@ -360,9 +402,16 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                     if usage.reaches_case_limit(effective_task_limit, preceding_known_tokens=preceding_known_tokens):
                         stop_reason = "case_budget_exhausted"
                         break
+                    message = turn.user_message(language=prepared.language)
+                    if persistent_bash and turn.turn_id == 1:
+                        message = first_question(
+                            message, data_directory="/workspace/attachments",
+                            script_location=f"/workspace/skills/{SKILL_NAME}/*/scripts/pysession.py after loading the skill",
+                            language=prepared.language,
+                        )
                     request = ConversationTurnRequest(
                         session_id=session_id, client_request_id=uuid4().hex,
-                        text=turn.user_message(language=prepared.language), create_session=turn.turn_id == 1,
+                        text=message, create_session=turn.turn_id == 1,
                         interaction_mode="auto", input_artifact_refs=references)
                     prefix = directory / f"turn-{turn.turn_id:02}"
                     _write(prefix.with_suffix(".request.json"), request.model_dump(mode="json"))
@@ -390,7 +439,7 @@ def baseline(materials: Path, directory: Path, *, purpose: Literal["baseline", "
                         break
                     answered += 1
                     stop_reason = "planned_turns_finished"
-                    if turn.turn_id == 17 and recovery is None:
+                    if turn.turn_id == 17 and recovery is None and not persistent_bash:
                         _checkpoint(directory, result=result, references=references, materials=materials, usage=usage)
                         if stop_after_checkpoint:
                             stop_reason = "checkpoint_17_completed"
@@ -426,12 +475,14 @@ def main() -> None:
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--purpose", choices=("baseline", "target"), default="baseline")
     run.add_argument("--user-turns", type=int, choices=range(2, 51), default=2)
-    run.add_argument("--bash-image-id")
-    run.add_argument("--docker-endpoint")
+    run.add_argument("--bash", action="store_true", help="Enable native Linux Bash")
     run.add_argument("--recovery-checkpoint", type=Path)
     run.add_argument("--task-token-limit", type=int)
     run.add_argument("--stop-after-checkpoint", action="store_true")
     run.add_argument("--task-workspace", action="store_true")
+    run.add_argument("--persistent-bash", action="store_true")
+    run.add_argument("--goal-mode", type=ConversationGoalMode, choices=tuple(ConversationGoalMode),
+                     default=ConversationGoalMode.ENABLED)
     args = parser.parse_args()
     if args.command == "prepare":
         result = prepare(args.output, source_directory=args.source_directory)
@@ -439,10 +490,11 @@ def main() -> None:
                           "bytes": sum(x.bytes for x in result.inputs), "model_calls": 0}))
     else:
         result = baseline(args.materials, args.output, purpose=args.purpose,
-                          user_turns=args.user_turns, bash_image_id=args.bash_image_id,
-                          docker_endpoint=args.docker_endpoint, recovery_checkpoint=args.recovery_checkpoint,
+                          user_turns=args.user_turns, enable_bash=args.bash,
+                          recovery_checkpoint=args.recovery_checkpoint,
                           task_token_limit=args.task_token_limit, stop_after_checkpoint=args.stop_after_checkpoint,
-                          retain_task_workspace=args.task_workspace)
+                          retain_task_workspace=args.task_workspace, persistent_bash=args.persistent_bash,
+                          goal_mode=args.goal_mode)
         print(result.model_dump_json())
 
 

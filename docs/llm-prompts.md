@@ -13,7 +13,6 @@ Prompt Registry 拥有可复用的版本化模板；业务事实、权限、执�
 | `structured.native_tool.repair.system` | 原生typed输出的有界修复，继续调用本次输出工具修正参数；JSON消费者仍使用原`structured.repair.system`，不混用承载 |
 | `conversation.plan_context`、`conversation.plan.recovery`、`conversation.requirements` | 物化计划工具回执、Step Context 的计划接续信息及冻结验收条件 |
 | `conversation.history_compaction` | HistoryCompactor 将闭合旧历史生成工作摘要，原 Journal／Artifact 保留事实与原文；当前接入及真实消费的证据边界见 [Context](topics/context-engineering.md#整体窗口与历史增长的当前边界) |
-| `conversation.context.budget`、`conversation.time_budget_snapshot`、`conversation.low_budget_warning` | 在主决策末尾的 Step Context 展示当次额度、适用的剩余秒数和低余额提醒。预算组件执行硬停止。 |
 | `interaction_verification.*` | 普通整稿核验；实际主体、条件、强度和否定范围与已提交原文对照 |
 | `web_search.description`、`web_read.description` | 工具的发现与正文读取契约；选择与回答来自当前用户任务 |
 | `conversation.read_artifact.description`、`conversation.search_output.description` | 实际正文坐标、读取覆盖、搜索续页及超长行边界 |

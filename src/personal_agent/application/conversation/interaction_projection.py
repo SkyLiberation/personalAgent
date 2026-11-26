@@ -17,8 +17,9 @@ from .context_materialization import (
 from .goal_models import GOAL_PENDING_ACTION_REJECTED
 from .mcp_result_projection import project_mcp_result
 from .models import ActionObservation, ArtifactSourceInput, DecisionFeedback, InteractionInput
+from .skills import LOAD_SKILL_CAPABILITY, LoadedSkill
 from .verification_admission import INTERACTION_VERIFICATION_CAPABILITY, observed_receipts
-from personal_agent.application.artifacts.models import artifact_file_path
+from personal_agent.application.artifacts.models import artifact_file_path, supports_text_snapshot
 from personal_agent.application.bash_execution.models import BashToolResult
 from .file_search import GrepFileArguments
 class ProjectedInteractionInput(BaseModel):
@@ -103,6 +104,13 @@ def _render_observation(
     data = observation.payload.get("data")
     if observation.capability_id == "bash" and isinstance(data, dict) and "receipt" in data:
         return BashToolResult.model_validate(data).shell_output()
+    if observation.capability_id == LOAD_SKILL_CAPABILITY and observation.status == "succeeded" and native_tool_result:
+        skill = LoadedSkill.model_validate(data)
+        content = prompts.render("skills.loaded", skill_name=skill.name, instructions=skill.instructions)
+        if observation.skill_scripts is not None:
+            resources = prompts.render("skills.resource_base", path=observation.skill_scripts.resource_base)
+            return f"{resources}\n\n{content}"
+        return content
     if observation.status == "unknown":
         parts = [prompts.render("conversation.context.tool.outcome_unknown", tool_name=observation.capability_id)]
     else:
@@ -183,7 +191,13 @@ def render_interaction_input(
         return _render_observation(observation, item, prompts=prompts, native_tool_result=native_tool_result)
     if isinstance(observation, ArtifactSourceInput):
         resource = observation.resource
-        return prompts.render("conversation.context.tool.material", filename=resource.filename,
-            resource_id=resource.resource_ref.resource_id, file_path=artifact_file_path(resource.resource_ref),
-            size=resource.size_bytes)
+        if supports_text_snapshot(resource.content_type):
+            return prompts.render(
+                "conversation.context.attachment.text", filename=resource.filename,
+                size=resource.size_bytes, file_path=artifact_file_path(resource.resource_ref),
+            )
+        return prompts.render(
+            "conversation.context.attachment.metadata", filename=resource.filename,
+            size=resource.size_bytes,
+        )
     return prompts.render("conversation.context.execution_data", data=item.model_dump_json(exclude_none=True))

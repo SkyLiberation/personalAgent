@@ -67,8 +67,8 @@ description: 用于本仓库编写、修改、重构代码及检查局部结构�
 
 ## 6. 走读与交付
 
-- 沿真实入口走读成功和关键失败路径，核对业务主流程、切面契约、规模和坏味道；迁移全部受影响调用方，删除被替代定义、装配及失效说明。
+- 沿真实入口走读成功和关键失败路径。迁移受影响调用方，删除被替代定义、装配及说明。
 - 按影响运行适用的[层级检查](../../../scripts/check_layers.py)、导入／类型等静态检查，并按 [EVD](../../../docs/devSpec/change-evidence.md#12-按实际影响选择证据)取得行为保持或产品变更证据。验证计划使用 `analyze-proposal-progress`，遵守根规范的单元测试停用要求。
 - 报告职责与规模变化、局部查阅范围、协作成本及采用的验证。
 
-本技能拥有编码组织、拆分、坏味道处理和机制选择方法；[COD](../../../docs/devSpec/code-structure.md)拥有实现门禁，[ARC](../../../docs/devSpec/architecture-ownership.md)拥有事实归属与依赖边界。涉及架构定义或跨模块职责、依赖与装配调整时，使用 `design-project-architecture`。
+架构定义或跨模块职责、依赖与装配调整使用 `design-project-architecture`。

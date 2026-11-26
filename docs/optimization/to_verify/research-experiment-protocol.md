@@ -384,7 +384,7 @@ SDK 不提供控制端宕机后的自动任务 TTL 或本工程 durable executio
 | 本例工作 | 当前入口 | 责任及验证边界 |
 | --- | --- | --- |
 | 查实验方法、数据说明及原始资料 | `web_search`、`web_read`，分别依赖搜索和捕获配置 | 按研究需要调用，不把联网设为所有实验的必经步骤；获准数据和实现已提供时直接消费 |
-| 检查用户提供的材料 | `inspect_artifact` | 支持已有合法引用的上传内容检查；文本等解释有预览限制，不能据此声称完整读取数据集。初始实验材料仍须经获准只读入口提供，不借会入库的上传路由改写知识 |
+| 阅读用户提供的文本材料 | `tool_read_file`、`tool_grep_file` | 使用已获准的文件路径读搜原文，按实际返回窗口确认已读范围。初始实验材料经获准的只读入口提供 |
 | 运行检索实验、冻结及正式评测 | `retrieval_experiment` | 实验 Application 绑定数据、候选、评分与冻结，唯一引擎执行；旧 E1 已实际消费，P1 模型候选链尚未验收 |
 | 创建和修订程序／配置 | `write_artifact` 的 strict create／patch 分支 | 复用 Artifact owner、不可变引用和正式工具治理；读写参数及派生版本见[程序产物契约](program-artifact-contract.md) |
 | 定位和读取结果、配置及错例材料 | `search_action_output`、`read_artifact` | 当前获准初始资料、实验产物和 Python 输出可经确切引用读搜；保留 owner、scope、版本及原件绑定，不开放任意文件路径 |

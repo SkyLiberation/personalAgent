@@ -13,10 +13,9 @@ from personal_agent.kernel.contracts.resource import ResourceRef
 from personal_agent.kernel.contracts.scope import ExecutionScope
 from personal_agent.kernel.contracts.tool_runtime import accepted_tool_request_digest
 from .models import (
+    BASH_STREAM_PREVIEW_BYTES,
     INPUT_MAX_BYTES,
     PROGRAM_MAX_BYTES,
-    STDERR_PREVIEW_CHARS,
-    STDOUT_PREVIEW_CHARS,
     BashArgs,
     BashBackendOutcome,
     BashExecutionCommand,
@@ -143,7 +142,7 @@ class BashExecutionService:
             action_id=action_id,
             receipt=receipt,
         )
-        return self._response(receipt, execution_scope)
+        return self._response(receipt, execution_scope, stdout=outcome.stdout, stderr=outcome.stderr)
 
     def _input_identity(
         self, name: str, ref: ResourceRef, scope: ExecutionScope, *, max_bytes: int
@@ -242,7 +241,6 @@ class BashExecutionService:
             action_id=view.action_id,
             request_digest=view.request_digest,
             deployment_digest=view.deployment_digest,
-            image_id=self.profile.image_id,
             limits=limits,
             program=source,
             inputs=tuple(inputs),
@@ -270,7 +268,6 @@ class BashExecutionService:
             or command.action_id != view.action_id
             or command.request_digest != view.request_digest
             or command.deployment_digest != view.deployment_digest
-            or command.image_id != self.profile.image_id
             or command.deadline_at > view.run_deadline_at
             or command.limits.model_dump(exclude={"timeout_seconds"})
             != self.profile.limits.model_dump(exclude={"timeout_seconds"})
@@ -313,7 +310,6 @@ class BashExecutionService:
             command_digest=command.command_digest,
             program=command.program,
             inputs=command.inputs,
-            image_id=command.image_id,
             limits=command.limits,
         )
         manifest_ref = self._publish(
@@ -383,33 +379,29 @@ class BashExecutionService:
         )
 
     def _response(
-        self, receipt: BashExecutionReceipt, scope: ExecutionScope
+        self, receipt: BashExecutionReceipt, scope: ExecutionScope,
+        *, stdout: bytes | None = None, stderr: bytes | None = None,
     ) -> BashToolResult:
         previews: dict[str, str | int | None] = {}
-        for stream, ref, limit, byte_limit in (
-            (
-                "stdout",
-                receipt.stdout_ref,
-                STDOUT_PREVIEW_CHARS,
-                receipt.limits.stdout_bytes,
-            ),
-            (
-                "stderr",
-                receipt.stderr_ref,
-                STDERR_PREVIEW_CHARS,
-                receipt.limits.stderr_bytes,
-            ),
+        for stream, ref, content in (
+            ("stdout", receipt.stdout_ref, stdout),
+            ("stderr", receipt.stderr_ref, stderr),
         ):
             preview = omitted = None
             if ref is not None:
-                content = self._read(
-                    stream + ".txt", ref, scope, max_bytes=byte_limit
-                ).content
+                if content is None:
+                    # A settled receipt can be replayed without dispatching the command again.
+                    _, content = self.artifacts.read_upload(ref, principal=scope.principal, owner=scope.principal)
                 try:
                     text = content.decode("utf-8", errors="strict")
-                    preview, omitted = text[:limit], max(0, len(text) - limit)
                 except UnicodeDecodeError:
                     pass
+                else:
+                    preview = text
+                    if len(content) > BASH_STREAM_PREVIEW_BYTES:
+                        # The full stream is valid UTF-8. Only its first retained code point can be partial.
+                        preview = content[-BASH_STREAM_PREVIEW_BYTES:].decode("utf-8", errors="ignore")
+                    omitted = len(text) - len(preview)
             previews[f"{stream}_preview"] = preview
             previews[f"{stream}_omitted_chars"] = omitted
         return BashToolResult(

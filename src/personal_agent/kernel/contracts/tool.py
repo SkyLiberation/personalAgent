@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 RiskLevel = Literal["low", "medium", "high"]
 ToolExposure = Literal[
@@ -21,6 +21,35 @@ ToolExposure = Literal[
     "workflow_activity",
     "admin",
 ]
+ConversationToolGroup = Literal[
+    "bash", "files_and_artifacts", "conversation_control", "knowledge",
+    "research_and_operations", "network", "workspace_changes", "retrieval_experiment",
+    "skills", "extensions", "delegation",
+]
+
+
+class ConversationToolProfile(BaseModel):
+    """Deployment selection for the Conversation capability surface."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    enabled_groups: tuple[ConversationToolGroup, ...] | None = None
+
+    @field_validator("enabled_groups")
+    @classmethod
+    def require_conversation_control(
+        cls, groups: tuple[ConversationToolGroup, ...] | None,
+    ) -> tuple[ConversationToolGroup, ...] | None:
+        if groups is not None:
+            if "conversation_control" not in groups:
+                raise ValueError("an explicit tool profile must enable conversation_control")
+            if len(set(groups)) != len(groups):
+                raise ValueError("conversation tool groups must be unique")
+        return groups
+
+    def enables(self, group: ConversationToolGroup) -> bool:
+        return self.enabled_groups is None or group in self.enabled_groups
+
+
 SideEffectType = Literal[
     "none",
     "read_local",

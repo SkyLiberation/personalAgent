@@ -11,6 +11,10 @@
 | [Galileo RAGBench](../../evals/galileo_ragbench/README.md) | [Galileo 数据集](https://huggingface.co/datasets/galileo-ai/ragbench) |
 | [LongDS](04-running-and-release.md#公开数据集运行) | [LongDS 数据集](https://huggingface.co/datasets/zjunlp/LongDS) |
 | [Agent Durability Lab 对照](../problems/Agent-Durability-Lab/ambiguous-effect.md) | [公开故障用例 `ambiguous-effect`](https://github.com/sjarmak/agent-durability-lab/blob/68a3d73a9d1bafe12d5be188624a802fc11404df/benchmarks/agent-durability/contract-v1.json#L31-L36) |
+| [DynaRev 对照](04-running-and-release.md#dynarev-同轮补充对照) | [DynaRev 公开原题](https://github.com/zsq259/DynaRev)：邮轮追加要求、Apple 换型号、AKC 条件覆盖 |
+| [Marathon 对照](../problems/marathon/marathon-0.md) | [CTXAgent 公开用例 `marathon:0`](https://github.com/MatthiasHBusch/CTXAgent/blob/77ec7a9e9127e3258b035af32dc7f13730979902/bench/tasks_mix.py) |
+| [Skill-Use-Bench 对照](../problems/Skill-Use-Bench/SF03_t1_merge_unordered.md) | [公开 PDF 合并用例 `SF03_t1_merge_unordered`](https://github.com/JinyiHan99/Skill-Use-Bench/blob/1a80e93479e1a9f5ce4be2e27550edaf7f9d6ffc/benchmark/pdftk-server/tasks/t1_merge_unordered.yaml) |
+| [BrowseComp-Plus 对照](../../evals/BrowseComp-Plus/README.md) | [公开检索问答、语料及预计算向量](https://huggingface.co/collections/Tevatron/browsecomp-plus) |
 
 [Toolathlon MCP 接线、文件隔离与 PDF 交付](04-running-and-release.md#toolathlon-mcp-验证)使用上游工具配置和镜像，按实际边界记录支持证据。工作区和 PDF 用例共享[对话预算配置](04-running-and-release.md#对话预算)，可通过[并行入口](04-running-and-release.md#多用例并行执行)批量调度。
 
@@ -24,7 +28,9 @@ Toolathlon 配对运行使用[共用 MCP 工具清单](04-running-and-release.md
 
 ## 外部 Agent 共用部署
 
-[DeepSeek Harness 评测部署](../../evals/deepseek-harness-deployment.md)提供共享检出、构建和运行入口。[Toolathlon 对照](../../evals/Toolathlon/DEPLOYMENT.md#deepseek-harness-对照)维护任务专用配置和历史结果。
+[DeepSeek Harness 评测部署](../../evals/deepseek-harness-deployment.md)提供共享检出、构建和原生 Bash 运行入口。[Toolathlon 对照](../../evals/Toolathlon/DEPLOYMENT.md#deepseek-harness-对照)维护任务专用配置和历史结果。
+
+[BobFlow 评测部署](../../evals/bobflow-deployment.md)提供独立检出、上游运行时和 LongDS 验收条件。
 
 ## Conversation 用户结果采集
 
@@ -32,8 +38,6 @@ LongDS 和 Toolathlon 从同一[正式 HTTP 流程](04-running-and-release.md#co
 
 ## 验证与结果边界
 
-本次清理以数据集来源为保留依据。项目自建设例、专用夹具、评分与晋级入口从当前工作树退出。清理前的用例与证据按原版本查阅。[历史用例盘点](02-current-case-inventory.md)
+现行运行范围以上述公开数据集为准。历史自建用例、夹具、评分和晋级记录按原版本查阅。发布资格按目标版本的实际证据判断。[评测盘点](02-current-case-inventory.md) · [运行与归档](04-running-and-release.md#公开数据集运行) · [证据分类](01-evidence-classes.md)
 
-本次验收检查保留目录及依赖、默认用例收集、CI 和文档引用。三套检索评测分别用同一缓存、配置与单样本对比指标。LongDS 复核公开题目、正式 HTTP 采集入口与已有封存的用量结果。历史记录保留原身份，发布资格按实际证据判断。[运行与归档](04-running-and-release.md#公开数据集运行) · [评测规范](../../evals/AGENTS.md) · [证据分类](01-evidence-classes.md)
-
-历史方法和结果见 [baseline-first 审计](03-baseline-first-audit.md)、[观测指标](05-observability-metrics.md)与 [Open / Galileo 历史检索报告](retrieval-benchmark-20260709.md)。
+历史方法和结果见 [baseline-first 审计](03-baseline-first-audit.md)、[旧 E2E 矩阵观测记录](05-observability-metrics.md)与 [Open / Galileo 历史检索报告](retrieval-benchmark-20260709.md)。

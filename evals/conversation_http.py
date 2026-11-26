@@ -26,6 +26,8 @@ from pydantic import BaseModel
 from personal_agent.adapters.web.routes.artifacts import ArtifactResourceView
 from personal_agent.adapters.web.routes.conversation import ConversationTurnResumeRequest
 from personal_agent.kernel.config_models import InteractionLoopConfig
+from personal_agent.kernel.contracts.tool import ConversationToolProfile
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from personal_agent.kernel.feature_flags import FeatureFlags
 
 from .web_process import ActualWebProcess, record_server_process
@@ -154,6 +156,8 @@ class WebSettingsSnapshot(BaseModel):
     openai: WebModelSettings
     budget: InteractionLoopConfig
     feature_flags: FeatureFlags
+    conversation_tools: ConversationToolProfile = ConversationToolProfile()
+    conversation_goal_mode: ConversationGoalMode = ConversationGoalMode.ENABLED
 
 
 def _record_web_settings(directory: Path, settings: Settings) -> None:
@@ -162,6 +166,8 @@ def _record_web_settings(directory: Path, settings: Settings) -> None:
         openai=WebModelSettings.from_config(settings.openai),
         budget=settings.interaction_loop,
         feature_flags=settings.feature_flags,
+        conversation_tools=settings.conversation_tools,
+        conversation_goal_mode=settings.conversation_goal_mode,
     )
     (directory / "web-settings.json").write_text(snapshot.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
@@ -172,7 +178,12 @@ def effective_structured_model(directory: Path) -> str:
 
 @contextmanager
 def product(
-    output: Path, env: dict[str, str], *, sdk_directory: Path | None = None, log_name: str = "web.log",
+    output: Path,
+    env: dict[str, str],
+    *,
+    sdk_directory: Path | None = None,
+    log_name: str = "web.log",
+    turn_stopping_endpoint: str | None = None,
 ) -> Iterator[tuple[str, ActualWebProcess]]:
     log_path = output / log_name
     port_file = output / "web.port"
@@ -180,6 +191,8 @@ def product(
     command = [sys.executable, "-B", "-X", "utf8", "-m", "evals.conversation_http", str(output)]
     if sdk_directory is not None:
         command.extend(("--sdk-directory", str(sdk_directory)))
+    if turn_stopping_endpoint is not None:
+        command.extend(("--turn-stopping-endpoint", turn_stopping_endpoint))
     environment = {
         **env,
         "PYTHONUTF8": "1",
@@ -229,6 +242,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--sdk-directory", type=Path)
+    parser.add_argument("--turn-stopping-endpoint")
     args = parser.parse_args()
     record_server_process(args.output / "server-process.json")
 
@@ -245,6 +259,11 @@ def main() -> None:
             install_acceptance_observer(args.sdk_directory)
         from personal_agent.adapters.web.api import app
 
+        if args.turn_stopping_endpoint is not None:
+            def notify_turn_stopping() -> None:
+                httpx.post(args.turn_stopping_endpoint, timeout=15).raise_for_status()
+
+            app.state.context.on_turn_stopping = notify_turn_stopping
         _record_web_settings(args.output, app.state.context.settings)
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port))
 

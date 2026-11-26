@@ -93,7 +93,7 @@ ADK 的轨迹匹配可要求相同工具与参数顺序，LangSmith 示例也允
 
 ## 7. 数据库执行入口的局部观察
 
-2026-10-21 为研究验收取证的重复启动阻塞核对 OpenTelemetry Python contrib 固定提交 `de43f819a4a919213d246a23e62a1b256aeca7b9`，A 级源码；[两份原件及 SHA](../../.tmp/research-capability-20261020/t5/sql-observer-external-1/source-index.json)已封存，未安装或执行第三方项目。
+2026-10-21 为研究验收取证的重复启动阻塞核对 OpenTelemetry Python contrib 固定提交 `de43f819a4a919213d246a23e62a1b256aeca7b9`，A 级源码；两份原件及 SHA（`.tmp/research-capability-20261020/t5/sql-observer-external-1/source-index.json`）已封存，未安装或执行第三方项目。
 
 [`wrapped_connection`](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L324-L338)配置 cursor factory；其[同步 Cursor 子类](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-psycopg/src/opentelemetry/instrumentation/psycopg/__init__.py#L384-L418)将 execute／executemany 交给 `CursorTracer.traced_execution`。该[实际执行方法](https://github.com/open-telemetry/opentelemetry-python-contrib/blob/de43f819a4a919213d246a23e62a1b256aeca7b9/instrumentation/opentelemetry-instrumentation-dbapi/src/opentelemetry/instrumentation/dbapi/__init__.py#L867-L910)在未开启 SQL commenter 时调用原 query method 并保留其返回或异常，执行后记录观测。参数收集和 SQL commenter 为不同选项；该框架也支持保存查询文本，不能把使用它等同于已满足本工程隐私要求。
 
@@ -118,6 +118,6 @@ ADK 的轨迹匹配可要求相同工具与参数顺序，LangSmith 示例也允
 
 ## 9. 用户要求与工作解释的核对
 
-2026-11-02重新设计核验器时，复用OpenHands并核对DeepEval和Ragas的固定源码；11份原件与SHA见[来源清单](../../.tmp/goal-verifier-redesign-20261102/source-index.json)，没有安装或执行第三方项目或模型。
+2026-11-02重新设计核验器时，复用OpenHands并核对DeepEval和Ragas的固定源码；11份原件与SHA见来源清单（`.tmp/goal-verifier-redesign-20261102/source-index.json`），没有安装或执行第三方项目或模型。
 
 本次完整调用链、采用差异及局限统一见[目标维护Spec §9.13的源码对照](../optimization/to_verify/analysis-goal-maintenance.md#913-按用户要求逐项比较的统一核验)。关键区别是原始委托、模型工作解释及当前待验内容的关系；这些源码不证明模型提取的要求必然正确。本页不复制本工程候选契约或验收结果。

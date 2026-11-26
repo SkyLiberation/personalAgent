@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 import re
 from typing import Annotated, Literal
 
@@ -25,10 +26,9 @@ from personal_agent.kernel.prompt_registry import PromptCatalog
 
 PROGRAM_MAX_BYTES = 128 * 1024
 INPUT_MAX_BYTES = 64 * 1024 * 1024
-STDOUT_PREVIEW_CHARS = 4000
-STDERR_PREVIEW_CHARS = 2000
-BASH_SHARED_INPUTS_DIR = "/run/personal-agent-inputs"
-BASH_RUNTIME_DIR = "/opt/personal-agent-runtime"
+BASH_STREAM_PREVIEW_BYTES = 64_000
+BASH_DEFAULT_INPUTS_DIR = "/workspace"
+BASH_SHARED_INPUTS_DIR = "/workspace/inputs"
 BASH_TEMP_DIR = "/tmp"
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Identifier = Annotated[str, Field(min_length=1)]
@@ -48,7 +48,6 @@ ErrorCode = Literal[
     "backend_unknown",
     "invalid_output",
     "output_unavailable",
-    "oom",
     "workspace_unavailable",
 ]
 _FILENAME = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
@@ -141,32 +140,34 @@ class BashWorkspaceFile(BashModel):
     resource_ref: ResourceRef
 
 
+BashInputScope = Literal["history", "task", "attachments"]
+
+
 class BashExecutionLimits(BashModel):
     timeout_seconds: PositiveSeconds = 60
-    memory_mb: PositiveInteger = 512
-    cpus: PositiveSeconds = 1
-    pids_limit: PositiveInteger = 64
     stdout_bytes: Annotated[int, Field(strict=True, gt=0, le=16 * 1024 * 1024)] = (
         16 * 1024 * 1024
     )
     stderr_bytes: Annotated[int, Field(strict=True, gt=0, le=64 * 1024)] = 64 * 1024
-    scratch_mb: PositiveInteger = 32
 
 
 class BashWorkspaceBinding(BashModel):
-    """Deployment binding to the writable workspace of one MCP server."""
+    """Writable native directory expressly shared with the named MCP server."""
 
     mcp_server_id: Identifier
-    volume_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]+$")
-    subdirectory: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
+    host_path: Path
     root: str = Field(pattern=r"^/workspace/(?:[A-Za-z0-9_-]+/)+[A-Za-z0-9_-]+$")
-    runtime_volume_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]+$")
-    network_container_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("host_path")
+    @classmethod
+    def absolute_host_path(cls, path: Path) -> Path:
+        if not path.is_absolute():
+            raise ValueError("The Bash workspace host path must be absolute")
+        return path
 
 
 class BashTaskWorkspacePolicy(BashModel):
     conversation_id: Identifier
-    expires_at: AwareDatetime
 
 
 class BashTaskWorkspaceAccess(BashModel):
@@ -177,10 +178,12 @@ class BashTaskWorkspaceAccess(BashModel):
 class BashExecutionProfile(BashModel):
     authorized_principal: AuthenticatedPrincipal
     deployment_digest: Digest
-    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     limits: BashExecutionLimits
     workspace: BashWorkspaceBinding | None = None
     task_workspace: BashTaskWorkspacePolicy | None = None
+    persistent_bash: bool = False
+    allow_network: bool = True
+    hidden_directories: tuple[Path, ...] = ()
 
 
 class BashExecutionAuthorization(BashModel):
@@ -188,26 +191,31 @@ class BashExecutionAuthorization(BashModel):
 
     authorized_principal: AuthenticatedPrincipal
     conversation_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
-    expires_at: AwareDatetime
     turn_timeout_seconds: PositiveSeconds = 3600
     max_total_tokens: PositiveInteger
     max_execution_seconds: PositiveSeconds
-    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     limits: BashExecutionLimits = Field(default_factory=BashExecutionLimits)
     workspace: BashWorkspaceBinding | None = None
     retain_task_workspace: Literal[True] | None = None
+    persistent_bash: Literal[True] | None = None
+    allow_network: bool = True
+    hidden_directories: tuple[Path, ...] = ()
 
     @model_validator(mode="after")
     def validate_workspace_modes(self) -> BashExecutionAuthorization:
         if self.workspace is not None and self.retain_task_workspace:
             raise ValueError("Task workspaces require the standalone Bash profile")
+        if self.persistent_bash and not self.retain_task_workspace:
+            raise ValueError("Persistent Bash requires an authorized task workspace")
+        if any(not path.is_absolute() or path.parent == path for path in self.hidden_directories):
+            raise ValueError("Hidden Bash directories must be absolute non-root paths")
         return self
 
     @property
     def authorization_digest(self) -> Digest:
         payload = self.model_dump(mode="json", exclude_none=True)
         if self.retain_task_workspace:
-            # A retained container must match the directory bound by its permit.
+            # A retained workspace must match the directory bound by its permit.
             payload["task_workspace_root"] = BASH_TEMP_DIR
         return canonical_digest(payload)
 
@@ -215,11 +223,13 @@ class BashExecutionAuthorization(BashModel):
         return BashExecutionProfile(
             authorized_principal=self.authorized_principal,
             deployment_digest=self.authorization_digest,
-            image_id=self.image_id,
             limits=self.limits,
             workspace=self.workspace,
+            persistent_bash=self.persistent_bash is True,
+            allow_network=self.allow_network,
+            hidden_directories=self.hidden_directories,
             task_workspace=BashTaskWorkspacePolicy(
-                conversation_id=self.conversation_id, expires_at=self.expires_at,
+                conversation_id=self.conversation_id,
             ) if self.retain_task_workspace else None,
         )
 
@@ -259,7 +269,6 @@ class BashExecutionCommand(BashModel):
     action_id: Identifier
     request_digest: Digest
     deployment_digest: Digest
-    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
     limits: BashExecutionLimits
     program: BashInputIdentity
     inputs: tuple[BashInputIdentity, ...]
@@ -325,9 +334,6 @@ class BashExecutionFact(BashModel):
     status: ProcessStatus
     process_exit_code: int | None = None
     elapsed_seconds: Seconds | None = None
-    container_id: str | None = None
-    image_id: str | None = None
-    oom_killed: bool | None = None
     stdout_truncated: bool = False
     stderr_truncated: bool = False
     output_available: bool = True
@@ -374,17 +380,23 @@ class BashInputManifest(BashModel):
     command_digest: Digest
     program: BashInputIdentity
     inputs: tuple[BashInputIdentity, ...]
-    image_id: str
     limits: BashExecutionLimits
 
 
 class BashToolResult(BashModel):
     receipt: BashExecutionReceipt
-    stdout_preview: str | None = Field(default=None, max_length=STDOUT_PREVIEW_CHARS)
-    stderr_preview: str | None = Field(default=None, max_length=STDERR_PREVIEW_CHARS)
+    stdout_preview: str | None = None
+    stderr_preview: str | None = None
     stdout_omitted_chars: int | None = Field(default=None, ge=0)
     stderr_omitted_chars: int | None = Field(default=None, ge=0)
     limitations: tuple[str, ...] = ()
+
+    @field_validator("stdout_preview", "stderr_preview")
+    @classmethod
+    def validate_preview_size(cls, preview: str | None) -> str | None:
+        if preview is not None and len(preview.encode("utf-8")) > BASH_STREAM_PREVIEW_BYTES:
+            raise ValueError("Bash stream preview exceeds its UTF-8 byte limit")
+        return preview
 
     def shell_output(self) -> str:
         parts = [self.stdout_preview] if self.stdout_preview else []

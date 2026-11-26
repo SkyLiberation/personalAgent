@@ -221,6 +221,9 @@ class AgentService:
     def conversation_trace(self, *args, **kwargs):
         return self.runtime.conversation_trace(*args, **kwargs)
 
+    def steer_conversation_turn(self, *args, **kwargs):
+        return self.runtime.steer_conversation_turn(*args, **kwargs)
+
     def decide_conversation_knowledge_save(self, **kwargs):
         return self.runtime.decide_conversation_knowledge_save(**kwargs)
 

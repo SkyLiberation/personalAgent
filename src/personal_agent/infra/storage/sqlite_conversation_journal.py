@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sqlite3
@@ -16,9 +15,11 @@ from uuid import uuid4
 from personal_agent.application.conversation.errors import ConversationOperationConflict
 from personal_agent.application.conversation.journal import InMemoryInteractionJournal, session_lock_key
 from personal_agent.application.conversation.journal_lock import exclusive_run_lock
-from personal_agent.application.conversation.models import ConversationMessage, InteractionTrace, SessionId
+from personal_agent.application.conversation.models import ConversationMessage, InteractionTrace, SessionId, TurnSteeringRequest
 from personal_agent.capabilities.contracts.model import ModelResponseRecord
-from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal
+from personal_agent.kernel.contracts.scope import AuthenticatedPrincipal, ExecutionScope
+
+from .conversation_revision import decode_revision, encode_revision
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS turn (
@@ -40,6 +41,13 @@ CREATE TABLE IF NOT EXISTS revision (
     facts TEXT NOT NULL,
     PRIMARY KEY (turn_id, number)
 );
+CREATE TABLE IF NOT EXISTS turn_steering_inbox (
+    sequence INTEGER PRIMARY KEY,
+    turn_id TEXT NOT NULL REFERENCES turn(id),
+    request_id TEXT NOT NULL,
+    user_text TEXT NOT NULL,
+    UNIQUE(turn_id, request_id)
+);
 """
 
 _TIMELINE = """
@@ -50,11 +58,10 @@ WITH RECURSIVE lineage(id, revision) AS (
     FROM lineage JOIN turn ON turn.id = lineage.id
     WHERE turn.predecessor_id IS NOT NULL
 )
-SELECT turn.id, revision.number, turn.user_text, turn.predecessor_reply, revision.facts
+SELECT turn.id, revision.number, turn.user_text, turn.predecessor_reply
 FROM lineage
 JOIN turn ON turn.id = lineage.id
 LEFT JOIN revision ON revision.turn_id = lineage.id AND revision.number = lineage.revision
-AND (? OR lineage.id = ?)
 ORDER BY turn.number
 """
 
@@ -63,10 +70,10 @@ ORDER BY number DESC LIMIT 1"""
 
 
 @dataclass(slots=True)
-class _DecodedSessionHistory:
+class _DecodedSession:
     principal: AuthenticatedPrincipal
     session_id: SessionId
-    predecessors: dict[str, InteractionTrace] = field(default_factory=dict)
+    traces: dict[str, InteractionTrace] = field(default_factory=dict)
 
 
 class SqliteInteractionJournal(InMemoryInteractionJournal):
@@ -77,8 +84,8 @@ class SqliteInteractionJournal(InMemoryInteractionJournal):
         self._root = root.resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         self._database = self._root / "sessions.sqlite3"
-        self._decoded_history: ContextVar[_DecodedSessionHistory | None] = ContextVar(
-            "decoded_session_history", default=None,
+        self._decoded_session: ContextVar[_DecodedSession | None] = ContextVar(
+            "decoded_session", default=None,
         )
         with closing(self._connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
@@ -140,11 +147,11 @@ class SqliteInteractionJournal(InMemoryInteractionJournal):
         root = self._root.resolve()
         with exclusive_run_lock(f"file:{os.path.normcase(str(root))}:conversation:{key}",
                                 root.parent / "conversation_locks" / f"{key}.lock"):
-            token = self._decoded_history.set(_DecodedSessionHistory(principal, session_id))
+            token = self._decoded_session.set(_DecodedSession(principal, session_id))
             try:
                 yield
             finally:
-                self._decoded_history.reset(token)
+                self._decoded_session.reset(token)
 
     def exclusive_run(self, run_ref: str):
         self._validate_run_ref(run_ref)
@@ -168,40 +175,50 @@ class SqliteInteractionJournal(InMemoryInteractionJournal):
             messages.append(ConversationMessage(role="assistant", content=predecessor_reply))
         messages.append(ConversationMessage(role="user", content=user_text))
 
-    @staticmethod
-    def _trace(facts: str, messages: list[ConversationMessage]) -> InteractionTrace:
-        return InteractionTrace.model_validate({**json.loads(facts), "messages": tuple(messages)})
+    def _remember(self, trace: InteractionTrace) -> None:
+        session = self._decoded_session.get()
+        if session is not None and trace.principal == session.principal and trace.conversation_id == session.session_id:
+            session.traces[trace.interaction_run_ref] = trace
+
+    def _trace(
+        self, db: sqlite3.Connection, run_ref: str, revision: int, messages: tuple[ConversationMessage, ...],
+    ) -> InteractionTrace:
+        session = self._decoded_session.get()
+        cached = session.traces.get(run_ref) if session is not None else None
+        if cached is not None and cached.revision == revision and cached.messages == messages:
+            return cached
+        with closing(db.execute(
+            "SELECT number, facts FROM revision WHERE turn_id = ? AND number <= ? ORDER BY number DESC",
+            (run_ref, revision),
+        )) as revisions:
+            trace = decode_revision(revisions, revision=revision, messages=messages)
+        self._remember(trace)
+        return trace
 
     def _decode_timeline(
-        self, rows: list[tuple[str, int | None, str, str | None, str | None]], *, all_turns: bool,
+        self, db: sqlite3.Connection, rows: list[tuple[str, int | None, str, str | None]], *, all_turns: bool,
     ) -> tuple[InteractionTrace, ...]:
         messages: list[ConversationMessage] = []
         traces: list[InteractionTrace] = []
-        history = self._decoded_history.get() if all_turns else None
         tail = len(rows) - 1
-        for index, (run_ref, revision, user_text, previous_reply, facts) in enumerate(rows):
+        for index, (run_ref, revision, user_text, previous_reply) in enumerate(rows):
             self._append_message_pair(messages, user_text, previous_reply)
             if not all_turns and index != tail:
                 continue
-            if facts is None:
+            if revision is None:
                 raise ConversationOperationConflict("会话前驱修订未提交")
-            # The database selects the revision on every read. Reuse only an already
-            # decoded predecessor of the locked session with the same input lineage.
-            if history is not None and index < tail:
-                cached = history.predecessors.get(run_ref)
-                if cached is not None and cached.revision == revision and cached.messages == tuple(messages):
-                    traces.append(cached)
-                    continue
-            trace = self._trace(facts, messages)
-            if (history is not None and index < tail and trace.principal == history.principal
-                    and trace.conversation_id == history.session_id):
-                history.predecessors[run_ref] = trace
-            traces.append(trace)
+            traces.append(self._trace(db, run_ref, revision, tuple(messages)))
         return tuple(traces)
 
     def _latest(self, db: sqlite3.Connection, run_ref: str) -> InteractionTrace | None:
-        rows = db.execute(_TIMELINE, (run_ref, None, run_ref, False, run_ref)).fetchall()
-        return self._decode_timeline(rows, all_turns=False)[0] if rows else None
+        session = self._decoded_session.get()
+        cached = session.traces.get(run_ref) if session is not None else None
+        if cached is not None:
+            (latest_revision,) = db.execute("SELECT MAX(number) FROM revision WHERE turn_id = ?", (run_ref,)).fetchone()
+            if latest_revision == cached.revision:
+                return cached
+        rows = db.execute(_TIMELINE, (run_ref, None, run_ref)).fetchall()
+        return self._decode_timeline(db, rows, all_turns=False)[0] if rows else None
 
     def get(self, interaction_run_ref: str) -> InteractionTrace | None:
         self._validate_run_ref(interaction_run_ref)
@@ -209,17 +226,48 @@ class SqliteInteractionJournal(InMemoryInteractionJournal):
             return self._latest(db, interaction_run_ref)
 
     def put(self, trace: InteractionTrace, *, expected_revision: int | None = None) -> None:
-        with self.exclusive_run(trace.interaction_run_ref), closing(self._connect()) as db, db:
+        with self.exclusive_run(trace.interaction_run_ref), closing(self._connect()) as db:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                previous = self._latest(db, trace.interaction_run_ref)
+                self._check_revision(trace, previous, expected_revision)
+                queued = self._read_steering(db, trace.interaction_run_ref) if (
+                    trace.final_message is not None or trace.steering != (previous.steering if previous else ())
+                ) else ()
+                claimed = self.check_steering_commit(trace, previous, queued)
+                if previous == trace:
+                    return
+                if previous is None:
+                    self._insert_turn(db, trace)
+                db.execute("INSERT INTO revision VALUES (?, ?, ?)", (
+                    trace.interaction_run_ref, trace.revision, encode_revision(trace, previous),
+                ))
+                if claimed:
+                    db.executemany("DELETE FROM turn_steering_inbox WHERE turn_id=? AND request_id=?", (
+                        (trace.interaction_run_ref, item.client_request_id) for item in queued[:claimed]
+                    ))
+            self._remember(trace)
+
+    @staticmethod
+    def _read_steering(db: sqlite3.Connection, run_ref: str) -> tuple[TurnSteeringRequest, ...]:
+        return tuple(TurnSteeringRequest(client_request_id=request_id, text=text)
+                     for request_id, text in db.execute(
+                         "SELECT request_id, user_text FROM turn_steering_inbox WHERE turn_id=? ORDER BY sequence",
+                         (run_ref,),
+                     ))
+
+    def pending_steering(self, run_ref: str) -> tuple[TurnSteeringRequest, ...]:
+        with closing(self._connect()) as db:
+            return self._read_steering(db, run_ref)
+
+    def submit_steering(self, scope: ExecutionScope, request: TurnSteeringRequest, *, active: bool) -> None:
+        with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            previous = self._latest(db, trace.interaction_run_ref)
-            self._check_revision(trace, previous, expected_revision)
-            if previous == trace:
-                return
-            if previous is None:
-                self._insert_turn(db, trace)
-            db.execute("INSERT INTO revision VALUES (?, ?, ?)", (
-                trace.interaction_run_ref, trace.revision, trace.model_dump_json(exclude={"messages"}),
-            ))
+            trace = self._latest(db, scope.execution_id)
+            queued = self._read_steering(db, scope.execution_id)
+            if self.validate_steering_submission(trace, scope, request, queued, active=active):
+                db.execute("INSERT INTO turn_steering_inbox(turn_id, request_id, user_text) VALUES (?, ?, ?)",
+                           (scope.execution_id, request.client_request_id, request.text))
 
     def _insert_turn(self, db: sqlite3.Connection, trace: InteractionTrace) -> None:
         scope = (trace.principal.tenant_id, trace.principal.user_id, trace.conversation_id)
@@ -247,13 +295,13 @@ class SqliteInteractionJournal(InMemoryInteractionJournal):
     def session_runs(self, *, principal: AuthenticatedPrincipal, session_id: SessionId) -> tuple[InteractionTrace, ...]:
         with closing(self._connect()) as db:
             rows = db.execute(
-                """SELECT turn.id, revision.number, turn.user_text, turn.predecessor_reply, revision.facts
+                """SELECT turn.id, revision.number, turn.user_text, turn.predecessor_reply
                 FROM turn JOIN revision ON revision.turn_id = turn.id
                 AND revision.number = (SELECT MAX(r.number) FROM revision r WHERE r.turn_id = turn.id)
                 WHERE turn.tenant_id=? AND turn.user_id=? AND turn.session_id=? ORDER BY turn.number""",
                 (principal.tenant_id, principal.user_id, session_id),
             ).fetchall()
-        return self._decode_timeline(rows, all_turns=True)
+            return self._decode_timeline(db, rows, all_turns=True)
 
     def last_turn(self, *, principal: AuthenticatedPrincipal, session_id: SessionId) -> InteractionTrace | None:
         with closing(self._connect()) as db:
@@ -263,5 +311,5 @@ class SqliteInteractionJournal(InMemoryInteractionJournal):
     def _history_candidates(self, trace: InteractionTrace) -> tuple[InteractionTrace, ...]:
         with closing(self._connect()) as db:
             run_ref = trace.interaction_run_ref
-            rows = db.execute(_TIMELINE, (run_ref, trace.revision, run_ref, True, run_ref)).fetchall()
-        return self._decode_timeline(rows, all_turns=True)
+            rows = db.execute(_TIMELINE, (run_ref, trace.revision, run_ref)).fetchall()
+            return self._decode_timeline(db, rows, all_turns=True)

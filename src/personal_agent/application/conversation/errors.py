@@ -101,6 +101,10 @@ class ConversationTurnPending(RuntimeError):
     """A submitted turn is recorded but has no result to return yet."""
 
 
+class ConversationSteeringPending(RuntimeError):
+    """The original turn received a supplement before its terminal commit."""
+
+
 class ConversationInputError(ValueError):
     """An explicitly rejected caller input, distinct from Runtime invariants."""
 

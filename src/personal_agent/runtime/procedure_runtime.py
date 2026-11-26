@@ -242,11 +242,10 @@ class ProcedureMaterializer:
             )
         is_web_source = bool(resource_types.intersection({"url", "link"}))
         acquire_domain = "web" if is_web_source else "artifact"
-        domain_handler = "capture_url" if is_web_source else "inspect_artifact"
+        domain_handler = "capture_url" if is_web_source else None
         # Decision Ownership Taxonomy: deterministic capability-contract
-        # projection. The accepted resource type selects the unique built-in
-        # reader contract, including its declared technical side-effect class;
-        # no target, payload, or provider is introduced here.
+        # projection. The accepted resource type selects the reader contract.
+        # Artifact reads require a bound provider for that contract.
         side_effect_class = "external_network" if is_web_source else "none"
         acquire = next(node for node in definition.nodes if node.node_id == "acquire-source")
         requirement = acquire.capability_requirement

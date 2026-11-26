@@ -102,8 +102,6 @@ class OpenAIConfig(_ModelEndpointConfig):
     api_key: str | None = None
     model: str = DEFAULT_GENERATIVE_MODEL
     small_model: str = DEFAULT_GENERATIVE_MODEL
-    vision_model: str = ""
-    transcription_model: str = "whisper-1"
     embedding_model: str = "BAAI/bge-m3"
     timeout_seconds: float = 30.0
     max_retries: int = 2
@@ -121,10 +119,6 @@ class StructuredConfig(_ModelEndpointConfig):
     max_retries: int = 2
     output_transport: Literal["json_schema", "json_object"] = "json_object"
     capacity: ModelCapacityConfig | None = None
-
-    @property
-    def small_model(self) -> str:
-        return self.model
 
 
 class FirecrawlConfig(_StrictBase):
@@ -157,7 +151,7 @@ class GPTResearcherA2AConfig(_StrictBase):
 class InteractionLoopConfig(_StrictBase):
     policy_revision: str = "interaction-loop-v1"
     max_model_turns: int = Field(default=8, ge=1)
-    max_tool_calls: int = Field(default=12, ge=0)
+    max_tool_calls: int | None = Field(default=12, ge=0)
     max_agent_calls: int = Field(default=4, ge=0)
     max_total_tokens: int = Field(default=32_000, ge=1)
     max_concurrency: int = Field(default=4, ge=1)
@@ -233,6 +227,30 @@ class WorkspaceChangesConfig(_StrictBase):
     server_id: str = Field(min_length=1)
     create_directory_tool: str = Field(min_length=1)
     move_tool: str = Field(min_length=1)
+
+
+class SkillUserRoot(_StrictBase):
+    principal: AuthenticatedPrincipal
+    home: Path
+
+
+class SkillProjectRoot(_StrictBase):
+    principal: AuthenticatedPrincipal
+    session_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
+    root: Path
+
+
+class SkillScopesConfig(_StrictBase):
+    users: tuple[SkillUserRoot, ...] = ()
+    projects: tuple[SkillProjectRoot, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_bindings(self) -> "SkillScopesConfig":
+        if len({entry.principal for entry in self.users}) != len(self.users):
+            raise ValueError("Each user can have only one skill home")
+        if len({(entry.principal, entry.session_id) for entry in self.projects}) != len(self.projects):
+            raise ValueError("Each user session can have only one skill project root")
+        return self
 
 
 class EnterpriseKnowledgeConfig(_StrictBase):

@@ -10,6 +10,8 @@
 
 复用现有 Journal 和原生反馈闭环，不复制目标存储。旧独立意图分类、单正文和文稿替换协议已退出。早期强制在作答前读目标的规则已移除，正式输入继续包含生效目标。[统一主循环规格](../optimization/to_verify/analysis-goal-maintenance.md#统一-conversation-主循环)
 
+2026-11-23 接受可选装配设计，生产默认装配 Goal。2026-11-26 将模块开关与 LongDS 的运行条件解耦，工具、网络、授权和工作区配置由各自责任边界管理。模式绑定到会话的每个 Turn，恢复前校验。Goal 关闭时，持久 Bash 工作区从现有会话授权与冻结前驱取得身份。回答核验消费已接纳 Goal，构造时校验这项依赖。具体装配、准入与验收由[Goal 模块装配规格](../optimization/to_verify/analysis-goal-maintenance.md#goal-模块的可选装配)维护。
+
 ## 验证与退出
 
 旧 `.tmp/gm631/` 六轮独立评分 2/6，保留原接入身份。单正文四项契约和职责分离的三轮结果分别留在原记录。现行任务切换的实际验收按统一规格报告；若目标归属、原要求、反馈或恢复出错，使用对应的真实轨迹定位与复验。[早期目标结果](../optimization/to_verify/verify_results/analysis-correctness.md#32-单正文四项内容契约的空会话连续前三轮) · [核验分离结果](0047-user-goal-verification-context.md)

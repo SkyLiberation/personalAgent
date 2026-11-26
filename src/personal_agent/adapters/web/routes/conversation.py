@@ -23,7 +23,7 @@ from personal_agent.application.conversation import (
 from personal_agent.application.conversation.errors import ConversationTurnBlocked, ConversationTurnPending
 from personal_agent.application.conversation.service import submitted_turn_id
 from personal_agent.adapters.web.routes.entry_serializers import chunk_answer, sse_event
-from personal_agent.application.conversation.models import InteractionTrace, KnowledgeDeleteConfirmation
+from personal_agent.application.conversation.models import InteractionTrace, KnowledgeDeleteConfirmation, TurnSteeringRequest
 from personal_agent.application.conversation.workspace_changes import (
     Decision as WorkspaceDecision, Digest as WorkspaceDigest, WorkspaceChangeConfirmation, WorkspaceChangeReceipt,
 )
@@ -74,6 +74,16 @@ class PendingConversationTurn(BaseModel):
     turn_id: TurnId
     session_id: str
     disposition: Literal["pending"] = "pending"
+
+
+class ConversationTurnSteerRequest(TurnSteeringRequest):
+    user_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ConversationTurnSteerReceipt(BaseModel):
+    turn_id: TurnId
+    session_id: str
+    client_request_id: str
 
 
 class ConversationKnowledgeSaveDecisionRequest(BaseModel):
@@ -194,6 +204,7 @@ def register_conversation_routes(
                 settings,
                 body.user_id,
             )
+            on_turn_stopping = request.app.state.context.on_turn_stopping
             if isinstance(body, ConversationTurnRequest):
                 session_id = body.session_id
                 turn_id = submitted_turn_id(principal, session_id, body.client_request_id)
@@ -206,7 +217,7 @@ def register_conversation_routes(
                         conversation_id=session_id, message=message, client_request_id=body.client_request_id,
                         create_session=body.create_session, principal=principal, source_platform="web",
                         interaction_mode=body.interaction_mode, input_artifact_refs=body.input_artifact_refs,
-                        on_registered=on_registered,
+                        on_registered=on_registered, on_turn_stopping=on_turn_stopping,
                     )
                 except ConversationTurnPending:
                     pending = PendingConversationTurn(turn_id=turn_id, session_id=session_id)
@@ -217,7 +228,7 @@ def register_conversation_routes(
                 existing = require_turn(turn_id, principal)
                 view = service.converse(
                     conversation_id=existing.conversation_id, interaction_run_ref=turn_id,
-                    principal=principal, source_platform="web",
+                    principal=principal, source_platform="web", on_turn_stopping=on_turn_stopping,
                 )
             return conversation_turn_response(
                 view, principal=principal, settings=settings
@@ -299,6 +310,23 @@ def register_conversation_routes(
               response_model_exclude_none=True)
     def resume_conversation_turn(turn_id: TurnId, body: ConversationTurnResumeRequest, request: Request):
         return web_turn(body, request, turn_id=turn_id)
+
+    @app.post("/api/conversation/turns/{turn_id}/steer", response_model=ConversationTurnSteerReceipt, status_code=202)
+    def steer_conversation_turn(turn_id: TurnId, body: ConversationTurnSteerRequest, request: Request):
+        try:
+            require_entry_identity(request, settings)
+            principal = resolve_requested_principal(request, settings, body.user_id)
+            trace = service.steer_conversation_turn(turn_id, principal=principal, request=TurnSteeringRequest(
+                client_request_id=body.client_request_id, text=body.text,
+            ))
+        except (ConversationOperationNotFound, PermissionError):
+            raise HTTPException(status_code=404, detail="Resource not found.") from None
+        except ConversationOperationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except EntryPolicyDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return ConversationTurnSteerReceipt(turn_id=turn_id, session_id=trace.conversation_id,
+                                            client_request_id=body.client_request_id)
 
     @app.get("/api/conversation/turns/{turn_id}", response_model=ConversationTurnTraceResponse)
     def conversation_trace(

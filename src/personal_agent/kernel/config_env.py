@@ -7,6 +7,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 from personal_agent.kernel.contracts.answer_result import AnswerResultConfig
+from personal_agent.kernel.contracts.tool import ConversationToolProfile
+from personal_agent.kernel.contracts.goal import ConversationGoalMode
 from personal_agent.kernel.feature_flags import load_feature_flags
 from personal_agent.kernel.model_provider import ModelProvider, resolve_model_provider
 
@@ -31,6 +33,7 @@ from personal_agent.kernel.config_models import (
     ReflectionReplaySettings,
     ResearchConfig,
     ReviewDigestConfig,
+    SkillScopesConfig,
     StructuredConfig,
     WebApiConfig,
     WebSearchConfig,
@@ -108,12 +111,18 @@ def settings_from_env(settings_cls: type):
     extract_provider, extract_extra_body = generation_binding(
         "PERSONAL_AGENT_EXTRACT_PROVIDER", "PERSONAL_AGENT_EXTRACT_EXTRA_BODY",
         extract_base_url, extract_model)
+    tool_call_limit = os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS", "12").strip().lower()
     return settings_cls(
         feature_flags=load_feature_flags(Path(os.getenv(
             "PERSONAL_AGENT_FEATURE_FLAGS_CONFIG", "config/feature_flags.toml"))),
         answer_result=AnswerResultConfig.model_validate_json(
             os.getenv("PERSONAL_AGENT_ANSWER_RESULT", '{}')
         ),
+        conversation_tools=ConversationToolProfile.model_validate_json(
+            os.getenv("PERSONAL_AGENT_CONVERSATION_TOOLS", '{}')
+        ),
+        conversation_goal_mode=ConversationGoalMode(os.getenv(
+            "PERSONAL_AGENT_CONVERSATION_GOAL_MODE", ConversationGoalMode.ENABLED)),
         data_dir=Path(os.getenv("PERSONAL_AGENT_DATA_DIR", "./data")),
         log_level=os.getenv("PERSONAL_AGENT_LOG_LEVEL", "INFO"),
         embedding_provider=os.getenv("PERSONAL_AGENT_EMBEDDING_PROVIDER", "local"),
@@ -140,9 +149,7 @@ def settings_from_env(settings_cls: type):
             max_model_turns=int(
                 os.getenv("PERSONAL_AGENT_INTERACTION_MAX_MODEL_TURNS", "8")
             ),
-            max_tool_calls=int(
-                os.getenv("PERSONAL_AGENT_INTERACTION_MAX_TOOL_CALLS", "12")
-            ),
+            max_tool_calls=None if tool_call_limit == "unlimited" else int(tool_call_limit),
             max_agent_calls=int(
                 os.getenv("PERSONAL_AGENT_INTERACTION_MAX_AGENT_CALLS", "4")
             ),
@@ -216,6 +223,8 @@ def settings_from_env(settings_cls: type):
             else None
         ),
         prompt_language=os.getenv("PERSONAL_AGENT_PROMPT_LANGUAGE", "zh"),
+        skill_root=Path(skill_root) if (skill_root := os.getenv("PERSONAL_AGENT_SKILL_ROOT")) else None,
+        skill_scopes=SkillScopesConfig.model_validate_json(os.getenv("PERSONAL_AGENT_SKILL_SCOPES") or "{}"),
         bash_execution_config_path=(
             Path(os.environ["PERSONAL_AGENT_BASH_EXECUTION_CONFIG"])
             if os.getenv("PERSONAL_AGENT_BASH_EXECUTION_CONFIG")
@@ -227,8 +236,6 @@ def settings_from_env(settings_cls: type):
             base_url=openai_base_url,
             model=openai_model,
             small_model=os.getenv("OPENAI_SMALL_MODEL") or structured_model,
-            vision_model=os.getenv("OPENAI_VISION_MODEL", ""),
-            transcription_model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "whisper-1"),
             embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "BAAI/bge-m3"),
             timeout_seconds=float(
                 os.getenv("PERSONAL_AGENT_OPENAI_TIMEOUT_SECONDS", "30")

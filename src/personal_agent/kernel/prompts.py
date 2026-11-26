@@ -21,6 +21,7 @@ from personal_agent.kernel.prompt_templates.bash_execution import (
     PROMPTS as BASH_EXECUTION_PROMPTS,
 )
 from personal_agent.kernel.prompt_templates.web_search import PROMPTS as WEB_SEARCH_PROMPTS
+from personal_agent.kernel.prompt_templates.skills import PROMPTS as SKILL_PROMPTS
 from personal_agent.kernel.prompt_templates.supplemental import PROMPTS as SUPPLEMENTAL_PROMPTS
 from personal_agent.kernel.prompt_templates.reading_feedback import PROMPTS as READING_FEEDBACK_PROMPTS
 from personal_agent.kernel.prompt_templates.owned_feedback import PROMPTS as OWNED_FEEDBACK_PROMPTS
@@ -33,7 +34,7 @@ _PROMPTS: dict[str, PromptSpec] = {}
 for _group in (ASK_PROMPTS, ARTIFACT_PROMPTS, CONVERSATION_PROMPTS, GRAPH_PROMPTS,
                INTERACTION_VERIFICATION_PROMPTS, RUNTIME_PROMPTS,
                RETRIEVAL_EXPERIMENT_PROMPTS, BASH_EXECUTION_PROMPTS,
-               WEB_SEARCH_PROMPTS, SUPPLEMENTAL_PROMPTS, READING_FEEDBACK_PROMPTS,
+               WEB_SEARCH_PROMPTS, SKILL_PROMPTS, SUPPLEMENTAL_PROMPTS, READING_FEEDBACK_PROMPTS,
                OWNED_FEEDBACK_PROMPTS, RESULT_FEEDBACK_PROMPTS, SERVICE_FEEDBACK_PROMPTS,
                CONTEXT_FEEDBACK_PROMPTS):
     if set(_group) & set(_PROMPTS):

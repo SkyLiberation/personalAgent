@@ -172,7 +172,16 @@ class ModelRuntimeFeedback(BaseModel):
     before_message_index: int | None = Field(default=None, ge=0)
 
 
-ModelHistoryEntry = ModelToolExchange | ModelRuntimeFeedback
+class ModelUserHistoryMessage(BaseModel):
+    """A user message positioned among completed native exchanges."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    user_text: str = Field(min_length=1)
+    context_before: tuple[str, ...] = ()
+    before_message_index: int | None = Field(default=None, ge=0)
+
+
+ModelHistoryEntry = ModelToolExchange | ModelRuntimeFeedback | ModelUserHistoryMessage
 
 
 class ProviderExceptionFrame(BaseModel):
@@ -798,6 +807,7 @@ __all__ = [
     "ModelToolResult",
     "ModelToolExchange",
     "ModelRuntimeFeedback",
+    "ModelUserHistoryMessage",
     "ModelHistoryEntry",
     "ModelActionDefinition",
     "ModelActionInvocation",

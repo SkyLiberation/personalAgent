@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agent 测试集性能比对"
+  short_description: "从已有评测结果汇总 Agent 的用量、缓存、调用、耗时与得分"

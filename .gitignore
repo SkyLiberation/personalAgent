@@ -23,7 +23,7 @@ evals/galileo_ragbench/results/
 .tmp
 .reasonix
 /toolServer/Toolathlon/
-/evals/deepseek-harness/
+/evals/agents/
 
 # 消融实验测试数据
 /docs/ablation/**/*.json
